@@ -1,0 +1,16 @@
+# expect: 36
+# Test triple nested generic calls
+
+trait Tripler
+    triple(self) -> Int
+end
+
+Int: Tripler
+    triple(self) = self * 3
+end
+
+innerTriple[T: Tripler](x: T) -> Int = x.triple()
+middleTriple[T: Tripler](x: T) -> Int = innerTriple(x)
+outerTriple[T: Tripler](x: T) -> Int = middleTriple(x)
+
+main() = outerTriple(12)

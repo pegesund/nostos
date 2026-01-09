@@ -1,0 +1,19 @@
+# expect: 14
+# Test dropWhile with trait predicate
+
+trait Skippable
+    shouldSkip(self) -> Bool
+    amount(self) -> Int
+end
+
+Int: Skippable
+    shouldSkip(self) = self < 5
+    amount(self) = self
+end
+
+sumAfterSkip[T: Skippable](items: List[T]) -> Int =
+    items.dropWhile(x => x.shouldSkip())
+         .map(x => x.amount())
+         .fold(0, (a, b) => a + b)
+
+main() = sumAfterSkip([1, 2, 3, 5, 9])

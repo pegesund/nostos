@@ -1,0 +1,17 @@
+# expect: 60
+# Test generic function with list of tuples
+type Val = Val(Int)
+
+trait Summable
+    toSum(self) -> Int
+end
+
+Val: Summable
+    toSum(self) = match self { Val(n) -> n }
+end
+
+sumPairs[T: Summable](pairs: List[(T, T)]) -> Int =
+    pairs.map(p => match p { (a, b) -> a.toSum() + b.toSum() })
+         .fold(0, (acc, x) => acc + x)
+
+main() = sumPairs([(Val(10), Val(20)), (Val(5), Val(25))])

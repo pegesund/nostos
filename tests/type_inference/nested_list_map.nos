@@ -1,0 +1,20 @@
+# expect: 30
+# Test nested list with map operations
+
+trait Double
+    double(self) -> Int
+end
+
+Int: Double
+    double(self) = self * 2
+end
+
+processNested[T: Double](nested: List[List[T]]) -> Int =
+    nested.map(inner =>
+        inner.map(x => x.double()).fold(0, (a, b) => a + b)
+    ).fold(0, (a, b) => a + b)
+
+main() = {
+    data = [[1, 2, 3], [4, 5]]
+    processNested(data)
+}

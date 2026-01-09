@@ -1,0 +1,18 @@
+# expect: 15
+# Test trait method on tuple element
+
+trait Doubler
+    double(self) -> Int
+end
+
+Int: Doubler
+    double(self) = self * 2
+end
+
+doubleFirst[T: Doubler](pair: (T, T)) -> Int =
+    match pair { (a, _) -> a.double() }
+
+main() = {
+    p = (5, 10)
+    doubleFirst(p) + 5
+}

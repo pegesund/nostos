@@ -3670,31 +3670,46 @@ impl Compiler {
     /// Find the implementation of a trait method for a given type.
     pub fn find_trait_method(&self, type_name: &str, method_name: &str) -> Option<String> {
         // Look through all traits this type implements
-        if let Some(traits) = self.type_traits.get(type_name) {
-            for trait_name in traits {
-                // Check if this trait has the method
-                // For built-in derivable traits, we know the method names
-                let has_method = if self.is_builtin_derivable_trait(trait_name) {
-                    match (trait_name.as_str(), method_name) {
-                        ("Show", "show") => true,
-                        ("Hash", "hash") => true,
-                        ("Copy", "copy") => true,
-                        ("Eq", "==") | ("Eq", "eq") | ("Eq", "neq") => true,
-                        // Num trait methods (arithmetic operations)
-                        ("Num", "add") | ("Num", "sub") | ("Num", "mul") | ("Num", "div") => true,
-                        // Ord trait methods (comparison operations)
-                        ("Ord", "lt") | ("Ord", "gt") | ("Ord", "lte") | ("Ord", "gte") => true,
-                        _ => false,
-                    }
-                } else if let Some(trait_info) = self.trait_defs.get(trait_name) {
-                    trait_info.methods.iter().any(|m| m.name == method_name)
-                } else {
-                    false
-                };
+        // Try both the exact type name and qualified version
+        let type_names_to_try = if type_name.contains('.') {
+            vec![type_name.to_string()]
+        } else {
+            // Try unqualified first, then try with module prefix
+            let qualified = self.qualify_name(type_name);
+            if qualified == type_name {
+                vec![type_name.to_string()]
+            } else {
+                vec![type_name.to_string(), qualified]
+            }
+        };
 
-                if has_method {
-                    // Return the qualified function name
-                    return Some(format!("{}.{}.{}", type_name, trait_name, method_name));
+        for type_name_to_try in &type_names_to_try {
+            if let Some(traits) = self.type_traits.get(type_name_to_try) {
+                for trait_name in traits {
+                    // Check if this trait has the method
+                    // For built-in derivable traits, we know the method names
+                    let has_method = if self.is_builtin_derivable_trait(trait_name) {
+                        match (trait_name.as_str(), method_name) {
+                            ("Show", "show") => true,
+                            ("Hash", "hash") => true,
+                            ("Copy", "copy") => true,
+                            ("Eq", "==") | ("Eq", "eq") | ("Eq", "neq") => true,
+                            // Num trait methods (arithmetic operations)
+                            ("Num", "add") | ("Num", "sub") | ("Num", "mul") | ("Num", "div") => true,
+                            // Ord trait methods (comparison operations)
+                            ("Ord", "lt") | ("Ord", "gt") | ("Ord", "lte") | ("Ord", "gte") => true,
+                            _ => false,
+                        }
+                    } else if let Some(trait_info) = self.trait_defs.get(trait_name) {
+                        trait_info.methods.iter().any(|m| m.name == method_name)
+                    } else {
+                        false
+                    };
+
+                    if has_method {
+                        // Return the qualified function name using the type name that matched
+                        return Some(format!("{}.{}.{}", type_name_to_try, trait_name, method_name));
+                    }
                 }
             }
         }
@@ -3724,6 +3739,42 @@ impl Compiler {
         }
 
         None
+    }
+
+    /// Check if a type implements a USER-DEFINED trait with the given method.
+    /// This excludes builtin derivable traits (Show, Eq, Hash, etc.) which are
+    /// auto-generated and should not override builtin type methods.
+    fn find_user_trait_method(&self, type_name: &str, method_name: &str) -> bool {
+        // Try both the exact type name and qualified version
+        let type_names_to_try = if type_name.contains('.') {
+            vec![type_name.to_string()]
+        } else {
+            let qualified = self.qualify_name(type_name);
+            if qualified == type_name {
+                vec![type_name.to_string()]
+            } else {
+                vec![type_name.to_string(), qualified]
+            }
+        };
+
+        for type_name_to_try in &type_names_to_try {
+            if let Some(traits) = self.type_traits.get(type_name_to_try) {
+                for trait_name in traits {
+                    // Skip builtin derivable traits - they don't count as user-defined
+                    if self.is_builtin_derivable_trait(trait_name) {
+                        continue;
+                    }
+                    // Check if this user-defined trait has the method
+                    if let Some(trait_info) = self.trait_defs.get(trait_name) {
+                        if trait_info.methods.iter().any(|m| m.name == method_name) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        false
     }
 
     /// Check if a type name is a type parameter in the current function.
@@ -6815,16 +6866,23 @@ impl Compiler {
                     };
 
                     if let Some(native_name) = builtin_name {
-                        // Compile receiver and args
-                        let obj_reg = self.compile_expr_tail(obj, false)?;
-                        let mut arg_regs = vec![obj_reg];
-                        for arg in args {
-                            let reg = self.compile_expr_tail(Self::call_arg_expr(arg), false)?;
-                            arg_regs.push(reg);
+                        // Check if user defined a NON-BUILTIN trait method with this name
+                        // User-defined trait methods take precedence over builtins
+                        // But builtin derivable traits (Show, Eq, etc.) don't override builtins
+                        let has_user_trait_method = self.find_user_trait_method(&type_name, &method.node);
+                        if !has_user_trait_method {
+                            // No user-defined trait method, use the builtin
+                            let obj_reg = self.compile_expr_tail(obj, false)?;
+                            let mut arg_regs = vec![obj_reg];
+                            for arg in args {
+                                let reg = self.compile_expr_tail(Self::call_arg_expr(arg), false)?;
+                                arg_regs.push(reg);
+                            }
+                            let dst = self.alloc_reg();
+                            self.emit_call_native(dst, native_name, arg_regs.into(), line);
+                            return Ok(dst);
                         }
-                        let dst = self.alloc_reg();
-                        self.emit_call_native(dst, native_name, arg_regs.into(), line);
-                        return Ok(dst);
+                        // User has a trait method with this name - fall through to trait dispatch
                     }
                 }
 
@@ -9070,7 +9128,7 @@ impl Compiler {
         match expr {
             // Record/variant construction: Point(1, 2) or Point{x: 1, y: 2}
             // Note: The parser treats uppercase calls like Foo(42) as Record expressions
-            Expr::Record(type_name, _, _) => {
+            Expr::Record(type_name, args, _) => {
                 let name = &type_name.node;
                 // First check if it's directly a type name (for records and single-constructor variants)
                 if self.types.contains_key(name) {
@@ -9084,7 +9142,29 @@ impl Compiler {
                 // Otherwise check if it's a variant constructor
                 for (ty_name, info) in &self.types {
                     if let TypeInfoKind::Variant { constructors } = &info.kind {
-                        if constructors.iter().any(|(ctor_name, _)| ctor_name == name) {
+                        if let Some((_, ctor_fields)) = constructors.iter().find(|(ctor_name, _)| ctor_name == name) {
+                            // Check if the constructor has type parameter fields
+                            // Type params are single uppercase letters like "T", "U", etc.
+                            if !ctor_fields.is_empty() && !args.is_empty() {
+                                let first_field_type = &ctor_fields[0];
+                                // Check if first field type is a type parameter (single uppercase letter)
+                                let is_type_param = first_field_type.len() == 1
+                                    && first_field_type.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+                                if is_type_param {
+                                    // Try to infer type arg from first constructor arg
+                                    let first_arg_expr = match &args[0] {
+                                        RecordField::Positional(e) => Some(e),
+                                        RecordField::Named(_, e) => Some(e),
+                                    };
+                                    if let Some(arg_expr) = first_arg_expr {
+                                        if let Some(arg_type) = self.expr_type_name(arg_expr) {
+                                            // Return type with inferred type arg
+                                            // E.g., "MyOpt" + arg_type="Int" -> "MyOpt[Int]"
+                                            return Some(format!("{}[{}]", ty_name, arg_type));
+                                        }
+                                    }
+                                }
+                            }
                             return Some(ty_name.clone());
                         }
                     }
@@ -9092,37 +9172,25 @@ impl Compiler {
                 // Fall back to the given name (might be an unknown type, will error later)
                 Some(name.clone())
             }
-            // Tuple
-            Expr::Tuple(_, _) => Some("Tuple".to_string()),
+            // Tuple - infer element types for monomorphization
+            Expr::Tuple(items, _) => {
+                let elem_types: Vec<String> = items.iter()
+                    .filter_map(|e| self.expr_type_name(e))
+                    .collect();
+                if elem_types.len() == items.len() && !elem_types.is_empty() {
+                    Some(format!("({})", elem_types.join(", ")))
+                } else {
+                    Some("Tuple".to_string())
+                }
+            }
             // List - try to infer element type for monomorphization
-            // Only infer for simple cases (records/variants) to avoid non-deterministic behavior
             Expr::List(elements, _, _) => {
                 if let Some(first_elem) = elements.first() {
-                    // Only infer type for Record expressions (which include variant constructors)
-                    // This avoids calling expr_type_name on function calls which can have
-                    // non-deterministic results due to HashMap iteration order
-                    if let Expr::Record(type_name, _, _) = first_elem {
-                        let name = &type_name.node;
-                        // Check if it's a known type
-                        if self.types.contains_key(name) {
-                            return Some(format!("List[{}]", name));
-                        }
-                        // Try resolving the name
-                        let resolved = self.resolve_name(name);
-                        if self.types.contains_key(&resolved) {
-                            return Some(format!("List[{}]", resolved));
-                        }
-                        // Check if it's a variant constructor - but use sorted iteration for determinism
-                        let mut type_names: Vec<_> = self.types.keys().collect();
-                        type_names.sort();
-                        for ty_name in type_names {
-                            if let Some(info) = self.types.get(ty_name) {
-                                if let TypeInfoKind::Variant { constructors } = &info.kind {
-                                    if constructors.iter().any(|(ctor, _)| ctor == name) {
-                                        return Some(format!("List[{}]", ty_name));
-                                    }
-                                }
-                            }
+                    // Try to get element type from the first element
+                    if let Some(elem_type) = self.expr_type_name(first_elem) {
+                        // Only use concrete types (not just "List" or other generic containers)
+                        if !elem_type.is_empty() && elem_type != "List" && elem_type != "Map" {
+                            return Some(format!("List[{}]", elem_type));
                         }
                     }
                 }
@@ -9217,21 +9285,19 @@ impl Compiler {
                                         // Find which parameter has this type parameter in its type annotation
                                         if let Some(clause) = fn_def.clauses.first() {
                                             for (param_idx, param) in clause.params.iter().enumerate() {
-                                                if let Some(TypeExpr::Name(type_ident)) = &param.ty {
-                                                    if type_ident.node == ret_type {
-                                                        // This parameter has the same type parameter as return type
-                                                        // Get the argument type at this position
-                                                        if param_idx < args.len() {
-                                                            let arg_expr = Self::call_arg_expr(&args[param_idx]);
-                                                            if let Some(arg_type) = self.expr_type_name(arg_expr) {
-                                                                // Don't substitute if arg_type is also a type parameter
-                                                                let arg_is_type_param = arg_type.len() == 1 && arg_type.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
-                                                                if !arg_is_type_param {
-                                                                    return Some(arg_type);
+                                                if param_idx < args.len() {
+                                                    let arg_expr = Self::call_arg_expr(&args[param_idx]);
+                                                    if let Some(arg_type) = self.expr_type_name(arg_expr) {
+                                                        // Try to extract the concrete type for the type parameter from this param
+                                                        if let Some(ref param_ty) = param.ty {
+                                                            if let Some(concrete) = Self::extract_type_param_from_type_expr(param_ty, &ret_type, &arg_type) {
+                                                                // Don't substitute if concrete is also a type parameter
+                                                                let is_type_param = concrete.len() == 1 && concrete.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+                                                                if !is_type_param {
+                                                                    return Some(concrete);
                                                                 }
                                                             }
                                                         }
-                                                        break;
                                                     }
                                                 }
                                             }
@@ -9331,10 +9397,15 @@ impl Compiler {
             Expr::Var(ident) => {
                 // Check param_types first (for monomorphized function variants)
                 if let Some(ty) = self.param_types.get(&ident.node) {
-                    return Some(ty.clone());
+                    // Substitute type parameters from current_type_bindings
+                    return Some(self.substitute_type_params_in_string(ty));
                 }
                 // Then check local_types
-                self.local_types.get(&ident.node).cloned()
+                if let Some(ty) = self.local_types.get(&ident.node) {
+                    // Substitute type parameters from current_type_bindings
+                    return Some(self.substitute_type_params_in_string(ty));
+                }
+                None
             }
             // For field access, look up the field's type from the record definition
             Expr::FieldAccess(obj, field, _) => {
@@ -9767,11 +9838,53 @@ impl Compiler {
                                 let inner = &arg_type[container_name.len() + 1..arg_type.len() - 1];
                                 // For single type parameter (most common case)
                                 if type_args.len() == 1 {
-                                    if let TypeExpr::Name(type_param_ident) = &type_args[0] {
-                                        let type_param_name = &type_param_ident.node;
-                                        let is_type_param = fn_def.type_params.iter().any(|tp| tp.name.node == *type_param_name);
-                                        if is_type_param {
-                                            self.current_type_bindings.insert(type_param_name.clone(), inner.to_string());
+                                    match &type_args[0] {
+                                        TypeExpr::Name(type_param_ident) => {
+                                            let type_param_name = &type_param_ident.node;
+                                            let is_type_param = fn_def.type_params.iter().any(|tp| tp.name.node == *type_param_name);
+                                            if is_type_param {
+                                                self.current_type_bindings.insert(type_param_name.clone(), inner.to_string());
+                                            }
+                                        }
+                                        // Handle List[(T, T)] - tuple inside generic container
+                                        TypeExpr::Tuple(tuple_elems) => {
+                                            // inner is "(Int, Int)" - parse it as tuple
+                                            if inner.starts_with('(') && inner.ends_with(')') {
+                                                let tuple_inner = &inner[1..inner.len() - 1];
+                                                let arg_elem_types = Self::split_type_args(tuple_inner);
+                                                for (j, elem_type) in tuple_elems.iter().enumerate() {
+                                                    if j < arg_elem_types.len() {
+                                                        if let TypeExpr::Name(type_param_ident) = elem_type {
+                                                            let type_param_name = &type_param_ident.node;
+                                                            let is_type_param = fn_def.type_params.iter().any(|tp| tp.name.node == *type_param_name);
+                                                            if is_type_param {
+                                                                self.current_type_bindings.insert(type_param_name.clone(), arg_elem_types[j].clone());
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                        // Tuple type: (T, T), (T, U), etc.
+                        Some(TypeExpr::Tuple(tuple_elems)) => {
+                            // Parse the arg_type as a tuple: "(Int, Int)" -> ["Int", "Int"]
+                            if arg_type.starts_with('(') && arg_type.ends_with(')') {
+                                let inner = &arg_type[1..arg_type.len() - 1];
+                                let arg_elem_types = Self::split_type_args(inner);
+                                // Match each tuple element with the corresponding type parameter
+                                for (j, elem_type) in tuple_elems.iter().enumerate() {
+                                    if j < arg_elem_types.len() {
+                                        if let TypeExpr::Name(type_param_ident) = elem_type {
+                                            let type_param_name = &type_param_ident.node;
+                                            let is_type_param = fn_def.type_params.iter().any(|tp| tp.name.node == *type_param_name);
+                                            if is_type_param {
+                                                self.current_type_bindings.insert(type_param_name.clone(), arg_elem_types[j].clone());
+                                            }
                                         }
                                     }
                                 }
@@ -9843,13 +9956,154 @@ impl Compiler {
         for (key, def) in &self.fn_asts {
             if key.starts_with(&prefix) || key == fn_name {
                 if !def.clauses.is_empty() {
-                    return def.clauses[0].params.iter()
+                    let param_types: Vec<Option<TypeExpr>> = def.clauses[0].params.iter()
                         .map(|p| p.ty.clone())
                         .collect();
+                    // Only use these types if at least one parameter has a type annotation
+                    // Otherwise, fall through to check builtin signatures
+                    if param_types.iter().any(|t| t.is_some()) {
+                        return param_types;
+                    }
                 }
             }
         }
+
+        // Fall back to builtin signatures
+        if let Some(sig) = Self::get_builtin_signature(fn_name) {
+            return Self::parse_builtin_signature_params(sig);
+        }
+
         vec![]
+    }
+
+    /// Parse a builtin signature string into parameter TypeExprs.
+    /// For example, "[a] -> (a -> b) -> [b]" returns [Some(List[a]), Some((a -> b))]
+    fn parse_builtin_signature_params(sig: &str) -> Vec<Option<TypeExpr>> {
+        // Split by " -> " respecting parentheses and brackets
+        let parts = Self::split_signature_by_arrow(sig);
+        if parts.len() <= 1 {
+            return vec![];
+        }
+
+        // All parts except the last are parameters
+        parts[..parts.len() - 1]
+            .iter()
+            .map(|part| Some(Self::parse_signature_type(part)))
+            .collect()
+    }
+
+    /// Split a signature string by " -> ", respecting nested parentheses and brackets.
+    fn split_signature_by_arrow(sig: &str) -> Vec<String> {
+        let mut result = Vec::new();
+        let mut current = String::new();
+        let mut depth = 0;
+        let chars: Vec<char> = sig.chars().collect();
+        let mut i = 0;
+
+        while i < chars.len() {
+            let c = chars[i];
+            match c {
+                '(' | '[' => {
+                    depth += 1;
+                    current.push(c);
+                }
+                ')' | ']' => {
+                    depth -= 1;
+                    current.push(c);
+                }
+                '-' if depth == 0 && i + 1 < chars.len() && chars[i + 1] == '>' => {
+                    // Found " -> " at depth 0
+                    let trimmed = current.trim().to_string();
+                    if !trimmed.is_empty() {
+                        result.push(trimmed);
+                    }
+                    current.clear();
+                    i += 2; // Skip "->"
+                    // Skip any whitespace after "->"
+                    while i < chars.len() && chars[i].is_whitespace() {
+                        i += 1;
+                    }
+                    continue;
+                }
+                _ => {
+                    current.push(c);
+                }
+            }
+            i += 1;
+        }
+
+        let trimmed = current.trim().to_string();
+        if !trimmed.is_empty() {
+            result.push(trimmed);
+        }
+
+        result
+    }
+
+    /// Parse a type string from a signature, handling special syntax like [a] for List[a].
+    fn parse_signature_type(type_str: &str) -> TypeExpr {
+        let trimmed = type_str.trim();
+
+        // Handle [a] shorthand for List[a]
+        if trimmed.starts_with('[') && trimmed.ends_with(']') && !trimmed.contains("->") {
+            let inner = &trimmed[1..trimmed.len() - 1];
+            let inner_type = Self::parse_signature_type(inner);
+            return TypeExpr::Generic(
+                Spanned::new("List".to_string(), Span::default()),
+                vec![inner_type],
+            );
+        }
+
+        // Handle function types like (a -> b) or a -> b
+        if trimmed.contains("->") {
+            // Parse as function type
+            let parts = Self::split_signature_by_arrow(trimmed);
+            if parts.len() >= 2 {
+                let params: Vec<TypeExpr> = parts[..parts.len() - 1]
+                    .iter()
+                    .map(|p| Self::parse_signature_type(p))
+                    .collect();
+                let ret = Box::new(Self::parse_signature_type(&parts[parts.len() - 1]));
+                return TypeExpr::Function(params, ret);
+            }
+        }
+
+        // Handle parenthesized types (might be tuples or just grouping)
+        if trimmed.starts_with('(') && trimmed.ends_with(')') {
+            let inner = &trimmed[1..trimmed.len() - 1];
+            // Check if it contains " -> " - if so, it's a function type inside parens
+            if inner.contains("->") {
+                return Self::parse_signature_type(inner);
+            }
+            // Check if it's a tuple type (contains comma)
+            if inner.contains(',') {
+                let parts = Self::split_type_args(inner);
+                let types: Vec<TypeExpr> = parts.iter()
+                    .map(|p| Self::parse_signature_type(p))
+                    .collect();
+                return TypeExpr::Tuple(types);
+            }
+            // Just a grouped single type
+            return Self::parse_signature_type(inner);
+        }
+
+        // Handle parameterized types like Map k v
+        if trimmed.contains(' ') && !trimmed.contains('[') {
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let container = parts[0];
+                let args: Vec<TypeExpr> = parts[1..].iter()
+                    .map(|p| Self::parse_signature_type(p))
+                    .collect();
+                return TypeExpr::Generic(
+                    Spanned::new(container.to_string(), Span::default()),
+                    args,
+                );
+            }
+        }
+
+        // Use the existing parser for simpler types
+        Self::parse_type_string_to_type_expr(trimmed)
     }
 
     /// Get parameter names for a function by name.
@@ -9893,6 +10147,38 @@ impl Compiler {
     /// Parse a type string like "List[Box]" into a TypeExpr.
     /// Handles simple types (Int, Box) and parameterized types (List[T], Map[K,V]).
     fn parse_type_string_to_type_expr(type_str: &str) -> TypeExpr {
+        let type_str = type_str.trim();
+
+        // Check for tuple type: (Type1, Type2, ...)
+        if type_str.starts_with('(') && type_str.ends_with(')') {
+            let inner = &type_str[1..type_str.len() - 1];
+            // Check if this is actually a tuple (contains comma at depth 0) or just parenthesized
+            let has_comma = {
+                let mut depth = 0;
+                let mut found = false;
+                for c in inner.chars() {
+                    match c {
+                        '(' | '[' => depth += 1,
+                        ')' | ']' => depth -= 1,
+                        ',' if depth == 0 => { found = true; break; }
+                        _ => {}
+                    }
+                }
+                found
+            };
+
+            if has_comma || inner.is_empty() {
+                // This is a tuple
+                let elem_strs = Self::split_type_args(inner);
+                let elem_types = elem_strs.into_iter()
+                    .map(|s| Self::parse_type_string_to_type_expr(&s))
+                    .collect();
+                return TypeExpr::Tuple(elem_types);
+            }
+            // Otherwise it's just parenthesized, parse the inner
+            return Self::parse_type_string_to_type_expr(inner);
+        }
+
         // Check for parameterized type: Container[Arg1, Arg2, ...]
         if let Some(bracket_pos) = type_str.find('[') {
             if type_str.ends_with(']') {
@@ -9916,25 +10202,26 @@ impl Compiler {
         TypeExpr::Name(Spanned::new(type_str.to_string(), Span::default()))
     }
 
-    /// Split type arguments by comma, respecting nested brackets.
+    /// Split type arguments by comma, respecting nested brackets and parentheses.
     /// "A, B" -> ["A", "B"]
     /// "List[A], B" -> ["List[A]", "B"]
+    /// "(A, B), C" -> ["(A, B)", "C"]
     fn split_type_args(args_str: &str) -> Vec<String> {
         let mut result = Vec::new();
         let mut current = String::new();
-        let mut bracket_depth = 0;
+        let mut depth = 0;
 
         for c in args_str.chars() {
             match c {
-                '[' => {
-                    bracket_depth += 1;
+                '[' | '(' => {
+                    depth += 1;
                     current.push(c);
                 }
-                ']' => {
-                    bracket_depth -= 1;
+                ']' | ')' => {
+                    depth -= 1;
                     current.push(c);
                 }
-                ',' if bracket_depth == 0 => {
+                ',' if depth == 0 => {
                     let trimmed = current.trim().to_string();
                     if !trimmed.is_empty() {
                         result.push(trimmed);
@@ -9953,6 +10240,65 @@ impl Compiler {
         }
 
         result
+    }
+
+    /// Extract a concrete type for a type parameter from a type expression and concrete type string.
+    /// For example, if type_expr is `(T, T)`, type_param is `T`, and concrete is `(Int, Int)`,
+    /// this returns `Some("Int")`.
+    fn extract_type_param_from_type_expr(type_expr: &TypeExpr, type_param: &str, concrete: &str) -> Option<String> {
+        match type_expr {
+            TypeExpr::Name(ident) => {
+                if ident.node == type_param {
+                    Some(concrete.to_string())
+                } else {
+                    None
+                }
+            }
+            TypeExpr::Tuple(elems) => {
+                // Parse concrete as tuple: "(A, B)" -> ["A", "B"]
+                if concrete.starts_with('(') && concrete.ends_with(')') {
+                    let inner = &concrete[1..concrete.len() - 1];
+                    let concrete_elems = Self::split_type_args(inner);
+                    for (i, elem) in elems.iter().enumerate() {
+                        if i < concrete_elems.len() {
+                            if let Some(result) = Self::extract_type_param_from_type_expr(elem, type_param, &concrete_elems[i]) {
+                                return Some(result);
+                            }
+                        }
+                    }
+                }
+                None
+            }
+            TypeExpr::Generic(_, type_args) => {
+                // Parse concrete as generic: "List[A]" -> "A" for inner
+                if let Some(bracket_start) = concrete.find('[') {
+                    if concrete.ends_with(']') {
+                        let inner = &concrete[bracket_start + 1..concrete.len() - 1];
+                        let concrete_args = Self::split_type_args(inner);
+                        for (i, type_arg) in type_args.iter().enumerate() {
+                            if i < concrete_args.len() {
+                                if let Some(result) = Self::extract_type_param_from_type_expr(type_arg, type_param, &concrete_args[i]) {
+                                    return Some(result);
+                                }
+                            }
+                        }
+                    }
+                }
+                None
+            }
+            TypeExpr::Function(params, ret) => {
+                // For function types, we'd need to parse the concrete function type
+                // This is complex, so just try the return type for now
+                if let Some(arrow_pos) = concrete.rfind("->") {
+                    let ret_part = concrete[arrow_pos + 2..].trim();
+                    if let Some(result) = Self::extract_type_param_from_type_expr(ret, type_param, ret_part) {
+                        return Some(result);
+                    }
+                }
+                None
+            }
+            TypeExpr::Record(_) | TypeExpr::Unit => None,
+        }
     }
 
     /// Compile an argument expression with knowledge of the expected parameter type.
@@ -10203,8 +10549,8 @@ impl Compiler {
                 if matches!(name.as_str(), "Int" | "Float" | "String" | "Bool" | "Char" | "()" | "List" | "Map" | "Set" | "Tuple") {
                     return Some(name.clone());
                 }
-                // Single uppercase letters are likely type parameters
-                if name.len() == 1 && name.chars().next().unwrap().is_uppercase() {
+                // Single letters (upper or lowercase) are likely type parameters
+                if name.len() == 1 && name.chars().next().unwrap().is_alphabetic() {
                     return None;
                 }
                 // Could be an unknown type - return it anyway
@@ -10234,21 +10580,12 @@ impl Compiler {
     fn build_type_param_map(&self, expected_types: &[Option<TypeExpr>], args: &[Expr]) -> HashMap<String, String> {
         let mut map = HashMap::new();
 
-        // First pass: find simple type parameter mappings from non-function types
+        // First pass: find type parameter mappings
         for (expected, arg) in expected_types.iter().zip(args.iter()) {
             if let Some(type_expr) = expected {
-                // Check if this parameter is a simple type parameter (single uppercase letter)
-                if let TypeExpr::Name(ident) = type_expr {
-                    let name = &ident.node;
-                    if name.len() == 1 && name.chars().next().unwrap().is_uppercase() {
-                        // This is a type parameter - try to get concrete type from argument
-                        if let Some(concrete_type) = self.expr_type_name(arg) {
-                            // Only map if the concrete type is actually concrete (not another type param)
-                            if !(concrete_type.len() == 1 && concrete_type.chars().next().unwrap().is_uppercase()) {
-                                map.insert(name.clone(), concrete_type);
-                            }
-                        }
-                    }
+                if let Some(concrete_type) = self.expr_type_name(arg) {
+                    // Extract type bindings recursively
+                    Self::extract_type_bindings(type_expr, &concrete_type, &mut map);
                 }
             }
         }
@@ -10260,26 +10597,71 @@ impl Compiler {
     fn build_type_param_map_refs(&self, expected_types: &[Option<TypeExpr>], args: &[&Expr]) -> HashMap<String, String> {
         let mut map = HashMap::new();
 
-        // First pass: find simple type parameter mappings from non-function types
+        // First pass: find type parameter mappings
         for (expected, arg) in expected_types.iter().zip(args.iter()) {
             if let Some(type_expr) = expected {
-                // Check if this parameter is a simple type parameter (single uppercase letter)
-                if let TypeExpr::Name(ident) = type_expr {
-                    let name = &ident.node;
-                    if name.len() == 1 && name.chars().next().unwrap().is_uppercase() {
-                        // This is a type parameter - try to get concrete type from argument
-                        if let Some(concrete_type) = self.expr_type_name(arg) {
-                            // Only map if the concrete type is actually concrete (not another type param)
-                            if !(concrete_type.len() == 1 && concrete_type.chars().next().unwrap().is_uppercase()) {
-                                map.insert(name.clone(), concrete_type);
-                            }
-                        }
-                    }
+                if let Some(concrete_type) = self.expr_type_name(arg) {
+                    // Extract type bindings recursively
+                    Self::extract_type_bindings(type_expr, &concrete_type, &mut map);
                 }
             }
         }
 
         map
+    }
+
+    /// Check if a name is a type parameter (single letter, upper or lowercase)
+    fn is_type_param_name(name: &str) -> bool {
+        name.len() == 1 && name.chars().next().unwrap().is_alphabetic()
+    }
+
+    /// Extract type bindings by matching a type expression against a concrete type string.
+    /// For example, matching List[a] against List[Int] adds a -> Int to the map.
+    fn extract_type_bindings(type_expr: &TypeExpr, concrete_type: &str, map: &mut HashMap<String, String>) {
+        match type_expr {
+            TypeExpr::Name(ident) => {
+                let name = &ident.node;
+                // Check if this is a type parameter (single letter)
+                if Self::is_type_param_name(name) {
+                    // Only map if the concrete type is actually concrete (not another type param)
+                    if !Self::is_type_param_name(concrete_type) {
+                        map.insert(name.clone(), concrete_type.to_string());
+                    }
+                }
+            }
+            TypeExpr::Generic(container_ident, type_args) => {
+                let container = &container_ident.node;
+                // Match Container[Args] against concrete Container[ConcreteArgs]
+                let prefix = format!("{}[", container);
+                if concrete_type.starts_with(&prefix) && concrete_type.ends_with(']') {
+                    // Extract inner types: "List[Int]" -> "Int", "Map[String, Int]" -> "String, Int"
+                    let inner = &concrete_type[prefix.len()..concrete_type.len() - 1];
+                    // Split the concrete inner types
+                    let concrete_args = Self::split_type_args(inner);
+                    // Match each type argument
+                    for (type_arg, concrete_arg) in type_args.iter().zip(concrete_args.iter()) {
+                        Self::extract_type_bindings(type_arg, concrete_arg, map);
+                    }
+                }
+            }
+            TypeExpr::Function(params, ret) => {
+                // For function types, we can't easily extract bindings without more context
+                // But if we have current_type_bindings, we might be able to use those
+                // For now, skip function types
+                let _ = (params, ret);
+            }
+            TypeExpr::Tuple(types) => {
+                // Match tuple types if the concrete type is a tuple
+                if concrete_type.starts_with('(') && concrete_type.ends_with(')') {
+                    let inner = &concrete_type[1..concrete_type.len() - 1];
+                    let concrete_parts = Self::split_type_args(inner);
+                    for (type_elem, concrete_elem) in types.iter().zip(concrete_parts.iter()) {
+                        Self::extract_type_bindings(type_elem, concrete_elem, map);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Substitute type parameters in a TypeExpr using the given map.
@@ -10320,6 +10702,50 @@ impl Compiler {
             }
             _ => type_expr.clone(),
         }
+    }
+
+    /// Substitute type parameters in a type string using current_type_bindings.
+    /// For example, "List[T]" with bindings {T: "Int"} becomes "List[Int]".
+    fn substitute_type_params_in_string(&self, type_str: &str) -> String {
+        if self.current_type_bindings.is_empty() {
+            return type_str.to_string();
+        }
+
+        let mut result = type_str.to_string();
+        for (param, concrete) in &self.current_type_bindings {
+            // Replace type parameter at word boundaries
+            // This handles cases like "List[T]" -> "List[Int]", "(T, T)" -> "(Val, Val)", etc.
+            let patterns = [
+                // Simple bracketed types: [T], [T, U], etc.
+                (format!("[{}]", param), format!("[{}]", concrete)),
+                (format!("[{},", param), format!("[{},", concrete)),
+                (format!("[{} ", param), format!("[{} ", concrete)),
+                (format!(", {}]", param), format!(", {}]", concrete)),
+                (format!(" {}]", param), format!(" {}]", concrete)),
+                (format!(", {}, ", param), format!(", {}, ", concrete)),
+                // Tuple types: (T), (T, T), etc.
+                (format!("({})", param), format!("({})", concrete)),
+                (format!("({},", param), format!("({},", concrete)),
+                (format!("({} ", param), format!("({} ", concrete)),
+                (format!(", {})", param), format!(", {})", concrete)),
+                (format!(" {})", param), format!(" {})", concrete)),
+                // Nested: [(T, T)], etc.
+                (format!("[({})", param), format!("[({})", concrete)),
+                (format!("[({}]", param), format!("[({}]", concrete)),
+                (format!("[({},", param), format!("[({},", concrete)),
+            ];
+
+            for (pattern, replacement) in &patterns {
+                result = result.replace(pattern, replacement);
+            }
+
+            // Also handle standalone type parameter (whole string is just "T")
+            if result == *param {
+                result = concrete.clone();
+            }
+        }
+
+        result
     }
 
     /// Extract a module path from an expression.
@@ -10606,9 +11032,10 @@ impl Compiler {
 
     /// Compile a match expression.
     fn compile_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], is_tail: bool, line: usize) -> Result<Reg, CompileError> {
-        // Check for exhaustiveness before compiling
-        if let Some(scrut_type) = self.expr_type_name(scrutinee) {
-            self.check_match_exhaustiveness(&scrut_type, arms, scrutinee.span())?;
+        // Get scrutinee type for exhaustiveness checking and type propagation
+        let scrut_type = self.expr_type_name(scrutinee);
+        if let Some(ref ty) = scrut_type {
+            self.check_match_exhaustiveness(ty, arms, scrutinee.span())?;
         }
 
         let scrut_reg = self.compile_expr_tail(scrutinee, false)?;
@@ -10627,8 +11054,9 @@ impl Compiler {
                 self.chunk.patch_jump(jump, arm_start);
             }
 
-            // Save locals before processing arm (pattern bindings should be scoped to this arm)
+            // Save locals and local_types before processing arm (pattern bindings should be scoped to this arm)
             let saved_locals = self.locals.clone();
+            let saved_local_types = self.local_types.clone();
 
             // Try to match the pattern
             let (match_success, bindings) = self.compile_pattern_test(&arm.pattern, scrut_reg)?;
@@ -10639,6 +11067,14 @@ impl Compiler {
             // Bind pattern variables with type info from pattern
             for (name, reg, is_float) in bindings {
                 self.locals.insert(name, LocalInfo { reg, is_float, mutable: false });
+            }
+
+            // Set types for pattern variables based on scrutinee type
+            if let Some(ref ty) = scrut_type {
+                let binding_types = self.extract_pattern_binding_types(&arm.pattern, ty);
+                for (var_name, var_type) in binding_types {
+                    self.local_types.insert(var_name, var_type);
+                }
             }
 
             // Compile guard if present
@@ -10673,8 +11109,9 @@ impl Compiler {
                 }
             }
 
-            // Restore locals after arm (pattern bindings shouldn't leak to next arm)
+            // Restore locals and local_types after arm (pattern bindings shouldn't leak to next arm)
             self.locals = saved_locals;
+            self.local_types = saved_local_types;
         }
 
         // Patch remaining jumps (from last arm failures) to panic location
@@ -10699,6 +11136,122 @@ impl Compiler {
         }
 
         Ok(dst)
+    }
+
+    /// Extract type bindings for pattern variables given the scrutinee type.
+    /// For example, pattern `(a, _)` with type `(Int, Int)` returns `[("a", "Int")]`
+    fn extract_pattern_binding_types(&self, pattern: &Pattern, scrut_type: &str) -> Vec<(String, String)> {
+        let mut result = Vec::new();
+        self.extract_pattern_binding_types_inner(pattern, scrut_type, &mut result);
+        result
+    }
+
+    fn extract_pattern_binding_types_inner(&self, pattern: &Pattern, ty: &str, result: &mut Vec<(String, String)>) {
+        match pattern {
+            Pattern::Var(ident) => {
+                // Bind variable to the type
+                if !ty.is_empty() && ty != "Tuple" {
+                    result.push((ident.node.clone(), ty.to_string()));
+                }
+            }
+            Pattern::Tuple(pats, _) => {
+                // Parse tuple type: "(Int, Int)" -> ["Int", "Int"]
+                if ty.starts_with('(') && ty.ends_with(')') {
+                    let inner = &ty[1..ty.len() - 1];
+                    let elem_types = Self::split_type_args(inner);
+                    for (i, pat) in pats.iter().enumerate() {
+                        if i < elem_types.len() {
+                            self.extract_pattern_binding_types_inner(pat, &elem_types[i], result);
+                        }
+                    }
+                }
+            }
+            Pattern::Wildcard(_) => {
+                // Wildcards don't bind anything
+            }
+            // Literal patterns don't bind anything
+            Pattern::Int(_, _) | Pattern::Int8(_, _) | Pattern::Int16(_, _) | Pattern::Int32(_, _) |
+            Pattern::UInt8(_, _) | Pattern::UInt16(_, _) | Pattern::UInt32(_, _) | Pattern::UInt64(_, _) |
+            Pattern::BigInt(_, _) | Pattern::Float(_, _) | Pattern::Float32(_, _) | Pattern::Decimal(_, _) |
+            Pattern::String(_, _) | Pattern::Char(_, _) | Pattern::Bool(_, _) | Pattern::Unit(_) => {
+                // Literals don't bind anything
+            }
+            Pattern::Variant(ctor_ident, fields, _) => {
+                // For variants, try to extract field types from the type
+                // If ty is "MyOption[Int]" and constructor has one field of type T,
+                // the field's concrete type is Int
+                if let VariantPatternFields::Positional(patterns) = fields {
+                    if !patterns.is_empty() {
+                        // Try to extract type arguments from ty (e.g., "MyOption[Int]" -> ["Int"])
+                        if let Some(bracket_pos) = ty.find('[') {
+                            if ty.ends_with(']') {
+                                let inner = &ty[bracket_pos + 1..ty.len() - 1];
+                                let type_args = Self::split_type_args(inner);
+                                // For single type arg and single pattern, assume they match
+                                if type_args.len() == 1 && patterns.len() == 1 {
+                                    self.extract_pattern_binding_types_inner(&patterns[0], &type_args[0], result);
+                                    return;
+                                }
+                            }
+                        }
+                        // Also look up the constructor to get field types
+                        let ctor_name = &ctor_ident.node;
+                        for (_, info) in &self.types {
+                            if let TypeInfoKind::Variant { constructors } = &info.kind {
+                                if let Some((_, field_types)) = constructors.iter().find(|(name, _)| name == ctor_name) {
+                                    // Try to match patterns with field types
+                                    for (i, pat) in patterns.iter().enumerate() {
+                                        if i < field_types.len() {
+                                            self.extract_pattern_binding_types_inner(pat, &field_types[i], result);
+                                        }
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Pattern::Record(fields, _) => {
+                // For record patterns, we'd need field type info
+                for field in fields {
+                    match field {
+                        RecordPatternField::Named(_, pat) => {
+                            self.extract_pattern_binding_types_inner(pat, "", result);
+                        }
+                        RecordPatternField::Punned(ident) => {
+                            // Punned binding - we don't know the field type
+                            result.push((ident.node.clone(), String::new()));
+                        }
+                        RecordPatternField::Rest(_) => {}
+                    }
+                }
+            }
+            Pattern::List(list_pat, _) => {
+                // For list patterns, extract element type from List[T]
+                let elem_type = if ty.starts_with("List[") && ty.ends_with(']') {
+                    ty[5..ty.len() - 1].to_string()
+                } else {
+                    String::new()
+                };
+                match list_pat {
+                    ListPattern::Empty => {}
+                    ListPattern::Cons(head_pats, tail) => {
+                        for pat in head_pats {
+                            self.extract_pattern_binding_types_inner(pat, &elem_type, result);
+                        }
+                        if let Some(tail_pat) = tail {
+                            // Tail has the same type as the whole list
+                            self.extract_pattern_binding_types_inner(tail_pat, ty, result);
+                        }
+                    }
+                }
+            }
+            Pattern::Map(_, _) | Pattern::Or(_, _) | Pattern::Pin(_, _) |
+            Pattern::Set(_, _) | Pattern::StringCons(_, _) => {
+                // Not handling these for now
+            }
+        }
     }
 
     /// Check if match arms exhaustively cover all cases of a type.
@@ -15813,10 +16366,20 @@ impl Compiler {
             Expr::Call(func, type_args, args, span) => {
                 let new_func = if let Expr::Var(ident) = func.as_ref() {
                     if Self::RHTML_SCOPED_NAMES.contains(&ident.node.as_str()) {
-                        // Transform `div` to `stdlib.rhtml.div` as a qualified name
+                        // Transform `div` to `stdlib.rhtml.div` using FieldAccess chain
+                        // (same approach as HTML transform for consistent function resolution)
                         let fn_span = ident.span;
-                        let qualified_name = format!("stdlib.rhtml.{}", ident.node);
-                        Expr::Var(Spanned::new(qualified_name, fn_span))
+                        let stdlib_var = Expr::Var(Spanned::new("stdlib".to_string(), fn_span));
+                        let rhtml_access = Expr::FieldAccess(
+                            Box::new(stdlib_var),
+                            Spanned::new("rhtml".to_string(), fn_span),
+                            fn_span,
+                        );
+                        Expr::FieldAccess(
+                            Box::new(rhtml_access),
+                            ident.clone(),
+                            fn_span,
+                        )
                     } else {
                         func.as_ref().clone()
                     }

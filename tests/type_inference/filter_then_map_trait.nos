@@ -1,0 +1,19 @@
+# expect: 12
+# Test filter then map with trait methods
+
+trait Processable
+    keep(self) -> Bool
+    process(self) -> Int
+end
+
+Int: Processable
+    keep(self) = self % 2 == 0
+    process(self) = self * 2
+end
+
+filterThenProcess[T: Processable](items: List[T]) -> Int =
+    items.filter(x => x.keep())
+         .map(x => x.process())
+         .fold(0, (a, b) => a + b)
+
+main() = filterThenProcess([1, 2, 3, 4, 5])

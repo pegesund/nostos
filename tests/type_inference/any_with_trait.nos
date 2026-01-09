@@ -1,0 +1,15 @@
+# expect: true
+# Test any() with trait predicate
+
+trait Matchable
+    matches(self) -> Bool
+end
+
+Int: Matchable
+    matches(self) = self == 42
+end
+
+hasMatch[T: Matchable](items: List[T]) -> Bool =
+    items.any(x => x.matches())
+
+main() = hasMatch([1, 2, 42, 3])

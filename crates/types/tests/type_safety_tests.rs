@@ -369,6 +369,7 @@ mod functions {
         let _ = TypeCheckOk {
             source: "add(a: Int, b: Int) -> Int = a + b",
             expected_type: Type::Function(FunctionType {
+                required_params: None,
                 type_params: vec![],
                 params: vec![Type::Int, Type::Int],
                 ret: Box::new(Type::Int),
@@ -417,6 +418,7 @@ mod functions {
         let _ = TypeCheckOk {
             source: "x => x + 1",
             expected_type: Type::Function(FunctionType {
+                required_params: None,
                 type_params: vec![],
                 params: vec![Type::Int],
                 ret: Box::new(Type::Int),
@@ -465,6 +467,7 @@ mod pattern_matching {
         let _ = TypeCheckOk {
             source: "fib(0) = 0\nfib(1) = 1\nfib(n) = fib(n - 1) + fib(n - 2)",
             expected_type: Type::Function(FunctionType {
+                required_params: None,
                 type_params: vec![],
                 params: vec![Type::Int],
                 ret: Box::new(Type::Int),
@@ -481,6 +484,7 @@ mod pattern_matching {
         let _ = TypeCheckOk {
             source: "sum([]) = 0\nsum([h | t]) = h + sum(t)",
             expected_type: Type::Function(FunctionType {
+                required_params: None,
                 type_params: vec![],
                 params: vec![Type::List(Box::new(Type::Int))],
                 ret: Box::new(Type::Int),
@@ -507,6 +511,7 @@ mod pattern_matching {
         let _ = TypeCheckOk {
             source: "getX({x, y}) = x",
             expected_type: Type::Function(FunctionType {
+                required_params: None,
                 type_params: vec![],
                 params: vec![Type::Named {
                     name: "Point".to_string(),
@@ -526,6 +531,7 @@ mod pattern_matching {
         let _ = TypeCheckOk {
             source: r#"unwrap(Some(x)) = x\nunwrap(None) = panic("empty")"#,
             expected_type: Type::Function(FunctionType {
+                required_params: None,
                 type_params: vec![TypeParam {
                     name: "T".to_string(),
                     constraints: vec![]
@@ -796,6 +802,7 @@ mod generics {
         let _ = TypeCheckOk {
             source: "id(x) = x",
             expected_type: Type::Function(FunctionType {
+                required_params: None,
                 type_params: vec![TypeParam { name: "T".to_string(), constraints: vec![] }],
                 params: vec![Type::TypeParam("T".to_string())],
                 ret: Box::new(Type::TypeParam("T".to_string())),
@@ -822,12 +829,14 @@ mod generics {
         let _ = TypeCheckOk {
             source: "map(f, []) = []\nmap(f, [h | t]) = [f(h) | map(f, t)]",
             expected_type: Type::Function(FunctionType {
+                required_params: None,
                 type_params: vec![
                     TypeParam { name: "A".to_string(), constraints: vec![] },
                     TypeParam { name: "B".to_string(), constraints: vec![] },
                 ],
                 params: vec![
                     Type::Function(FunctionType {
+                        required_params: None,
                         type_params: vec![],
                         params: vec![Type::TypeParam("A".to_string())],
                         ret: Box::new(Type::TypeParam("B".to_string())),
@@ -895,6 +904,7 @@ mod traits {
         let _ = TypeCheckOk {
             source: "equals(a, b) when T: Eq = a == b",
             expected_type: Type::Function(FunctionType {
+                required_params: None,
                 type_params: vec![TypeParam {
                     name: "T".to_string(),
                     constraints: vec!["Eq".to_string()]
@@ -939,6 +949,7 @@ mod traits {
         let _ = TypeCheckOk {
             source: "max(a, b) = if a > b then a else b",
             expected_type: Type::Function(FunctionType {
+                required_params: None,
                 type_params: vec![TypeParam {
                     name: "T".to_string(),
                     constraints: vec!["Ord".to_string()]
@@ -960,6 +971,7 @@ mod traits {
         let _ = TypeCheckOk {
             source: "hashAndShow(x) = x.hash().show()",
             expected_type: Type::Function(FunctionType {
+                required_params: None,
                 type_params: vec![TypeParam {
                     name: "T".to_string(),
                     constraints: vec![

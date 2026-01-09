@@ -1,0 +1,15 @@
+# expect: 3
+# Test trait with comparison in predicate
+
+trait Comparable
+    greaterThan(self, threshold: Int) -> Bool
+end
+
+Int: Comparable
+    greaterThan(self, threshold: Int) = self > threshold
+end
+
+countGreater[T: Comparable](items: List[T], threshold: Int) -> Int =
+    items.filter(x => x.greaterThan(threshold)).length()
+
+main() = countGreater([1, 5, 2, 8, 3, 9], 4)

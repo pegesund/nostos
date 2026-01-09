@@ -1,0 +1,20 @@
+# expect: 42
+# Test find() with trait predicate
+
+trait Findable
+    isTarget(self) -> Bool
+    getVal(self) -> Int
+end
+
+Int: Findable
+    isTarget(self) = self > 40
+    getVal(self) = self
+end
+
+findFirst[T: Findable](items: List[T]) -> Int =
+    match items.find(x => x.isTarget()) {
+        Some(x) -> x.getVal()
+        None -> 0
+    }
+
+main() = findFirst([10, 20, 42, 50])

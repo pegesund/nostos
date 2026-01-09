@@ -1,0 +1,23 @@
+# expect: 584
+# Test trait with multiple type implementations
+
+trait ToInt
+    toInt(self) -> Int
+end
+
+Int: ToInt
+    toInt(self) = self
+end
+
+String: ToInt
+    toInt(self) = self.length()
+end
+
+sumInts[T: ToInt](items: List[T]) -> Int =
+    items.map(x => x.toInt()).fold(0, (a, b) => a + b)
+
+main() = {
+    nums = sumInts([100, 200, 270])
+    strs = sumInts(["hello", "world", "test"])
+    nums + strs
+}

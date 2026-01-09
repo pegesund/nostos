@@ -1,0 +1,17 @@
+# expect: 30
+# Test head() with trait method call
+
+trait Triple
+    triple(self) -> Int
+end
+
+Int: Triple
+    triple(self) = self * 3
+end
+
+tripleFirst[T: Triple](items: List[T]) -> Int =
+    match items.head() {
+        x -> x.triple()
+    }
+
+main() = tripleFirst([10, 20, 30])

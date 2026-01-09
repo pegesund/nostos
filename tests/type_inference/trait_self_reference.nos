@@ -1,0 +1,18 @@
+# expect: 27
+# Test trait with Self return type
+
+trait Tripler
+    triple(self) -> Self
+    getValue(self) -> Int
+end
+
+type Num = Num(Int)
+
+Num: Tripler
+    triple(self) = match self { Num(n) -> Num(n * 3) }
+    getValue(self) = match self { Num(n) -> n }
+end
+
+tripleAndGet[T: Tripler](x: T) -> Int = x.triple().getValue()
+
+main() = tripleAndGet(Num(9))

@@ -1,0 +1,19 @@
+# expect: 6
+# Test takeWhile with trait predicate
+
+trait Bounded
+    inBounds(self) -> Bool
+    toNum(self) -> Int
+end
+
+Int: Bounded
+    inBounds(self) = self < 5
+    toNum(self) = self
+end
+
+sumWhileInBounds[T: Bounded](items: List[T]) -> Int =
+    items.takeWhile(x => x.inBounds())
+         .map(x => x.toNum())
+         .fold(0, (a, b) => a + b)
+
+main() = sumWhileInBounds([1, 2, 3, 10, 4])

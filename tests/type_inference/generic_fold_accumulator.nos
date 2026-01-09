@@ -1,0 +1,19 @@
+# expect: 150
+# Test fold with trait on accumulator type
+
+trait Combinable
+    combine(self, x: Int) -> Self
+    result(self) -> Int
+end
+
+type Acc = Acc(Int)
+
+Acc: Combinable
+    combine(self, x: Int) = match self { Acc(n) -> Acc(n + x) }
+    result(self) = match self { Acc(n) -> n }
+end
+
+foldWithTrait[T: Combinable](init: T, nums: List[Int]) -> Int =
+    nums.fold(init, (acc, x) => acc.combine(x)).result()
+
+main() = foldWithTrait(Acc(0), [10, 20, 30, 40, 50])

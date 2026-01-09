@@ -1,0 +1,19 @@
+# expect: 13
+# Test filter with trait predicate
+
+trait Filterable
+    keepIt(self) -> Bool
+    getValue(self) -> Int
+end
+
+Int: Filterable
+    keepIt(self) = self > 5
+    getValue(self) = self
+end
+
+sumFiltered[T: Filterable](items: List[T]) -> Int =
+    items.filter(x => x.keepIt())
+         .map(x => x.getValue())
+         .fold(0, (a, b) => a + b)
+
+main() = sumFiltered([1, 6, 2, 7, 3])

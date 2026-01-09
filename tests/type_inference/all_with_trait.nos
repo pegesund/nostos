@@ -1,0 +1,15 @@
+# expect: true
+# Test all() with trait predicate
+
+trait Checkable
+    isValid(self) -> Bool
+end
+
+Int: Checkable
+    isValid(self) = self > 0
+end
+
+allValid[T: Checkable](items: List[T]) -> Bool =
+    items.all(x => x.isValid())
+
+main() = allValid([1, 2, 3, 4, 5])

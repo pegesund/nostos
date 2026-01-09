@@ -1,0 +1,15 @@
+# expect: 18
+# Test trait method after stdlib chain
+
+trait Valuable
+    getValue(self) -> Int
+end
+
+Int: Valuable
+    getValue(self) = self
+end
+
+processChain[T: Valuable](items: List[T]) -> Int =
+    items.take(3).map(x => x.getValue()).fold(0, (a, b) => a + b)
+
+main() = processChain([5, 6, 7, 8, 9])

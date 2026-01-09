@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use nostos_syntax::{parse, offset_to_line_col};
-use nostos_syntax::ast::{Expr, Item, Stmt, Pattern};
+use nostos_syntax::ast::{Expr, Item, Stmt, Pattern, CallArg};
 use nostos_compiler::Compiler;
 
 /// Infer type from an expression
@@ -97,7 +97,11 @@ fn check_module_compiles_standalone(content: &str) -> Result<(), String> {
                 }
                 collect_calls(callee, calls, local_types, known_functions);
                 for arg in args {
-                    collect_calls(arg, calls, local_types, known_functions);
+                    let expr = match arg {
+                        CallArg::Positional(e) => e,
+                        CallArg::Named(_, e) => e,
+                    };
+                    collect_calls(expr, calls, local_types, known_functions);
                 }
             }
             Expr::MethodCall(receiver, method, args, span) => {
@@ -122,7 +126,11 @@ fn check_module_compiles_standalone(content: &str) -> Result<(), String> {
 
                 collect_calls(receiver, calls, local_types, known_functions);
                 for arg in args {
-                    collect_calls(arg, calls, local_types, known_functions);
+                    let expr = match arg {
+                        CallArg::Positional(e) => e,
+                        CallArg::Named(_, e) => e,
+                    };
+                    collect_calls(expr, calls, local_types, known_functions);
                 }
             }
             Expr::BinOp(left, _, right, _) => {

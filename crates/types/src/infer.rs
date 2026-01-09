@@ -2270,6 +2270,7 @@ pub fn check_module(env: &mut TypeEnv, module: &Module) -> Result<(), TypeError>
 mod tests {
     use super::*;
     use nostos_syntax::ast::Span;
+    use nostos_syntax::CallArg;
 
     // Helper to create a spanned identifier
     fn ident(name: &str) -> nostos_syntax::ast::Ident {
@@ -2646,7 +2647,7 @@ mod tests {
         let expr = Expr::Call(
             Box::new(Expr::Var(ident("f"))),
             vec![],
-            vec![Expr::Int(42, span())],
+            vec![CallArg::Positional(Expr::Int(42, span()))],
             span(),
         );
         let ty = infer_expr_type(&mut env, &expr).unwrap();
@@ -2668,7 +2669,7 @@ mod tests {
         let expr = Expr::Call(
             Box::new(Expr::Var(ident("f"))),
             vec![],
-            vec![Expr::String(nostos_syntax::ast::StringLit::Plain("hello".to_string()), span())],
+            vec![CallArg::Positional(Expr::String(nostos_syntax::ast::StringLit::Plain("hello".to_string()), span()))],
             span(),
         );
         let result = infer_expr_type(&mut env, &expr);
@@ -2892,7 +2893,7 @@ mod tests {
         let expr = Expr::Call(
             Box::new(Expr::Var(ident("Some"))),
             vec![],
-            vec![Expr::Int(42, span())],
+            vec![CallArg::Positional(Expr::Int(42, span()))],
             span(),
         );
         let ty = infer_expr_type(&mut env, &expr).unwrap();
@@ -3205,7 +3206,7 @@ mod tests {
         let expr = Expr::Call(
             Box::new(Expr::Var(ident("make_adder"))),
             vec![],
-            vec![Expr::Int(5, span())],
+            vec![CallArg::Positional(Expr::Int(5, span()))],
             span(),
         );
         let ty = infer_expr_type(&mut env, &expr).unwrap();
@@ -3270,7 +3271,7 @@ mod tests {
         let expr = Expr::Call(
             Box::new(Expr::Var(ident("id_int"))),
             vec![],
-            vec![Expr::Int(42, span())],
+            vec![CallArg::Positional(Expr::Int(42, span()))],
             span(),
         );
         let ty = infer_expr_type(&mut env, &expr).unwrap();
@@ -3368,7 +3369,7 @@ mod tests {
         let expr = Expr::Call(
             Box::new(Expr::Var(ident("Ok"))),
             vec![],
-            vec![Expr::Int(42, span())],
+            vec![CallArg::Positional(Expr::Int(42, span()))],
             span(),
         );
         let ty = infer_expr_type(&mut env, &expr).unwrap();
@@ -3387,7 +3388,7 @@ mod tests {
         let expr = Expr::Call(
             Box::new(Expr::Var(ident("Err"))),
             vec![],
-            vec![Expr::String(nostos_syntax::ast::StringLit::Plain("error".to_string()), span())],
+            vec![CallArg::Positional(Expr::String(nostos_syntax::ast::StringLit::Plain("error".to_string()), span()))],
             span(),
         );
         let ty = infer_expr_type(&mut env, &expr).unwrap();
@@ -3494,7 +3495,7 @@ mod tests {
         let expr = Expr::Call(
             Box::new(Expr::Var(ident("add"))),
             vec![],
-            vec![Expr::Int(1, span())],
+            vec![CallArg::Positional(Expr::Int(1, span()))],
             span(),
         );
         let result = infer_expr_type(&mut env, &expr);

@@ -1,0 +1,16 @@
+# expect: 21
+# Test zip with trait operations
+
+trait Addable
+    add(self, other: Self) -> Int
+end
+
+Int: Addable
+    add(self, other: Int) = self + other
+end
+
+zipAndAdd[T: Addable](xs: List[T], ys: List[T]) -> Int =
+    xs.zip(ys).map(p => match p { (a, b) -> a.add(b) })
+              .fold(0, (acc, x) => acc + x)
+
+main() = zipAndAdd([1, 2, 3], [4, 5, 6, 7])

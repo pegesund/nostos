@@ -1,0 +1,18 @@
+# expect: 60
+# Test function taking two generic lists
+
+trait Numeric
+    toNum(self) -> Int
+end
+
+Int: Numeric
+    toNum(self) = self
+end
+
+sumBothLists[T: Numeric](xs: List[T], ys: List[T]) -> Int = {
+    sumX = xs.map(x => x.toNum()).fold(0, (a, b) => a + b)
+    sumY = ys.map(y => y.toNum()).fold(0, (a, b) => a + b)
+    sumX + sumY
+}
+
+main() = sumBothLists([1, 2, 3], [10, 20, 24])
