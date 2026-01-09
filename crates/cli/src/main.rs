@@ -242,6 +242,59 @@ fn run_repl(args: &[String]) -> ExitCode {
     }
 }
 
+/// Convert MvarInitValue to ThreadSafeValue for VM registration
+fn mvar_init_to_thread_safe(init: &MvarInitValue) -> ThreadSafeValue {
+    match init {
+        MvarInitValue::Unit => ThreadSafeValue::Unit,
+        MvarInitValue::Bool(b) => ThreadSafeValue::Bool(*b),
+        MvarInitValue::Int(n) => ThreadSafeValue::Int64(*n),
+        MvarInitValue::Float(f) => ThreadSafeValue::Float64(*f),
+        MvarInitValue::String(s) => ThreadSafeValue::String(s.clone()),
+        MvarInitValue::Char(c) => ThreadSafeValue::Char(*c),
+        MvarInitValue::EmptyList => ThreadSafeValue::List(vec![]),
+        MvarInitValue::IntList(ints) => ThreadSafeValue::List(
+            ints.iter().map(|n| ThreadSafeValue::Int64(*n)).collect()
+        ),
+        MvarInitValue::StringList(strings) => ThreadSafeValue::List(
+            strings.iter().map(|s| ThreadSafeValue::String(s.clone())).collect()
+        ),
+        MvarInitValue::FloatList(floats) => ThreadSafeValue::List(
+            floats.iter().map(|f| ThreadSafeValue::Float64(*f)).collect()
+        ),
+        MvarInitValue::BoolList(bools) => ThreadSafeValue::List(
+            bools.iter().map(|b| ThreadSafeValue::Bool(*b)).collect()
+        ),
+        MvarInitValue::Tuple(items) => ThreadSafeValue::Tuple(
+            items.iter().map(|item| mvar_init_to_thread_safe(item)).collect()
+        ),
+        MvarInitValue::List(items) => ThreadSafeValue::List(
+            items.iter().map(|item| mvar_init_to_thread_safe(item)).collect()
+        ),
+        MvarInitValue::Record(type_name, fields) => {
+            // Convert to record with field names and values
+            let field_names: Vec<String> = fields.iter()
+                .enumerate()
+                .map(|(i, (name, _))| {
+                    if name.is_empty() {
+                        format!("_{}", i) // Positional fields
+                    } else {
+                        name.clone()
+                    }
+                })
+                .collect();
+            let values: Vec<ThreadSafeValue> = fields.iter()
+                .map(|(_, val)| mvar_init_to_thread_safe(val))
+                .collect();
+            ThreadSafeValue::Record {
+                type_name: type_name.clone(),
+                field_names,
+                fields: values,
+                mutable_fields: vec![false; fields.len()],
+            }
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
 
@@ -565,21 +618,7 @@ fn main() -> ExitCode {
 
     // Register mvars (module-level mutable variables)
     for (name, info) in compiler.get_mvars() {
-        let initial_value = match &info.initial_value {
-            MvarInitValue::Unit => ThreadSafeValue::Unit,
-            MvarInitValue::Bool(b) => ThreadSafeValue::Bool(*b),
-            MvarInitValue::Int(n) => ThreadSafeValue::Int64(*n),
-            MvarInitValue::Float(f) => ThreadSafeValue::Float64(*f),
-            MvarInitValue::String(s) => ThreadSafeValue::String(s.clone()),
-            MvarInitValue::Char(c) => ThreadSafeValue::Char(*c),
-            MvarInitValue::EmptyList => ThreadSafeValue::List(vec![]),
-            MvarInitValue::IntList(ints) => ThreadSafeValue::List(
-                ints.iter().map(|n| ThreadSafeValue::Int64(*n)).collect()
-            ),
-            MvarInitValue::StringList(strings) => ThreadSafeValue::List(
-                strings.iter().map(|s| ThreadSafeValue::String(s.clone())).collect()
-            ),
-        };
+        let initial_value = mvar_init_to_thread_safe(&info.initial_value);
         vm.register_mvar(name, initial_value);
     }
 

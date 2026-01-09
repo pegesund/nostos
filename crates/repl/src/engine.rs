@@ -1010,7 +1010,7 @@ impl ReplEngine {
     fn has_definitions(module: &nostos_syntax::Module) -> bool {
         for item in &module.items {
             match item {
-                Item::FnDef(_) | Item::TypeDef(_) => return true,
+                Item::FnDef(_) | Item::TypeDef(_) | Item::MvarDef(_) => return true,
                 _ => {}
             }
         }
