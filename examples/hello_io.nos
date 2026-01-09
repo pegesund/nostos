@@ -1,5 +1,5 @@
 # Hello IO
-# 
+#
 # Simple demonstration of basic IO operations.
 # See file_io.nos for comprehensive file system operations.
 
@@ -8,19 +8,18 @@ main() = {
     path = "/tmp/nostos_hello.txt"
     File.writeAll(path, "Hello from Nostos!")
 
-    (status, content) = File.readAll(path)
-    assert_eq("ok", status)
+    content = File.readAll(path)
     assert_eq("Hello from Nostos!", content)
 
     # Verify file exists
-    (s1, exists) = File.exists(path)
+    exists = File.exists(path)
     assert_eq(true, exists)
 
     # Clean up
     File.remove(path)
 
     # Verify removed
-    (s2, exists2) = File.exists(path)
+    exists2 = File.exists(path)
     assert_eq(false, exists2)
 
     println("Hello IO tests passed!")

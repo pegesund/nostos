@@ -98,38 +98,42 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "newFloat64Array", signature: "Int -> Float64Array", doc: "Create a new Float64 array of given size" },
 
     // === File I/O ===
-    BuiltinInfo { name: "File.readAll", signature: "String -> (String, String)", doc: "Read entire file contents, returns (status, content)" },
-    BuiltinInfo { name: "File.writeAll", signature: "String -> String -> (String, ())", doc: "Write string to file, returns (status, ())" },
-    BuiltinInfo { name: "File.append", signature: "String -> String -> (String, ())", doc: "Append string to file, returns (status, ())" },
-    BuiltinInfo { name: "File.open", signature: "String -> String -> (String, Int)", doc: "Open file with mode, returns (status, handle)" },
-    BuiltinInfo { name: "File.write", signature: "Int -> String -> (String, Int)", doc: "Write to handle, returns (status, bytes_written)" },
-    BuiltinInfo { name: "File.read", signature: "Int -> Int -> (String, String)", doc: "Read n bytes from handle, returns (status, data)" },
-    BuiltinInfo { name: "File.readLine", signature: "Int -> (String, String)", doc: "Read line from handle, returns (status, line)" },
-    BuiltinInfo { name: "File.flush", signature: "Int -> (String, ())", doc: "Flush file handle, returns (status, ())" },
-    BuiltinInfo { name: "File.close", signature: "Int -> (String, ())", doc: "Close file handle, returns (status, ())" },
-    BuiltinInfo { name: "File.seek", signature: "Int -> Int -> String -> (String, ())", doc: "Seek in file, returns (status, ())" },
-    BuiltinInfo { name: "File.exists", signature: "String -> (String, Bool)", doc: "Check if file exists, returns (status, exists)" },
-    BuiltinInfo { name: "File.remove", signature: "String -> (String, ())", doc: "Delete a file, returns (status, ())" },
-    BuiltinInfo { name: "File.rename", signature: "String -> String -> (String, ())", doc: "Rename/move a file, returns (status, ())" },
-    BuiltinInfo { name: "File.copy", signature: "String -> String -> (String, ())", doc: "Copy a file, returns (status, ())" },
-    BuiltinInfo { name: "File.size", signature: "String -> (String, Int)", doc: "Get file size in bytes, returns (status, size)" },
+    // All File functions throw exceptions on error
+    BuiltinInfo { name: "File.readAll", signature: "String -> String", doc: "Read entire file contents, throws on error" },
+    BuiltinInfo { name: "File.writeAll", signature: "String -> String -> ()", doc: "Write string to file, throws on error" },
+    BuiltinInfo { name: "File.append", signature: "String -> String -> ()", doc: "Append string to file, throws on error" },
+    BuiltinInfo { name: "File.open", signature: "String -> String -> Int", doc: "Open file with mode, returns handle, throws on error" },
+    BuiltinInfo { name: "File.write", signature: "Int -> String -> Int", doc: "Write to handle, returns bytes written, throws on error" },
+    BuiltinInfo { name: "File.read", signature: "Int -> Int -> String", doc: "Read n bytes from handle, throws on error" },
+    BuiltinInfo { name: "File.readLine", signature: "Int -> String", doc: "Read line from handle, throws on error" },
+    BuiltinInfo { name: "File.flush", signature: "Int -> ()", doc: "Flush file handle, throws on error" },
+    BuiltinInfo { name: "File.close", signature: "Int -> ()", doc: "Close file handle, throws on error" },
+    BuiltinInfo { name: "File.seek", signature: "Int -> Int -> String -> ()", doc: "Seek in file, throws on error" },
+    BuiltinInfo { name: "File.exists", signature: "String -> Bool", doc: "Check if file exists, throws on error" },
+    BuiltinInfo { name: "File.remove", signature: "String -> ()", doc: "Delete a file, throws on error" },
+    BuiltinInfo { name: "File.rename", signature: "String -> String -> ()", doc: "Rename/move a file, throws on error" },
+    BuiltinInfo { name: "File.copy", signature: "String -> String -> ()", doc: "Copy a file, throws on error" },
+    BuiltinInfo { name: "File.size", signature: "String -> Int", doc: "Get file size in bytes, throws on error" },
 
     // === Directory I/O ===
-    BuiltinInfo { name: "Dir.create", signature: "String -> (String, ())", doc: "Create a directory, returns (status, ())" },
-    BuiltinInfo { name: "Dir.createAll", signature: "String -> (String, ())", doc: "Create directory and parents, returns (status, ())" },
-    BuiltinInfo { name: "Dir.list", signature: "String -> (String, [String])", doc: "List directory contents, returns (status, entries)" },
-    BuiltinInfo { name: "Dir.remove", signature: "String -> (String, ())", doc: "Remove empty directory, returns (status, ())" },
-    BuiltinInfo { name: "Dir.removeAll", signature: "String -> (String, ())", doc: "Remove directory recursively, returns (status, ())" },
-    BuiltinInfo { name: "Dir.exists", signature: "String -> (String, Bool)", doc: "Check if directory exists, returns (status, exists)" },
+    // All Dir functions throw exceptions on error
+    BuiltinInfo { name: "Dir.create", signature: "String -> ()", doc: "Create a directory, throws on error" },
+    BuiltinInfo { name: "Dir.createAll", signature: "String -> ()", doc: "Create directory and parents, throws on error" },
+    BuiltinInfo { name: "Dir.list", signature: "String -> [String]", doc: "List directory contents, throws on error" },
+    BuiltinInfo { name: "Dir.remove", signature: "String -> ()", doc: "Remove empty directory, throws on error" },
+    BuiltinInfo { name: "Dir.removeAll", signature: "String -> ()", doc: "Remove directory recursively, throws on error" },
+    BuiltinInfo { name: "Dir.exists", signature: "String -> Bool", doc: "Check if directory exists, throws on error" },
 
     // === HTTP ===
-    BuiltinInfo { name: "Http.get", signature: "String -> (String, HttpResponse)", doc: "HTTP GET request, returns (status, response)" },
-    BuiltinInfo { name: "Http.request", signature: "String -> String -> [(String, String)] -> String -> (String, HttpResponse)", doc: "HTTP request (method, url, headers, body)" },
+    // HTTP functions throw exceptions on error
+    BuiltinInfo { name: "Http.get", signature: "String -> HttpResponse", doc: "HTTP GET request, throws on error" },
+    BuiltinInfo { name: "Http.request", signature: "String -> String -> [(String, String)] -> String -> HttpResponse", doc: "HTTP request (method, url, headers, body), throws on error" },
 
     // === HTTP Server ===
-    BuiltinInfo { name: "Server.bind", signature: "Int -> (String, Int)", doc: "Start HTTP server on port, returns (status, handle)" },
-    BuiltinInfo { name: "Server.accept", signature: "Int -> (String, Request)", doc: "Accept next request on server handle" },
-    BuiltinInfo { name: "Server.respond", signature: "Int -> Int -> [(String, String)] -> String -> ()", doc: "Send response: respond(reqId, status, headers, body)" },
+    // Server functions throw exceptions on error
+    BuiltinInfo { name: "Server.bind", signature: "Int -> Int", doc: "Start HTTP server on port, returns server handle, throws on error" },
+    BuiltinInfo { name: "Server.accept", signature: "Int -> HttpRequest", doc: "Accept next request on server handle, throws on error" },
+    BuiltinInfo { name: "Server.respond", signature: "Int -> Int -> [(String, String)] -> String -> ()", doc: "Send response: respond(reqId, status, headers, body), throws on error" },
     BuiltinInfo { name: "Server.close", signature: "Int -> ()", doc: "Close server handle" },
 
     // === Process Introspection ===
@@ -151,14 +155,14 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "eval", signature: "String -> String", doc: "Evaluate code at runtime, returns result as string or error message" },
 
     // === External Process Execution ===
-    // All Exec functions return (status, result) tuples where status is "ok" or "error"
-    BuiltinInfo { name: "Exec.run", signature: "(String, [String]) -> (String, { exitCode: Int, stdout: String, stderr: String })", doc: "Run command and wait for completion. Returns (status, { exitCode, stdout, stderr })" },
-    BuiltinInfo { name: "Exec.start", signature: "(String, [String]) -> (String, Int)", doc: "Start process with streaming I/O. Returns (status, handle)" },
-    BuiltinInfo { name: "Exec.readline", signature: "Int -> (String, String)", doc: "Read line from spawned process stdout. Returns (status, line)" },
-    BuiltinInfo { name: "Exec.readStderr", signature: "Int -> (String, String)", doc: "Read line from spawned process stderr. Returns (status, line)" },
-    BuiltinInfo { name: "Exec.write", signature: "(Int, String) -> (String, ())", doc: "Write string to spawned process stdin. Returns (status, ())" },
-    BuiltinInfo { name: "Exec.wait", signature: "Int -> (String, Int)", doc: "Wait for spawned process to exit. Returns (status, exitCode)" },
-    BuiltinInfo { name: "Exec.kill", signature: "Int -> (String, ())", doc: "Kill a spawned process. Returns (status, ())" },
+    // All Exec functions throw exceptions on error
+    BuiltinInfo { name: "Exec.run", signature: "(String, [String]) -> { exitCode: Int, stdout: String, stderr: String }", doc: "Run command and wait for completion, throws on error" },
+    BuiltinInfo { name: "Exec.start", signature: "(String, [String]) -> Int", doc: "Start process with streaming I/O, returns handle, throws on error" },
+    BuiltinInfo { name: "Exec.readline", signature: "Int -> String", doc: "Read line from spawned process stdout, throws on error" },
+    BuiltinInfo { name: "Exec.readStderr", signature: "Int -> String", doc: "Read line from spawned process stderr, throws on error" },
+    BuiltinInfo { name: "Exec.write", signature: "(Int, String) -> ()", doc: "Write string to spawned process stdin, throws on error" },
+    BuiltinInfo { name: "Exec.wait", signature: "Int -> Int", doc: "Wait for spawned process to exit, returns exit code, throws on error" },
+    BuiltinInfo { name: "Exec.kill", signature: "Int -> ()", doc: "Kill a spawned process, throws on error" },
 
     // === Option Functions ===
     BuiltinInfo { name: "unwrapOr", signature: "a -> b -> b", doc: "Unwrap Option or return default value" },

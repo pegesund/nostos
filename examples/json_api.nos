@@ -30,27 +30,31 @@ main() = {
     # -----------------------------------------
     println("1. Fetching IP Address:")
 
-    (status, resp) = Http.get("https://httpbin.org/ip")
-    if status == "ok" then {
+    result1 = try {
+        resp = Http.get("https://httpbin.org/ip")
         json = jsonParse(resp.body)
         ipInfo = fromJson[IpInfo](json)
         println("   Your IP: " ++ ipInfo.origin)
-    } else {
-        println("   Failed to fetch IP")
-    }
+        "ok"
+    } catch e -> {
+        println("   Failed to fetch IP: " ++ e)
+        "error"
+    } end
 
     # -----------------------------------------
     # Example 2: Working with HTTP Headers
     # -----------------------------------------
     println("\n2. HTTP Headers Response:")
 
-    (status2, resp2) = Http.get("https://httpbin.org/headers")
-    if status2 == "ok" then {
+    result2 = try {
+        resp2 = Http.get("https://httpbin.org/headers")
         # Show first 100 chars of headers response
         println("   Headers received: " ++ String.substring(resp2.body, 0, 100) ++ "...")
-    } else {
-        println("   Failed to fetch headers")
-    }
+        "ok"
+    } catch e -> {
+        println("   Failed to fetch headers: " ++ e)
+        "error"
+    } end
 
     # -----------------------------------------
     # Example 3: POST with JSON Body
@@ -61,14 +65,15 @@ main() = {
     requestData = %{"message": "Hello from Nostos!", "timestamp": "2024-01-15"}
     requestJson = jsonStringify(reflect(requestData))
 
-    (status3, resp3) = Http.post("https://httpbin.org/post", requestJson)
-
-    if status3 == "ok" then {
+    result3 = try {
+        resp3 = Http.request("POST", "https://httpbin.org/post", [], requestJson)
         println("   POST successful!")
         println("   Response (truncated): " ++ String.substring(resp3.body, 0, 150) ++ "...")
-    } else {
-        println("   POST failed")
-    }
+        "ok"
+    } catch e -> {
+        println("   POST failed: " ++ e)
+        "error"
+    } end
 
     # -----------------------------------------
     # Example 4: Error Handling Pattern
@@ -77,13 +82,9 @@ main() = {
 
     # Using try-catch for safe HTTP requests
     safeResult = try {
-        (s, r) = Http.get("https://httpbin.org/ip")
-        if s == "ok" then {
-            j = jsonParse(r.body)
-            Found(fromJson[IpInfo](j))
-        } else {
-            NotFound
-        }
+        r = Http.get("https://httpbin.org/ip")
+        j = jsonParse(r.body)
+        Found(fromJson[IpInfo](j))
     } catch e -> NetworkError(e) end
 
     match safeResult
@@ -104,7 +105,7 @@ main() = {
     println("   " ++ requestBody)
 
     # In real code, you would send this:
-    # (status, resp) = Http.post("https://api.example.com/users", requestBody, headers)
+    # resp = Http.request("POST", "https://api.example.com/users", [("Content-Type", "application/json")], requestBody)
 
     println("\n=== API examples completed! ===")
 }

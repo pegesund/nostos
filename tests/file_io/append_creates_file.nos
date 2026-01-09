@@ -4,18 +4,13 @@
 main() = {
   path = "/tmp/nostos_test_append_create.txt"
 
-  # Make sure file doesn't exist
-  (_, _) = File.remove(path)
+  # Make sure file doesn't exist (ignore error if not found)
+  try { File.remove(path) } catch _ -> () end
 
   # Append should create the file
-  (status, _) = File.append(path, "Created by append")
+  File.append(path, "Created by append")
 
-  if status != "ok" then false
-  else {
-    (status2, data) = File.readAll(path)
-    (_, _) = File.remove(path)
-
-    if status2 != "ok" then false
-    else data == "Created by append"
-  }
+  data = File.readAll(path)
+  File.remove(path)
+  data == "Created by append"
 }

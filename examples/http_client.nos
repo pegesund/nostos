@@ -1,16 +1,17 @@
 # HTTP Client
-# 
+#
 # Demonstrates the HTTP client API:
 # - Http.get, Http.post, Http.put, Http.delete, Http.patch, Http.head
 # - Http.request for custom headers and methods
 # - Response has .status (int) and .body (string) fields
-# 
+# - All methods throw exceptions on error
+#
 # Uses httpbin.org as a test server.
 
 # Simple GET request
 simpleGet() = {
     println("=== Simple GET Request ===")
-    (status, resp) = Http.get("https://httpbin.org/get")
+    resp = Http.get("https://httpbin.org/get")
     println("Status: " ++ show(resp.status))
     println("Body length: " ++ show(length(resp.body)))
     println("")
@@ -20,7 +21,7 @@ simpleGet() = {
 postJson() = {
     println("=== POST with JSON ===")
     body = "{\"name\": \"Nostos\", \"type\": \"language\"}"
-    (status, resp) = Http.post("https://httpbin.org/post", body)
+    resp = Http.request("POST", "https://httpbin.org/post", [], body)
     println("Status: " ++ show(resp.status))
     println("")
 }
@@ -29,7 +30,7 @@ postJson() = {
 putRequest() = {
     println("=== PUT Request ===")
     body = "{\"updated\": true}"
-    (status, resp) = Http.put("https://httpbin.org/put", body)
+    resp = Http.request("PUT", "https://httpbin.org/put", [], body)
     println("Status: " ++ show(resp.status))
     println("")
 }
@@ -37,7 +38,7 @@ putRequest() = {
 # DELETE request
 deleteRequest() = {
     println("=== DELETE Request ===")
-    (status, resp) = Http.delete("https://httpbin.org/delete")
+    resp = Http.request("DELETE", "https://httpbin.org/delete", [], "")
     println("Status: " ++ show(resp.status))
     println("")
 }
@@ -46,7 +47,7 @@ deleteRequest() = {
 patchRequest() = {
     println("=== PATCH Request ===")
     body = "{\"partial\": \"update\"}"
-    (status, resp) = Http.patch("https://httpbin.org/patch", body)
+    resp = Http.request("PATCH", "https://httpbin.org/patch", [], body)
     println("Status: " ++ show(resp.status))
     println("")
 }
@@ -54,7 +55,7 @@ patchRequest() = {
 # HEAD request (headers only, no body)
 headRequest() = {
     println("=== HEAD Request ===")
-    (status, resp) = Http.head("https://httpbin.org/get")
+    resp = Http.request("HEAD", "https://httpbin.org/get", [], "")
     println("Status: " ++ show(resp.status))
     println("Body length: " ++ show(length(resp.body)))
     println("(HEAD returns empty body)")
@@ -70,7 +71,7 @@ customRequest() = {
         ("Accept", "application/json")
     ]
     body = "{\"via\": \"Http.request\"}"
-    (status, resp) = Http.request("POST", "https://httpbin.org/post", headers, body)
+    resp = Http.request("POST", "https://httpbin.org/post", headers, body)
     println("Status: " ++ show(resp.status))
     println("")
 }

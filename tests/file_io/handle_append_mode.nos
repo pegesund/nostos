@@ -4,21 +4,13 @@
 main() = {
   path = "/tmp/nostos_test_handle_append.txt"
 
-  (_, _) = File.writeAll(path, "Start")
+  File.writeAll(path, "Start")
 
-  (status1, handle) = File.open(path, "a")
-  if status1 != "ok" then false
-  else {
-    (status2, _) = File.write(handle, "End")
-    (_, _) = File.close(handle)
+  handle = File.open(path, "a")
+  File.write(handle, "End")
+  File.close(handle)
 
-    if status2 != "ok" then false
-    else {
-      (status3, data) = File.readAll(path)
-      (_, _) = File.remove(path)
-
-      if status3 != "ok" then false
-      else data == "StartEnd"
-    }
-  }
+  data = File.readAll(path)
+  File.remove(path)
+  data == "StartEnd"
 }

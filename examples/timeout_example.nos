@@ -1,12 +1,12 @@
 # Timeout Example
-# 
+#
 # Demonstrates receive timeout patterns:
 # - Simple timeout: waiting for messages that never arrive
 # - HTTP with retry: timeout during async HTTP operations
 # - Race requests: take first response from multiple sources
 # - Collect with timeout: gather as many results as possible
 # - Sleep vs timeout: interleaving sleep and receive
-# 
+#
 # Run with: nostos examples/timeout_example.nos
 
 # Pattern 1: Simple timeout - wait for a message that never arrives
@@ -32,7 +32,7 @@ httpWithRetry() = {
 
   # Worker makes HTTP request
   spawn {
-    (status, response) = Http.get("https://httpbin.org/delay/1")
+    response = Http.get("https://httpbin.org/delay/1")
     me <- ("http_done", response.status, response.body)
   }
 
@@ -55,15 +55,15 @@ raceRequests() = {
 
   # Start 3 requests with different delays
   spawn {
-    (status, response) = Http.get("https://httpbin.org/delay/2")
+    response = Http.get("https://httpbin.org/delay/2")
     me <- ("server_a", response.status)
   }
   spawn {
-    (status, response) = Http.get("https://httpbin.org/delay/1")
+    response = Http.get("https://httpbin.org/delay/1")
     me <- ("server_b", response.status)
   }
   spawn {
-    (status, response) = Http.get("https://httpbin.org/delay/3")
+    response = Http.get("https://httpbin.org/delay/3")
     me <- ("server_c", response.status)
   }
 
