@@ -11,29 +11,12 @@
 //! - `double$I` for Int arguments
 //! - `double$F` for Float arguments
 
-use crate::infer::InferenceResult;
 use crate::Type;
-use std::collections::{HashMap, HashSet};
-
-/// A specialized function instance with a mangled name.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FunctionInstance {
-    /// Original function name
-    pub original_name: String,
-    /// Mangled name with type suffix (e.g., "double$I")
-    pub mangled_name: String,
-    /// Concrete argument types for this instantiation
-    pub arg_types: Vec<Type>,
-    /// Concrete return type for this instantiation
-    pub ret_type: Type,
-}
+use std::collections::HashMap;
 
 /// Result of monomorphization analysis.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MonomorphizationPlan {
-    /// All function instances that need to be generated.
-    /// Key: (original_name, arg_types), Value: FunctionInstance
-    pub instances: HashMap<(String, Vec<Type>), FunctionInstance>,
     /// Mapping from call site spans to the mangled function name to use.
     /// Key: (start, end) of call expression span
     pub call_rewrites: HashMap<(usize, usize), String>,
@@ -43,7 +26,6 @@ impl MonomorphizationPlan {
     /// Create a new empty plan.
     pub fn new() -> Self {
         Self {
-            instances: HashMap::new(),
             call_rewrites: HashMap::new(),
         }
     }
@@ -53,15 +35,9 @@ impl MonomorphizationPlan {
         self.call_rewrites.get(&(start, end)).map(|s| s.as_str())
     }
 
-    /// Get all unique function instances that need to be generated.
-    pub fn unique_instances(&self) -> impl Iterator<Item = &FunctionInstance> {
-        self.instances.values()
-    }
-}
-
-impl Default for MonomorphizationPlan {
-    fn default() -> Self {
-        Self::new()
+    /// Add a call rewrite.
+    pub fn add_rewrite(&mut self, start: usize, end: usize, mangled_name: String) {
+        self.call_rewrites.insert((start, end), mangled_name);
     }
 }
 
@@ -144,7 +120,7 @@ pub fn mangle_name(name: &str, arg_types: &[Type]) -> String {
 }
 
 /// Functions that should NOT be monomorphized (builtins, etc.)
-fn is_builtin(name: &str) -> bool {
+pub fn is_builtin(name: &str) -> bool {
     matches!(
         name,
         "println" | "print" | "show" | "length" | "head" | "tail" | "empty"
@@ -156,70 +132,6 @@ fn is_builtin(name: &str) -> bool {
             | "throw" | "self" | "spawn" | "send" | "receive" | "sleep"
             | "trunc" | "toFloat" | "toInt" | "toString"
     )
-}
-
-/// Check if a function needs monomorphization based on its call sites.
-/// A function needs monomorphization if it's called with different type instantiations.
-fn needs_monomorphization(
-    func_name: &str,
-    infer_result: &InferenceResult,
-) -> bool {
-    if is_builtin(func_name) {
-        return false;
-    }
-
-    // Check if there are multiple distinct instantiations of this function
-    let instantiations = infer_result.function_instantiations();
-    let matching: Vec<_> = instantiations
-        .keys()
-        .filter(|(name, _)| name == func_name)
-        .collect();
-
-    // If there are multiple distinct type instantiations, we need monomorphization
-    matching.len() > 1
-}
-
-/// Analyze the inference results and create a monomorphization plan.
-pub fn create_monomorphization_plan(
-    infer_result: &InferenceResult,
-    polymorphic_functions: &HashSet<String>,
-) -> MonomorphizationPlan {
-    let mut plan = MonomorphizationPlan::new();
-
-    // Group call sites by function and type instantiation
-    for call_site in &infer_result.call_sites {
-        let func_name = &call_site.func_name;
-
-        // Skip builtins
-        if is_builtin(func_name) {
-            continue;
-        }
-
-        // Only monomorphize if the function is polymorphic or has multiple instantiations
-        let should_mono = polymorphic_functions.contains(func_name)
-            || needs_monomorphization(func_name, infer_result);
-
-        if should_mono {
-            let key = (func_name.clone(), call_site.arg_types.clone());
-            let mangled = mangle_name(func_name, &call_site.arg_types);
-
-            // Record the instance if we haven't seen it
-            plan.instances.entry(key).or_insert_with(|| FunctionInstance {
-                original_name: func_name.clone(),
-                mangled_name: mangled.clone(),
-                arg_types: call_site.arg_types.clone(),
-                ret_type: call_site.ret_type.clone(),
-            });
-
-            // Record the call rewrite
-            plan.call_rewrites.insert(
-                (call_site.span.start, call_site.span.end),
-                mangled,
-            );
-        }
-    }
-
-    plan
 }
 
 #[cfg(test)]
