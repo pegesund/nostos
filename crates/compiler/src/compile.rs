@@ -8058,9 +8058,22 @@ impl Compiler {
             }
         }
 
+        // Register pending function signatures FIRST (pre-built in compile_all_collecting_errors)
+        // These have proper type info, unlike placeholders in self.functions
+        for (fn_name, fn_type) in &self.pending_fn_signatures {
+            if !env.functions.contains_key(fn_name) {
+                env.functions.insert(fn_name.clone(), fn_type.clone());
+            }
+        }
+
         // Register known functions in environment for recursive calls
+        // Skip placeholders (empty param_types) since pending_fn_signatures has better info
         for (fn_name, fn_val) in &self.functions {
             if env.functions.contains_key(fn_name) {
+                continue;
+            }
+            // Skip placeholder functions that have no type info yet
+            if fn_val.param_types.is_empty() && fn_val.return_type.is_none() && fn_val.arity > 0 {
                 continue;
             }
             let param_types: Vec<nostos_types::Type> = fn_val.param_types
@@ -8079,13 +8092,6 @@ impl Compiler {
                     ret: Box::new(ret_ty),
                 },
             );
-        }
-
-        // Also register pending function signatures (pre-built in compile_all_collecting_errors)
-        for (fn_name, fn_type) in &self.pending_fn_signatures {
-            if !env.functions.contains_key(fn_name) {
-                env.functions.insert(fn_name.clone(), fn_type.clone());
-            }
         }
 
         // Pre-register the function being checked with fresh type variables for recursion support
