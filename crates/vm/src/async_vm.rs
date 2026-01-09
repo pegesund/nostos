@@ -5192,8 +5192,8 @@ impl AsyncProcess {
                     }
                     _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "non-string".to_string() }),
                 };
-                let json_val = self.type_info_to_json(&type_name)?;
-                set_reg!(dst, json_val);
+                let map_val = self.type_info_to_map(&type_name)?;
+                set_reg!(dst, map_val);
             }
 
             Construct(dst, type_reg, json_reg) => {
@@ -5942,6 +5942,82 @@ impl AsyncProcess {
         let obj_list = GcList::from_vec(obj_pairs);
         let ptr = self.heap.alloc_variant(json_type, Arc::new("Object".to_string()), vec![GcValue::List(obj_list)]);
         Ok(GcValue::Variant(ptr))
+    }
+
+    /// Get type info as a native Map (for typeInfo builtin)
+    fn type_info_to_map(&mut self, type_name: &str) -> Result<GcValue, RuntimeError> {
+        // Look up type in static types, then dynamic types
+        let type_info = self.shared.types.read().unwrap().get(type_name).cloned()
+            .or_else(|| self.shared.dynamic_types.read().unwrap().get(type_name).cloned())
+            .or_else(|| self.shared.stdlib_types.read().unwrap().get(type_name).cloned());
+
+        let type_val = match type_info {
+            Some(t) => t,
+            None => {
+                // Return empty map for unknown types
+                let empty_map: ImblHashMap<GcMapKey, GcValue> = ImblHashMap::new();
+                let ptr = self.heap.alloc_map(empty_map);
+                return Ok(GcValue::Map(ptr));
+            }
+        };
+
+        // Build Map structure: %{ "name": ..., "kind": ..., "fields": [...], "constructors": [...] }
+        let mut entries: ImblHashMap<GcMapKey, GcValue> = ImblHashMap::new();
+
+        // name
+        let name_str = self.heap.alloc_string(type_val.name.clone());
+        entries.insert(GcMapKey::String("name".to_string()), GcValue::String(name_str));
+
+        // kind
+        let kind_str = match &type_val.kind {
+            crate::value::TypeKind::Primitive => "primitive",
+            crate::value::TypeKind::Record { .. } => "record",
+            crate::value::TypeKind::Variant => "variant",
+            crate::value::TypeKind::Alias { .. } => "alias",
+        };
+        let kind_val = self.heap.alloc_string(kind_str.to_string());
+        entries.insert(GcMapKey::String("kind".to_string()), GcValue::String(kind_val));
+
+        // fields (for records) - List of Maps
+        let mut field_list = Vec::new();
+        for field in &type_val.fields {
+            let mut field_map: ImblHashMap<GcMapKey, GcValue> = ImblHashMap::new();
+            let fname = self.heap.alloc_string(field.name.clone());
+            field_map.insert(GcMapKey::String("name".to_string()), GcValue::String(fname));
+            let ftype = self.heap.alloc_string(field.type_name.clone());
+            field_map.insert(GcMapKey::String("type".to_string()), GcValue::String(ftype));
+            let field_map_ptr = self.heap.alloc_map(field_map);
+            field_list.push(GcValue::Map(field_map_ptr));
+        }
+        entries.insert(GcMapKey::String("fields".to_string()), GcValue::List(GcList::from_vec(field_list)));
+
+        // constructors (for variants) - List of Maps
+        let mut ctor_list = Vec::new();
+        for ctor in &type_val.constructors {
+            let mut ctor_map: ImblHashMap<GcMapKey, GcValue> = ImblHashMap::new();
+            let cname = self.heap.alloc_string(ctor.name.clone());
+            ctor_map.insert(GcMapKey::String("name".to_string()), GcValue::String(cname));
+
+            // Constructor fields
+            let mut cfield_list = Vec::new();
+            for cfield in &ctor.fields {
+                let mut cfield_map: ImblHashMap<GcMapKey, GcValue> = ImblHashMap::new();
+                let cfname = self.heap.alloc_string(cfield.name.clone());
+                cfield_map.insert(GcMapKey::String("name".to_string()), GcValue::String(cfname));
+                let cftype = self.heap.alloc_string(cfield.type_name.clone());
+                cfield_map.insert(GcMapKey::String("type".to_string()), GcValue::String(cftype));
+                let cfield_map_ptr = self.heap.alloc_map(cfield_map);
+                cfield_list.push(GcValue::Map(cfield_map_ptr));
+            }
+            ctor_map.insert(GcMapKey::String("fields".to_string()), GcValue::List(GcList::from_vec(cfield_list)));
+
+            let ctor_map_ptr = self.heap.alloc_map(ctor_map);
+            ctor_list.push(GcValue::Map(ctor_map_ptr));
+        }
+        entries.insert(GcMapKey::String("constructors".to_string()), GcValue::List(GcList::from_vec(ctor_list)));
+
+        let ptr = self.heap.alloc_map(entries);
+        Ok(GcValue::Map(ptr))
     }
 
     /// Construct a typed value from Json (for construct builtin)
