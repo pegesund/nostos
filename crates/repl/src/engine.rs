@@ -1141,6 +1141,20 @@ impl ReplEngine {
         }
     }
 
+    /// Call a pre-compiled function directly with a string argument.
+    /// This is much faster than eval() because it skips parsing and compilation.
+    /// Used for panel key handlers where performance is critical.
+    pub fn call_function_with_string_arg(&mut self, fn_name: &str, arg: String) -> Result<(), String> {
+        if let Some(func) = self.compiler.get_function(fn_name) {
+            match self.vm.run_with_string_arg(func, arg) {
+                Ok(_) => Ok(()),
+                Err(e) => Err(format!("Runtime error: {}", e)),
+            }
+        } else {
+            Err(format!("Function not found: {}", fn_name))
+        }
+    }
+
     /// Convert MvarInitValue to ThreadSafeValue for VM registration
     fn mvar_init_to_thread_safe(init: &MvarInitValue) -> ThreadSafeValue {
         match init {

@@ -2637,6 +2637,81 @@ impl ParallelVM {
         }
     }
 
+    /// Run a function with a single string argument.
+    /// This is optimized for calling handlers (like key handlers) without parsing/compiling.
+    pub fn run_with_string_arg(&mut self, func: Arc<FunctionValue>, arg: String) -> Result<RunResult, RuntimeError> {
+        // Clear previous run state
+        self.thread_senders.clear();
+        self.shared.shutdown.store(false, Ordering::SeqCst);
+
+        // Create channels for each thread
+        let mut receivers = Vec::with_capacity(self.num_threads);
+        for _ in 0..self.num_threads {
+            let (tx, rx) = channel::unbounded();
+            self.thread_senders.push(tx);
+            receivers.push(rx);
+        }
+
+        // Spawn worker threads
+        for thread_id in 0..self.num_threads {
+            let thread_id = thread_id as u16;
+            let inbox = receivers.remove(0);
+            let thread_senders = self.thread_senders.clone();
+            let shared = Arc::clone(&self.shared);
+            let config = self.config.clone();
+
+            // Thread 0 gets the main function and argument
+            let main_func_for_thread = if thread_id == 0 {
+                Some((func.clone(), arg.clone()))
+            } else {
+                None
+            };
+
+            let handle = thread::spawn(move || {
+                let mut worker = ThreadWorker::new(
+                    thread_id,
+                    inbox,
+                    thread_senders,
+                    shared,
+                    config,
+                );
+
+                // Thread 0 spawns the main process with argument
+                if let Some((func, arg)) = main_func_for_thread {
+                    let pid = worker.spawn_main_process_with_string_arg(func, arg);
+                    worker.main_pid = Some(pid);
+                }
+
+                worker.run()
+            });
+
+            self.threads.push(handle);
+        }
+
+        // Wait for all threads to finish
+        let mut main_result = None;
+        let mut main_output = Vec::new();
+        for handle in self.threads.drain(..) {
+            match handle.join() {
+                Ok(result) => {
+                    if result.main_result.is_some() {
+                        main_result = result.main_result;
+                        main_output = result.main_output;
+                    }
+                }
+                Err(e) => {
+                    return Err(RuntimeError::Panic(format!("Thread panicked: {:?}", e)));
+                }
+            }
+        }
+
+        match main_result {
+            Some(Ok(value)) => Ok(RunResult { value: Some(value), output: main_output }),
+            Some(Err(e)) => Err(RuntimeError::Panic(e)),
+            None => Ok(RunResult { value: None, output: main_output }),
+        }
+    }
+
     /// Signal all threads to shut down.
     pub fn shutdown(&self) {
         self.shared.shutdown.store(true, Ordering::SeqCst);
@@ -2711,6 +2786,40 @@ impl ThreadWorker {
         // Set up initial call frame (no arguments for main)
         let reg_count = func.code.register_count;
         let registers = vec![GcValue::Unit; reg_count];
+
+        let frame = crate::process::CallFrame {
+            function: func,
+            ip: 0,
+            registers,
+            captures: vec![],
+            return_reg: None,
+        };
+        process.frames.push(frame);
+
+        self.insert_process(local_id, process);
+        self.run_queue.push_back(local_id);
+
+        pid
+    }
+
+    /// Spawn the main process on this thread with a single string argument.
+    fn spawn_main_process_with_string_arg(&mut self, func: Arc<FunctionValue>, arg: String) -> Pid {
+        let local_id = self.next_local_id;
+        self.next_local_id += 1;
+        let pid = encode_pid(self.thread_id, local_id);
+
+        // Create process with lightweight heap
+        let mut process = Process::with_gc_config(pid, GcConfig::lightweight());
+
+        // Allocate the string argument on the process heap
+        let str_ptr = process.heap.alloc_string(arg);
+
+        // Set up initial call frame with argument in register 0
+        let reg_count = func.code.register_count;
+        let mut registers = vec![GcValue::Unit; reg_count];
+        if reg_count > 0 {
+            registers[0] = GcValue::String(str_ptr);
+        }
 
         let frame = crate::process::CallFrame {
             function: func,
