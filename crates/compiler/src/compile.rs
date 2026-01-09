@@ -7163,6 +7163,53 @@ impl Compiler {
                             _ => None,
                         };
                     }
+                    // Buffer methods
+                    else if obj_type == "Buffer" {
+                        return match method.node.as_str() {
+                            "append" => Some("Buffer".to_string()),
+                            "toString" => Some("String".to_string()),
+                            _ => None,
+                        };
+                    }
+                    // Float64Array methods
+                    else if obj_type == "Float64Array" {
+                        return match method.node.as_str() {
+                            "length" => Some("Int".to_string()),
+                            "get" => Some("Float".to_string()),
+                            "set" => Some("Float64Array".to_string()),
+                            "toList" => Some("List".to_string()),
+                            "slice" | "map" | "fill" => Some("Float64Array".to_string()),
+                            "sum" | "min" | "max" | "mean" => Some("Float".to_string()),
+                            "fold" => None, // Return type depends on accumulator
+                            _ => None,
+                        };
+                    }
+                    // Int64Array methods
+                    else if obj_type == "Int64Array" {
+                        return match method.node.as_str() {
+                            "length" => Some("Int".to_string()),
+                            "get" => Some("Int".to_string()),
+                            "set" => Some("Int64Array".to_string()),
+                            "toList" => Some("List".to_string()),
+                            "slice" | "map" | "fill" => Some("Int64Array".to_string()),
+                            "sum" | "min" | "max" => Some("Int".to_string()),
+                            "fold" => None,
+                            _ => None,
+                        };
+                    }
+                    // Float32Array methods
+                    else if obj_type == "Float32Array" {
+                        return match method.node.as_str() {
+                            "length" => Some("Int".to_string()),
+                            "get" => Some("Float".to_string()),
+                            "set" => Some("Float32Array".to_string()),
+                            "toList" => Some("List".to_string()),
+                            "slice" | "map" | "fill" => Some("Float32Array".to_string()),
+                            "sum" | "min" | "max" | "mean" => Some("Float".to_string()),
+                            "fold" => None,
+                            _ => None,
+                        };
+                    }
                 }
                 None
             }
