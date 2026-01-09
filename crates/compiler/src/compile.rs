@@ -374,6 +374,12 @@ pub enum CompileError {
 
     #[error("internal compiler error: {message}")]
     InternalError { message: String, span: Span },
+
+    #[error("module `{module}` is not imported; add `import {module}` to use `{function}`")]
+    ModuleNotImported { module: String, function: String, span: Span },
+
+    #[error("ambiguous name `{name}` is defined in multiple imported modules: {modules}")]
+    AmbiguousName { name: String, modules: String, span: Span },
 }
 
 impl CompileError {
@@ -398,6 +404,8 @@ impl CompileError {
             CompileError::NestedMvarWrite { span, .. } => *span,
             CompileError::BlockingWithMvarLock { span, .. } => *span,
             CompileError::InternalError { span, .. } => *span,
+            CompileError::ModuleNotImported { span, .. } => *span,
+            CompileError::AmbiguousName { span, .. } => *span,
         }
     }
 
@@ -475,6 +483,18 @@ impl CompileError {
             }
             CompileError::InternalError { message, .. } => {
                 SourceError::compile(format!("internal error: {}", message), span)
+            }
+            CompileError::ModuleNotImported { module, function, .. } => {
+                SourceError::compile(
+                    format!("module `{}` is not imported; add `import {}` to use `{}`", module, module, function),
+                    span
+                )
+            }
+            CompileError::AmbiguousName { name, modules, .. } => {
+                SourceError::compile(
+                    format!("ambiguous name `{}` is defined in multiple imported modules: {}; use qualified name (e.g., module.{})", name, modules, name),
+                    span
+                )
             }
         }
     }
@@ -570,6 +590,12 @@ pub struct Compiler {
     /// Known module prefixes (for distinguishing module.func from value.field)
     /// Contains all module path prefixes, e.g., "String", "utils", "math.vector"
     known_modules: HashSet<String>,
+    /// Imported modules per module: (current_module, imported_module_path)
+    /// When in module X, this tracks which modules X has imported
+    imported_modules: HashSet<(Vec<String>, String)>,
+    /// Local (inline) modules defined in the same compilation unit
+    /// These don't require explicit import statements
+    local_modules: HashSet<String>,
     /// REPL mode: bypass visibility checks for interactive exploration
     repl_mode: bool,
     /// Prelude functions: qualified names that bypass visibility checks (stdlib)
@@ -734,6 +760,8 @@ impl Compiler {
             current_source_name: None,
             type_defs: HashMap::new(),
             known_modules: builtin_modules,
+            imported_modules: HashSet::new(),
+            local_modules: HashSet::new(),
             repl_mode: false,
             prelude_functions: HashSet::new(),
             mvars: HashMap::new(),
@@ -936,7 +964,7 @@ impl Compiler {
             let is_recursive = Self::is_recursive_fn(fn_ast);
 
             // Run type checking with full knowledge of all function signatures
-            if let Err(e) = self.type_check_fn(fn_ast) {
+            if let Err(e) = self.type_check_fn(fn_ast, fn_name) {
                 // Only report concrete type mismatches
                 let should_report = match &e {
                     CompileError::TypeError { message, .. } => {
@@ -1100,6 +1128,8 @@ impl Compiler {
             current_source_name: Some("unknown".to_string()),
             type_defs: HashMap::new(),
             known_modules: builtin_modules,
+            imported_modules: HashSet::new(),
+            local_modules: HashSet::new(),
             repl_mode: false,
             prelude_functions: HashSet::new(),
             mvars: HashMap::new(),
@@ -1156,10 +1186,20 @@ impl Compiler {
 
     /// Resolve a name, checking imports and module path.
     /// Returns the fully qualified name if found, or the original name.
+    /// Note: This does not check for ambiguity - use resolve_name_checked for that.
     fn resolve_name(&self, name: &str) -> String {
+        match self.resolve_name_checked(name, Span::default()) {
+            Ok(resolved) => resolved,
+            Err(_) => name.to_string(), // Return original on error (will be caught elsewhere)
+        }
+    }
+
+    /// Resolve a name with ambiguity checking.
+    /// Returns the fully qualified name or an error if ambiguous.
+    fn resolve_name_checked(&self, name: &str, span: Span) -> Result<String, CompileError> {
         // If the name already contains '.', it's already qualified
         if name.contains('.') {
-            return name.to_string();
+            return Ok(name.to_string());
         }
 
         // First check module-local declarations (these should NOT be shadowed by imports)
@@ -1167,23 +1207,54 @@ impl Compiler {
         let qualified = self.qualify_name(name);
         if self.mvars.contains_key(&qualified) || self.mvars.contains_key(name) {
             // Mvars take highest precedence in local scope
-            return if self.mvars.contains_key(&qualified) { qualified } else { name.to_string() };
+            return Ok(if self.mvars.contains_key(&qualified) { qualified } else { name.to_string() });
         }
-        if self.has_function_with_base(&qualified) || self.types.contains_key(&qualified) || self.known_constructors.contains(&qualified) {
-            return qualified;
+        let has_qualified = self.has_function_with_base(&qualified);
+        if has_qualified || self.types.contains_key(&qualified) || self.known_constructors.contains(&qualified) {
+            return Ok(qualified);
         }
         // Check if it's in the global scope (before imports for user-defined global functions)
         if self.has_function_with_base(name) || self.types.contains_key(name) || self.known_constructors.contains(name) {
-            return name.to_string();
+            return Ok(name.to_string());
+        }
+
+        // Check user imports (import module statements)
+        // Collect all matching modules to detect ambiguity
+        let mut matching_modules: Vec<String> = Vec::new();
+        for (importing_module, imported_module) in &self.imported_modules {
+            if importing_module == &self.module_path {
+                // Check if the imported module has this function
+                let qualified_in_module = format!("{}.{}", imported_module, name);
+                if self.has_function_with_base(&qualified_in_module)
+                    || self.types.contains_key(&qualified_in_module)
+                    || self.known_constructors.contains(&qualified_in_module)
+                {
+                    matching_modules.push(imported_module.clone());
+                }
+            }
+        }
+
+        // Check for ambiguity
+        if matching_modules.len() > 1 {
+            return Err(CompileError::AmbiguousName {
+                name: name.to_string(),
+                modules: matching_modules.join(", "),
+                span,
+            });
+        }
+
+        // Return the single match if found
+        if let Some(module) = matching_modules.first() {
+            return Ok(format!("{}.{}", module, name));
         }
 
         // Then check imports (prelude functions)
         if let Some(qualified) = self.imports.get(name) {
-            return qualified.clone();
+            return Ok(qualified.clone());
         }
 
         // Return the original name (will error later if not found)
-        name.to_string()
+        Ok(name.to_string())
     }
 
     /// Check if there's any function with the given base name (ignoring signature suffix).
@@ -2448,7 +2519,8 @@ impl Compiler {
             .unwrap_or(false);
         let calls_untyped = self.calls_function_with_untyped_params(def);
         if !has_untyped_params && !calls_untyped {
-            if let Err(e) = self.type_check_fn(def) {
+            // Use local name here; full cross-module type checking happens in compile_all_collecting_errors
+            if let Err(e) = self.type_check_fn(def, &def.name.node) {
             // Only report errors that are actual type mismatches, not unknown identifiers
             // or polymorphic type issues that the checker can't handle yet
             let should_report = match &e {
@@ -5161,8 +5233,8 @@ impl Compiler {
 
             }
 
-            // Resolve the name (handles imports and module path)
-            let resolved_name = self.resolve_name(&qualified_name);
+            // Resolve the name (handles imports and module path) with ambiguity checking
+            let resolved_name = self.resolve_name_checked(&qualified_name, func.span())?;
 
             // Get argument types for function overloading resolution
             let arg_types: Vec<Option<String>> = args.iter()
@@ -5919,7 +5991,7 @@ impl Compiler {
     }
 
     /// Check if a function can be accessed from the current module.
-    /// Returns Ok(()) if access is allowed, Err with PrivateAccess otherwise.
+    /// Returns Ok(()) if access is allowed, Err with PrivateAccess or ModuleNotImported otherwise.
     fn check_visibility(&self, qualified_name: &str, span: Span) -> Result<(), CompileError> {
         // REPL mode bypasses all visibility checks for interactive exploration
         if self.repl_mode {
@@ -5933,6 +6005,12 @@ impl Compiler {
             return Ok(());
         }
 
+        // Functions brought in via `use` statements bypass import checks
+        // They were explicitly imported by the user
+        if self.imports.values().any(|v| v == base_name || qualified_name.starts_with(&format!("{}/", v))) {
+            return Ok(());
+        }
+
         // Get the visibility of the function
         let visibility = self.function_visibility.get(qualified_name);
 
@@ -5943,12 +6021,6 @@ impl Compiler {
             None => return Ok(()),
         };
 
-        // Public functions are always accessible
-        if visibility.is_public() {
-            return Ok(());
-        }
-
-        // Private function - check if caller is in the same module
         // Extract the module path from the qualified name (everything before the last dot)
         let function_module: Vec<&str> = qualified_name.rsplitn(2, '.').collect();
         let function_module = if function_module.len() > 1 {
@@ -5960,21 +6032,54 @@ impl Compiler {
         // Current module path
         let current_module: Vec<&str> = self.module_path.iter().map(|s| s.as_str()).collect();
 
-        // Allow access if the current module is the same as or nested within the function's module
-        if current_module.len() >= function_module.len()
-            && current_module[..function_module.len()] == function_module[..]
-        {
+        // Check if same module (allow access to both public and private functions)
+        let is_same_module = current_module.len() >= function_module.len()
+            && current_module[..function_module.len()] == function_module[..];
+
+        if is_same_module {
             return Ok(());
         }
 
-        // Access denied
+        // Different module - check if it's imported
+        let function_module_string = function_module.join(".");
         let function_name_with_sig = qualified_name.rsplit('.').next().unwrap_or(qualified_name);
-        // Strip signature suffix (e.g., "private_fn/" -> "private_fn")
         let function_name = function_name_with_sig.split('/').next().unwrap_or(function_name_with_sig);
+
+        // Check if this is a trait method call (Type.Trait.method pattern)
+        // These don't require imports as they're part of trait dispatch
+        if function_module.len() == 2 {
+            let type_name = function_module[0];
+            let trait_name = function_module[1];
+            // Check if this is a registered trait implementation
+            if self.trait_impls.contains_key(&(type_name.to_string(), trait_name.to_string())) {
+                // This is a trait method call, allow it
+                return Ok(());
+            }
+        }
+
+        // Check if the module is imported by the current module or is a local (inline) module
+        let is_imported = self.imported_modules.contains(&(self.module_path.clone(), function_module_string.clone()));
+        let is_local_module = self.local_modules.contains(&function_module_string);
+
+        if !is_imported && !is_local_module && !function_module.is_empty() {
+            // Module not imported
+            return Err(CompileError::ModuleNotImported {
+                module: function_module_string,
+                function: function_name.to_string(),
+                span,
+            });
+        }
+
+        // Module is imported (or function is in root) - check visibility
+        if visibility.is_public() {
+            return Ok(());
+        }
+
+        // Private function from imported module - access denied
         let module_name = if function_module.is_empty() {
             "<root>".to_string()
         } else {
-            function_module.join(".")
+            function_module_string
         };
 
         Err(CompileError::PrivateAccess {
@@ -8201,9 +8306,9 @@ impl Compiler {
 
         // Pre-register the function being inferred with fresh type variables for recursion support
         // This allows the function to call itself during type inference
+        // Always register (overwrite builtins if needed) so user functions can shadow builtins
         let fn_name = &def.name.node;
-        if !env.functions.contains_key(fn_name) {
-            if let Some(clause) = def.clauses.first() {
+        if let Some(clause) = def.clauses.first() {
                 let param_types: Vec<nostos_types::Type> = clause.params
                     .iter()
                     .map(|p| {
@@ -8218,15 +8323,14 @@ impl Compiler {
                     .map(|ty| self.type_name_to_type(&self.type_expr_to_string(ty)))
                     .unwrap_or_else(|| env.fresh_var());
 
-                env.functions.insert(
-                    fn_name.clone(),
-                    nostos_types::FunctionType {
-                        type_params: vec![],
-                        params: param_types,
-                        ret: Box::new(ret_ty),
-                    },
-                );
-            }
+            env.functions.insert(
+                fn_name.clone(),
+                nostos_types::FunctionType {
+                    type_params: vec![],
+                    params: param_types,
+                    ret: Box::new(ret_ty),
+                },
+            );
         }
 
         // Create inference context
@@ -8302,7 +8406,12 @@ impl Compiler {
 
     /// Type check a function definition using Hindley-Milner type inference.
     /// Returns Ok(()) if type checking passes, or a CompileError with details.
-    pub fn type_check_fn(&self, def: &FnDef) -> Result<(), CompileError> {
+    ///
+    /// The `qualified_name` parameter is the full module-qualified name of the function
+    /// (e.g., "moduleB.main") which is used to prioritize same-module functions when
+    /// resolving local names (to avoid cross-module conflicts when functions in different
+    /// modules have the same local name but different arities).
+    pub fn type_check_fn(&self, def: &FnDef, qualified_name: &str) -> Result<(), CompileError> {
         // Create a fresh type environment for inference
         let mut env = nostos_types::standard_env();
 
@@ -8410,27 +8519,89 @@ impl Compiler {
             if !env.functions.contains_key(fn_name) {
                 env.functions.insert(fn_name.clone(), fn_type.clone());
             }
-
-            // Also register with local name (strip signature suffix and module prefix)
-            // "utils.bar2/" -> "bar2", "bar2/" -> "bar2"
-            // We overwrite any existing entry to ensure the correct type is used
-            let base_name = fn_name.split('/').next().unwrap_or(fn_name);
-            let local_name = base_name.rsplit('.').next().unwrap_or(base_name);
-            env.functions.insert(local_name.to_string(), fn_type);
         }
 
         // Then register pending function signatures (for functions not yet compiled)
         // These use type variables since we don't know the actual types yet
-        // Register both qualified name (e.g., "utils.bar") and local name (e.g., "bar")
         for (fn_name, fn_type) in &self.pending_fn_signatures {
             if !env.functions.contains_key(fn_name) {
                 env.functions.insert(fn_name.clone(), fn_type.clone());
             }
-            // Also register with just the local name for intra-module calls
-            if let Some(dot_pos) = fn_name.rfind('.') {
-                let local_name = &fn_name[dot_pos + 1..];
+        }
+
+        // Now register local names, prioritizing functions in the same module as the current function.
+        // Extract the current function's module prefix (e.g., "moduleB.main" -> "moduleB.")
+        let current_module_prefix: Option<String> = {
+            let base_name = qualified_name.split('/').next().unwrap_or(qualified_name);
+            if let Some(dot_pos) = base_name.rfind('.') {
+                Some(format!("{}.", &base_name[..dot_pos]))
+            } else {
+                None
+            }
+        };
+
+        // First pass: register local names for functions NOT in the current module
+        // (only if not already present)
+        for fn_name in self.functions.keys() {
+            let base_name = fn_name.split('/').next().unwrap_or(fn_name);
+            let in_current_module = current_module_prefix.as_ref()
+                .map(|prefix| base_name.starts_with(prefix))
+                .unwrap_or(base_name.rfind('.').is_none());
+
+            if !in_current_module {
+                let local_name = base_name.rsplit('.').next().unwrap_or(base_name);
                 if !env.functions.contains_key(local_name) {
-                    env.functions.insert(local_name.to_string(), fn_type.clone());
+                    if let Some(fn_type) = env.functions.get(fn_name).cloned() {
+                        env.functions.insert(local_name.to_string(), fn_type);
+                    }
+                }
+            }
+        }
+        for fn_name in self.pending_fn_signatures.keys() {
+            let base_name = fn_name.split('/').next().unwrap_or(fn_name);
+            let in_current_module = current_module_prefix.as_ref()
+                .map(|prefix| base_name.starts_with(prefix))
+                .unwrap_or(base_name.rfind('.').is_none());
+
+            if !in_current_module {
+                if let Some(dot_pos) = base_name.rfind('.') {
+                    let local_name = &base_name[dot_pos + 1..];
+                    if !env.functions.contains_key(local_name) {
+                        if let Some(fn_type) = env.functions.get(fn_name).cloned() {
+                            env.functions.insert(local_name.to_string(), fn_type);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Second pass: register local names for functions IN the current module
+        // (these OVERWRITE any existing local names to ensure same-module priority)
+        for fn_name in self.functions.keys() {
+            let base_name = fn_name.split('/').next().unwrap_or(fn_name);
+            let in_current_module = current_module_prefix.as_ref()
+                .map(|prefix| base_name.starts_with(prefix))
+                .unwrap_or(base_name.rfind('.').is_none());
+
+            if in_current_module {
+                let local_name = base_name.rsplit('.').next().unwrap_or(base_name);
+                if let Some(fn_type) = env.functions.get(fn_name).cloned() {
+                    env.functions.insert(local_name.to_string(), fn_type);
+                }
+            }
+        }
+        for fn_name in self.pending_fn_signatures.keys() {
+            let base_name = fn_name.split('/').next().unwrap_or(fn_name);
+            let in_current_module = current_module_prefix.as_ref()
+                .map(|prefix| base_name.starts_with(prefix))
+                .unwrap_or(base_name.rfind('.').is_none());
+
+            if in_current_module {
+                if let Some(dot_pos) = base_name.rfind('.') {
+                    let local_name = &base_name[dot_pos + 1..];
+                    if let Some(fn_type) = env.functions.get(fn_name).cloned() {
+                        env.functions.insert(local_name.to_string(), fn_type);
+                    }
                 }
             }
         }
@@ -8451,32 +8622,32 @@ impl Compiler {
 
         // Pre-register the function being checked with fresh type variables for recursion support
         // This allows the function to call itself during type inference
+        // Always overwrite existing entries - when checking an overload, we need THIS overload's
+        // types, not another overload's types that might have been registered earlier
         let fn_name = &def.name.node;
-        if !env.functions.contains_key(fn_name) {
-            if let Some(clause) = def.clauses.first() {
-                let param_types: Vec<nostos_types::Type> = clause.params
-                    .iter()
-                    .map(|p| {
-                        if let Some(ty_expr) = &p.ty {
-                            self.type_name_to_type(&self.type_expr_to_string(ty_expr))
-                        } else {
-                            env.fresh_var()
-                        }
-                    })
-                    .collect();
-                let ret_ty = clause.return_type.as_ref()
-                    .map(|ty| self.type_name_to_type(&self.type_expr_to_string(ty)))
-                    .unwrap_or_else(|| env.fresh_var());
+        if let Some(clause) = def.clauses.first() {
+            let param_types: Vec<nostos_types::Type> = clause.params
+                .iter()
+                .map(|p| {
+                    if let Some(ty_expr) = &p.ty {
+                        self.type_name_to_type(&self.type_expr_to_string(ty_expr))
+                    } else {
+                        env.fresh_var()
+                    }
+                })
+                .collect();
+            let ret_ty = clause.return_type.as_ref()
+                .map(|ty| self.type_name_to_type(&self.type_expr_to_string(ty)))
+                .unwrap_or_else(|| env.fresh_var());
 
-                env.functions.insert(
-                    fn_name.clone(),
-                    nostos_types::FunctionType {
-                        type_params: vec![],
-                        params: param_types,
-                        ret: Box::new(ret_ty),
-                    },
-                );
-            }
+            env.functions.insert(
+                fn_name.clone(),
+                nostos_types::FunctionType {
+                    type_params: vec![],
+                    params: param_types,
+                    ret: Box::new(ret_ty),
+                },
+            );
         }
 
         // Create inference context
@@ -9475,10 +9646,13 @@ fn load_stdlib_into_compiler(compiler: &mut Compiler, stdlib_path: &std::path::P
 impl Compiler {
     /// Compile a list of items (can be called recursively for nested modules).
     fn compile_items(&mut self, items: &[Item]) -> Result<(), CompileError> {
-        // First pass: process use statements to set up imports
+        // First pass: process use and import statements to set up imports
         for item in items {
             if let Item::Use(use_stmt) = item {
                 self.compile_use_stmt(use_stmt)?;
+            }
+            if let Item::Import(import_stmt) = item {
+                self.compile_import_stmt(import_stmt)?;
             }
         }
 
@@ -9643,7 +9817,10 @@ impl Compiler {
 
         // Register the full module path as known (e.g., "Utils" or "Outer.Inner")
         let full_path = self.module_path.join(".");
-        self.known_modules.insert(full_path);
+        self.known_modules.insert(full_path.clone());
+
+        // Also register as a local module (inline modules don't require explicit imports)
+        self.local_modules.insert(full_path);
 
         // Compile the module's items
         self.compile_items(&module_def.items)?;
@@ -9677,6 +9854,21 @@ impl Compiler {
                 }
             }
         }
+
+        Ok(())
+    }
+
+    /// Compile an import statement.
+    /// Records that the current module imports the specified module.
+    fn compile_import_stmt(&mut self, import_stmt: &ImportStmt) -> Result<(), CompileError> {
+        // Build the module path from the import statement
+        let module_path: String = import_stmt.path.iter()
+            .map(|ident| ident.node.as_str())
+            .collect::<Vec<_>>()
+            .join(".");
+
+        // Record that this module is imported by the current module
+        self.imported_modules.insert((self.module_path.clone(), module_path));
 
         Ok(())
     }

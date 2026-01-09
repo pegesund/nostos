@@ -103,15 +103,23 @@ impl<'a> InferCtx<'a> {
     }
 
     /// Instantiate a polymorphic function type.
-    /// Replaces type parameters with fresh type variables and records trait constraints.
+    /// Replaces type parameters AND existing Var types with fresh type variables.
+    /// This ensures each call site gets its own type variables for proper unification.
     pub fn instantiate_function(&mut self, func_ty: &FunctionType) -> Type {
-        if func_ty.type_params.is_empty() {
-            // No type parameters, return as-is
-            return Type::Function(func_ty.clone());
+        // Collect all existing Var IDs in the function type
+        let mut var_ids: Vec<u32> = Vec::new();
+        self.collect_var_ids(&Type::Function(func_ty.clone()), &mut var_ids);
+
+        // Create mapping from old Var IDs to fresh ones
+        let mut var_subst: HashMap<u32, Type> = HashMap::new();
+        for var_id in var_ids {
+            if !var_subst.contains_key(&var_id) {
+                var_subst.insert(var_id, self.fresh());
+            }
         }
 
-        // Create fresh type variables for each type parameter
-        let mut subst: HashMap<String, Type> = HashMap::new();
+        // Also handle explicit type parameters
+        let mut param_subst: HashMap<String, Type> = HashMap::new();
         for type_param in &func_ty.type_params {
             let fresh_var = self.fresh();
 
@@ -122,21 +130,75 @@ impl<'a> InferCtx<'a> {
                 }
             }
 
-            subst.insert(type_param.name.clone(), fresh_var);
+            param_subst.insert(type_param.name.clone(), fresh_var);
         }
 
-        // Substitute type parameters in params and return type
+        // Substitute both Var IDs and type parameters
         let instantiated_params: Vec<Type> = func_ty.params
             .iter()
-            .map(|p| self.substitute_type_param(p, &subst))
+            .map(|p| self.freshen_type(p, &var_subst, &param_subst))
             .collect();
-        let instantiated_ret = self.substitute_type_param(&func_ty.ret, &subst);
+        let instantiated_ret = self.freshen_type(&func_ty.ret, &var_subst, &param_subst);
 
         Type::Function(FunctionType {
             type_params: vec![], // Instantiated function has no type params
             params: instantiated_params,
             ret: Box::new(instantiated_ret),
         })
+    }
+
+    /// Collect all Var IDs in a type
+    fn collect_var_ids(&self, ty: &Type, ids: &mut Vec<u32>) {
+        match ty {
+            Type::Var(id) => {
+                if !ids.contains(id) {
+                    ids.push(*id);
+                }
+            }
+            Type::List(elem) | Type::Array(elem) | Type::Set(elem) => {
+                self.collect_var_ids(elem, ids);
+            }
+            Type::Map(k, v) => {
+                self.collect_var_ids(k, ids);
+                self.collect_var_ids(v, ids);
+            }
+            Type::Tuple(elems) => {
+                for elem in elems {
+                    self.collect_var_ids(elem, ids);
+                }
+            }
+            Type::Function(ft) => {
+                for p in &ft.params {
+                    self.collect_var_ids(p, ids);
+                }
+                self.collect_var_ids(&ft.ret, ids);
+            }
+            _ => {}
+        }
+    }
+
+    /// Freshen a type by replacing Var IDs and TypeParams with fresh variables
+    fn freshen_type(&self, ty: &Type, var_subst: &HashMap<u32, Type>, param_subst: &HashMap<String, Type>) -> Type {
+        match ty {
+            Type::Var(id) => var_subst.get(id).cloned().unwrap_or_else(|| ty.clone()),
+            Type::TypeParam(name) => param_subst.get(name).cloned().unwrap_or_else(|| ty.clone()),
+            Type::List(elem) => Type::List(Box::new(self.freshen_type(elem, var_subst, param_subst))),
+            Type::Array(elem) => Type::Array(Box::new(self.freshen_type(elem, var_subst, param_subst))),
+            Type::Set(elem) => Type::Set(Box::new(self.freshen_type(elem, var_subst, param_subst))),
+            Type::Map(k, v) => Type::Map(
+                Box::new(self.freshen_type(k, var_subst, param_subst)),
+                Box::new(self.freshen_type(v, var_subst, param_subst)),
+            ),
+            Type::Tuple(elems) => Type::Tuple(
+                elems.iter().map(|e| self.freshen_type(e, var_subst, param_subst)).collect()
+            ),
+            Type::Function(ft) => Type::Function(FunctionType {
+                type_params: vec![],
+                params: ft.params.iter().map(|p| self.freshen_type(p, var_subst, param_subst)).collect(),
+                ret: Box::new(self.freshen_type(&ft.ret, var_subst, param_subst)),
+            }),
+            _ => ty.clone(),
+        }
     }
 
     /// Substitute type parameters in a type using the given mapping
@@ -1659,26 +1721,50 @@ impl<'a> InferCtx<'a> {
     pub fn infer_function(&mut self, func: &FnDef) -> Result<FunctionType, TypeError> {
         let name = &func.name.node;
 
-        // For now, use first clause to determine signature
-        if let Some(clause) = func.clauses.first() {
-            let (param_types, ret_ty) = self.infer_clause(clause)?;
-
-            let func_ty = FunctionType {
-                type_params: vec![],
-                params: param_types,
-                ret: Box::new(ret_ty),
-            };
-
-            // Register function in environment
-            self.env.functions.insert(name.clone(), func_ty.clone());
-
-            Ok(func_ty)
-        } else {
-            Err(TypeError::ArityMismatch {
+        if func.clauses.is_empty() {
+            return Err(TypeError::ArityMismatch {
                 expected: 1,
                 found: 0,
-            })
+            });
         }
+
+        // Infer the first clause to establish the base types
+        let (mut param_types, mut ret_ty) = self.infer_clause(&func.clauses[0])?;
+
+        // Infer remaining clauses and unify their types with the first
+        for clause in func.clauses.iter().skip(1) {
+            let (clause_params, clause_ret) = self.infer_clause(clause)?;
+
+            // Unify parameter types
+            if clause_params.len() != param_types.len() {
+                return Err(TypeError::ArityMismatch {
+                    expected: param_types.len(),
+                    found: clause_params.len(),
+                });
+            }
+            for i in 0..param_types.len() {
+                self.unify(param_types[i].clone(), clause_params[i].clone());
+            }
+            // Update param_types with unified types
+            for i in 0..param_types.len() {
+                param_types[i] = self.env.apply_subst(&param_types[i]);
+            }
+
+            // Unify return types
+            self.unify(ret_ty.clone(), clause_ret);
+            ret_ty = self.env.apply_subst(&ret_ty);
+        }
+
+        let func_ty = FunctionType {
+            type_params: vec![],
+            params: param_types,
+            ret: Box::new(ret_ty),
+        };
+
+        // Register function in environment
+        self.env.functions.insert(name.clone(), func_ty.clone());
+
+        Ok(func_ty)
     }
 
     /// Infer types for a function clause.
