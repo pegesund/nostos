@@ -1,0 +1,150 @@
+# PostgreSQL benchmark
+# REQUIRES: PostgreSQL running at localhost with user/password: postgres/postgres
+#
+# Tests:
+# 1. Simple queries (no params) - SELECT 1
+# 2. Parameterized queries - SELECT with parameters
+# 3. Inserts with parameters
+# 4. Prepared statement performance
+# 5. Pool overhead (get/release connection)
+
+# Direct connection for comparison (no pool)
+benchSimpleQuery(conn, iterations) = {
+    var i = 0
+    var sum = 0
+    while i < iterations {
+        rows = Pg.query(conn, "SELECT 1", [])
+        sum = sum + head(rows).0
+        i = i + 1
+    }
+    sum
+}
+
+benchParamQuery(conn, iterations) = {
+    var i = 0
+    var sum = 0
+    while i < iterations {
+        rows = Pg.query(conn, "SELECT $1 + $2", [i, i])
+        sum = sum + head(rows).0
+        i = i + 1
+    }
+    sum
+}
+
+# Benchmark insert/delete cycle
+benchInsertDelete(conn, iterations) = {
+    Pg.execute(conn, "CREATE TEMP TABLE bench_test (id INT, value INT)", [])
+    var i = 0
+    while i < iterations {
+        Pg.execute(conn, "INSERT INTO bench_test (id, value) VALUES ($1, $2)", [i, i * 2])
+        i = i + 1
+    }
+    Pg.execute(conn, "DROP TABLE bench_test", [])
+}
+
+# Benchmark prepared statements
+benchPreparedQuery(conn, iterations) = {
+    Pg.prepare(conn, "bench_select", "SELECT $1::int8 + $2::int8")
+    var i = 0
+    var sum = 0
+    while i < iterations {
+        rows = Pg.queryPrepared(conn, "bench_select", [i, i])
+        sum = sum + head(rows).0
+        i = i + 1
+    }
+    Pg.deallocate(conn, "bench_select")
+    sum
+}
+
+benchPreparedInsert(conn, iterations) = {
+    Pg.execute(conn, "CREATE TEMP TABLE bench_prep (id INT, value INT)", [])
+    Pg.prepare(conn, "bench_insert", "INSERT INTO bench_prep (id, value) VALUES ($1, $2)")
+    var i = 0
+    while i < iterations {
+        Pg.executePrepared(conn, "bench_insert", [i, i * 2])
+        i = i + 1
+    }
+    Pg.deallocate(conn, "bench_insert")
+    Pg.execute(conn, "DROP TABLE bench_prep", [])
+}
+
+# Benchmark with bulk data
+benchBulkRead(conn, iterations, rowCount) = {
+    # Create and populate table
+    Pg.execute(conn, "CREATE TEMP TABLE bench_bulk (id INT, value INT)", [])
+    var i = 0
+    while i < rowCount {
+        Pg.execute(conn, "INSERT INTO bench_bulk VALUES ($1, $2)", [i, i * 3])
+        i = i + 1
+    }
+
+    # Benchmark reading all rows
+    var j = 0
+    var sum = 0
+    while j < iterations {
+        rows = Pg.query(conn, "SELECT * FROM bench_bulk", [])
+        sum = sum + length(rows)
+        j = j + 1
+    }
+
+    Pg.execute(conn, "DROP TABLE bench_bulk", [])
+    sum
+}
+
+main() = {
+    println("PostgreSQL Benchmark")
+    println("====================")
+
+    conn = Pg.connect("host=localhost user=postgres password=postgres")
+    iterations = 1000
+
+    # 1. Simple query
+    s1 = Time.now()
+    benchSimpleQuery(conn, iterations)
+    e1 = Time.now() - s1
+    println("Simple query (SELECT 1) x" ++ show(iterations) ++ ": " ++ show(e1) ++ " ms")
+    println("  Per query: " ++ show(e1 * 1000 / iterations) ++ " us")
+
+    # 2. Parameterized query
+    s2 = Time.now()
+    benchParamQuery(conn, iterations)
+    e2 = Time.now() - s2
+    println("Param query (SELECT $1 + $2) x" ++ show(iterations) ++ ": " ++ show(e2) ++ " ms")
+    println("  Per query: " ++ show(e2 * 1000 / iterations) ++ " us")
+
+    # 3. Insert/delete cycle
+    s3 = Time.now()
+    benchInsertDelete(conn, iterations)
+    e3 = Time.now() - s3
+    println("Insert x" ++ show(iterations) ++ ": " ++ show(e3) ++ " ms")
+    println("  Per insert: " ++ show(e3 * 1000 / iterations) ++ " us")
+
+    # 4. Prepared query
+    s4 = Time.now()
+    benchPreparedQuery(conn, iterations)
+    e4 = Time.now() - s4
+    println("Prepared query x" ++ show(iterations) ++ ": " ++ show(e4) ++ " ms")
+    println("  Per query: " ++ show(e4 * 1000 / iterations) ++ " us")
+    println("  Speedup vs param query: " ++ show(e2 / e4) ++ "x")
+
+    # 5. Prepared insert
+    s5 = Time.now()
+    benchPreparedInsert(conn, iterations)
+    e5 = Time.now() - s5
+    println("Prepared insert x" ++ show(iterations) ++ ": " ++ show(e5) ++ " ms")
+    println("  Per insert: " ++ show(e5 * 1000 / iterations) ++ " us")
+    println("  Speedup vs raw insert: " ++ show(e3 / e5) ++ "x")
+
+    # 6. Bulk read (smaller iterations)
+    bulkIter = 100
+    rowCount = 100
+    s6 = Time.now()
+    benchBulkRead(conn, bulkIter, rowCount)
+    e6 = Time.now() - s6
+    println("Bulk read (" ++ show(rowCount) ++ " rows) x" ++ show(bulkIter) ++ ": " ++ show(e6) ++ " ms")
+    println("  Per read: " ++ show(e6 * 1000 / bulkIter) ++ " us")
+
+    Pg.close(conn)
+    println("Done!")
+    0
+}

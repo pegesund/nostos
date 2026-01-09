@@ -1925,11 +1925,11 @@ impl IoRuntime {
                     let pg_conns = pg_connections.clone();
 
                     tokio::spawn(async move {
-                        let conns = pg_conns.lock().await;
-                        match conns.get(&handle) {
+                        let mut conns = pg_conns.lock().await;
+                        match conns.get_mut(&handle) {
                             Some(conn) => {
-                                // Build params - we need to keep ownership of the boxed values
-                                let result = Self::execute_pg_query(conn.client(), &query, &params).await;
+                                // Use cached statement execution
+                                let result = Self::execute_pg_query_cached(conn, &query, &params).await;
                                 match result {
                                     Ok(rows) => {
                                         let _ = response.send(Ok(IoResponseValue::PgRows(rows)));
@@ -1950,10 +1950,11 @@ impl IoRuntime {
                     let pg_conns = pg_connections.clone();
 
                     tokio::spawn(async move {
-                        let conns = pg_conns.lock().await;
-                        match conns.get(&handle) {
+                        let mut conns = pg_conns.lock().await;
+                        match conns.get_mut(&handle) {
                             Some(conn) => {
-                                let result = Self::execute_pg_execute(conn.client(), &query, &params).await;
+                                // Use cached statement execution
+                                let result = Self::execute_pg_execute_cached(conn, &query, &params).await;
                                 match result {
                                     Ok(count) => {
                                         let _ = response.send(Ok(IoResponseValue::PgAffected(count)));
@@ -2933,22 +2934,35 @@ impl IoRuntime {
         result
     }
 
-    /// Execute a Postgres query with parameters
-    async fn execute_pg_query(
-        client: &PgClient,
+    /// Execute a Postgres query with parameters (with automatic statement caching)
+    async fn execute_pg_query_cached(
+        conn: &mut PgConnection,
         query: &str,
         params: &[PgParam],
     ) -> Result<Vec<Vec<PgValue>>, String> {
+        let client = conn.client();
+
         let rows = if params.is_empty() {
             client.query(query, &[]).await
         } else {
             // Add type casts based on param types
             let typed_query = Self::add_type_casts(query, params);
 
-            // Prepare statement
-            let stmt = match client.prepare(&typed_query).await {
-                Ok(s) => s,
-                Err(e) => return Err(e.to_string()),
+            // Use auto-cache key (prefix to avoid collision with user-defined prepared statements)
+            let cache_key = format!("__auto__{}", typed_query);
+
+            // Check if we have a cached statement
+            let stmt = if let Some(cached) = conn.prepared().get(&cache_key) {
+                cached.clone()
+            } else {
+                // Prepare statement
+                let stmt = match conn.client().prepare(&typed_query).await {
+                    Ok(s) => s,
+                    Err(e) => return Err(e.to_string()),
+                };
+                // Cache it
+                conn.prepared_mut().insert(cache_key, stmt.clone());
+                stmt
             };
 
             // Build typed params based on what PostgreSQL expects
@@ -2956,7 +2970,7 @@ impl IoRuntime {
             let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
                 typed_params.iter().map(|p| &**p as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
 
-            client.query(&stmt, &param_refs).await
+            conn.client().query(&stmt, &param_refs).await
         };
 
         match rows {
@@ -2970,28 +2984,40 @@ impl IoRuntime {
         }
     }
 
-    /// Execute a Postgres statement with parameters
-    async fn execute_pg_execute(
-        client: &PgClient,
+    /// Execute a Postgres statement with parameters (with automatic statement caching)
+    async fn execute_pg_execute_cached(
+        conn: &mut PgConnection,
         query: &str,
         params: &[PgParam],
     ) -> Result<u64, String> {
         let count = if params.is_empty() {
-            client.execute(query, &[]).await
+            conn.client().execute(query, &[]).await
         } else {
             // Add type casts based on param types
             let typed_query = Self::add_type_casts(query, params);
 
-            let stmt = match client.prepare(&typed_query).await {
-                Ok(s) => s,
-                Err(e) => return Err(e.to_string()),
+            // Use auto-cache key (prefix to avoid collision with user-defined prepared statements)
+            let cache_key = format!("__auto__{}", typed_query);
+
+            // Check if we have a cached statement
+            let stmt = if let Some(cached) = conn.prepared().get(&cache_key) {
+                cached.clone()
+            } else {
+                // Prepare statement
+                let stmt = match conn.client().prepare(&typed_query).await {
+                    Ok(s) => s,
+                    Err(e) => return Err(e.to_string()),
+                };
+                // Cache it
+                conn.prepared_mut().insert(cache_key, stmt.clone());
+                stmt
             };
 
             let typed_params = Self::build_typed_params(params, stmt.params());
             let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
                 typed_params.iter().map(|p| &**p as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
 
-            client.execute(&stmt, &param_refs).await
+            conn.client().execute(&stmt, &param_refs).await
         };
 
         count.map_err(|e| e.to_string())
