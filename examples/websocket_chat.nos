@@ -1,0 +1,200 @@
+# WebSocket Chat Server Example
+#
+# A multi-client chat server using WebSockets with typed JSON messages.
+# Uses the stdlib/ws.nos message protocol and mvar for shared state.
+#
+# Test with: websocat ws://localhost:8080/
+# Send messages like: {"type":"chat","payload":"Hello everyone!"}
+# Or set username: {"type":"username","payload":"Alice"}
+
+use stdlib.server.{serve, respondText}
+use stdlib.ws.{parseMessage, makeMessage, WsMessage}
+
+# --- Client State ---
+
+type Client = { id: Int, writerId: Int, username: String }
+
+mvar clients: List[Client] = []
+mvar nextId: Int = 1
+
+# --- Client Management ---
+
+addClient(id, writerId) = {
+    c = Client(id, writerId, "Guest" ++ show(nextId))
+    clients = clients ++ [c]
+    nextId = nextId + 1
+    c
+}
+
+removeClient(clientId) = {
+    clients = clients.filter(c => c.id != clientId)
+}
+
+updateUsername(clientId, newName) = {
+    clients = clients.map(c =>
+        if c.id == clientId then Client(c.id, c.writerId, newName) else c
+    )
+}
+
+getClient(clientId) = {
+    list = clients.filter(c => c.id == clientId)
+    match list {
+        [c | _] -> Some(c)
+        [] -> None
+    }
+}
+
+# --- Broadcasting ---
+
+broadcast(message) = {
+    list = clients
+    list.each(c => {
+        try { WebSocket.sendShared(c.writerId, message) } catch { _ -> () }
+    })
+}
+
+broadcastExcept(exceptId, message) = {
+    list = clients
+    list.each(c => {
+        if c.id != exceptId then {
+            try { WebSocket.sendShared(c.writerId, message) } catch { _ -> () }
+        } else ()
+    })
+}
+
+# --- Message Handling ---
+
+handleMessage(client, msg) = {
+    match msg.msgType {
+        "chat" -> {
+            # Get current username (might have changed)
+            currentClient = getClient(client.id)
+            name = match currentClient {
+                Some(c) -> c.username
+                None -> "Unknown"
+            }
+            chatMsg = makeMessage("chat", name ++ ": " ++ msg.payload)
+            broadcast(chatMsg)
+            println("[CHAT] " ++ name ++ ": " ++ msg.payload)
+            true
+        }
+        "username" -> {
+            oldName = client.username
+            newName = msg.payload
+            updateUsername(client.id, newName)
+
+            # Notify everyone about the name change
+            notification = makeMessage("system", oldName ++ " is now known as " ++ newName)
+            broadcast(notification)
+            println("[RENAME] " ++ oldName ++ " -> " ++ newName)
+            true
+        }
+        "users" -> {
+            # Send list of connected users
+            list = clients
+            names = list.map(c => c.username)
+            namesStr = String.join(", ", names)
+            response = makeMessage("users", namesStr)
+            WebSocket.sendShared(client.writerId, response)
+            true
+        }
+        "quit" -> {
+            println("[QUIT] " ++ client.username ++ " requested disconnect")
+            false
+        }
+        _ -> {
+            # Unknown message type - send error
+            errMsg = makeMessage("error", "Unknown message type: " ++ msg.msgType)
+            WebSocket.sendShared(client.writerId, errMsg)
+            true
+        }
+    }
+}
+
+# --- WebSocket Session ---
+
+wsSession(ws, client) = {
+    ok = try {
+        raw = WebSocket.recv(ws)
+        match parseMessage(raw) {
+            Some(msg) -> handleMessage(client, msg)
+            None -> {
+                # Invalid JSON - send error
+                errMsg = makeMessage("error", "Invalid message format. Use: {\"type\":\"...\",\"payload\":\"...\"}")
+                WebSocket.sendShared(client.writerId, errMsg)
+                true
+            }
+        }
+    } catch { _ -> false }
+
+    if ok then wsSession(ws, client) else ()
+}
+
+# --- Connection Handler ---
+
+handleConnection(ws, client) = {
+    # Announce join
+    joinMsg = makeMessage("system", client.username ++ " joined the chat")
+    broadcastExcept(client.id, joinMsg)
+
+    # Send welcome message to new client
+    welcome = makeMessage("system", "Welcome to the chat! Commands: chat (send message), username (change name), users (list users), quit")
+    WebSocket.sendShared(client.writerId, welcome)
+
+    # Message loop
+    wsSession(ws, client)
+
+    # Client disconnected - cleanup
+    currentClient = getClient(client.id)
+    name = match currentClient {
+        Some(c) -> c.username
+        None -> client.username
+    }
+
+    removeClient(client.id)
+
+    # Announce departure
+    leaveMsg = makeMessage("system", name ++ " left the chat")
+    broadcast(leaveMsg)
+    println("[DISCONNECT] " ++ name)
+}
+
+# --- HTTP Handler ---
+
+route(req) = {
+    if req.isWebSocket then {
+        ws = WebSocket.accept(req.id)
+        result = WebSocket.split(ws)
+        client = addClient(result.requestId, result.writerId)
+        println("[CONNECT] " ++ client.username ++ " (ID: " ++ show(client.id) ++ ")")
+
+        handleConnection(result.requestId, client)
+        WebSocket.close(result.requestId)
+    } else {
+        html = "<!DOCTYPE html>
+<html>
+<head><title>WebSocket Chat</title></head>
+<body>
+<h1>WebSocket Chat Server</h1>
+<p>Connect with: <code>websocat ws://localhost:8080/</code></p>
+<h2>Message Format</h2>
+<pre>
+{\"type\": \"chat\", \"payload\": \"Your message here\"}
+{\"type\": \"username\", \"payload\": \"NewUsername\"}
+{\"type\": \"users\", \"payload\": \"\"}
+{\"type\": \"quit\", \"payload\": \"\"}
+</pre>
+</body>
+</html>"
+        respondText(req, html)
+    }
+}
+
+main() = {
+    println("=== WebSocket Chat Server ===")
+    println("HTTP: http://localhost:8080/")
+    println("WebSocket: ws://localhost:8080/")
+    println("Connect with: websocat ws://localhost:8080/")
+    println("")
+    serve(8080, route)
+}
