@@ -1,4 +1,4 @@
-# expect_error: division by zero
+# expect_error: Division by zero
 # Division by zero at runtime
 
 main() = {
