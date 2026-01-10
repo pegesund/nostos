@@ -543,22 +543,19 @@ main() = startRWeb(8080, "Live Search", session)</code></pre>
                 <!-- Multi-Route Applications -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Multi-Route Applications</h2>
                 <p class="text-slate-400 mb-4">
-                    For applications with multiple pages, use <code>startRWebWithRoutes</code> to define different routes:
+                    For applications with multiple pages, use <code>startRWebWithRoutes</code> with resolver functions:
                 </p>
 
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos">use stdlib.rweb
-use stdlib.rhtml
-
-# Route definitions
-# Each route can be:
-#   - Reactive: (path, session_fn) where session_fn returns (render, handler)
-#   - Static HTML: (path, "html", html_content)
+<pre><code class="language-nostos">use stdlib.rweb.{startRWebWithRoutes}
+use stdlib.rhtml.{div, h1, p, button, a}
+use stdlib.server.{respondHtml, respondJson}
 
 reactive HomeState = { count: Int }
 reactive DashState = { total: Int }
 
-homeSession() = {
+# Reactive session for home page
+homeSession(writerId) = {
     state = HomeState(count: 0)
     (
         () => RHtml(div([
@@ -574,7 +571,8 @@ homeSession() = {
     )
 }
 
-dashSession() = {
+# Reactive session for dashboard
+dashSession(writerId) = {
     state = DashState(total: 100)
     (
         () => RHtml(div([
@@ -590,28 +588,112 @@ dashSession() = {
     )
 }
 
-# Static HTML page (no reactivity)
-aboutHtml = "<!DOCTYPE html><html><body><h1>About Us</h1><p>This is a static page.</p><a href='/'>Home</a></body></html>"
+# Reactive resolver: path -> Option[sessionFn]
+reactiveResolver(path) = match path {
+    "/" -> Some(homeSession)
+    "/dashboard" -> Some(dashSession)
+    _ -> None()
+}
 
-routes(path) = match path {
-    "/" -> ("reactive", homeSession)
-    "/dashboard" -> ("reactive", dashSession)
-    "/about" -> ("html", aboutHtml)
-    _ -> ("404", ())  # 404 for unknown routes
+# Plain resolver: path -> Option[handler]
+# For static HTML, API endpoints, etc.
+plainResolver(path) = match path {
+    "/about" -> Some(req => respondHtml(req, "&lt;h1&gt;About Us&lt;/h1&gt;"))
+    "/api/health" -> Some(req => respondJson(req, "{\"status\":\"ok\"}"))
+    _ -> None()
 }
 
 main() = {
     println("Starting multi-route app on port 8080...")
-    startRWebWithRoutes(8080, "Multi-Route App", routes)
+    startRWebWithRoutes(8080, "Multi-Route App", reactiveResolver, plainResolver)
 }</code></pre>
                 </div>
 
                 <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
-                    <h4 class="text-white font-semibold mb-2">Route Types</h4>
+                    <h4 class="text-white font-semibold mb-2">Resolver Functions</h4>
                     <ul class="text-slate-400 text-sm space-y-2">
-                        <li><code>("reactive", sessionFn)</code> - A reactive page with WebSocket connection</li>
-                        <li><code>("html", htmlString)</code> - A static HTML page (no WebSocket)</li>
-                        <li><code>("404", ())</code> - Return 404 Not Found</li>
+                        <li><code>reactiveResolver(path) -> Option[sessionFn]</code> - Returns a reactive session setup function</li>
+                        <li><code>plainResolver(path) -> Option[handler]</code> - Returns a plain HTTP handler (for APIs, static HTML)</li>
+                        <li>Return <code>None()</code> for paths you don't handle</li>
+                    </ul>
+                </div>
+
+                <!-- Static File Serving -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Static File Serving</h2>
+                <p class="text-slate-400 mb-4">
+                    For applications that need to serve CSS, JavaScript, images, and other static assets, use <code>startRWebFull</code>:
+                </p>
+
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">use stdlib.rweb.{startRWebFull}
+use stdlib.rhtml.{div, h1, link, script, img}
+use stdlib.server.{respondJson}
+
+reactive AppState = { theme: String }
+
+appSession(writerId) = {
+    state = AppState(theme: "light")
+    (
+        () => RHtml(div([
+            # Link to static CSS file
+            link(href: "/static/css/style.css", rel: "stylesheet"),
+
+            h1("My App"),
+            img(src: "/static/images/logo.png", alt: "Logo"),
+            p("Current theme: " ++ state.theme),
+            button("Toggle Theme", dataAction: "toggle"),
+
+            # Link to static JavaScript
+            script(src: "/static/js/app.js")
+        ])),
+        (action, _) => match action {
+            "toggle" -> state.theme = if state.theme == "light" then "dark" else "light"
+            _ -> ()
+        }
+    )
+}
+
+reactiveResolver(path) = match path {
+    "/" -> Some(appSession)
+    _ -> None()
+}
+
+plainResolver(path) = match path {
+    "/api/status" -> Some(req => respondJson(req, "{\"ok\":true}"))
+    _ -> None()
+}
+
+# Static file configuration: list of (urlPrefix, directory) tuples
+staticConfig = [
+    ("/static", "./public"),      # /static/css/style.css -> ./public/css/style.css
+    ("/assets", "./assets")       # /assets/logo.png -> ./assets/logo.png
+]
+
+main() = {
+    startRWebFull(8080, "My App", reactiveResolver, plainResolver, staticConfig)
+}</code></pre>
+                </div>
+
+                <div class="bg-gradient-to-r from-blue-900/30 to-emerald-900/30 rounded-lg p-6 mb-8 border border-slate-700">
+                    <h4 class="text-white font-semibold mb-2">Request Routing Order</h4>
+                    <p class="text-slate-400 mb-2">When a request comes in, RWeb checks handlers in this order:</p>
+                    <ol class="text-slate-300 space-y-1 list-decimal list-inside">
+                        <li><strong>Reactive pages</strong> - WebSocket-enabled pages with live updates</li>
+                        <li><strong>Plain handlers</strong> - API endpoints, static HTML pages</li>
+                        <li><strong>Static files</strong> - CSS, JS, images from configured directories</li>
+                        <li><strong>404 fallback</strong> - If nothing matches</li>
+                    </ol>
+                </div>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <h4 class="text-white font-semibold mb-2">Supported MIME Types</h4>
+                    <p class="text-slate-400 text-sm mb-2">Static files are served with correct Content-Type headers:</p>
+                    <ul class="text-slate-400 text-sm space-y-1">
+                        <li><strong>Text:</strong> .html, .css, .js, .json, .svg, .txt, .xml</li>
+                        <li><strong>Images:</strong> .png, .jpg, .jpeg, .gif, .webp, .ico</li>
+                        <li><strong>Fonts:</strong> .woff, .woff2, .ttf, .otf, .eot</li>
+                        <li><strong>Media:</strong> .mp3, .mp4, .webm</li>
+                        <li><strong>Other:</strong> .pdf, .zip, .wasm</li>
                     </ul>
                 </div>
 
