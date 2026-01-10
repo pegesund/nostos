@@ -12768,9 +12768,11 @@ impl Compiler {
                         self.chunk.emit(Instruction::Move(existing_reg, value_reg), 0);
                     }
                 } else {
-                    // Both are immutable: treat as pattern match (assert equality)
-                    // Emit AssertEq to check that the new value matches the existing one
-                    self.chunk.emit(Instruction::AssertEq(existing_info.reg, value_reg), self.span_line(binding.span));
+                    // Both are immutable: this is an error - cannot reassign immutable variable
+                    return Err(CompileError::TypeError {
+                        message: format!("cannot reassign immutable variable '{}'; use 'var' to declare a mutable variable", ident.node),
+                        span: binding.span,
+                    });
                 }
             } else {
                 // Check if this is an mvar (module-level mutable variable) assignment

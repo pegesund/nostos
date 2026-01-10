@@ -1,5 +1,5 @@
-# expect: 1
-# Rebinding immutable to same value acts as assertion
+# expect_error: cannot reassign immutable variable
+# Attempting to reassign immutable variable is a compile error
 
 main() = {
     x = 1

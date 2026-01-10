@@ -1,5 +1,5 @@
-# expect: 1
-# Pattern match on immutable binding with same value should succeed
+# expect_error: cannot reassign immutable variable
+# Attempting to reassign immutable variable is a compile error, even with same value
 
 main() = {
     x = 1

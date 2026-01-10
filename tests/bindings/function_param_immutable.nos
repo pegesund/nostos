@@ -1,4 +1,4 @@
-# expect_error: Assertion failed
+# expect_error: cannot reassign immutable variable
 # Function parameters are immutable by default
 
 add_one(x) = {
