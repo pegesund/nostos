@@ -7,6 +7,9 @@ pub mod callgraph;
 pub mod session;
 pub mod engine;
 
+#[cfg(test)]
+mod repl_tests;
+
 pub use callgraph::CallGraph;
 pub use session::{
     Definition, DefineSuccess, FunctionError, ReplError, ReplSession, TryDefineResult,
