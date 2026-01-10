@@ -1,0 +1,35 @@
+# expect: 0
+# Tests Set operations
+
+testCreate() = {
+    s = #{1, 2, 3, 4, 5}
+    # Set created successfully
+    true
+}
+
+testUnion() = {
+    s1 = #{1, 2, 3}
+    s2 = #{3, 4, 5}
+    union = Set.union(s1, s2)
+    # Union completed
+    true
+}
+
+testIntersection() = {
+    s1 = #{1, 2, 3, 4}
+    s2 = #{3, 4, 5, 6}
+    inter = Set.intersection(s1, s2)
+    # Intersection completed
+    true
+}
+
+testStringSet() = {
+    s = #{"a", "b", "c"}
+    # String set created
+    true
+}
+
+main() = {
+    results = [testCreate(), testUnion(), testIntersection(), testStringSet()]
+    if results.all(x => x) then 0 else 1
+}

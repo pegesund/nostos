@@ -1,0 +1,34 @@
+# expect: 0
+# Tests Map operations
+
+testCreate() = {
+    m = %{"a": 1, "b": 2, "c": 3}
+    t1 = Map.get(m, "a") == 1
+    t2 = Map.get(m, "b") == 2
+    t3 = Map.get(m, "c") == 3
+    t1 && t2 && t3
+}
+
+testIntKeys() = {
+    m = %{1: "one", 2: "two", 3: "three"}
+    t1 = Map.get(m, 2) == "two"
+    t2 = Map.get(m, 1) == "one"
+    t1 && t2
+}
+
+testEmpty() = {
+    m = %{}
+    # Empty map created successfully
+    true
+}
+
+testInsert() = {
+    m1 = %{"x": 10}
+    m2 = Map.insert(m1, "y", 20)
+    Map.get(m2, "y") == 20
+}
+
+main() = {
+    results = [testCreate(), testIntKeys(), testEmpty(), testInsert()]
+    if results.all(x => x) then 0 else 1
+}

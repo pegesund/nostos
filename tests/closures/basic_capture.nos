@@ -1,0 +1,30 @@
+# expect: 0
+# Basic closure variable capture
+
+main() = {
+    # Capture single variable
+    x = 10
+    f = () => x
+    test1 = f() == 10
+
+    # Capture multiple variables
+    a = 1
+    b = 2
+    c = 3
+    g = () => a + b + c
+    test2 = g() == 6
+
+    # Capture with parameter
+    y = 100
+    h = n => n + y
+    test3 = h(5) == 105
+
+    # Capture in different scope
+    outer = 50
+    test4 = {
+        inner = () => outer * 2
+        inner() == 100
+    }
+
+    if test1 && test2 && test3 && test4 then 0 else 1
+}

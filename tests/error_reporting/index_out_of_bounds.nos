@@ -1,0 +1,7 @@
+# expect_error: out of bounds
+# Array index out of bounds at runtime
+
+main() = {
+    list = [1, 2, 3]
+    list[10]
+}

@@ -1,0 +1,33 @@
+# expect: 0
+# Closures passed as arguments
+
+apply(f, x) = f(x)
+applyTwice(f, x) = f(f(x))
+compose(f, g) = x => g(f(x))
+
+main() = {
+    # Simple function argument
+    double = x => x * 2
+    test1 = apply(double, 5) == 10
+
+    # Apply twice
+    test2 = applyTwice(double, 3) == 12
+
+    # Closure capturing variable passed as argument
+    factor = 10
+    scale = x => x * factor
+    test3 = apply(scale, 5) == 50
+
+    # Compose closures
+    add1 = x => x + 1
+    mul2 = x => x * 2
+    add1ThenMul2 = compose(add1, mul2)
+    test4 = add1ThenMul2(5) == 12
+
+    # Higher-order with captured variable
+    base = 100
+    addBase = x => x + base
+    test5 = applyTwice(addBase, 0) == 200
+
+    if test1 && test2 && test3 && test4 && test5 then 0 else 1
+}

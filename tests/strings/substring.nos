@@ -1,0 +1,30 @@
+# expect: 0
+# String substring and slicing tests
+
+main() = {
+    s = "Hello, World!"
+
+    # Basic substring
+    t1 = String.substring(s, 0, 5) == "Hello"
+    t2 = String.substring(s, 7, 12) == "World"
+    t3 = String.substring(s, 0, 1) == "H"
+
+    # Full string
+    t4 = String.substring(s, 0, 13) == s
+
+    # Empty result
+    t5 = String.substring(s, 5, 5) == ""
+
+    # IndexOf
+    t6 = String.indexOf(s, "World") == 7
+    t7 = String.indexOf(s, "Hello") == 0
+    t8 = String.indexOf(s, "xyz") == -1
+    t9 = String.indexOf(s, ",") == 5
+
+    # LastIndexOf
+    repeated = "abcabc"
+    t10 = String.indexOf(repeated, "abc") == 0
+    t11 = String.lastIndexOf(repeated, "abc") == 3
+
+    if t1 && t2 && t3 && t4 && t5 && t6 && t7 && t8 && t9 && t10 && t11 then 0 else 1
+}

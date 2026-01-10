@@ -1,0 +1,15 @@
+# expect_error: non-exhaustive
+# Non-exhaustive pattern match
+
+type Color = Red | Green | Blue
+
+describe(c: Color) = match c {
+    Red -> "red"
+    Green -> "green"
+    # Missing Blue case
+}
+
+main() = {
+    describe(Red)
+    0
+}

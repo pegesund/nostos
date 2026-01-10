@@ -1,0 +1,8 @@
+# expect_error: unknown variable
+# Reference to undefined variable
+
+main() = {
+    x = 10
+    y = x + undefinedVar
+    y
+}

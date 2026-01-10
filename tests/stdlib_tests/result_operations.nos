@@ -1,0 +1,73 @@
+# expect: 0
+# Tests Result operations
+
+safeDivide(a, b) = if b == 0 then Err("division by zero") else Ok(a / b)
+
+testOkErr() = {
+    ok = Ok(42)
+    err = Err("error")
+
+    t1 = match ok {
+        Ok(x) -> x == 42
+        Err(_) -> false
+    }
+
+    t2 = match err {
+        Ok(_) -> false
+        Err(msg) -> msg == "error"
+    }
+
+    t1 && t2
+}
+
+testMap() = {
+    ok = Ok(10)
+    doubled = ok.map(x => x * 2)
+
+    match doubled {
+        Ok(x) -> x == 20
+        Err(_) -> false
+    }
+}
+
+testFlatMap() = {
+    ok = Ok(10)
+    result = ok.flatMap(x => Ok(x + 5))
+
+    match result {
+        Ok(x) -> x == 15
+        Err(_) -> false
+    }
+}
+
+testUnwrapOr() = {
+    ok = Ok(42)
+    err = Err("error")
+
+    t1 = ok.unwrapOr(0) == 42
+    t2 = err.unwrapOr(0) == 0
+
+    t1 && t2
+}
+
+testSafeDivide() = {
+    r1 = safeDivide(10, 2)
+    t1 = match r1 {
+        Ok(x) -> x == 5
+        Err(_) -> false
+    }
+
+    r2 = safeDivide(10, 0)
+    t2 = match r2 {
+        Ok(_) -> false
+        Err(_) -> true
+    }
+
+    t1 && t2
+}
+
+main() = {
+    results = [testOkErr(), testMap(), testFlatMap(),
+               testUnwrapOr(), testSafeDivide()]
+    if results.all(x => x) then 0 else 1
+}

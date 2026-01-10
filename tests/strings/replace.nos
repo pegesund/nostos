@@ -1,0 +1,28 @@
+# expect: 0
+# String replace tests
+
+main() = {
+    # Basic replace (replaces first occurrence only)
+    t1 = String.replace("hello world", "world", "nostos") == "hello nostos"
+    t2 = String.replace("aaa", "a", "b") == "baa"  # Only first 'a' replaced
+
+    # No match
+    t3 = String.replace("hello", "xyz", "abc") == "hello"
+
+    # Replace at start
+    t4 = String.replace("hello world", "hello", "hi") == "hi world"
+
+    # Replace at end
+    t5 = String.replace("hello world", "world", "there") == "hello there"
+
+    # Replace with empty string
+    t6 = String.replace("hello world", " ", "") == "helloworld"
+
+    # Replace empty string inserts at beginning
+    t7 = String.replace("hello", "", "x") == "xhello"
+
+    # Multiple occurrences (only first replaced)
+    t8 = String.replace("banana", "a", "o") == "bonana"
+
+    if t1 && t2 && t3 && t4 && t5 && t6 && t7 && t8 then 0 else 1
+}

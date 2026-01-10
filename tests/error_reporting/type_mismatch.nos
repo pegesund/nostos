@@ -1,0 +1,8 @@
+# expect_error: type mismatch
+# Type mismatch in function argument
+
+addOne(x: Int) -> Int = x + 1
+
+main() = {
+    addOne("hello")
+}

@@ -1,0 +1,29 @@
+# expect: 0
+# String case conversion tests
+
+main() = {
+    # Basic case conversion
+    t1 = String.toUpper("hello") == "HELLO"
+    t2 = String.toLower("WORLD") == "world"
+    t3 = String.toUpper("Hello World") == "HELLO WORLD"
+    t4 = String.toLower("Hello World") == "hello world"
+
+    # Mixed case
+    mixed = "HeLLo WoRLd"
+    t5 = String.toLower(mixed) == "hello world"
+    t6 = String.toUpper(mixed) == "HELLO WORLD"
+
+    # Already in correct case
+    t7 = String.toUpper("UPPERCASE") == "UPPERCASE"
+    t8 = String.toLower("lowercase") == "lowercase"
+
+    # Numbers and symbols unchanged
+    t9 = String.toUpper("hello123!@#") == "HELLO123!@#"
+    t10 = String.toLower("HELLO123!@#") == "hello123!@#"
+
+    # Empty string
+    t11 = String.toUpper("") == ""
+    t12 = String.toLower("") == ""
+
+    if t1 && t2 && t3 && t4 && t5 && t6 && t7 && t8 && t9 && t10 && t11 && t12 then 0 else 1
+}

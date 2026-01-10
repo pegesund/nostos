@@ -1,0 +1,8 @@
+# expect_error: arguments
+# Wrong number of arguments
+
+add(a, b) = a + b
+
+main() = {
+    add(1, 2, 3)
+}

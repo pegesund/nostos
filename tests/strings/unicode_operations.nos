@@ -1,0 +1,31 @@
+# expect: 0
+# Unicode string operations
+
+main() = {
+    # Unicode in split/join
+    csv = "アリス,ボブ,チャーリー"
+    parts = String.split(csv, ",")
+    t1 = length(parts) == 3
+    t2 = head(parts) == "アリス"
+
+    rejoined = String.join(parts, "-")
+    t3 = String.contains(rejoined, "アリス-ボブ")
+
+    # Trim with Unicode
+    padded = "  日本語  "
+    trimmed = String.trim(padded)
+    t4 = trimmed == "日本語"
+
+    # Contains with Unicode
+    text = "The quick 狐 jumps over the lazy 犬"
+    t5 = String.contains(text, "狐")
+    t6 = String.contains(text, "犬")
+    t7 = String.contains(text, "猫") == false
+
+    # StartsWith/EndsWith with Unicode
+    greeting = "你好世界"
+    t8 = String.startsWith(greeting, "你好")
+    t9 = String.endsWith(greeting, "世界")
+
+    if t1 && t2 && t3 && t4 && t5 && t6 && t7 && t8 && t9 then 0 else 1
+}

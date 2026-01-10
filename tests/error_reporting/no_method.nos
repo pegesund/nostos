@@ -1,0 +1,7 @@
+# expect_error: no method
+# Call non-existent method on type
+
+main() = {
+    list = [1, 2, 3]
+    list.nonExistentMethod()
+}

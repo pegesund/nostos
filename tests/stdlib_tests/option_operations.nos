@@ -1,0 +1,72 @@
+# expect: 0
+# Tests Option operations
+
+testSomeNone() = {
+    some = Some(42)
+    none = None()
+
+    t1 = match some {
+        Some(x) -> x == 42
+        None -> false
+    }
+
+    t2 = match none {
+        Some(_) -> false
+        None -> true
+    }
+
+    t1 && t2
+}
+
+testMap() = {
+    some = Some(10)
+    doubled = some.map(x => x * 2)
+
+    match doubled {
+        Some(x) -> x == 20
+        None -> false
+    }
+}
+
+testFlatMap() = {
+    some = Some(10)
+    result = some.flatMap(x => Some(x + 5))
+
+    match result {
+        Some(x) -> x == 15
+        None -> false
+    }
+}
+
+testUnwrapOr() = {
+    some = Some(42)
+    none = None()
+
+    t1 = some.unwrapOr(0) == 42
+    t2 = none.unwrapOr(0) == 0
+
+    t1 && t2
+}
+
+testFind() = {
+    list = [1, 2, 3, 4, 5]
+
+    found = list.find(x => x == 3)
+    t1 = match found {
+        Some(x) -> x == 3
+        None -> false
+    }
+
+    notFound = list.find(x => x == 10)
+    t2 = match notFound {
+        Some(_) -> false
+        None -> true
+    }
+
+    t1 && t2
+}
+
+main() = {
+    results = [testSomeNone(), testMap(), testFlatMap(), testUnwrapOr(), testFind()]
+    if results.all(x => x) then 0 else 1
+}

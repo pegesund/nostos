@@ -1,0 +1,8 @@
+# expect_error: cannot reassign immutable variable
+# Attempt to reassign immutable variable
+
+main() = {
+    x = 10
+    x = 20
+    x
+}

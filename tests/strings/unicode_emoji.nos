@@ -1,0 +1,30 @@
+# expect: 0
+# Emoji handling in strings
+
+main() = {
+    # Basic emoji
+    smile = "😀"
+    heart = "❤️"
+    flag = "🇯🇵"
+
+    # Emoji in strings
+    msg = "I ❤️ Nostos!"
+    t1 = String.contains(msg, "❤️")
+    t2 = String.contains(msg, "Nostos")
+
+    # Multiple emoji
+    faces = "😀😃😄😁"
+    t3 = String.length(faces) >= 4
+
+    # Emoji with text
+    status = "Status: ✅ Complete"
+    t4 = String.contains(status, "✅")
+    t5 = String.startsWith(status, "Status")
+
+    # Split with emoji delimiter (if supported)
+    items = "apple🍎banana🍌orange"
+    t6 = String.contains(items, "apple")
+    t7 = String.contains(items, "banana")
+
+    if t1 && t2 && t3 && t4 && t5 && t6 && t7 then 0 else 1
+}

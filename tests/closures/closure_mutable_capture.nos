@@ -1,0 +1,38 @@
+# expect: 0
+# Closures with mutable state via reactive records
+
+reactive Counter = { value: Int }
+
+main() = {
+    # Closure modifying reactive record field
+    c = Counter(value: 0)
+    increment = () => { c.value = c.value + 1 }
+    increment()
+    increment()
+    increment()
+    test1 = c.value == 3
+
+    # Multiple closures sharing reactive state
+    shared = Counter(value: 10)
+    getter = () => shared.value
+    setter = n => { shared.value = n }
+    adder = n => { shared.value = shared.value + n }
+
+    test2 = getter() == 10
+    setter(50)
+    test3 = getter() == 50
+    adder(5)
+    test4 = getter() == 55
+
+    # Independent reactive records
+    c1 = Counter(value: 100)
+    c2 = Counter(value: 200)
+    inc1 = () => { c1.value = c1.value + 1; c1.value }
+    inc2 = () => { c2.value = c2.value + 1; c2.value }
+
+    test5 = inc1() == 101
+    test6 = inc2() == 201
+    test7 = inc1() == 102
+
+    if test1 && test2 && test3 && test4 && test5 && test6 && test7 then 0 else 1
+}

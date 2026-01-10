@@ -1,0 +1,37 @@
+# expect: 0
+# Recursive patterns with closures
+
+# Named functions can be recursive
+fact(n) = if n <= 1 then 1 else n * fact(n - 1)
+fib(n) = if n <= 1 then n else fib(n - 1) + fib(n - 2)
+
+# Mutual recursion
+isEven(n) = if n == 0 then true else isOdd(n - 1)
+isOdd(n) = if n == 0 then false else isEven(n - 1)
+
+# Helper for sumTo
+sumToHelper(acc, i, n) = if i > n then acc else sumToHelper(acc + i, i + 1, n)
+sumTo(n) = sumToHelper(0, 1, n)
+
+main() = {
+    # Factorial
+    test1 = fact(5) == 120
+
+    # Fibonacci
+    test2 = fib(10) == 55
+
+    # Mutual recursion
+    test3 = isEven(10) == true
+    test4 = isOdd(10) == false
+    test5 = isEven(7) == false
+    test6 = isOdd(7) == true
+
+    # Sum with recursive helper
+    test7 = sumTo(10) == 55
+
+    # Closures calling recursive functions
+    factClosure = n => fact(n)
+    test8 = factClosure(6) == 720
+
+    if test1 && test2 && test3 && test4 && test5 && test6 && test7 && test8 then 0 else 1
+}

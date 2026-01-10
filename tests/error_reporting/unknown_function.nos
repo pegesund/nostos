@@ -1,0 +1,7 @@
+# expect_error: unknown variable
+# Call to undefined function
+
+main() = {
+    result = nonExistentFunction(42)
+    result
+}

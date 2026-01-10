@@ -1,0 +1,7 @@
+# expect_error: type mismatch
+# Type annotation mismatch causes error
+
+main() = {
+    x: String = 42
+    x
+}

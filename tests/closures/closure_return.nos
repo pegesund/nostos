@@ -1,0 +1,36 @@
+# expect: 0
+# Functions returning closures
+
+makeMultiplier(factor) = x => x * factor
+
+makeAdder(n) = x => x + n
+
+# Compose two functions
+composer(f, g) = x => g(f(x))
+
+main() = {
+    # Multiplier factory
+    times3 = makeMultiplier(3)
+    times5 = makeMultiplier(5)
+    test1 = times3(4) == 12
+    test2 = times5(4) == 20
+
+    # Multiple independent closures
+    add10 = makeAdder(10)
+    add20 = makeAdder(20)
+    test3 = add10(5) == 15
+    test4 = add20(5) == 25
+
+    # Composition
+    addThenMultiply = composer(makeAdder(1), makeMultiplier(2))
+    test5 = addThenMultiply(5) == 12
+
+    # Nested factory
+    makeScaler = (mul, add) => x => x * mul + add
+    scale1 = makeScaler(2, 3)
+    scale2 = makeScaler(3, 1)
+    test6 = scale1(5) == 13
+    test7 = scale2(5) == 16
+
+    if test1 && test2 && test3 && test4 && test5 && test6 && test7 then 0 else 1
+}

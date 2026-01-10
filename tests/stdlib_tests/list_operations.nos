@@ -1,0 +1,77 @@
+# expect: 0
+# Tests List operations from stdlib
+
+testBasicOps() = {
+    list = [1, 2, 3, 4, 5]
+    t1 = length(list) == 5
+    t2 = head(list) == 1
+    t3 = tail(list) == [2, 3, 4, 5]
+    t4 = last(list) == 5
+    t5 = init(list) == [1, 2, 3, 4]
+    t1 && t2 && t3 && t4 && t5
+}
+
+testAccess() = {
+    list = [1, 2, 3, 4, 5]
+    t1 = list.get(0) == 1
+    t2 = list.get(2) == 3
+    t3 = list[4] == 5
+    t1 && t2 && t3
+}
+
+testTransform() = {
+    list = [1, 2, 3, 4, 5]
+    doubled = list.map(x => x * 2)
+    t1 = doubled == [2, 4, 6, 8, 10]
+    evens = list.filter(x => x % 2 == 0)
+    t2 = evens == [2, 4]
+    sum = list.fold(0, (acc, x) => acc + x)
+    t3 = sum == 15
+    t1 && t2 && t3
+}
+
+testPredicates() = {
+    list = [1, 2, 3, 4, 5]
+    t1 = list.any(x => x > 4) == true
+    t2 = list.any(x => x > 10) == false
+    t3 = list.all(x => x > 0) == true
+    t4 = list.all(x => x > 3) == false
+    t1 && t2 && t3 && t4
+}
+
+testSlice() = {
+    list = [1, 2, 3, 4, 5]
+    t1 = take(list, 3) == [1, 2, 3]
+    t2 = drop(list, 3) == [4, 5]
+    t3 = list.slice(1, 4) == [2, 3]  # slice is exclusive of end index
+    t1 && t2 && t3
+}
+
+testConcat() = {
+    list = [1, 2, 3, 4, 5]
+    t1 = [1, 2] ++ [3, 4] == [1, 2, 3, 4]
+    t2 = 0 :: list == [0, 1, 2, 3, 4, 5]
+    t3 = reverse([1, 2, 3]) == [3, 2, 1]
+    t1 && t2 && t3
+}
+
+testEmpty() = {
+    empty = []
+    t1 = length(empty) == 0
+    t2 = empty.map(x => x * 2) == []
+    t1 && t2
+}
+
+testZip() = {
+    a = [1, 2, 3]
+    b = ["a", "b", "c"]
+    zipped = zip(a, b)
+    zipped == [(1, "a"), (2, "b"), (3, "c")]
+}
+
+main() = {
+    results = [testBasicOps(), testAccess(), testTransform(),
+               testPredicates(), testSlice(), testConcat(),
+               testEmpty(), testZip()]
+    if results.all(x => x) then 0 else 1
+}

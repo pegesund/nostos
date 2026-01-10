@@ -1,0 +1,28 @@
+# expect: 0
+# Basic Unicode string handling
+
+main() = {
+    # Unicode string literals
+    hello_jp = "こんにちは"
+    hello_ru = "Привет"
+    hello_ar = "مرحبا"
+    emoji = "Hello 👋 World 🌍"
+
+    # Length counts characters, not bytes
+    t1 = String.length(hello_jp) == 5
+    t2 = String.length(hello_ru) == 6
+    t3 = String.length(emoji) > 10
+
+    # Concatenation with Unicode
+    combined = hello_jp ++ " " ++ hello_ru
+    t4 = String.contains(combined, "こんにちは")
+    t5 = String.contains(combined, "Привет")
+
+    # Mixed ASCII and Unicode
+    mixed = "Hello こんにちは World"
+    t6 = String.contains(mixed, "Hello")
+    t7 = String.contains(mixed, "こんにちは")
+    t8 = String.contains(mixed, "World")
+
+    if t1 && t2 && t3 && t4 && t5 && t6 && t7 && t8 then 0 else 1
+}

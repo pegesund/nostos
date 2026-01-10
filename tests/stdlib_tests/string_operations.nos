@@ -1,0 +1,67 @@
+# expect: 0
+# Tests String operations from stdlib
+
+main() = {
+    s = "Hello, World!"
+
+    # Length
+    test1 = String.length(s) == 13
+
+    # Substring
+    test2 = String.substring(s, 0, 5) == "Hello"
+    test3 = String.substring(s, 7, 12) == "World"
+
+    # Contains
+    test4 = String.contains(s, "World") == true
+    test5 = String.contains(s, "xyz") == false
+
+    # StartsWith / EndsWith
+    test6 = String.startsWith(s, "Hello") == true
+    test7 = String.startsWith(s, "World") == false
+    test8 = String.endsWith(s, "!") == true
+    test9 = String.endsWith(s, "Hello") == false
+
+    # IndexOf
+    test10 = String.indexOf(s, "World") == 7
+    test11 = String.indexOf(s, "xyz") == -1
+
+    # Split
+    csv = "a,b,c,d"
+    parts = String.split(csv, ",")
+    test12 = parts == ["a", "b", "c", "d"]
+
+    # Join
+    joined = String.join(["x", "y", "z"], "-")
+    test13 = joined == "x-y-z"
+
+    # Trim
+    padded = "  hello  "
+    test14 = String.trim(padded) == "hello"
+    test15 = String.trimStart(padded) == "hello  "
+    test16 = String.trimEnd(padded) == "  hello"
+
+    # Case conversion
+    test17 = String.toUpper("hello") == "HELLO"
+    test18 = String.toLower("HELLO") == "hello"
+
+    # Replace
+    test19 = String.replace("hello world", "world", "nostos") == "hello nostos"
+
+    # Repeat
+    test20 = String.repeat("ab", 3) == "ababab"
+
+    # Empty string
+    test21 = String.length("") == 0
+    test22 = String.isEmpty("") == true
+    test23 = String.isEmpty("x") == false
+
+    # Concatenation
+    test24 = "Hello" ++ " " ++ "World" == "Hello World"
+
+    results = [test1, test2, test3, test4, test5, test6, test7, test8,
+               test9, test10, test11, test12, test13, test14, test15,
+               test16, test17, test18, test19, test20, test21, test22,
+               test23, test24]
+
+    if results.all(x => x) then 0 else 1
+}

@@ -1,0 +1,44 @@
+# expect: 0
+# Nested closure tests
+
+main() = {
+    # Double nesting
+    x = 10
+    f = () => {
+        g = () => x * 2
+        g()
+    }
+    test1 = f() == 20
+
+    # Triple nesting
+    a = 5
+    outer = () => {
+        middle = () => {
+            inner = () => a + 1
+            inner()
+        }
+        middle() * 2
+    }
+    test2 = outer() == 12
+
+    # Nested with parameters at each level
+    make_adder = n => {
+        m => n + m
+    }
+    add5 = make_adder(5)
+    test3 = add5(3) == 8
+
+    # Nested closures capturing different variables
+    p = 1
+    q = 2
+    r = 3
+    nested = () => {
+        inner1 = () => p
+        inner2 = () => q
+        inner3 = () => r
+        inner1() + inner2() + inner3()
+    }
+    test4 = nested() == 6
+
+    if test1 && test2 && test3 && test4 then 0 else 1
+}

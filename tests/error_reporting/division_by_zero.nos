@@ -1,0 +1,8 @@
+# expect_error: division by zero
+# Division by zero at runtime
+
+main() = {
+    x = 10
+    y = 0
+    x / y
+}
