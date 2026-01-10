@@ -68,7 +68,7 @@ stats() = {
     (active, pooled, active + pooled, maxP)
 }
 
-# Get a connection from the pool (internal)
+# Get a connection from the pool (internal) - waits if pool exhausted
 getConn() = match decideConnection() {
     ("take", conn, _) -> conn
     ("create", _, connStr) -> try {
@@ -83,6 +83,20 @@ getConn() = match decideConnection() {
         sleep(5)
         getConn()
     }
+}
+
+# Try to get a connection immediately - returns None if pool exhausted
+tryGetConn() = match decideConnection() {
+    ("take", conn, _) -> Some(conn)
+    ("create", _, connStr) -> try {
+        Some(Pg.connect(connStr))
+    } catch {
+        e -> {
+            releaseSlot()
+            throw(e)
+        }
+    }
+    ("wait", _, _) -> None
 }
 
 # Return a connection to the pool atomically
@@ -143,5 +157,27 @@ transaction(action) = {
         }
     } finally {
         releaseConn(conn)
+    }
+}
+
+# Try to run a transaction - returns None immediately if pool exhausted
+# Returns Some(result) on success
+tryTransaction(action) = match tryGetConn() {
+    None -> None
+    Some(conn) -> {
+        result = try {
+            Pg.begin(conn)
+            r = action(conn)
+            Pg.commit(conn)
+            Some(r)
+        } catch {
+            e -> {
+                try { Pg.rollback(conn) } catch { _ -> () }
+                throw(e)
+            }
+        } finally {
+            releaseConn(conn)
+        }
+        result
     }
 }

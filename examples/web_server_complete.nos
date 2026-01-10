@@ -17,8 +17,8 @@
 #   curl -X POST -d "from=1&to=2&amount=50" http://localhost:8080/transfer
 
 use stdlib.html.{Html, render}
-use stdlib.server.{serve, getParam, respondHtml, redirect, redirectWith, respond400, respond405, setCookieWithAge}
-use stdlib.pool.{init, query, execute, withConn, transaction}
+use stdlib.server.{serve, getParam, respondHtml, redirect, redirectWith, respond400, respond405, respond503, setCookieWithAge}
+use stdlib.pool.{init, query, execute, withConn, transaction, tryTransaction}
 
 # --- Database Setup ---
 
@@ -177,12 +177,15 @@ handleTransfer(req) = match req.method {
 
                 if amount <= 0 then respond400(req, "Amount must be positive")
                 else {
-                    # Transactional updates - atomic credit transfer
-                    transaction(conn => {
+                    # Try transaction - returns None if pool exhausted (503)
+                    result = tryTransaction(conn => {
                         Pg.execute(conn, "UPDATE web_users SET credits = credits - $1 WHERE id = $2", (amount, fromIdInt))
                         Pg.execute(conn, "UPDATE web_users SET credits = credits + $1 WHERE id = $2", (amount, toIdInt))
                     })
-                    redirect(req, "/users")
+                    match result {
+                        Some(_) -> redirect(req, "/users")
+                        None -> respond503(req, "Server busy, please retry")
+                    }
                 }
             }
         }
@@ -214,7 +217,7 @@ route(req) = match req.path {
 }
 
 main() = {
-    # Initialize connection pool
+    # Initialize connection pool (default 25 connections)
     init("host=localhost user=postgres password=postgres")
     setupDatabase()
 

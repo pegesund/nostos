@@ -52,6 +52,10 @@ respond404(req) =
 respond405(req) =
     Server.respond(req.id, 405, [("Content-Type", "text/plain")], "Method Not Allowed")
 
+# Send a 503 Service Unavailable (e.g., pool exhausted)
+respond503(req, msg) =
+    Server.respond(req.id, 503, [("Content-Type", "text/plain")], msg)
+
 # Send a redirect (302 Found)
 redirect(req, url) =
     Server.respond(req.id, 302, [("Location", url)], "")
