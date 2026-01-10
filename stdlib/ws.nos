@@ -1,0 +1,106 @@
+# WebSocket utilities and patterns
+# Provides helpers for common WebSocket use cases
+
+use stdlib.json.{Json, jsonParse}
+
+# --- Typed Message Protocol ---
+
+# A WebSocket message with type and payload
+pub type WsMessage = { msgType: String, payload: String }
+
+# Parse a typed message from JSON
+# Format: {"type": "...", "payload": "..."}
+pub parseMessage(raw) = {
+    json = jsonParse(raw)
+    match json {
+        Object(fields) -> {
+            typeField = lookupField(fields, "type")
+            payloadField = lookupField(fields, "payload")
+            match (typeField, payloadField) {
+                (Some(String(t)), Some(String(p))) -> Some(WsMessage(t, p))
+                (Some(String(t)), _) -> Some(WsMessage(t, ""))
+                _ -> None
+            }
+        }
+        _ -> None
+    }
+}
+
+# Helper to look up a field in Object's List[(String, Json)]
+lookupField(fields, key) = match fields {
+    [] -> None
+    [(k, v) | rest] -> if k == key then Some(v) else lookupField(rest, key)
+}
+
+# Create a typed message JSON string
+pub makeMessage(msgType, payload) =
+    "{\"type\":\"" ++ escapeJsonString(msgType) ++ "\",\"payload\":\"" ++ escapeJsonString(payload) ++ "\"}"
+
+# Escape special characters for JSON strings
+escapeJsonString(s) = {
+    chars = String.chars(s)
+    escaped = escapeChars(chars, [])
+    String.from_chars(escaped)
+}
+
+escapeChars(chars, acc) = match chars {
+    [] -> acc
+    ['"' | rest] -> escapeChars(rest, acc ++ ['\\', '"'])
+    ['\\' | rest] -> escapeChars(rest, acc ++ ['\\', '\\'])
+    ['\n' | rest] -> escapeChars(rest, acc ++ ['\\', 'n'])
+    ['\t' | rest] -> escapeChars(rest, acc ++ ['\\', 't'])
+    [c | rest] -> escapeChars(rest, acc ++ [c])
+}
+
+# --- Enhanced WebSocket Loop ---
+
+# WebSocket loop with typed messages
+# Handler receives (ws, WsMessage) and returns true to continue
+pub wsTypedLoop(ws, handler) = {
+    ok = try {
+        raw = WebSocket.recv(ws)
+        match parseMessage(raw) {
+            Some(msg) -> handler(ws, msg)
+            None -> true  # Ignore malformed messages
+        }
+    } catch { _ -> {
+        WebSocket.close(ws)
+        false
+    } }
+    if ok then wsTypedLoop(ws, handler) else ()
+}
+
+# --- Utility Functions ---
+
+# Send a typed message
+pub sendTyped(ws, msgType, payload) = {
+    msg = makeMessage(msgType, payload)
+    WebSocket.send(ws, msg)
+}
+
+# Send a typed message using shared writer
+pub sendTypedShared(writerId, msgType, payload) = {
+    msg = makeMessage(msgType, payload)
+    WebSocket.sendShared(writerId, msg)
+}
+
+# --- Room Pattern (using module-level mvar) ---
+#
+# For broadcast/room patterns, declare an mvar in your module:
+#
+#   type Client = { id: Int, writerId: Int, name: String }
+#   mvar clients: List[Client] = []
+#
+#   addClient(c) = { clients = clients ++ [c] }
+#   removeClient(id) = { clients = filter(clients, c => c.id != id) }
+#   broadcastMsg(msg) = foreach(clients, c => {
+#       try { WebSocket.sendShared(c.writerId, msg) } catch { _ -> () }
+#   })
+#
+# Then in your WebSocket handler:
+#   ws = WebSocket.accept(req.id)
+#   result = WebSocket.split(ws)
+#   client = Client(result.requestId, result.writerId, "user")
+#   addClient(client)
+#   # ... message loop ...
+#   removeClient(client.id)
