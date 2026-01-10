@@ -1,0 +1,129 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Nostos",
+  "scopeName": "source.nostos",
+  "fileTypes": ["nos"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#operators" },
+    { "include": "#types" },
+    { "include": "#functions" },
+    { "include": "#variables" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.nostos",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.nostos",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.nostos",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.nostos",
+          "match": "\\b[0-9]+\\.[0-9]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.nostos",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.nostos",
+          "match": "\\b(if|then|else|match|with|try|catch|throw)\\b"
+        },
+        {
+          "name": "keyword.other.nostos",
+          "match": "\\b(use|type|mvar|deriving|trait|impl|where|forall|async|await|spawn)\\b"
+        },
+        {
+          "name": "constant.language.boolean.nostos",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.unit.nostos",
+          "match": "\\(\\)"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arrow.nostos",
+          "match": "->|=>"
+        },
+        {
+          "name": "keyword.operator.comparison.nostos",
+          "match": "==|!=|<=|>=|<|>"
+        },
+        {
+          "name": "keyword.operator.arithmetic.nostos",
+          "match": "\\+\\+|\\+|-|\\*|/|%"
+        },
+        {
+          "name": "keyword.operator.logical.nostos",
+          "match": "&&|\\|\\||!"
+        },
+        {
+          "name": "keyword.operator.assignment.nostos",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.accessor.nostos",
+          "match": "\\."
+        },
+        {
+          "name": "keyword.operator.pipe.nostos",
+          "match": "\\|>"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "entity.name.type.nostos",
+          "match": "\\b[A-Z][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "entity.name.function.nostos",
+          "match": "\\b([a-z_][a-zA-Z0-9_]*)\\s*(?=\\()"
+        }
+      ]
+    },
+    "variables": {
+      "patterns": [
+        {
+          "name": "variable.other.nostos",
+          "match": "\\b[a-z_][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    }
+  }
+}

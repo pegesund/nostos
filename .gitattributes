@@ -1,0 +1,2 @@
+# Nostos language files - use F# highlighting until Linguist adds native support
+*.nos linguist-language=F#
