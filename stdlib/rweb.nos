@@ -32,7 +32,7 @@
 #
 #   main() = startRWeb(8080, "My App", session)
 
-use stdlib.server.{serve, respondHtml, respond404, getParam}
+use stdlib.server.{serve, respondHtml, respond404, getParam, serveStatic}
 use stdlib.rhtml
 # Import Json variant constructors for pattern matching (Json.parse returns these)
 use stdlib.json.{Null, Bool, Number, Object, String}
@@ -700,6 +700,116 @@ pub startRWebWithRoutes(port, title, reactiveResolver, plainResolver) = {
     } else {
         serve(port, req => rwebHandleRequestWithRoutes(req, title, reactiveResolver, plainResolver))
     }
+}
+
+# --- Static File Integration ---
+
+# Request handler with routes AND static file support
+# staticConfig: list of (urlPrefix, directory) tuples for static serving
+#   e.g., [("/static", "./public"), ("/assets", "./assets")]
+rwebHandleRequestWithStatic(req, title, reactiveResolver, plainResolver, staticConfig) = {
+    # WebSocket upgrade
+    if req.path == "/ws" && req.isWebSocket then {
+        pagePath = getParam(req.queryParams, "path")
+        actualPath = if pagePath == "" then "/" else pagePath
+
+        match reactiveResolver(actualPath) {
+            Some(sessionSetup) -> {
+                ws = WebSocket.accept(req.id)
+                splitResult = WebSocket.split(ws)
+                requestId = splitResult.requestId
+                writerId = splitResult.writerId
+
+                pid = self()
+                println("[RWeb] Session started: pid=" ++ show(pid) ++ " path=" ++ actualPath ++ " writerId=" ++ show(writerId))
+
+                (renderPage, onAction) = sessionSetup(writerId)
+                renderResult = renderPage()
+
+                html = renderRHtml(renderResult)
+                msg = "{\"type\":\"full\",\"html\":\"" ++ Json.escapeString(html) ++ "\"}"
+                WebSocket.sendShared(writerId, msg)
+
+                sessionLoop(requestId, writerId, renderResult, renderPage, onAction)
+
+                gcResult = Gc.collect()
+                stats = Gc.stats()
+                println("[RWeb] Session ended: pid=" ++ show(pid) ++
+                        " | gc collected=" ++ show(gcResult.collected) ++
+                        " live=" ++ show(stats.live))
+            }
+            None() -> respond404(req)
+        }
+    }
+    # Check reactive routes first
+    else match reactiveResolver(req.path) {
+        Some(sessionSetup) -> {
+            (renderPage, _) = sessionSetup(0)
+            result = renderPage()
+            html = renderRHtml(result)
+            respondHtml(req, pageTemplateWithRoutes(title, html))
+        }
+        None() -> {
+            # Check plain routes
+            match plainResolver(req.path) {
+                Some(handler) -> handler(req)
+                None() -> {
+                    # Try static files
+                    if tryServeStatic(req, staticConfig) then ()
+                    else respond404(req)
+                }
+            }
+        }
+    }
+}
+
+# Try to serve static file from config list
+tryServeStatic(req, config) = match config {
+    [] -> false
+    [(prefix, dir) | rest] -> {
+        if serveStatic(req, prefix, dir) then true
+        else tryServeStatic(req, rest)
+    }
+}
+
+# Start RWeb with routes AND static file serving
+#
+# staticConfig: list of (urlPrefix, directory) tuples
+#   e.g., [("/static", "./public"), ("/css", "./styles")]
+#
+# Example:
+#   reactiveResolver(path) = match path {
+#       "/" -> Some(homeSession)
+#       "/app" -> Some(appSession)
+#       _ -> None()
+#   }
+#
+#   plainResolver(path) = match path {
+#       "/api/health" -> Some(req => respondJson(req, "{\"ok\":true}"))
+#       _ -> None()
+#   }
+#
+#   main() = startRWebFull(8080, "My App", reactiveResolver, plainResolver, [("/static", "./public")])
+#
+pub startRWebFull(port, title, reactiveResolver, plainResolver, staticConfig) = {
+    println("RWeb server started on http://localhost:" ++ show(port))
+    println("Static paths: " ++ showStaticConfig(staticConfig))
+    if Runtime.isInteractive() then {
+        spawn { serve(port, req => rwebHandleRequestWithStatic(req, title, reactiveResolver, plainResolver, staticConfig)) }
+        ()
+    } else {
+        serve(port, req => rwebHandleRequestWithStatic(req, title, reactiveResolver, plainResolver, staticConfig))
+    }
+}
+
+showStaticConfig(config) = match config {
+    [] -> "(none)"
+    [(prefix, dir) | rest] -> prefix ++ " -> " ++ dir ++ showStaticConfigRest(rest)
+}
+
+showStaticConfigRest(config) = match config {
+    [] -> ""
+    [(prefix, dir) | rest] -> ", " ++ prefix ++ " -> " ++ dir ++ showStaticConfigRest(rest)
 }
 
 # --- REPL-friendly Background Server ---
