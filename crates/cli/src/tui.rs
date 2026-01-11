@@ -3768,16 +3768,16 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 // Use "pub" prefix for public functions
                 let pub_prefix = if *is_public { "pub " } else { "" };
 
-                // Add status prefix with colored symbol
+                // Add status prefix with colored symbol (back, front order in ColorStyle::new)
                 match &compile_status {
                     Some(CompileStatus::CompileError(_)) => {
-                        styled.append_styled("✗ ", Style::from(ColorStyle::new(Color::Light(BaseColor::Red), Color::TerminalDefault)));
+                        styled.append_styled("✗ ", Style::from(ColorStyle::new(Color::TerminalDefault, Color::Light(BaseColor::Red))));
                     }
                     Some(CompileStatus::Stale { .. }) => {
-                        styled.append_styled("○ ", Style::from(ColorStyle::new(Color::Light(BaseColor::Yellow), Color::TerminalDefault)));
+                        styled.append_styled("○ ", Style::from(ColorStyle::new(Color::TerminalDefault, Color::Light(BaseColor::Yellow))));
                     }
                     Some(CompileStatus::Compiled) => {
-                        styled.append_styled("✓ ", Style::from(ColorStyle::new(Color::Light(BaseColor::Green), Color::TerminalDefault)));
+                        styled.append_styled("✓ ", Style::from(ColorStyle::new(Color::TerminalDefault, Color::Light(BaseColor::Green))));
                     }
                     _ => {
                         styled.append_plain("  ");  // No status - align with others
@@ -3835,9 +3835,9 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 let compiled_ok = engine_ref.file_compiled_ok(path);
                 let mut styled = StyledString::new();
                 if has_errors {
-                    styled.append_styled("✗ ", Style::from(ColorStyle::new(Color::Light(BaseColor::Red), Color::TerminalDefault)));
+                    styled.append_styled("✗ ", Style::from(ColorStyle::new(Color::TerminalDefault, Color::Light(BaseColor::Red))));
                 } else if compiled_ok {
-                    styled.append_styled("✓ ", Style::from(ColorStyle::new(Color::Light(BaseColor::Green), Color::TerminalDefault)));
+                    styled.append_styled("✓ ", Style::from(ColorStyle::new(Color::TerminalDefault, Color::Light(BaseColor::Green))));
                 } else {
                     styled.append_plain("  ");  // No status - align with others
                 }
