@@ -1,0 +1,86 @@
+# Debounced Search Input
+# Demonstrates using script() for client-side debouncing before sending to server
+#
+# Features:
+#   - Debounced input to reduce server load
+#   - Script block for timer-based debouncing
+#   - Shows search results from server
+#
+# Run with: ./target/release/nostos examples/rweb_debounced_search.nos
+# Then open http://localhost:8101 in your browser
+
+use stdlib.rweb
+use stdlib.rhtml
+
+reactive SearchState = { query: String, results: String, searchCount: Int }
+
+# Filter items that contain query
+filterItems(query) = {
+    items = ["Apple", "Apricot", "Avocado", "Banana", "Blueberry", "Cherry", "Date", "Elderberry", "Fig", "Grape", "Honeydew", "Kiwi", "Lemon", "Lime", "Mango", "Nectarine", "Orange", "Papaya", "Peach", "Pear", "Pineapple", "Plum", "Raspberry", "Strawberry", "Watermelon"]
+    if query == "" then ""
+    else {
+        filtered = filter(item => String.contains(item, query), items)
+        String.join(", ", filtered)
+    }
+}
+
+session() = {
+    state = SearchState(query: "", results: "", searchCount: 0)
+
+    (
+        () => RHtml(div([
+            h1("Debounced Search"),
+            p("Type to search fruits. Results update 300ms after you stop typing."),
+
+            # Debouncing script - waits 300ms after last keystroke
+            script("
+                var searchTimeout;
+                function debouncedSearch(value) {
+                    clearTimeout(searchTimeout);
+                    document.getElementById('status').textContent = 'Typing...';
+                    searchTimeout = setTimeout(function() {
+                        document.getElementById('status').textContent = 'Searching...';
+                        rweb.sendAction('search', { query: value });
+                    }, 300);
+                }
+            "),
+
+            # Search input with debounced oninput
+            div([
+                input(inputType: "text", placeholder: "Search fruits...", attrs: [("oninput", "debouncedSearch(this.value)")], dataTestid: "search-input"),
+                span("", id: "status", style: "margin-left: 10px; color: gray;", dataTestid: "status")
+            ], style: "margin: 20px 0;"),
+
+            # Results display
+            component("results", () => RHtml(
+                div([
+                    h3("Results for: " ++ state.query),
+                    p(if state.results == "" then "No results" else state.results, dataTestid: "results"),
+                    p("Total searches: " ++ show(state.searchCount), style: "color: gray; font-size: 12px;", dataTestid: "search-count")
+                ], dataTestid: "results-container")
+            )),
+
+            hr(),
+
+            # Comparison: Instant search (no debouncing)
+            h2("Compare: Instant Search"),
+            p("This sends immediately on every keystroke - notice search count increases faster", style: "color: gray;"),
+            input(inputType: "text", placeholder: "Instant search...", attrs: [("oninput", "rweb.sendAction('search', { query: this.value })")], dataTestid: "instant-input")
+        ])),
+
+        (actionName, params) => match actionName {
+            "search" -> {
+                query = Map.get(params, "query")
+                state.query = query
+                state.results = filterItems(query)
+                state.searchCount = state.searchCount + 1
+            }
+            _ -> ()
+        }
+    )
+}
+
+main() = {
+    println("Debounced search example running at http://localhost:8101")
+    startRWeb(8101, "Debounced Search", session)
+}

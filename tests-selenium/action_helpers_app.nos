@@ -1,0 +1,98 @@
+# Test app for action(), actionJs(), and script() helpers
+# Demonstrates client-to-server JavaScript messaging
+#
+# Run with: ./target/release/nostos tests/selenium/action_helpers_app.nos
+
+use stdlib.rweb
+use stdlib.rhtml
+
+reactive State = { lastAction: String, lastParams: String, clickCount: Int }
+
+# Helper to format params for display
+formatParams(params) = {
+    paramList = Map.toList(params)
+    paramStrs = map(p => p.0 ++ "=" ++ p.1, paramList)
+    String.join(", ", paramStrs)
+}
+
+session() = {
+    state = State(lastAction: "none", lastParams: "", clickCount: 0)
+
+    # Pre-define the params map for action with static params
+    deleteParams = Map.fromList([("id", "42"), ("confirm", "true")])
+
+    # Pre-define the JS params list for actionJs
+    searchJsParams = [("query", "document.getElementById('search-input').value"), ("timestamp", "Date.now().toString()")]
+
+    (
+        # Render function
+        () => RHtml(div([
+            h1("Action Helpers Test"),
+
+            # Section 1: Simple action() with no params
+            div([
+                h2("1. Simple Action (no params)"),
+                button("Ping Server", onclick: action("ping"), dataTestid: "btn-ping")
+            ]),
+
+            # Section 2: action() with static params
+            div([
+                h2("2. Action with Static Params"),
+                button("Delete Item 42", onclick: action("delete", deleteParams), dataTestid: "btn-delete")
+            ]),
+
+            # Section 3: actionJs() with dynamic JS params
+            div([
+                h2("3. Action with Dynamic JS Params"),
+                input(inputType: "text", id: "search-input", placeholder: "Type search query...", dataTestid: "search-input"),
+                button("Search", onclick: actionJs("search", searchJsParams), dataTestid: "btn-search")
+            ]),
+
+            # Section 4: script() block with custom JS
+            div([
+                h2("4. Script Block with Custom Logic"),
+                script("var clickCounter = 0; function countAndSend() { clickCounter++; document.getElementById('js-counter').textContent = clickCounter; rweb.sendAction('count', { clicks: clickCounter.toString() }); }"),
+                button("Count Clicks", onclick: "countAndSend()", dataTestid: "btn-count"),
+                span("0", id: "js-counter", dataTestid: "js-counter")
+            ]),
+
+            # Section 5: Combined example - validate before send
+            div([
+                h2("5. Client Validation Before Send"),
+                input(inputType: "email", id: "email-input", placeholder: "Enter email", dataTestid: "email-input"),
+                script("function validateAndSubmit() { var email = document.getElementById('email-input').value; var errorEl = document.getElementById('validation-error'); if (!email || !email.includes('@')) { errorEl.textContent = 'Invalid email'; errorEl.style.display = 'block'; return; } errorEl.style.display = 'none'; rweb.sendAction('submit_email', { email: email }); }"),
+                button("Submit Email", onclick: "validateAndSubmit()", dataTestid: "btn-submit-email"),
+                span("", id: "validation-error", style: "color: red; display: none;", dataTestid: "validation-error")
+            ]),
+
+            # Display last action received
+            hr(),
+            component("status", () => RHtml(
+                div([
+                    h3("Server Received:"),
+                    p("Action: " ++ state.lastAction, dataTestid: "last-action"),
+                    p("Params: " ++ state.lastParams, dataTestid: "last-params"),
+                    p("Click count from state: " ++ show(state.clickCount), dataTestid: "click-count")
+                ], dataTestid: "status")
+            ))
+        ])),
+
+        # Action handler - update state on every action
+        (actionName, params) => {
+            state.lastAction = actionName
+            state.lastParams = formatParams(params)
+            match actionName {
+                "count" -> {
+                    clicksStr = Map.get(params, "clicks")
+                    state.clickCount = match String.toInt(clicksStr) {
+                        Some(n) -> n
+                        None() -> state.clickCount
+                    }
+                }
+                _ -> ()
+            }
+        }
+    )
+}
+
+main() = startRWeb(8098, "Action Helpers Test", session)

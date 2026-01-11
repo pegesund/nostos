@@ -3154,15 +3154,22 @@ impl Compiler {
             TypeBody::Variant(variants) => {
                 // Check for constructor name collisions with stdlib types
                 // (only for non-stdlib files to avoid self-conflicts)
-                let is_stdlib_file = self.module_path.first().map(|s| s == "stdlib").unwrap_or(false);
+                // Check module_path, qualified type name, and source file path
+                let is_stdlib_file = self.module_path.first().map(|s| s == "stdlib").unwrap_or(false)
+                    || name.starts_with("stdlib.")
+                    || self.current_source_name.as_ref().map(|s| s.contains("stdlib/") || s.starts_with("stdlib")).unwrap_or(false);
                 if !is_stdlib_file {
                     for v in variants {
                         let ctor_name = &v.name.node;
                         // Check if this constructor name exists in any stdlib type
                         for (type_name, type_info) in &self.types {
+                            // Skip checking against ourselves (the type being defined)
+                            if type_name == &name {
+                                continue;
+                            }
                             if type_name.starts_with("stdlib.") {
                                 if let TypeInfoKind::Variant { constructors } = &type_info.kind {
-                                    if constructors.iter().any(|(name, _)| name == ctor_name) {
+                                    if constructors.iter().any(|(cname, _)| cname == ctor_name) {
                                         return Err(CompileError::TypeError {
                                             message: format!(
                                                 "Constructor '{}' conflicts with stdlib type '{}'. \
@@ -4147,7 +4154,8 @@ impl Compiler {
         // Check if function name shadows a built-in function
         // Only check for user-defined functions (not stdlib)
         // Also skip trait method implementations (contain '.') - they're called via method syntax
-        let is_stdlib = self.module_path.first().map_or(false, |m| m == "stdlib");
+        let is_stdlib = self.module_path.first().map_or(false, |m| m == "stdlib")
+            || self.current_source_name.as_ref().map(|s| s.contains("stdlib/") || s.starts_with("stdlib")).unwrap_or(false);
         let is_trait_impl = def.name.node.contains('.');
         if !is_stdlib && !is_trait_impl {
             // Check for builtin shadowing
@@ -4168,6 +4176,7 @@ impl Compiler {
             // If the function name matches an import that comes from prelude (stdlib),
             // it would shadow the stdlib function
             // Exception: 'main' is the entry point and should always be allowed
+            // (is_stdlib check above already handles stdlib files)
             if def.name.node != "main" {
                 if let Some(qualified_name) = self.imports.get(&def.name.node) {
                     if self.prelude_functions.contains(qualified_name) {

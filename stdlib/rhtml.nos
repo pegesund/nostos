@@ -232,6 +232,70 @@ a(children: List[RNode], href = "", target = "", class = "", id = "", attrs = []
 a(str: String, href = "", target = "", class = "", id = "", attrs = []) =
     Element("a", buildAttrs([("href", href), ("target", target), ("class", class), ("id", id)], attrs), [Text(str)])
 
+# --- Script tag for raw JavaScript ---
+
+# Script block for embedding JavaScript
+# The content is NOT escaped - it's inserted as-is
+script(js: String, attrs = []) = Element("script", attrs, [Raw(js)])
+
+# --- JavaScript Action Helpers ---
+# These generate rweb.sendAction() calls for use in onclick, oninput, etc.
+
+# Escape a string for use in JavaScript string literals
+escapeJsChar(c: Char) = match c {
+    '\'' -> "\\'"
+    '"' -> "\\\""
+    '\\' -> "\\\\"
+    '\n' -> "\\n"
+    '\r' -> "\\r"
+    '\t' -> "\\t"
+    _ -> String.from_chars([c])
+}
+
+escapeJsChars(chars: List[Char]) = match chars {
+    [] -> ""
+    [c | rest] -> escapeJsChar(c) ++ escapeJsChars(rest)
+}
+
+escapeJs(s: String) = escapeJsChars(String.chars(s))
+
+# Generate rweb.sendAction() call with no params
+# Usage: button("Ping", onclick: action("ping"))
+# Output: rweb.sendAction('ping', {})
+action(name: String) =
+    "rweb.sendAction('" ++ escapeJs(name) ++ "', {})"
+
+# Generate rweb.sendAction() call with static params (values known at render time)
+# Usage: button("Delete", onclick: action("delete", %{"id" -> "42"}))
+# Output: rweb.sendAction('delete', {id: '42'})
+actionParamToJs(key: String, value: String) =
+    "'" ++ escapeJs(key) ++ "': '" ++ escapeJs(value) ++ "'"
+
+actionParamsToJs(params: List[(String, String)]) = match params {
+    [] -> ""
+    [(k, v)] -> actionParamToJs(k, v)
+    [(k, v) | rest] -> actionParamToJs(k, v) ++ ", " ++ actionParamsToJs(rest)
+}
+
+action(name: String, params: Map[String, String]) =
+    "rweb.sendAction('" ++ escapeJs(name) ++ "', {" ++ actionParamsToJs(Map.toList(params)) ++ "})"
+
+# Generate rweb.sendAction() call with dynamic JS expressions (evaluated in browser)
+# Usage: button("Search", onclick: actionJs("search", [("query", "document.getElementById('q').value")]))
+# Output: rweb.sendAction('search', {query: document.getElementById('q').value})
+# Note: The values are JS expressions, NOT quoted strings
+actionJsParamToJs(key: String, jsExpr: String) =
+    "'" ++ escapeJs(key) ++ "': " ++ jsExpr
+
+actionJsParamsToJs(params: List[(String, String)]) = match params {
+    [] -> ""
+    [(k, v)] -> actionJsParamToJs(k, v)
+    [(k, v) | rest] -> actionJsParamToJs(k, v) ++ ", " ++ actionJsParamsToJs(rest)
+}
+
+actionJs(name: String, jsParams: List[(String, String)]) =
+    "rweb.sendAction('" ++ escapeJs(name) ++ "', {" ++ actionJsParamsToJs(jsParams) ++ "})"
+
 # Generic element constructor
 el(tag: String, attrs: List[(String, String)], children: List[RNode]) = Element(tag, attrs, children)
 

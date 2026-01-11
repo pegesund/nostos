@@ -1,0 +1,109 @@
+# Form with Client-Side Validation
+# Demonstrates using script() and actionJs() to validate forms before sending to server
+#
+# Features:
+#   - Client-side email validation using JavaScript
+#   - Dynamic form field reading with actionJs()
+#   - Script block for custom validation logic
+#
+# Run with: ./target/release/nostos examples/rweb_form_validation.nos
+# Then open http://localhost:8100 in your browser
+
+use stdlib.rweb
+use stdlib.rhtml
+
+reactive FormState = { name: String, email: String, message: String }
+
+session() = {
+    state = FormState(name: "", email: "", message: "")
+
+    # JavaScript params that read form values dynamically
+    submitParams = [
+        ("name", "document.getElementById('name').value"),
+        ("email", "document.getElementById('email').value")
+    ]
+
+    (
+        () => RHtml(div([
+            h1("Contact Form"),
+
+            # Client-side validation script
+            script("
+                function validateAndSubmit() {
+                    var name = document.getElementById('name').value;
+                    var email = document.getElementById('email').value;
+                    var errorDiv = document.getElementById('error');
+
+                    // Validate name
+                    if (!name || name.length < 2) {
+                        errorDiv.textContent = 'Name must be at least 2 characters';
+                        errorDiv.style.display = 'block';
+                        return;
+                    }
+
+                    // Validate email
+                    if (!email || !email.includes('@')) {
+                        errorDiv.textContent = 'Please enter a valid email address';
+                        errorDiv.style.display = 'block';
+                        return;
+                    }
+
+                    // All valid - hide error and submit
+                    errorDiv.style.display = 'none';
+                    rweb.sendAction('submit', { name: name, email: email });
+                }
+            "),
+
+            # Form fields
+            div([
+                label("Name: "),
+                input(inputType: "text", id: "name", placeholder: "Your name", dataTestid: "input-name")
+            ], style: "margin: 10px 0;"),
+
+            div([
+                label("Email: "),
+                input(inputType: "email", id: "email", placeholder: "your@email.com", dataTestid: "input-email")
+            ], style: "margin: 10px 0;"),
+
+            # Error message (hidden by default)
+            div("", id: "error", style: "color: red; display: none; margin: 10px 0;", dataTestid: "error"),
+
+            # Submit button with client-side validation
+            button("Submit", onclick: "validateAndSubmit()", dataTestid: "btn-submit"),
+
+            # Alternative: direct actionJs without validation
+            button("Submit (no validation)", onclick: actionJs("submit_direct", submitParams), dataTestid: "btn-submit-direct"),
+
+            hr(),
+
+            # Server response
+            component("result", () => RHtml(
+                div([
+                    h3("Server Received:"),
+                    p("Name: " ++ state.name, dataTestid: "result-name"),
+                    p("Email: " ++ state.email, dataTestid: "result-email"),
+                    p(state.message, dataTestid: "result-message", style: "color: green;")
+                ])
+            ))
+        ])),
+
+        (actionName, params) => match actionName {
+            "submit" -> {
+                state.name = Map.get(params, "name")
+                state.email = Map.get(params, "email")
+                state.message = "Form submitted successfully!"
+            }
+            "submit_direct" -> {
+                state.name = Map.get(params, "name")
+                state.email = Map.get(params, "email")
+                state.message = "Submitted without validation"
+            }
+            _ -> ()
+        }
+    )
+}
+
+main() = {
+    println("Form validation example running at http://localhost:8100")
+    startRWeb(8100, "Form Validation", session)
+}
