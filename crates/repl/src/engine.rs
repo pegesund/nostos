@@ -4078,14 +4078,30 @@ impl ReplEngine {
 
         // Now mark functions with errors and their dependents as stale
         // Also collect files with errors for file-level status tracking
+        // Convert absolute paths to relative paths for source_manager compatibility
         let mut files_with_errors: HashSet<String> = HashSet::new();
         for (fn_name, error, source_name, _) in &errors {
             let error_msg = format!("{}", error);
             self.set_compile_status(fn_name, CompileStatus::CompileError(error_msg.clone()));
             // Mark dependents as stale (they were just marked Compiled above, so this works)
             self.mark_dependents_stale(fn_name, &format!("{} has errors", fn_name));
-            // Track which files have errors
-            files_with_errors.insert(source_name.clone());
+            // Track which files have errors - convert to relative path
+            let relative_path = std::path::Path::new(source_name)
+                .strip_prefix(&path_buf)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| source_name.clone());
+            // Map .nostos/defs/<module>/<anything>.nos back to <module>.nos
+            let original_file = if relative_path.starts_with(".nostos/defs/") {
+                let stripped = relative_path.strip_prefix(".nostos/defs/").unwrap();
+                if let Some(slash_pos) = stripped.find('/') {
+                    format!("{}.nos", &stripped[..slash_pos])
+                } else {
+                    relative_path.clone()
+                }
+            } else {
+                relative_path.clone()
+            };
+            files_with_errors.insert(original_file);
         }
 
         // Mark files as compiled_ok or compile_error in source_manager
@@ -7331,6 +7347,62 @@ mod tests {
         assert!(has_errors, "file_has_errors should return true for parse errors");
 
         fs::remove_file(&temp_file).ok();
+    }
+
+    #[test]
+    fn test_project_file_compile_status() {
+        // Create a temp project directory with good and bad files
+        let temp_dir = std::env::temp_dir().join(format!("test_project_status_{}", std::process::id()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create nostos.toml
+        let mut config_file = fs::File::create(temp_dir.join("nostos.toml")).unwrap();
+        writeln!(config_file, "[project]\nname = \"test\"").unwrap();
+
+        // Create a good file
+        let mut good_file = fs::File::create(temp_dir.join("good.nos")).unwrap();
+        writeln!(good_file, "helper(x) = x + 1").unwrap();
+        drop(good_file);
+
+        // Create a bad file with compile error
+        let mut bad_file = fs::File::create(temp_dir.join("bad.nos")).unwrap();
+        writeln!(bad_file, "broken() = undefined_function()").unwrap();
+        drop(bad_file);
+
+        // Load the project
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        let result = engine.load_directory(temp_dir.to_str().unwrap());
+        println!("load_directory result: {:?}", result);
+
+        // Debug: print source files from source_manager
+        let source_files = engine.get_source_files();
+        println!("Source files in source_manager: {:?}", source_files);
+
+        // Check file compile status
+        let good_path = temp_dir.join("good.nos").to_string_lossy().to_string();
+        let bad_path = temp_dir.join("bad.nos").to_string_lossy().to_string();
+        println!("good_path: {}", good_path);
+        println!("bad_path: {}", bad_path);
+
+        let good_has_errors = engine.file_has_errors(&good_path);
+        let good_compiled_ok = engine.file_compiled_ok(&good_path);
+        let bad_has_errors = engine.file_has_errors(&bad_path);
+        let bad_compiled_ok = engine.file_compiled_ok(&bad_path);
+
+        println!("good.nos: has_errors={}, compiled_ok={}", good_has_errors, good_compiled_ok);
+        println!("bad.nos: has_errors={}, compiled_ok={}", bad_has_errors, bad_compiled_ok);
+
+        // Assertions
+        assert!(!good_has_errors, "good.nos should not have errors");
+        assert!(good_compiled_ok, "good.nos should be compiled ok");
+        assert!(bad_has_errors, "bad.nos should have errors");
+        assert!(!bad_compiled_ok, "bad.nos should not be compiled ok");
+
+        // Cleanup
+        fs::remove_dir_all(&temp_dir).ok();
     }
 
     #[test]

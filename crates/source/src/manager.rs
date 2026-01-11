@@ -1893,12 +1893,28 @@ impl SourceManager {
 
     /// Check if a file has parse errors
     pub fn file_has_errors(&self, path: &str) -> bool {
-        self.files_with_errors.contains(path)
+        // Try exact path first
+        if self.files_with_errors.contains(path) {
+            return true;
+        }
+        // Try relative path (in case absolute path was passed)
+        if let Ok(relative) = std::path::Path::new(path).strip_prefix(&self.project_root) {
+            return self.files_with_errors.contains(relative.to_string_lossy().as_ref());
+        }
+        false
     }
 
     /// Check if a file compiled successfully
     pub fn file_compiled_ok(&self, path: &str) -> bool {
-        self.files_compiled_ok.contains(path)
+        // Try exact path first
+        if self.files_compiled_ok.contains(path) {
+            return true;
+        }
+        // Try relative path (in case absolute path was passed)
+        if let Ok(relative) = std::path::Path::new(path).strip_prefix(&self.project_root) {
+            return self.files_compiled_ok.contains(relative.to_string_lossy().as_ref());
+        }
+        false
     }
 
     /// Mark a file as compiled successfully
