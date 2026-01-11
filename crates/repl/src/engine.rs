@@ -7406,6 +7406,66 @@ mod tests {
     }
 
     #[test]
+    fn test_project_with_imports_initial_load() {
+        // Test that files with imports between them compile correctly on initial load
+        let temp_dir = std::env::temp_dir().join(format!("test_imports_{}", std::process::id()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create nostos.toml
+        let mut config_file = fs::File::create(temp_dir.join("nostos.toml")).unwrap();
+        writeln!(config_file, "[project]\nname = \"test\"").unwrap();
+        drop(config_file);
+
+        // Create good.nos with a public function
+        let mut good_file = fs::File::create(temp_dir.join("good.nos")).unwrap();
+        writeln!(good_file, "pub add(a, b) = a + b").unwrap();
+        drop(good_file);
+
+        // Create main.nos that imports from good.nos
+        let mut main_file = fs::File::create(temp_dir.join("main.nos")).unwrap();
+        writeln!(main_file, "use good.add\nmain() = add(1, 2)").unwrap();
+        drop(main_file);
+
+        // Create broken.nos with an error
+        let mut broken_file = fs::File::create(temp_dir.join("broken.nos")).unwrap();
+        writeln!(broken_file, "broken() = undefined_var").unwrap();
+        drop(broken_file);
+
+        // Load the project
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        let result = engine.load_directory(temp_dir.to_str().unwrap());
+        println!("load_directory result: {:?}", result);
+
+        // Check file statuses
+        let good_path = temp_dir.join("good.nos").to_string_lossy().to_string();
+        let main_path = temp_dir.join("main.nos").to_string_lossy().to_string();
+        let broken_path = temp_dir.join("broken.nos").to_string_lossy().to_string();
+
+        println!("good.nos: has_errors={}, compiled_ok={}",
+            engine.file_has_errors(&good_path), engine.file_compiled_ok(&good_path));
+        println!("main.nos: has_errors={}, compiled_ok={}",
+            engine.file_has_errors(&main_path), engine.file_compiled_ok(&main_path));
+        println!("broken.nos: has_errors={}, compiled_ok={}",
+            engine.file_has_errors(&broken_path), engine.file_compiled_ok(&broken_path));
+
+        // Assertions - main.nos should compile OK because good.add is public and imported
+        assert!(!engine.file_has_errors(&good_path), "good.nos should not have errors");
+        assert!(engine.file_compiled_ok(&good_path), "good.nos should be compiled ok");
+
+        assert!(!engine.file_has_errors(&main_path), "main.nos should not have errors (import should work)");
+        assert!(engine.file_compiled_ok(&main_path), "main.nos should be compiled ok");
+
+        assert!(engine.file_has_errors(&broken_path), "broken.nos should have errors");
+        assert!(!engine.file_compiled_ok(&broken_path), "broken.nos should not be compiled ok");
+
+        // Cleanup
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
     fn test_load_directory_with_nostos_defs() {
         // Create a temp directory with .nostos/defs structure
         let temp_dir = std::env::temp_dir().join(format!("nostos_test_{}", std::process::id()));

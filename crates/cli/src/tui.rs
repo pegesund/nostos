@@ -25,10 +25,10 @@ use crate::git_panel::{GitHistoryPanel, GitPanelCommand, HistoryTarget};
 use crate::tutorial;
 use crate::packages;
 
-/// Debug logging disabled. Uncomment to enable.
+/// Debug logging - writes to /tmp/nostos_debug.log (disabled by default)
 #[allow(unused)]
 fn debug_log(_msg: &str) {
-    // Disabled - uncomment to enable debug logging
+    // Uncomment to enable debug logging:
     // if let Ok(mut f) = std::fs::OpenOptions::new()
     //     .create(true)
     //     .append(true)
@@ -3261,6 +3261,7 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
             // Check if this is file-mode (file:path)
             if name_for_compile.starts_with("file:") {
                 let file_path = &name_for_compile[5..];
+                debug_log(&format!("Ctrl+O file mode: {}", file_path));
 
                 // First save the file to disk
                 if let Err(e) = engine.save_file_content(file_path, &content) {
@@ -3290,8 +3291,10 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                 }));
 
                 let file_path_owned = file_path.to_string();
+                debug_log(&format!("Ctrl+O compile_result={:?}", compile_result.as_ref().map(|r| r.is_ok())));
                 match compile_result {
                     Ok(Ok(_)) => {
+                        debug_log("Ctrl+O: Compile OK");
                         engine.mark_file_compiled_ok(&file_path_owned);
                         drop(engine);
                         s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| {
@@ -3301,6 +3304,7 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                         refresh_browser_if_open(s);
                     }
                     Ok(Err(e)) => {
+                        debug_log(&format!("Ctrl+O: Compile error: {}", e));
                         engine.mark_file_compile_error(&file_path_owned);
                         drop(engine);
                         // Parse line number from error (format: "filename:line: message")
@@ -3312,7 +3316,9 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                                 v.jump_to_line(line);
                             }
                         });
+                        debug_log("Ctrl+O: About to refresh browser");
                         refresh_browser_if_open(s);
+                        debug_log("Ctrl+O: Browser refresh done");
                     }
                     Err(panic_info) => {
                         let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
@@ -3659,9 +3665,11 @@ fn open_browser(s: &mut Cursive) {
 
 /// Refresh the browser dialog if it's open (to update compile status indicators)
 fn refresh_browser_if_open(s: &mut Cursive) {
+    debug_log("refresh_browser_if_open called");
     // Get browser state
     let browser_state = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let state_ref = state.borrow();
+        debug_log(&format!("browser_open={}", state_ref.browser_open));
         if state_ref.browser_open {
             Some((state_ref.engine.clone(), state_ref.browser_path.clone()))
         } else {
@@ -3670,14 +3678,20 @@ fn refresh_browser_if_open(s: &mut Cursive) {
     }).flatten();
 
     if let Some((engine, path)) = browser_state {
+        debug_log(&format!("Refreshing browser at path {:?}", path));
         // Pop the current browser and recreate it
         s.pop_layer();
+        debug_log("Popped layer, recreating browser");
         show_browser_dialog(s, engine, path);
+        debug_log("Browser recreated");
+    } else {
+        debug_log("Browser not open, skipping refresh");
     }
 }
 
 /// Show the browser dialog at a given path
 fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: Vec<String>) {
+    debug_log(&format!("show_browser_dialog called with path {:?}", path));
     // Track browser state for refresh after compilation
     s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
         let mut state_ref = state.borrow_mut();
@@ -3686,7 +3700,9 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     });
 
     // Get browser items with mutable borrow (syncs dynamic functions)
+    debug_log("Getting browser items");
     let items = engine.borrow_mut().get_browser_items(&path);
+    debug_log(&format!("Got {} browser items", items.len()));
 
     // Check if we're showing files at root level (file mode)
     let is_file_mode = path.is_empty() && items.iter().any(|item| matches!(item, BrowserItem::File { .. }));
@@ -3995,6 +4011,9 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 // Open function in editor
                 let full_name = engine.borrow().get_full_name(&new_path, item);
                 debug_log(&format!("Browser: selected Function: {} -> full_name: {}", name, full_name));
+                s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                    state.borrow_mut().browser_open = false;
+                });
                 s.pop_layer();
                 open_editor(s, &full_name);
             }
@@ -4002,6 +4021,9 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 // Open type in editor directly (preview pane shows info)
                 let full_name = engine.borrow().get_full_name(&new_path, item);
                 debug_log(&format!("Browser: selected Type: {} -> full_name: {}", name, full_name));
+                s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                    state.borrow_mut().browser_open = false;
+                });
                 s.pop_layer();
                 open_editor(s, &full_name);
             }
@@ -4009,6 +4031,9 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 // Open trait in editor directly (preview pane shows info)
                 let full_name = engine.borrow().get_full_name(&new_path, item);
                 debug_log(&format!("Browser: selected Trait: {} -> full_name: {}", name, full_name));
+                s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                    state.borrow_mut().browser_open = false;
+                });
                 s.pop_layer();
                 open_editor(s, &full_name);
             }
@@ -4031,6 +4056,9 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                     }
                 };
                 if let Some(value) = value_opt {
+                    s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                        state.borrow_mut().browser_open = false;
+                    });
                     open_inspector(s, &var_name, value);
                 } else {
                     log_to_repl(s, &format!("Unable to evaluate variable: {}", var_name));
@@ -4040,6 +4068,9 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 // Open metadata editor
                 let full_name = format!("{}._meta", module);
                 debug_log(&format!("Browser: selected Metadata for module: {}", module));
+                s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                    state.borrow_mut().browser_open = false;
+                });
                 s.pop_layer();
                 open_editor(s, &full_name);
             }
@@ -4047,6 +4078,9 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 // Open file editor
                 let full_name = format!("file:{}", path);
                 debug_log(&format!("Browser: selected File: {}", path));
+                s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                    state.borrow_mut().browser_open = false;
+                });
                 s.pop_layer();
                 open_editor(s, &full_name);
             }
