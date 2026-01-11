@@ -1078,9 +1078,19 @@ impl ReplEngine {
 
     /// Load a file into the REPL
     pub fn load_file(&mut self, path_str: &str) -> Result<(), String> {
+        // Debug helper
+        let dbg = |msg: &str| {
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                use std::io::Write;
+                let _ = writeln!(f, "load_file: {}", msg);
+            }
+        };
+        dbg(&format!("called with {}", path_str));
+
         let path = PathBuf::from(path_str);
 
         if !path.exists() {
+            dbg("file not found");
             return Err(format!("File not found: {}", path_str));
         }
 
@@ -1089,6 +1099,7 @@ impl ReplEngine {
 
         let (module_opt, errors) = parse(&source);
         if !errors.is_empty() {
+            dbg(&format!("parse errors: {}", errors.len()));
             // Format errors to string for display in REPL
             use nostos_syntax::offset_to_line_col;
             let source_errors = parse_errors_to_source_errors(&errors);
@@ -1096,7 +1107,17 @@ impl ReplEngine {
                 let (line, _col) = offset_to_line_col(&source, e.span.start);
                 format!("Line {}: {}", line, e.message)
             }).collect();
-            return Err(format!("Parse errors:\n  {}", error_msgs.join("\n  ")));
+            let error_str = format!("Parse errors:\n  {}", error_msgs.join("\n  "));
+
+            // Set compile error status for file-level parse error
+            let module_name = path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown");
+            self.set_compile_status(
+                &format!("{}._parse_error", module_name),
+                CompileStatus::CompileError(error_str.clone())
+            );
+            return Err(error_str);
         }
 
         let module = module_opt.ok_or("Failed to parse file")?;
@@ -1163,7 +1184,30 @@ impl ReplEngine {
         if let Err((e, filename, source)) = self.compiler.compile_all() {
             let span = e.span();
             let line = Self::offset_to_line(&source, span.start);
-            return Err(format!("{}:{}: {}", filename, line, e));
+            let error_str = format!("{}:{}: {}", filename, line, e);
+
+            // Set compile error status for all functions in this file
+            for fn_def in Self::get_fn_defs(&module) {
+                let fn_name = fn_def.name.node.clone();
+                let qualified_name = format!("{}{}", prefix, fn_name);
+                self.set_compile_status(&qualified_name, CompileStatus::CompileError(error_str.clone()));
+            }
+            return Err(error_str);
+        }
+
+        // Set compile status for all functions after successful compilation
+        let fn_defs = Self::get_fn_defs(&module);
+        for fn_def in &fn_defs {
+            let fn_name = fn_def.name.node.clone();
+            let qualified_name = format!("{}{}", prefix, fn_name);
+            self.set_compile_status(&qualified_name, CompileStatus::Compiled);
+        }
+
+        // Debug: log final state
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+            use std::io::Write;
+            let _ = writeln!(f, "load_file OK: {} functions, prefix='{}', status_count={}",
+                fn_defs.len(), prefix, self.compile_status.len());
         }
 
         // Now create thunk functions for each binding
@@ -4120,7 +4164,15 @@ impl ReplEngine {
         if let Some(ref sm) = self.source_manager {
             sm.file_has_errors(path)
         } else {
-            false
+            // Single-file mode: check if any function in the module has errors
+            let module_name = std::path::Path::new(path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            let prefix = format!("{}.", module_name);
+            self.compile_status.iter().any(|(name, status)| {
+                name.starts_with(&prefix) && matches!(status, CompileStatus::CompileError(_))
+            })
         }
     }
 
@@ -4136,7 +4188,20 @@ impl ReplEngine {
         if let Some(ref sm) = self.source_manager {
             sm.file_compiled_ok(path)
         } else {
-            false
+            // Single-file mode: check if any function in the module is compiled
+            let module_name = std::path::Path::new(path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            let prefix = format!("{}.", module_name);
+            // Check if we have any compiled functions and no errors
+            let has_compiled = self.compile_status.iter().any(|(name, status)| {
+                name.starts_with(&prefix) && matches!(status, CompileStatus::Compiled)
+            });
+            let has_errors = self.compile_status.iter().any(|(name, status)| {
+                name.starts_with(&prefix) && matches!(status, CompileStatus::CompileError(_))
+            });
+            has_compiled && !has_errors
         }
     }
 
@@ -4458,6 +4523,19 @@ impl ReplEngine {
     /// Get the compile status for a definition
     pub fn get_compile_status(&self, name: &str) -> Option<&CompileStatus> {
         self.compile_status.get(name)
+    }
+
+    /// Get all compile status entries (for debugging)
+    pub fn get_all_compile_status(&self) -> Vec<(String, String)> {
+        self.compile_status.iter().map(|(k, v)| {
+            let status_str = match v {
+                CompileStatus::Compiled => "Compiled".to_string(),
+                CompileStatus::CompileError(e) => format!("Error: {}", e),
+                CompileStatus::Stale { reason, .. } => format!("Stale: {}", reason),
+                CompileStatus::NotCompiled => "NotCompiled".to_string(),
+            };
+            (k.clone(), status_str)
+        }).collect()
     }
 
     /// Check if module content would compile without actually saving it
@@ -7157,6 +7235,105 @@ Keyboard shortcuts (TUI):
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn test_single_file_compile_status() {
+        // Create a temp file
+        let temp_file = std::env::temp_dir().join(format!("test_single_{}.nos", std::process::id()));
+        let mut f = fs::File::create(&temp_file).unwrap();
+        writeln!(f, "main() = 42").unwrap();
+        writeln!(f, "helper(x) = x + 1").unwrap();
+        drop(f);
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        // Load the file
+        let result = engine.load_file(temp_file.to_str().unwrap());
+        println!("load_file result: {:?}", result);
+        assert!(result.is_ok(), "load_file failed: {:?}", result);
+
+        // Check compile status
+        let all_status = engine.get_all_compile_status();
+        println!("All compile status: {:?}", all_status);
+
+        // The module name should be derived from filename (test_single_XXX)
+        let module_name = temp_file.file_stem().unwrap().to_str().unwrap();
+        println!("Module name: {}", module_name);
+
+        // Check file_has_errors and file_compiled_ok
+        let has_errors = engine.file_has_errors(temp_file.to_str().unwrap());
+        let compiled_ok = engine.file_compiled_ok(temp_file.to_str().unwrap());
+        println!("has_errors={}, compiled_ok={}", has_errors, compiled_ok);
+
+        // Should have compiled status for main and helper
+        assert!(!all_status.is_empty(), "compile_status should not be empty");
+        assert!(!has_errors, "file should not have errors");
+        assert!(compiled_ok, "file should be compiled ok");
+
+        fs::remove_file(&temp_file).ok();
+    }
+
+    #[test]
+    fn test_single_file_with_compile_error() {
+        // Create a temp file with a compile error (undefined function)
+        let temp_file = std::env::temp_dir().join(format!("test_error_{}.nos", std::process::id()));
+        let mut f = fs::File::create(&temp_file).unwrap();
+        writeln!(f, "main() = undefined_function()").unwrap();  // This will cause compile error
+        writeln!(f, "helper(x) = x + 1").unwrap();
+        drop(f);
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        // Load the file - should fail with compile error
+        let result = engine.load_file(temp_file.to_str().unwrap());
+        println!("load_file with error result: {:?}", result);
+
+        // Check compile status
+        let all_status = engine.get_all_compile_status();
+        println!("All compile status after error: {:?}", all_status);
+
+        // Check file_has_errors and file_compiled_ok
+        let has_errors = engine.file_has_errors(temp_file.to_str().unwrap());
+        let compiled_ok = engine.file_compiled_ok(temp_file.to_str().unwrap());
+        println!("has_errors={}, compiled_ok={}", has_errors, compiled_ok);
+
+        fs::remove_file(&temp_file).ok();
+    }
+
+    #[test]
+    fn test_single_file_with_parse_error() {
+        // Create a temp file with a parse error (syntax error)
+        let temp_file = std::env::temp_dir().join(format!("test_parse_error_{}.nos", std::process::id()));
+        let mut f = fs::File::create(&temp_file).unwrap();
+        writeln!(f, "main() = {{{{").unwrap();  // Invalid syntax
+        drop(f);
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+
+        // Load the file - should fail with parse error
+        let result = engine.load_file(temp_file.to_str().unwrap());
+        println!("load_file with parse error result: {:?}", result);
+
+        // Check compile status
+        let all_status = engine.get_all_compile_status();
+        println!("All compile status after parse error: {:?}", all_status);
+
+        // Check file_has_errors - should detect the error
+        let has_errors = engine.file_has_errors(temp_file.to_str().unwrap());
+        let compiled_ok = engine.file_compiled_ok(temp_file.to_str().unwrap());
+        println!("has_errors={}, compiled_ok={}", has_errors, compiled_ok);
+
+        // Parse errors should be detected
+        assert!(has_errors, "file_has_errors should return true for parse errors");
+
+        fs::remove_file(&temp_file).ok();
+    }
 
     #[test]
     fn test_load_directory_with_nostos_defs() {

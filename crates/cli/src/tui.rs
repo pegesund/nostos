@@ -27,18 +27,15 @@ use crate::packages;
 
 /// Debug logging disabled. Uncomment to enable.
 #[allow(unused)]
-fn debug_log(_msg: &str) {
-    // if let Ok(mut f) = std::fs::OpenOptions::new()
-    //     .create(true)
-    //     .append(true)
-    //     .open("/tmp/nostos_tui_debug.log")
-    // {
-    //     let timestamp = std::time::SystemTime::now()
-    //         .duration_since(std::time::UNIX_EPOCH)
-    //         .map(|d| d.as_secs())
-    //         .unwrap_or(0);
-    //     let _ = writeln!(f, "[{}] {}", timestamp, _msg);
-    // }
+fn debug_log(msg: &str) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/nostos_debug.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(f, "{}", msg);
+    }
 }
 
 /// Apply syntax highlighting to source code, returning a StyledString
@@ -529,6 +526,9 @@ struct TuiState {
     saved_window_widths: std::collections::HashMap<String, usize>,
     /// Original source file path (for single-file mode)
     source_file_path: Option<std::path::PathBuf>,
+    /// Browser panel state (tracks if open and current path for refresh)
+    browser_open: bool,
+    browser_path: Vec<String>,
 }
 
 pub fn run_tui(args: &[String]) -> ExitCode {
@@ -699,6 +699,8 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         last_focused_window: Some("repl_log".to_string()),
         saved_window_widths: std::collections::HashMap::new(),
         source_file_path,
+        browser_open: false,
+        browser_path: Vec::new(),
     })));
 
     // Components
@@ -3404,6 +3406,9 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                                 // Update editor compile status
                                 s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| v.mark_saved());
 
+                                // Refresh browser to show updated compile status
+                                refresh_browser_if_open(s);
+
                                 // Log with timing info
                                 let names_str = if actual_names.is_empty() {
                                     name_for_compile.clone()
@@ -3439,6 +3444,9 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                             v.set_compile_error(Some(compile_error.clone()));
                         });
 
+                        // Refresh browser to show error status
+                        refresh_browser_if_open(s);
+
                         log_to_repl(s, &format!("Compile error ({}ms): {}", elapsed_ms, compile_error));
                     }
                 }
@@ -3468,6 +3476,10 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                         }
 
                         drop(engine);
+
+                        // Refresh browser to show updated compile status
+                        refresh_browser_if_open(s);
+
                         let names_str = if actual_names.is_empty() {
                             name_for_compile.clone()
                         } else {
@@ -3477,6 +3489,10 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                     }
                     Ok(Err(compile_error)) => {
                         drop(engine);
+
+                        // Refresh browser to show error status
+                        refresh_browser_if_open(s);
+
                         s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| {
                             v.set_compile_error(Some(compile_error));
                         });
@@ -3634,8 +3650,34 @@ fn open_browser(s: &mut Cursive) {
     show_browser_dialog(s, engine, path);
 }
 
+/// Refresh the browser dialog if it's open (to update compile status indicators)
+fn refresh_browser_if_open(s: &mut Cursive) {
+    // Get browser state
+    let browser_state = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let state_ref = state.borrow();
+        if state_ref.browser_open {
+            Some((state_ref.engine.clone(), state_ref.browser_path.clone()))
+        } else {
+            None
+        }
+    }).flatten();
+
+    if let Some((engine, path)) = browser_state {
+        // Pop the current browser and recreate it
+        s.pop_layer();
+        show_browser_dialog(s, engine, path);
+    }
+}
+
 /// Show the browser dialog at a given path
 fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: Vec<String>) {
+    // Track browser state for refresh after compilation
+    s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+        let mut state_ref = state.borrow_mut();
+        state_ref.browser_open = true;
+        state_ref.browser_path = path.clone();
+    });
+
     // Get browser items with mutable borrow (syncs dynamic functions)
     let items = engine.borrow_mut().get_browser_items(&path);
 
@@ -3716,34 +3758,45 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
             BrowserItem::Function { name, signature, doc, eval_created, is_public } => {
                 // Check compile status for this function
                 let qualified_name = format!("{}{}", module_prefix, name);
-                let status_indicator = match engine_ref.get_compile_status(&qualified_name) {
-                    Some(CompileStatus::CompileError(_)) => " 🔴",
-                    Some(CompileStatus::Stale { .. }) => " 🟡",
-                    Some(CompileStatus::NotCompiled) => " [?]",
-                    _ => "",
-                };
+                let compile_status = engine_ref.get_compile_status(&qualified_name);
+
                 // Build styled string with doc comment in different color
                 let mut styled = StyledString::new();
                 // Add [eval] prefix for eval-created functions (view-only)
                 let eval_prefix = if *eval_created { "[eval] " } else { "" };
                 // Use "pub" prefix for public functions
                 let pub_prefix = if *is_public { "pub " } else { "" };
-                if signature.is_empty() {
-                    styled.append_plain(format!("ƒ  {}{}{}{}", pub_prefix, eval_prefix, name, status_indicator));
-                } else {
-                    styled.append_plain(format!("ƒ  {}{}{} :: {}{}", pub_prefix, eval_prefix, name, signature, status_indicator));
+
+                // Add status prefix with colored symbol
+                match &compile_status {
+                    Some(CompileStatus::CompileError(_)) => {
+                        styled.append_styled("✗ ", Style::from(Color::Rgb(255, 80, 80)));  // Red X
+                    }
+                    Some(CompileStatus::Stale { .. }) => {
+                        styled.append_styled("○ ", Style::from(Color::Rgb(255, 200, 0)));  // Yellow circle
+                    }
+                    Some(CompileStatus::Compiled) => {
+                        styled.append_styled("✓ ", Style::from(Color::Rgb(80, 255, 80)));  // Green check
+                    }
+                    _ => {
+                        styled.append_plain("  ");  // No status - align with others
+                    }
                 }
-                // Style based on visibility and eval status
+
+                // Build function text with appropriate color
+                let func_text = if signature.is_empty() {
+                    format!("ƒ  {}{}{}", pub_prefix, eval_prefix, name)
+                } else {
+                    format!("ƒ  {}{}{} :: {}", pub_prefix, eval_prefix, name, signature)
+                };
+
+                // Style function text based on visibility and eval status
                 if *eval_created {
-                    styled = StyledString::styled(
-                        styled.source(),
-                        Style::from(Color::Rgb(100, 180, 200))  // Muted cyan for eval
-                    );
+                    styled.append_styled(func_text, Style::from(Color::Rgb(100, 180, 200)));  // Muted cyan for eval
                 } else if *is_public {
-                    styled = StyledString::styled(
-                        styled.source(),
-                        Style::from(Color::Rgb(100, 255, 100))  // Green for public functions
-                    );
+                    styled.append_styled(func_text, Style::from(Color::Rgb(100, 255, 100)));  // Green for public
+                } else {
+                    styled.append_plain(func_text);
                 }
                 // Add doc comment in a muted green/cyan color
                 if let Some(doc_text) = doc.as_ref().and_then(|d| d.lines().next()) {
@@ -3779,13 +3832,19 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
             BrowserItem::File { name, path } => {
                 let has_errors = engine_ref.file_has_errors(path);
                 let compiled_ok = engine_ref.file_compiled_ok(path);
+                // Debug: also show all compile_status entries
+                let all_status: Vec<_> = engine_ref.get_all_compile_status();
+                debug_log(&format!("File '{}' path='{}' has_errors={} compiled_ok={} all_status={:?}", name, path, has_errors, compiled_ok, all_status));
+                let mut styled = StyledString::new();
                 if has_errors {
-                    StyledString::plain(format!("🔴 📄 {}", name))
+                    styled.append_styled("✗ ", Style::from(Color::Rgb(255, 80, 80)));  // Red X
                 } else if compiled_ok {
-                    StyledString::plain(format!("🟢 📄 {}", name))
+                    styled.append_styled("✓ ", Style::from(Color::Rgb(80, 255, 80)));  // Green check
                 } else {
-                    StyledString::plain(format!("📄 {}", name))
+                    styled.append_plain("  ");  // No status - align with others
                 }
+                styled.append_plain(name.to_string());
+                styled
             }
         };
         select.add_item(label, item.clone());
@@ -4045,6 +4104,10 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
     let engine_for_module = engine.clone();
     let dialog_with_keys = OnEventView::new(dialog)
         .on_event(Key::Esc, |s| {
+            // Mark browser as closed
+            s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
+                state.borrow_mut().browser_open = false;
+            });
             s.pop_layer();
         })
         .on_event(Key::Left, move |s| {
