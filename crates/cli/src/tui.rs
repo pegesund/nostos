@@ -3296,6 +3296,8 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                     Ok(Ok(_)) => {
                         debug_log("Ctrl+O: Compile OK");
                         engine.mark_file_compiled_ok(&file_path_owned);
+                        // Recalculate all file statuses based on function dependencies
+                        engine.recalculate_file_statuses();
                         drop(engine);
                         s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| {
                             v.mark_saved();
@@ -3306,6 +3308,8 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                     Ok(Err(e)) => {
                         debug_log(&format!("Ctrl+O: Compile error: {}", e));
                         engine.mark_file_compile_error(&file_path_owned);
+                        // Recalculate all file statuses based on function dependencies
+                        engine.recalculate_file_statuses();
                         drop(engine);
                         // Parse line number from error (format: "filename:line: message")
                         let error_line = e.split(':').nth(1).and_then(|s| s.trim().parse::<usize>().ok());
@@ -3329,6 +3333,8 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                             "Unknown panic".to_string()
                         };
                         engine.mark_file_compile_error(&file_path_owned);
+                        // Recalculate all file statuses based on function dependencies
+                        engine.recalculate_file_statuses();
                         drop(engine);
                         s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| {
                             v.set_compile_error(Some(format!("Internal error: {}", panic_msg)));

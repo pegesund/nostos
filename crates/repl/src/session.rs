@@ -383,13 +383,40 @@ pub fn extract_dependencies_from_fn(fn_def: &FnDef) -> HashSet<String> {
 }
 
 /// Extract function references from an expression.
+/// Try to extract a qualified name from an expression like `foo.bar.baz`
+/// Returns None if the expression is not a simple qualified name chain
+fn try_extract_qualified_name(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Var(ident) => Some(ident.node.clone()),
+        Expr::FieldAccess(base, field, _) => {
+            // Only capture qualified module.function, not method calls on values
+            if let Some(base_name) = try_extract_qualified_name(base) {
+                Some(format!("{}.{}", base_name, field.node))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 fn extract_dependencies_from_expr(expr: &Expr, deps: &mut HashSet<String>) {
     match expr {
-        Expr::Var(ident) => {
-            deps.insert(ident.node.clone());
+        // NOTE: We intentionally do NOT capture Expr::Var references here.
+        // Var could be a local variable (x, y, result, etc.) or a function name.
+        // Function calls are captured via Expr::Call and Expr::MethodCall.
+        // Capturing all Vars would incorrectly treat local bindings as dependencies.
+        Expr::Var(_) => {
+            // Don't capture plain variable references - they're usually locals
         }
         Expr::Call(callee, _type_args, args, _) => {
-            extract_dependencies_from_expr(callee, deps);
+            // For calls, try to capture the full qualified name (e.g., good.multiply)
+            // instead of just the base module name
+            if let Some(qualified) = try_extract_qualified_name(callee) {
+                deps.insert(qualified);
+            } else {
+                extract_dependencies_from_expr(callee, deps);
+            }
             for arg in args {
                 let expr = match arg {
                     CallArg::Positional(e) | CallArg::Named(_, e) => e,
@@ -461,15 +488,27 @@ fn extract_dependencies_from_expr(expr: &Expr, deps: &mut HashSet<String>) {
                 }
             }
         }
-        Expr::FieldAccess(base, _, _) => {
-            extract_dependencies_from_expr(base, deps);
+        Expr::FieldAccess(base, _field, _) => {
+            // For field access like `module.function`, capture as potential function reference
+            if let Some(qualified) = try_extract_qualified_name(expr) {
+                deps.insert(qualified);
+            } else {
+                extract_dependencies_from_expr(base, deps);
+            }
         }
         Expr::Index(base, index, _) => {
             extract_dependencies_from_expr(base, deps);
             extract_dependencies_from_expr(index, deps);
         }
-        Expr::MethodCall(receiver, _, args, _) => {
-            extract_dependencies_from_expr(receiver, deps);
+        Expr::MethodCall(receiver, method, args, _) => {
+            // For method calls like `good.multiply()`, if receiver is a simple Var,
+            // this could be a qualified module call, so capture "receiver.method"
+            if let Expr::Var(receiver_name) = receiver.as_ref() {
+                let qualified = format!("{}.{}", receiver_name.node, method.node);
+                deps.insert(qualified);
+            } else {
+                extract_dependencies_from_expr(receiver, deps);
+            }
             for arg in args {
                 let expr = match arg {
                     CallArg::Positional(e) | CallArg::Named(_, e) => e,
@@ -880,5 +919,99 @@ mod tests {
         assert_eq!(funcs.len(), 2);
         assert!(funcs.contains(&"foo"));
         assert!(funcs.contains(&"bar"));
+    }
+
+    #[test]
+    fn test_extract_qualified_call_dependency() {
+        use nostos_syntax::ast::CallArg;
+
+        // Create AST for: main() = good.multiply(2, 3)
+        // This is: Call(FieldAccess(Var("good"), "multiply"), [2, 3])
+        let good_var = Expr::Var(Spanned::new("good".to_string(), Span::default()));
+        let field_access = Expr::FieldAccess(
+            Box::new(good_var),
+            Spanned::new("multiply".to_string(), Span::default()),
+            Span::default(),
+        );
+        let call = Expr::Call(
+            Box::new(field_access),
+            vec![],
+            vec![CallArg::Positional(int_expr(2)), CallArg::Positional(int_expr(3))],
+            Span::default(),
+        );
+
+        let main_fn = make_fn("main", call);
+        let deps = extract_dependencies_from_fn(&main_fn);
+
+        println!("Dependencies extracted: {:?}", deps);
+
+        // Should contain "good.multiply", NOT just "good"
+        assert!(deps.contains("good.multiply"),
+            "Should extract 'good.multiply' as dependency, but got: {:?}", deps);
+        assert!(!deps.contains("good"),
+            "Should NOT have 'good' alone in deps (should be 'good.multiply'), got: {:?}", deps);
+    }
+
+    #[test]
+    fn test_use_statement_parsing() {
+        // Test that use statements are parsed correctly
+        let code = "use lib.helper\nmain() = helper(5)";
+        let (parsed, errors) = nostos_syntax::parse(code);
+        assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+        let module = parsed.expect("Parse should succeed");
+
+        println!("Module items: {:?}", module.items.len());
+        for (i, item) in module.items.iter().enumerate() {
+            println!("Item {}: {:?}", i, item);
+        }
+
+        // Check the use statement
+        let use_stmt = match &module.items[0] {
+            nostos_syntax::Item::Use(u) => u,
+            other => panic!("Expected Use, got {:?}", other),
+        };
+
+        println!("Use stmt path: {:?}", use_stmt.path);
+        println!("Use stmt imports: {:?}", use_stmt.imports);
+
+        // Path should be ["lib"]
+        assert_eq!(use_stmt.path.len(), 1, "Path should have 1 component");
+        assert_eq!(use_stmt.path[0].node, "lib", "Path should be 'lib'");
+
+        // Imports should be Named with "helper"
+        match &use_stmt.imports {
+            nostos_syntax::UseImports::Named(items) => {
+                assert_eq!(items.len(), 1, "Should have 1 import");
+                assert_eq!(items[0].name.node, "helper", "Import name should be 'helper'");
+            }
+            other => panic!("Expected Named imports, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_extract_qualified_call_from_parser() {
+        // Parse the actual source code and check what AST the parser produces
+        let code = "main() = good.multiply(2, 3)";
+        let (parsed, errors) = nostos_syntax::parse(code);
+        assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+        let module = parsed.expect("Parse should succeed");
+
+        println!("Parsed module items: {:?}", module.items.len());
+
+        // Get the function definition
+        let fn_def = match &module.items[0] {
+            nostos_syntax::Item::FnDef(f) => f,
+            other => panic!("Expected FnDef, got {:?}", other),
+        };
+
+        // Print the AST structure
+        println!("Function body: {:?}", fn_def.clauses[0].body);
+
+        let deps = extract_dependencies_from_fn(&fn_def);
+        println!("Dependencies extracted from parsed code: {:?}", deps);
+
+        // Should contain "good.multiply", NOT just "good"
+        assert!(deps.contains("good.multiply"),
+            "Should extract 'good.multiply' as dependency from parsed code, but got: {:?}", deps);
     }
 }

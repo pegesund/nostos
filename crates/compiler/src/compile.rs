@@ -15277,6 +15277,18 @@ impl Compiler {
             .map(|s| s.to_string())
     }
 
+    /// Get mapping of source file -> list of function names.
+    /// Used to calculate file-level compile status from function-level status.
+    pub fn get_functions_by_source_file(&self) -> std::collections::HashMap<String, Vec<String>> {
+        let mut result: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for (fn_name, (source_name, _)) in &self.fn_sources {
+            // Extract base name without signature suffix
+            let base_name = fn_name.split('/').next().unwrap_or(fn_name).to_string();
+            result.entry(source_name.clone()).or_default().push(base_name);
+        }
+        result
+    }
+
     /// Get source code for ALL overloads of a function by base name.
     /// Returns None if no functions found.
     pub fn get_all_function_sources(&self, name: &str) -> Option<String> {
