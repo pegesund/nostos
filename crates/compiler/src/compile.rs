@@ -1963,37 +1963,8 @@ impl Compiler {
             return Ok(name.to_string());
         }
 
-        // Check user imports (import module statements)
-        // Collect all matching modules to detect ambiguity
-        let mut matching_modules: Vec<String> = Vec::new();
-        for (importing_module, imported_module) in &self.imported_modules {
-            if importing_module == &self.module_path {
-                // Check if the imported module has this function
-                let qualified_in_module = format!("{}.{}", imported_module, name);
-                if self.has_function_with_base(&qualified_in_module)
-                    || self.types.contains_key(&qualified_in_module)
-                    || self.known_constructors.contains(&qualified_in_module)
-                {
-                    matching_modules.push(imported_module.clone());
-                }
-            }
-        }
-
-        // Check for ambiguity
-        if matching_modules.len() > 1 {
-            return Err(CompileError::AmbiguousName {
-                name: name.to_string(),
-                modules: matching_modules.join(", "),
-                span,
-            });
-        }
-
-        // Return the single match if found
-        if let Some(module) = matching_modules.first() {
-            return Ok(format!("{}.{}", module, name));
-        }
-
-        // Then check imports (prelude functions)
+        // Check explicit imports first (from "use" statements with specific names or "use lib.*")
+        // This is the authoritative source for unqualified name resolution
         if let Some(qualified) = self.imports.get(name) {
             return Ok(qualified.clone());
         }
@@ -15432,6 +15403,35 @@ impl Compiler {
         for (path, stmt) in stmts {
             self.module_use_stmts.push((path.clone(), stmt.clone()));
         }
+    }
+
+    /// Clear imports for a specific module (before recompiling it).
+    /// This removes entries from imported_modules, module_use_stmts, and the imports map.
+    pub fn clear_module_imports(&mut self, module_path: &[String]) {
+        // First, find which modules this module was importing
+        let imported_module_prefixes: Vec<String> = self.imported_modules.iter()
+            .filter(|(importing, _)| importing == module_path)
+            .map(|(_, imported)| format!("{}.", imported))
+            .collect();
+
+        // Remove imports that map to functions in those modules
+        self.imports.retain(|_local, qualified| {
+            !imported_module_prefixes.iter().any(|prefix| qualified.starts_with(prefix))
+        });
+
+        // Clear the module tracking data
+        self.imported_modules.retain(|(importing, _)| importing != module_path);
+        self.module_use_stmts.retain(|(path, _)| path != module_path);
+    }
+
+    /// Debug: get imported_modules for inspection
+    pub fn get_imported_modules_debug(&self) -> Vec<(Vec<String>, String)> {
+        self.imported_modules.iter().cloned().collect()
+    }
+
+    /// Debug: get imports map for inspection
+    pub fn get_imports_debug(&self) -> Vec<(String, String)> {
+        self.imports.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
     /// Get field names for a record type.

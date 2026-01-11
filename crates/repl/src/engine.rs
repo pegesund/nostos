@@ -1959,6 +1959,10 @@ impl ReplEngine {
                 }
             }
 
+            // Clear old imports for this module before recompiling
+            // (handles case where "use lib.*" is removed)
+            self.compiler.clear_module_imports(&module_path);
+
             // Use the module with type definitions for compilation
             self.compiler.add_module(&module_to_compile, module_path.clone(), Arc::new(input_with_types.clone()), "<repl>".to_string())
                 .map_err(|e| format!("Error: {}", e))?;
@@ -9242,8 +9246,37 @@ main() = callWith(getValue)
         // Try to use helperB without importing it - should fail
         let use_unimported = "use lib.helperA\nmain() = helperA() + helperB()";
         let result = engine.eval_in_module(use_unimported, Some("main._file"));
-        // This might work if helperB is still in scope from previous compile,
-        // or might fail - depends on implementation
+        // This MUST fail - helperB is not imported anymore
+        assert!(result.is_err(), "Should fail when using helperB without importing: {:?}", result);
+
+        cleanup_test_project(&temp_dir);
+    }
+
+    #[test]
+    fn test_remove_use_star_should_fail() {
+        // This is the critical test: removing "use lib.*" should cause compile error
+        let temp_dir = create_test_project(&[
+            ("lib.nos", "pub multiply(x, y) = x * y"),
+            ("main.nos", "use lib.*\nmain() = multiply(2, 3)"),
+        ]);
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // Initial state - should compile fine
+        let status = engine.get_compile_status("main.main");
+        println!("Initial status: {:?}", status);
+        assert!(matches!(status, Some(CompileStatus::Compiled)), "Should be compiled initially");
+
+        // Now remove the use statement and try to call multiply without import
+        let without_use = "main() = multiply(2, 3)";
+        let result = engine.eval_in_module(without_use, Some("main._file"));
+        println!("Result after removing use: {:?}", result);
+
+        // This MUST fail - multiply is not in scope without the import
+        assert!(result.is_err(), "Should fail when using multiply without 'use lib.*': got {:?}", result);
 
         cleanup_test_project(&temp_dir);
     }
