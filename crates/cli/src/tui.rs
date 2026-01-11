@@ -536,20 +536,13 @@ pub fn run_tui(args: &[String]) -> ExitCode {
     // SAFETY: This is set once at TUI startup before any threads are spawned
     unsafe { std::env::set_var("NOSTOS_INTERACTIVE", "1"); }
 
-    // Pre-validate any file arguments before starting TUI
-    // Use a temporary engine to check for both parse and type errors
+    // Check that file arguments exist (but don't validate content - allow opening files with errors)
     for arg in args {
         if !arg.starts_with('-') {
             let path = std::path::Path::new(arg);
-            if !path.is_dir() && path.exists() {
-                // Create a temporary engine to validate the file
-                let config = ReplConfig::default();
-                let mut temp_engine = ReplEngine::new(config);
-                let _ = temp_engine.load_stdlib();
-                if let Err(e) = temp_engine.load_file(arg) {
-                    eprintln!("Error loading {}: {}", arg, e);
-                    return ExitCode::FAILURE;
-                }
+            if !path.is_dir() && !path.exists() {
+                eprintln!("File not found: {}", arg);
+                return ExitCode::FAILURE;
             }
         }
     }
@@ -651,7 +644,6 @@ pub fn run_tui(args: &[String]) -> ExitCode {
     }
 
     // Load files or directories, track single files to open in editor
-    let mut single_file_to_open: Option<String> = None;
     let mut source_file_path: Option<std::path::PathBuf> = None;
     for arg in args {
         if !arg.starts_with('-') {
@@ -662,24 +654,28 @@ pub fn run_tui(args: &[String]) -> ExitCode {
                     eprintln!("Error loading directory {}: {}", arg, e);
                 }
             } else {
-                // Load single file - exit on error
-                if let Err(e) = engine.load_file(arg) {
-                    eprintln!("Error loading {}: {}", arg, e);
-                    return ExitCode::FAILURE;
-                }
-                // Track module name to open in browser (derived from file stem)
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    single_file_to_open = Some(stem.to_string());
-                }
-                // Track original file path for background saving
+                // Load single file - allow opening even with errors for editing
+                let load_error = match engine.load_file(arg) {
+                    Ok(_) => None,
+                    Err(e) => Some(e),
+                };
+                // Track original file path for background saving and file-mode editing
                 source_file_path = Some(path.to_path_buf());
                 // Enable file-by-file editing mode for this single file
                 engine.set_single_file_path(path.to_path_buf());
+                // Store error to show in editor (if any)
+                if let Some(e) = load_error {
+                    eprintln!("Warning: {}", e);
+                    // We'll still open the file for editing
+                }
             }
         }
     }
 
     let engine = Rc::new(RefCell::new(engine));
+
+    // Clone file path before it's moved into state
+    let file_to_open = source_file_path.clone();
 
     // Initialize State
     siv.set_user_data(Rc::new(RefCell::new(TuiState {
@@ -823,10 +819,10 @@ pub fn run_tui(args: &[String]) -> ExitCode {
 
     // Dynamic global keybindings - panels register via Panel.registerHotkey() from Nostos code
     // When Alt+<letter> is pressed, check if any hotkey callback is registered
-    // Skip letters that have dedicated handlers (i=inspector, c=console)
+    // Skip letters that have dedicated handlers (i=inspector, c=console, e=jump to error)
     for c in 'a'..='z' {
-        if c == 'i' || c == 'c' {
-            continue;  // These have dedicated handlers above
+        if c == 'i' || c == 'c' || c == 'e' {
+            continue;  // These have dedicated handlers
         }
         let engine_for_key = engine.clone();
         let key_char = c;
@@ -884,10 +880,10 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         poll_inspect_entries(s);
     });
 
-    // If a single file was passed as argument, open the browser at root
-    // so the user can see the module (named after the file)
-    if single_file_to_open.is_some() {
-        show_browser_dialog(&mut siv, engine.clone(), vec![]);
+    // If a single file was passed as argument, open it directly in the editor
+    if let Some(ref file_path) = file_to_open {
+        let file_name = format!("file:{}", file_path.display());
+        open_editor(&mut siv, &file_name);
     }
 
     siv.run();
@@ -2809,7 +2805,8 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
     let editor = CodeEditor::new(source)
         .with_function_name(name)  // Set module context for autocomplete
         .with_engine(engine.clone())
-        .with_read_only(read_only);
+        .with_read_only(read_only)
+        .with_file_mode(is_file_mode);
     let editor_id = format!("editor_{}", name);
 
     let name_for_save = name.to_string();
@@ -3283,12 +3280,37 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                         .unwrap_or("main");
                     // Use "stem._file" to ensure module_path includes the file stem
                     let module_name = format!("{}._file", file_stem);
-                    engine.eval_in_module(&content, Some(&module_name))
+                    {
+                        use std::io::Write;
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                            let _ = writeln!(f, "[Ctrl+O] Calling eval_in_module with module_name={:?}", module_name);
+                        }
+                    }
+                    let result = engine.eval_in_module(&content, Some(&module_name));
+                    {
+                        use std::io::Write;
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                            let _ = writeln!(f, "[Ctrl+O] eval_in_module returned: {:?}", result);
+                        }
+                    }
+                    result
                 }));
 
                 let file_path_owned = file_path.to_string();
+                {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                        let _ = writeln!(f, "[Ctrl+O] compile_result: {:?}", compile_result.as_ref().map(|r| r.as_ref().map(|_| "Ok").map_err(|e| e.clone())));
+                    }
+                }
                 match compile_result {
                     Ok(Ok(_)) => {
+                        {
+                            use std::io::Write;
+                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                                let _ = writeln!(f, "[Ctrl+O] Compile SUCCESS - setting green");
+                            }
+                        }
                         engine.mark_file_compiled_ok(&file_path_owned);
                         drop(engine);
                         s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| {
@@ -3297,10 +3319,22 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                         });
                     }
                     Ok(Err(e)) => {
+                        {
+                            use std::io::Write;
+                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                                let _ = writeln!(f, "[Ctrl+O] Compile ERROR: {}", e);
+                            }
+                        }
                         engine.mark_file_compile_error(&file_path_owned);
                         drop(engine);
+                        // Parse line number from error (format: "filename:line: message")
+                        let error_line = e.split(':').nth(1).and_then(|s| s.trim().parse::<usize>().ok());
                         s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| {
                             v.set_compile_error(Some(e));
+                            // Jump to error line if parsed successfully
+                            if let Some(line) = error_line {
+                                v.jump_to_line(line);
+                            }
                         });
                     }
                     Err(panic_info) => {

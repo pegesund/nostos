@@ -1795,8 +1795,9 @@ impl ReplEngine {
             m.items.iter().any(|item| matches!(item, Item::Use(_)))
         }).unwrap_or(false);
 
-        // Handle use statements
-        if has_use_stmt && errors.is_empty() {
+        // Handle use statements ONLY if that's all there is (no definitions)
+        // If there are both use statements and definitions, continue to compile everything
+        if has_use_stmt && !has_definitions && errors.is_empty() {
             return self.handle_use_statement(module_opt.as_ref().unwrap());
         }
 
@@ -1833,7 +1834,8 @@ impl ReplEngine {
 
             // Prepend type definitions from the module to the input
             // This ensures types like "Counter" are available when compiling functions
-            let input_with_types = if !actual_module_name.is_empty() && actual_module_name != "repl" {
+            // Track prefix line count for error line adjustment
+            let (input_with_types, prefix_line_count) = if !actual_module_name.is_empty() && actual_module_name != "repl" {
                 let mut prefix = String::new();
 
                 // Add type definitions from the source manager if available
@@ -1862,12 +1864,13 @@ impl ReplEngine {
                 }
 
                 if prefix.is_empty() {
-                    input.to_string()
+                    (input.to_string(), 0)
                 } else {
-                    format!("{}{}", prefix, input)
+                    let line_count = prefix.lines().count();
+                    (format!("{}{}", prefix, input), line_count)
                 }
             } else {
-                input.to_string()
+                (input.to_string(), 0)
             };
 
             // Re-parse with the type-prefixed input
@@ -2105,7 +2108,9 @@ impl ReplEngine {
             if let Some((_fn_name, error, filename, source)) = errors.into_iter().next() {
                 let span = error.span();
                 let line = Self::offset_to_line(&source, span.start);
-                return Err(format!("{}:{}: {}", filename, line, error));
+                // Adjust line number by subtracting prefix lines (type definitions prepended)
+                let adjusted_line = if line > prefix_line_count { line - prefix_line_count } else { line };
+                return Err(format!("{}:{}: {}", filename, adjusted_line, error));
             }
 
             let mut output = String::new();

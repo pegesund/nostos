@@ -511,6 +511,8 @@ pub struct CodeEditor {
     last_edit_time: Option<Instant>,
     /// Whether we need a full compile check (after debounce)
     needs_full_compile: bool,
+    /// Whether this is a file: mode editor (standalone file, not part of a module)
+    is_file_mode: bool,
 }
 
 impl CodeEditor {
@@ -536,7 +538,14 @@ impl CodeEditor {
             last_check_content: String::new(),
             last_edit_time: None,
             needs_full_compile: false,
+            is_file_mode: false,
         }
+    }
+
+    /// Set file mode (for standalone file editors)
+    pub fn with_file_mode(mut self, is_file: bool) -> Self {
+        self.is_file_mode = is_file;
+        self
     }
 
     /// Perform a quick parse check on the current content
@@ -596,15 +605,20 @@ impl CodeEditor {
         let eng = engine.borrow();
 
         // Determine the module name for compile context
+        // For file: mode, use empty string to avoid prepending module context
         // If module_name is not set but we have a function_name, try to look up the module
-        let module_name = match &self.module_name {
-            Some(m) => m.clone(),
-            None => {
-                // Try to find the module for this function
-                if let Some(ref fn_name) = self.function_name {
-                    eng.get_function_module(fn_name).unwrap_or_default()
-                } else {
-                    String::new()
+        let module_name = if self.is_file_mode {
+            String::new() // Standalone file - no module context
+        } else {
+            match &self.module_name {
+                Some(m) => m.clone(),
+                None => {
+                    // Try to find the module for this function
+                    if let Some(ref fn_name) = self.function_name {
+                        eng.get_function_module(fn_name).unwrap_or_default()
+                    } else {
+                        String::new()
+                    }
                 }
             }
         };
@@ -788,6 +802,36 @@ impl CodeEditor {
         let line_char_len = self.line_char_count(self.cursor.1);
         if self.cursor.0 > line_char_len {
             self.cursor.0 = line_char_len;
+        }
+    }
+
+    /// Extract line number from compile status error message
+    /// Error messages are formatted as "line N: message"
+    fn get_error_line(&self) -> Option<usize> {
+        let error_msg = match &self.compile_status {
+            CompileStatus::ParseError(msg) | CompileStatus::CompileError(msg) => msg,
+            _ => return None,
+        };
+
+        // Parse "line N:" prefix
+        if error_msg.starts_with("line ") {
+            if let Some(colon_pos) = error_msg.find(':') {
+                let num_str = &error_msg[5..colon_pos];
+                return num_str.parse().ok();
+            }
+        }
+        None
+    }
+
+    /// Jump to a specific line number (1-indexed)
+    pub fn jump_to_line(&mut self, line: usize) {
+        // Line numbers are 1-indexed, cursor row is 0-indexed
+        let target_row = line.saturating_sub(1);
+        if target_row < self.content.len() {
+            self.cursor.1 = target_row;
+            self.cursor.0 = 0; // Go to start of line
+            self.ac_state.reset();
+            self.ensure_cursor_visible();
         }
     }
 
@@ -1574,6 +1618,14 @@ impl View for CodeEditor {
     }
 
     fn on_event(&mut self, event: Event) -> EventResult {
+        // Debug: log all events to see what's being received
+        {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                let _ = writeln!(f, "[editor.on_event] event: {:?}", event);
+            }
+        }
+
         // Track line before event for compile status checking
         let old_line = self.cursor.1;
 
@@ -1778,7 +1830,42 @@ impl View for CodeEditor {
                 }
                 EventResult::Consumed(None)
             }
-            _ => EventResult::Ignored,
+            // Alt+E to jump to error line
+            Event::AltChar('e') | Event::AltChar('E') => {
+                {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                        let _ = writeln!(f, "[Alt+E] compile_status: {:?}", self.compile_status);
+                        let _ = writeln!(f, "[Alt+E] get_error_line: {:?}", self.get_error_line());
+                    }
+                }
+                if let Some(line) = self.get_error_line() {
+                    // Line numbers in errors are 1-indexed, cursor row is 0-indexed
+                    let target_row = line.saturating_sub(1);
+                    if target_row < self.content.len() {
+                        self.cursor.1 = target_row;
+                        self.cursor.0 = 0; // Go to start of line
+                        self.ac_state.reset();
+                        {
+                            use std::io::Write;
+                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                                let _ = writeln!(f, "[Alt+E] Jumped to line {}", line);
+                            }
+                        }
+                    }
+                }
+                EventResult::Consumed(None)
+            }
+            other => {
+                // Debug: log unhandled events to see what's being received
+                if let Event::AltChar(c) = other {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log") {
+                        let _ = writeln!(f, "[editor] Unhandled AltChar: '{}'", c);
+                    }
+                }
+                EventResult::Ignored
+            }
         };
 
         // After any consumed event, ensure cursor stays visible
