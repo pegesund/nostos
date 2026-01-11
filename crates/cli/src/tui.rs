@@ -3,7 +3,7 @@
 use cursive::Cursive;
 use cursive::traits::*;
 use cursive::views::{Dialog, EditView, LinearLayout, ScrollView, TextView, OnEventView, SelectView, Panel, BoxedView};
-use cursive::theme::{Color, PaletteColor, Theme, BorderStyle, Style, ColorStyle};
+use cursive::theme::{Color, PaletteColor, Theme, BorderStyle, Style, ColorStyle, BaseColor};
 use cursive::view::Resizable;
 use cursive::utils::markup::StyledString;
 use cursive::event::{Event, EventResult, EventTrigger, Key};
@@ -3771,13 +3771,13 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 // Add status prefix with colored symbol
                 match &compile_status {
                     Some(CompileStatus::CompileError(_)) => {
-                        styled.append_styled("✗ ", Style::from(ColorStyle::front(Color::Rgb(255, 80, 80))));
+                        styled.append_styled("✗ ", Style::from(ColorStyle::new(Color::Light(BaseColor::Red), Color::TerminalDefault)));
                     }
                     Some(CompileStatus::Stale { .. }) => {
-                        styled.append_styled("○ ", Style::from(ColorStyle::front(Color::Rgb(255, 200, 0))));
+                        styled.append_styled("○ ", Style::from(ColorStyle::new(Color::Light(BaseColor::Yellow), Color::TerminalDefault)));
                     }
                     Some(CompileStatus::Compiled) => {
-                        styled.append_styled("✓ ", Style::from(ColorStyle::front(Color::Rgb(80, 255, 80))));
+                        styled.append_styled("✓ ", Style::from(ColorStyle::new(Color::Light(BaseColor::Green), Color::TerminalDefault)));
                     }
                     _ => {
                         styled.append_plain("  ");  // No status - align with others
@@ -3835,9 +3835,9 @@ fn show_browser_dialog(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>, path: V
                 let compiled_ok = engine_ref.file_compiled_ok(path);
                 let mut styled = StyledString::new();
                 if has_errors {
-                    styled.append_styled("✗ ", Style::from(ColorStyle::front(Color::Rgb(255, 80, 80))));
+                    styled.append_styled("✗ ", Style::from(ColorStyle::new(Color::Light(BaseColor::Red), Color::TerminalDefault)));
                 } else if compiled_ok {
-                    styled.append_styled("✓ ", Style::from(ColorStyle::front(Color::Rgb(80, 255, 80))));
+                    styled.append_styled("✓ ", Style::from(ColorStyle::new(Color::Light(BaseColor::Green), Color::TerminalDefault)));
                 } else {
                     styled.append_plain("  ");  // No status - align with others
                 }
