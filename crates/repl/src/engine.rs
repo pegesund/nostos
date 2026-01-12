@@ -4873,7 +4873,12 @@ impl ReplEngine {
             } else {
                 // Re-check dependencies for existing functions
                 // Builtin methods that work on any type
-                let generic_builtins = ["show", "hash", "copy"];
+                let generic_builtins = [
+                    "show", "hash", "copy",
+                    // Type conversion builtins
+                    "asInt8", "asInt16", "asInt32", "asInt64", "asInt",
+                    "asFloat32", "asFloat64", "asFloat",
+                ];
 
                 for fn_name in new_sources.keys() {
                     let qualified = format!("{}{}", prefix, fn_name);
@@ -4958,7 +4963,12 @@ impl ReplEngine {
         // After compilation, validate dependencies exist
         if result.is_ok() {
             // Builtin methods that work on any type
-            let generic_builtins = ["show", "hash", "copy"];
+            let generic_builtins = [
+                "show", "hash", "copy",
+                // Type conversion builtins
+                "asInt8", "asInt16", "asInt32", "asInt64", "asInt",
+                "asFloat32", "asFloat64", "asFloat",
+            ];
 
             for fn_name in new_sources.keys() {
                 let qualified = format!("{}{}", prefix, fn_name);
@@ -5449,7 +5459,12 @@ impl ReplEngine {
         // For types like List, Map, Set - methods are top-level builtins
         fn is_valid_ufcs_method(type_name: &str, method: &str, known_functions: &HashSet<String>) -> bool {
             // Generic builtins that work on any type
-            const GENERIC_BUILTINS: &[&str] = &["show", "hash", "copy"];
+            const GENERIC_BUILTINS: &[&str] = &[
+                "show", "hash", "copy",
+                // Type conversion builtins
+                "asInt8", "asInt16", "asInt32", "asInt64", "asInt",
+                "asFloat32", "asFloat64", "asFloat",
+            ];
             if GENERIC_BUILTINS.contains(&method) {
                 return true;
             }
@@ -5513,6 +5528,9 @@ impl ReplEngine {
             // Generic builtins that work on any type
             match method {
                 "show" | "hash" | "copy" => return vec![0],
+                // Type conversion builtins
+                "asInt8" | "asInt16" | "asInt32" | "asInt64" | "asInt" |
+                "asFloat32" | "asFloat64" | "asFloat" => return vec![0],
                 _ => {}
             }
 
@@ -17755,6 +17773,24 @@ main() = {
         // Cleanup
         cleanup_lsp(&temp_path);
 
+        assert!(result.is_ok(), "Expected Ok but got: {:?}", result);
+    }
+
+    #[test]
+    fn test_asint32_builtin() {
+        // Test that type conversion builtins work
+        let engine = ReplEngine::new(ReplConfig::default());
+
+        let test_code = r#"
+main() = {
+    y1 = 33
+    g = y1.asInt32()
+    g
+}
+"#;
+
+        let result = engine.check_module_compiles("", test_code);
+        println!("asInt32 result: {:?}", result);
         assert!(result.is_ok(), "Expected Ok but got: {:?}", result);
     }
 }
