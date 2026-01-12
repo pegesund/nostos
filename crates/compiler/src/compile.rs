@@ -15243,6 +15243,48 @@ impl Compiler {
             None
         };
 
+        // Helper to check if a param type matches the target type
+        let param_matches_type = |first_param: &str| -> bool {
+            // Direct matches
+            if first_param == type_name || first_param == type_base {
+                return true;
+            }
+
+            // Handle list syntax: [a], [Int], etc. should match "List"
+            if type_base == "List" && first_param.starts_with('[') && first_param.ends_with(']') {
+                return true;
+            }
+
+            // Handle Map syntax: Map k v should match "Map"
+            if type_base == "Map" && (first_param == "Map" || first_param.starts_with("Map ")) {
+                return true;
+            }
+
+            // Handle Set syntax: Set a should match "Set"
+            if type_base == "Set" && (first_param == "Set" || first_param.starts_with("Set ")) {
+                return true;
+            }
+
+            // Handle Option syntax: Option a, Maybe a should match "Option"
+            if type_base == "Option" && (first_param == "Option" || first_param.starts_with("Option ")
+                || first_param == "Maybe" || first_param.starts_with("Maybe ")) {
+                return true;
+            }
+
+            // Handle Result syntax
+            if type_base == "Result" && (first_param == "Result" || first_param.starts_with("Result ")) {
+                return true;
+            }
+
+            // Module-qualified match
+            let first_param_base = first_param.rsplit('.').next().unwrap_or(first_param);
+            if first_param_base == type_base && type_module.map_or(false, |m| first_param.starts_with(&format!("{}.", m))) {
+                return true;
+            }
+
+            false
+        };
+
         for (fn_name, func) in &self.functions {
             // Skip if no param types or if it takes no arguments
             if func.param_types.is_empty() {
@@ -15252,15 +15294,7 @@ impl Compiler {
             // Get the first parameter type
             let first_param = &func.param_types[0];
 
-            // Match if:
-            // 1. Exact match: first_param == type_name (e.g., "nalgebra.Vec" == "nalgebra.Vec")
-            // 2. Base match with same module: first_param == type_base AND function is in same module
-            // 3. Unqualified match: first_param == type_base (for stdlib types)
-            let first_param_base = first_param.rsplit('.').next().unwrap_or(first_param);
-
-            let matches = first_param == type_name
-                || first_param == type_base
-                || (first_param_base == type_base && type_module.map_or(false, |m| fn_name.starts_with(&format!("{}.", m))));
+            let matches = param_matches_type(first_param);
 
             if matches {
                 // Extract local function name (remove module prefix and signature suffix)

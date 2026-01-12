@@ -493,7 +493,7 @@ impl NostosLanguageServer {
 
 // Increment BUILD_ID manually when making changes to easily verify binary is updated
 const LSP_VERSION: &str = env!("CARGO_PKG_VERSION");
-const LSP_BUILD_ID: &str = "2026-01-12-n";
+const LSP_BUILD_ID: &str = "2026-01-12-u";
 
 #[tower_lsp::async_trait]
 impl LanguageServer for NostosLanguageServer {
@@ -626,12 +626,19 @@ impl LanguageServer for NostosLanguageServer {
 
         eprintln!("Line prefix: '{}'", prefix);
 
+        // Extract local variable bindings from the document (lines before cursor)
+        let engine_guard = self.engine.lock().unwrap();
+        let engine_ref = engine_guard.as_ref();
+        let local_vars = Self::extract_local_bindings(&content, line_num, engine_ref);
+        drop(engine_guard);
+        eprintln!("Local vars: {:?}", local_vars);
+
         // Determine completion context
         let items = if let Some(dot_pos) = prefix.rfind('.') {
             // After a dot - could be module or UFCS call
             let before_dot = prefix[..dot_pos].trim();
             eprintln!("After dot, before: '{}'", before_dot);
-            self.get_dot_completions(before_dot)
+            self.get_dot_completions(before_dot, &local_vars)
         } else {
             // General identifier completion
             let partial = prefix.split(|c: char| !c.is_alphanumeric() && c != '_')
@@ -646,8 +653,97 @@ impl LanguageServer for NostosLanguageServer {
 }
 
 impl NostosLanguageServer {
+    /// Extract local variable bindings from document content up to a certain line
+    /// Returns a map of variable name -> inferred type (e.g., "y" -> "Int")
+    fn extract_local_bindings(content: &str, up_to_line: usize, engine: Option<&nostos_repl::ReplEngine>) -> std::collections::HashMap<String, String> {
+        let mut bindings = std::collections::HashMap::new();
+
+        for (line_num, line) in content.lines().enumerate() {
+            if line_num >= up_to_line {
+                break;
+            }
+
+            let trimmed = line.trim();
+
+            // Skip empty lines and comments
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            // Look for simple bindings: "x = expr" or "x = Module.func(...)"
+            if let Some(eq_pos) = trimmed.find('=') {
+                // Make sure it's not == or other operators
+                let before_eq = trimmed[..eq_pos].trim();
+                let after_eq_start = eq_pos + 1;
+                if after_eq_start < trimmed.len() && !trimmed[after_eq_start..].starts_with('=') {
+                    let after_eq = trimmed[after_eq_start..].trim();
+
+                    // Check if before_eq is a simple identifier (variable name)
+                    if !before_eq.is_empty()
+                        && before_eq.chars().next().map_or(false, |c| c.is_lowercase())
+                        && before_eq.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    {
+                        // Try to infer the type from the RHS
+                        let inferred_type = Self::infer_rhs_type(after_eq, engine);
+                        if let Some(ty) = inferred_type {
+                            eprintln!("Extracted binding: {} = {} (type: {})", before_eq, after_eq, ty);
+                            bindings.insert(before_eq.to_string(), ty);
+                        }
+                    }
+                }
+            }
+        }
+
+        bindings
+    }
+
+    /// Infer the type of an expression on the right-hand side of a binding
+    fn infer_rhs_type(expr: &str, engine: Option<&nostos_repl::ReplEngine>) -> Option<String> {
+        let trimmed = expr.trim();
+
+        // Literals
+        if trimmed.starts_with('[') {
+            return Some("List".to_string());
+        }
+        if trimmed.starts_with('"') {
+            return Some("String".to_string());
+        }
+        if trimmed.starts_with("%{") {
+            return Some("Map".to_string());
+        }
+        if trimmed.starts_with("#{") {
+            return Some("Set".to_string());
+        }
+
+        // Numeric literals
+        if trimmed.chars().all(|c| c.is_ascii_digit() || c == '-') && !trimmed.is_empty() {
+            return Some("Int".to_string());
+        }
+        if trimmed.contains('.') && trimmed.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-') {
+            return Some("Float".to_string());
+        }
+
+        // Try to infer type from function call: Module.func(...) or func(...)
+        if let Some(paren_pos) = trimmed.find('(') {
+            let func_part = trimmed[..paren_pos].trim();
+            if let Some(engine) = engine {
+                // Try to get the return type of the function
+                if let Some(sig) = engine.get_function_signature(func_part) {
+                    // Parse return type from signature like "(Int, Int) -> Int"
+                    if let Some(arrow_pos) = sig.rfind("->") {
+                        let ret_type = sig[arrow_pos + 2..].trim();
+                        eprintln!("Inferred type from func call {}: {}", func_part, ret_type);
+                        return Some(ret_type.to_string());
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
     /// Get completions after a dot (module functions or UFCS methods)
-    fn get_dot_completions(&self, before_dot: &str) -> Vec<CompletionItem> {
+    fn get_dot_completions(&self, before_dot: &str, local_vars: &std::collections::HashMap<String, String>) -> Vec<CompletionItem> {
         let mut items = Vec::new();
 
         let engine_guard = self.engine.lock().unwrap();
@@ -713,15 +809,44 @@ impl NostosLanguageServer {
                 }
             }
         } else {
-            // Not a module - show UFCS methods for all types
-            // (In future: infer type and filter, for now show common methods)
-            eprintln!("Not a module, showing UFCS methods");
+            // Not a module - try to infer the type and show methods
+            eprintln!("Not a module, trying to infer type of: '{}'", before_dot);
 
-            // Show common list methods
-            let common_types = ["List", "String", "Map", "Option", "Result"];
+            // First check if it's a local variable we know about
+            // Extract just the identifier (handle cases like "    yy" -> "yy")
+            let var_name = before_dot.split(|c: char| !c.is_alphanumeric() && c != '_')
+                .filter(|s| !s.is_empty())
+                .last()
+                .unwrap_or(before_dot);
+
+            let inferred_type = if let Some(var_type) = local_vars.get(var_name) {
+                eprintln!("Found local var '{}' with type: {}", var_name, var_type);
+                Some(var_type.clone())
+            } else {
+                // Try to infer the type of the expression from the engine
+                engine.infer_expression_type(before_dot)
+            };
+            eprintln!("Inferred type: {:?}", inferred_type);
+
             let mut seen = std::collections::HashSet::new();
 
-            for type_name in &common_types {
+            if let Some(ref type_name) = inferred_type {
+                // Show builtin methods for the inferred type
+                for (method_name, signature, doc) in nostos_repl::ReplEngine::get_builtin_methods_for_type(type_name) {
+                    if !seen.insert(method_name.to_string()) {
+                        continue;
+                    }
+
+                    items.push(CompletionItem {
+                        label: method_name.to_string(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        detail: Some(signature.to_string()),
+                        documentation: Some(Documentation::String(doc.to_string())),
+                        ..Default::default()
+                    });
+                }
+
+                // Also add UFCS methods from user-defined functions
                 for (method_name, signature, doc) in engine.get_ufcs_methods_for_type(type_name) {
                     if !seen.insert(method_name.clone()) {
                         continue;
@@ -732,6 +857,19 @@ impl NostosLanguageServer {
                         kind: Some(CompletionItemKind::METHOD),
                         detail: Some(signature),
                         documentation: doc.map(|d| Documentation::String(d)),
+                        ..Default::default()
+                    });
+                }
+            }
+
+            // If no type inferred, show generic methods
+            if inferred_type.is_none() {
+                for (method_name, signature, doc) in nostos_repl::ReplEngine::get_builtin_methods_for_type("Unknown") {
+                    items.push(CompletionItem {
+                        label: method_name.to_string(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        detail: Some(signature.to_string()),
+                        documentation: Some(Documentation::String(doc.to_string())),
                         ..Default::default()
                     });
                 }

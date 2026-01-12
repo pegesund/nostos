@@ -2845,6 +2845,115 @@ impl ReplEngine {
         self.compiler.get_ufcs_methods_for_type(type_name)
     }
 
+    /// Get builtin methods for a type (hardcoded list of known methods)
+    /// Returns (method_name, signature, doc) tuples
+    pub fn get_builtin_methods_for_type(type_name: &str) -> Vec<(&'static str, &'static str, &'static str)> {
+        // Strip trait bounds prefix (e.g., "Eq a, Hash a => Map[a, b]" -> "Map[a, b]")
+        let base_type = if let Some(arrow_pos) = type_name.find("=>") {
+            type_name[arrow_pos + 2..].trim()
+        } else {
+            type_name
+        };
+
+        if base_type.starts_with("Map") || base_type == "Map" {
+            vec![
+                ("get", "(key) -> value", "Get the value associated with a key"),
+                ("insert", "(key, value) -> Map", "Insert a key-value pair, returning a new map"),
+                ("remove", "(key) -> Map", "Remove a key, returning a new map"),
+                ("contains", "(key) -> Bool", "Check if the map contains a key"),
+                ("keys", "() -> List", "Get all keys as a list"),
+                ("values", "() -> List", "Get all values as a list"),
+                ("size", "() -> Int", "Get the number of key-value pairs"),
+                ("isEmpty", "() -> Bool", "Check if the map is empty"),
+                ("merge", "(other) -> Map", "Merge two maps"),
+            ]
+        } else if base_type.starts_with("Set") || base_type == "Set" {
+            vec![
+                ("contains", "(elem) -> Bool", "Check if the set contains an element"),
+                ("insert", "(elem) -> Set", "Insert an element"),
+                ("remove", "(elem) -> Set", "Remove an element"),
+                ("size", "() -> Int", "Get the number of elements"),
+                ("isEmpty", "() -> Bool", "Check if the set is empty"),
+                ("union", "(other) -> Set", "Return the union of two sets"),
+                ("intersection", "(other) -> Set", "Return the intersection"),
+                ("difference", "(other) -> Set", "Return elements in this but not other"),
+                ("toList", "() -> List", "Convert to a list"),
+            ]
+        } else if base_type == "String" {
+            vec![
+                ("length", "() -> Int", "Get the length"),
+                ("chars", "() -> List", "Get characters as a list"),
+                ("toInt", "() -> Option Int", "Parse as integer"),
+                ("toFloat", "() -> Option Float", "Parse as float"),
+                ("trim", "() -> String", "Remove whitespace"),
+                ("toUpper", "() -> String", "Convert to uppercase"),
+                ("toLower", "() -> String", "Convert to lowercase"),
+                ("contains", "(substr) -> Bool", "Check if contains substring"),
+                ("startsWith", "(prefix) -> Bool", "Check if starts with prefix"),
+                ("endsWith", "(suffix) -> Bool", "Check if ends with suffix"),
+                ("replace", "(from, to) -> String", "Replace first occurrence"),
+                ("replaceAll", "(from, to) -> String", "Replace all occurrences"),
+                ("split", "(sep) -> List", "Split by separator"),
+                ("lines", "() -> List", "Split into lines"),
+                ("words", "() -> List", "Split into words"),
+                ("isEmpty", "() -> Bool", "Check if empty"),
+            ]
+        } else if base_type.starts_with("List") || base_type == "List" || base_type.starts_with('[') {
+            vec![
+                ("length", "() -> Int", "Get the number of elements"),
+                ("head", "() -> a", "Get the first element"),
+                ("tail", "() -> List", "Get all except the first"),
+                ("isEmpty", "() -> Bool", "Check if empty"),
+                ("map", "(f) -> List", "Apply function to each element"),
+                ("filter", "(pred) -> List", "Keep matching elements"),
+                ("each", "(f) -> ()", "Apply function for side effects"),
+                ("fold", "(acc, f) -> a", "Left fold"),
+                ("any", "(pred) -> Bool", "Check if any matches"),
+                ("all", "(pred) -> Bool", "Check if all match"),
+                ("contains", "(elem) -> Bool", "Check if contains element"),
+                ("find", "(pred) -> Option", "Find first matching"),
+                ("get", "(n) -> a", "Get element at index"),
+                ("set", "(idx, val) -> List", "Set element at index"),
+                ("push", "(elem) -> List", "Append element"),
+                ("take", "(n) -> List", "Take first n elements"),
+                ("drop", "(n) -> List", "Drop first n elements"),
+                ("reverse", "() -> List", "Reverse the list"),
+                ("sort", "() -> List", "Sort the list"),
+                ("concat", "(other) -> List", "Concatenate lists"),
+                ("flatten", "() -> List", "Flatten list of lists"),
+                ("zip", "(other) -> List", "Zip two lists"),
+                ("unique", "() -> List", "Remove duplicates"),
+                ("sum", "() -> a", "Sum all elements"),
+                ("maximum", "() -> a", "Get maximum"),
+                ("minimum", "() -> a", "Get minimum"),
+            ]
+        } else if base_type == "Option" || base_type.starts_with("Option ") {
+            vec![
+                ("isSome", "() -> Bool", "Check if Some"),
+                ("isNone", "() -> Bool", "Check if None"),
+                ("unwrap", "() -> a", "Get value or panic"),
+                ("unwrapOr", "(default) -> a", "Get value or default"),
+                ("map", "(f) -> Option", "Apply function if Some"),
+                ("flatMap", "(f) -> Option", "Apply function returning Option"),
+            ]
+        } else if base_type == "Result" || base_type.starts_with("Result ") {
+            vec![
+                ("isOk", "() -> Bool", "Check if Ok"),
+                ("isErr", "() -> Bool", "Check if Err"),
+                ("unwrap", "() -> a", "Get value or panic"),
+                ("unwrapOr", "(default) -> a", "Get value or default"),
+                ("map", "(f) -> Result", "Apply function if Ok"),
+                ("mapErr", "(f) -> Result", "Apply function if Err"),
+            ]
+        } else {
+            // Generic methods available on all types
+            vec![
+                ("show", "() -> String", "Convert to string"),
+                ("hash", "() -> Int", "Get hash code"),
+            ]
+        }
+    }
+
     /// Get the type of a REPL variable (for autocomplete field access)
     /// Returns the stored type annotation or the inferred return type of the variable's thunk function
     pub fn get_variable_type(&self, var_name: &str) -> Option<String> {
@@ -3190,6 +3299,17 @@ impl ReplEngine {
         }
 
         None
+    }
+
+    /// Infer the type of an expression string (for LSP autocomplete)
+    /// Returns the type name if it can be inferred, None otherwise
+    pub fn infer_expression_type(&self, expr: &str) -> Option<String> {
+        // Try the structure-based inference first (handles method chains)
+        if let Some(ty) = self.infer_expr_type_from_structure(expr) {
+            return Some(ty);
+        }
+        // Fall back to base type detection
+        self.get_expr_base_type(expr)
     }
 
     /// Get the signature for a function (for autocomplete display)
@@ -4752,11 +4872,24 @@ impl ReplEngine {
                 // Fall through to compile section below
             } else {
                 // Re-check dependencies for existing functions
+                // Builtin methods that work on any type
+                let generic_builtins = ["show", "hash", "copy"];
+
                 for fn_name in new_sources.keys() {
                     let qualified = format!("{}{}", prefix, fn_name);
                     let deps = self.call_graph.direct_dependencies(&qualified);
                     for dep in deps {
                         if dep == qualified { continue; }
+
+                        // Check if this is a UFCS call to a generic builtin (e.g., "y.show", "x.hash")
+                        if let Some(dot_pos) = dep.rfind('.') {
+                            let method = &dep[dot_pos + 1..];
+                            let method_base = method.split('/').next().unwrap_or(method);
+                            if generic_builtins.contains(&method_base) {
+                                continue;
+                            }
+                        }
+
                         let dep_base = dep.split('/').next().unwrap_or(&dep);
                         let exists = self.compiler.get_function_names().iter()
                             .any(|n| n.split('/').next().unwrap_or(n) == dep_base);
@@ -4824,11 +4957,27 @@ impl ReplEngine {
 
         // After compilation, validate dependencies exist
         if result.is_ok() {
+            // Builtin methods that work on any type
+            let generic_builtins = ["show", "hash", "copy"];
+
             for fn_name in new_sources.keys() {
                 let qualified = format!("{}{}", prefix, fn_name);
                 let deps = self.call_graph.direct_dependencies(&qualified);
                 for dep in deps {
                     if dep == qualified { continue; }
+
+                    // Check if this is a UFCS call to a generic builtin (e.g., "y.show", "x.hash")
+                    // These look like function dependencies but are actually builtin methods
+                    if let Some(dot_pos) = dep.rfind('.') {
+                        let method = &dep[dot_pos + 1..];
+                        // Strip any signature suffix (e.g., "show/1" -> "show")
+                        let method_base = method.split('/').next().unwrap_or(method);
+                        if generic_builtins.contains(&method_base) {
+                            // This is a valid builtin method call, skip validation
+                            continue;
+                        }
+                    }
+
                     let dep_base = dep.split('/').next().unwrap_or(&dep);
                     let exists = self.compiler.get_function_names().iter()
                         .any(|n| n.split('/').next().unwrap_or(n) == dep_base);
@@ -4929,10 +5078,13 @@ impl ReplEngine {
         // Build set of known function base names (without signature suffix)
         let mut known_functions: HashSet<String> = HashSet::new();
 
-        // Build set of known module names (from use statements)
-        let mut known_modules: HashSet<String> = HashSet::new();
+        // Build set of known module names
+        // Start with all modules known to the main compiler (project-level modules)
+        let mut known_modules: HashSet<String> = self.compiler.get_known_modules()
+            .map(|s| s.to_string())
+            .collect();
 
-        // Process use statements to add imported function names and module names
+        // Also process use statements to add imported function names and module names
         for item in &module.items {
             if let Item::Use(use_stmt) = item {
                 use nostos_syntax::ast::UseImports;
@@ -5358,6 +5510,12 @@ impl ReplEngine {
         // Get all valid arities for a method across all known types
         // Returns empty vec if method is unknown
         fn get_all_valid_arities(method: &str) -> Vec<usize> {
+            // Generic builtins that work on any type
+            match method {
+                "show" | "hash" | "copy" => return vec![0],
+                _ => {}
+            }
+
             let types = ["String", "List", "Map", "Set"];
             let mut arities = Vec::new();
             for ty in &types {
@@ -17446,5 +17604,157 @@ mod lsp_integration_tests {
         }
 
         cleanup(&temp_dir);
+    }
+}
+
+#[cfg(test)]
+mod lsp_show_tests {
+    use super::*;
+    use std::fs;
+
+    fn create_temp_dir_lsp(name: &str) -> std::path::PathBuf {
+        let base = std::env::temp_dir().join("nostos_lsp_tests");
+        fs::create_dir_all(&base).ok();
+        let path = base.join(name);
+        if path.exists() {
+            fs::remove_dir_all(&path).ok();
+        }
+        fs::create_dir_all(&path).expect("Failed to create test dir");
+        path
+    }
+
+    fn cleanup_lsp(path: &std::path::Path) {
+        fs::remove_dir_all(path).ok();
+    }
+
+    #[test]
+    fn test_show_method_on_variable() {
+        // Create engine and load a simple module
+        let mut engine = ReplEngine::new(ReplConfig::default());
+
+        // First, add a module with multiply function
+        let good_module = r#"
+pub multiply(x, y) = x * y
+"#;
+
+        // Parse and add the module
+        let (module_opt, errors) = nostos_syntax::parse(good_module);
+        assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+        let module = module_opt.unwrap();
+
+        // Add the module as "good"
+        engine.compiler.add_module(
+            &module,
+            vec!["good".to_string()],
+            std::sync::Arc::new(good_module.to_string()),
+            "good.nos".to_string(),
+        ).expect("Failed to add module");
+
+        // Now test check_module_compiles with y.show()
+        let test_code = r#"
+main() = {
+    y = good.multiply(2, 3)
+    y.show()
+}
+"#;
+
+        let result = engine.check_module_compiles("", test_code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Expected Ok but got: {:?}", result);
+    }
+
+    #[test]
+    fn test_show_method_simple() {
+        let engine = ReplEngine::new(ReplConfig::default());
+
+        // Simple test - just y.show() where y is a local binding
+        let test_code = r#"
+main() = {
+    y = 5
+    y.show()
+}
+"#;
+
+        let result = engine.check_module_compiles("", test_code);
+        println!("Result: {:?}", result);
+        assert!(result.is_ok(), "Expected Ok but got: {:?}", result);
+    }
+
+    #[test]
+    fn test_show_method_lsp_scenario() {
+        // This test simulates the actual LSP scenario:
+        // 1. Create a temp directory with good.nos and main.nos
+        // 2. Load the directory (like LSP does on init)
+        // 3. Check main.nos compiles (like LSP does on file change)
+
+        let temp_path = create_temp_dir_lsp("show_test");
+
+        // Create good.nos
+        let good_content = "# A working function\npub multiply(x, y) = x * y\n";
+        fs::write(temp_path.join("good.nos"), good_content).expect("Failed to write good.nos");
+
+        // Create main.nos
+        let main_content = "main() = {\n    y = good.multiply(2, 3)\n    y.show()\n}\n";
+        fs::write(temp_path.join("main.nos"), main_content).expect("Failed to write main.nos");
+
+        // Create nostos.toml (required for project)
+        let toml_content = "[project]\nname = \"test-project\"\n";
+        fs::write(temp_path.join("nostos.toml"), toml_content).expect("Failed to write nostos.toml");
+
+        // Create engine and load directory (like LSP does)
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        let load_result = engine.load_directory(temp_path.to_str().unwrap());
+        println!("Load directory result: {:?}", load_result);
+        assert!(load_result.is_ok(), "Failed to load directory: {:?}", load_result);
+
+        // Print known modules
+        println!("Known modules after load: {:?}", engine.compiler.get_known_modules().collect::<Vec<_>>());
+
+        // Now simulate checking main.nos (like LSP does when file changes)
+        let result = engine.check_module_compiles("main", main_content);
+        println!("check_module_compiles result: {:?}", result);
+
+        // Cleanup
+        cleanup_lsp(&temp_path);
+
+        assert!(result.is_ok(), "Expected Ok but got: {:?}", result);
+    }
+
+    #[test]
+    fn test_show_method_recompile_path() {
+        // This test uses the actual LSP code path: recompile_module_with_content
+        // (not check_module_compiles which is different)
+
+        let temp_path = create_temp_dir_lsp("show_recompile_test");
+
+        // Create good.nos
+        let good_content = "# A working function\npub multiply(x, y) = x * y\n";
+        fs::write(temp_path.join("good.nos"), good_content).expect("Failed to write good.nos");
+
+        // Create main.nos
+        let main_content = "main() = {\n    y = good.multiply(2, 3)\n    y.show()\n}\n";
+        fs::write(temp_path.join("main.nos"), main_content).expect("Failed to write main.nos");
+
+        // Create nostos.toml
+        let toml_content = "[project]\nname = \"test-project\"\n";
+        fs::write(temp_path.join("nostos.toml"), toml_content).expect("Failed to write nostos.toml");
+
+        // Create engine and load directory
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        let load_result = engine.load_directory(temp_path.to_str().unwrap());
+        println!("Load directory result: {:?}", load_result);
+        assert!(load_result.is_ok(), "Failed to load directory: {:?}", load_result);
+
+        // Print known modules
+        println!("Known modules: {:?}", engine.compiler.get_known_modules().collect::<Vec<_>>());
+
+        // Now use recompile_module_with_content (the actual LSP code path)
+        let result = engine.recompile_module_with_content("main", main_content);
+        println!("recompile_module_with_content result: {:?}", result);
+
+        // Cleanup
+        cleanup_lsp(&temp_path);
+
+        assert!(result.is_ok(), "Expected Ok but got: {:?}", result);
     }
 }
