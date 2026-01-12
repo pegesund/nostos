@@ -2945,6 +2945,31 @@ impl ReplEngine {
                 ("map", "(f) -> Result", "Apply function if Ok"),
                 ("mapErr", "(f) -> Result", "Apply function if Err"),
             ]
+        } else if base_type == "Int" || base_type == "Int8" || base_type == "Int16" ||
+                  base_type == "Int32" || base_type == "Int64" ||
+                  base_type == "UInt8" || base_type == "UInt16" ||
+                  base_type == "UInt32" || base_type == "UInt64" ||
+                  base_type == "Float" || base_type == "Float32" || base_type == "Float64" ||
+                  base_type == "BigInt" {
+            // Numeric type conversion methods
+            vec![
+                ("show", "() -> String", "Convert to string"),
+                ("hash", "() -> Int", "Get hash code"),
+                ("asInt8", "() -> Int8", "Convert to Int8"),
+                ("asInt16", "() -> Int16", "Convert to Int16"),
+                ("asInt32", "() -> Int32", "Convert to Int32"),
+                ("asInt64", "() -> Int64", "Convert to Int64"),
+                ("asInt", "() -> Int", "Convert to Int"),
+                ("asUInt8", "() -> UInt8", "Convert to UInt8"),
+                ("asUInt16", "() -> UInt16", "Convert to UInt16"),
+                ("asUInt32", "() -> UInt32", "Convert to UInt32"),
+                ("asUInt64", "() -> UInt64", "Convert to UInt64"),
+                ("asFloat32", "() -> Float32", "Convert to Float32"),
+                ("asFloat64", "() -> Float64", "Convert to Float64"),
+                ("asFloat", "() -> Float", "Convert to Float"),
+                ("asBigInt", "() -> BigInt", "Convert to BigInt"),
+                ("abs", "() -> a", "Absolute value"),
+            ]
         } else {
             // Generic methods available on all types
             vec![
@@ -17791,6 +17816,91 @@ main() = {
 
         let result = engine.check_module_compiles("", test_code);
         println!("asInt32 result: {:?}", result);
+        assert!(result.is_ok(), "Expected Ok but got: {:?}", result);
+    }
+
+    #[test]
+    fn test_asint32_recompile_path() {
+        // Test using the actual LSP code path (recompile_module_with_content)
+        let temp_path = create_temp_dir_lsp("asint32_recompile_test");
+
+        // Create main.nos with asInt32 call - using FUNCTION FORM (not UFCS)
+        let main_content = "main() = {\n    y1 = 33\n    g = asInt32(y1)\n    g\n}\n";
+        fs::write(temp_path.join("main.nos"), main_content).expect("Failed to write main.nos");
+
+        // Create nostos.toml
+        let toml_content = "[project]\nname = \"test-project\"\n";
+        fs::write(temp_path.join("nostos.toml"), toml_content).expect("Failed to write nostos.toml");
+
+        // Create engine and load directory
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        let load_result = engine.load_directory(temp_path.to_str().unwrap());
+        println!("Load directory result: {:?}", load_result);
+        assert!(load_result.is_ok(), "Failed to load directory: {:?}", load_result);
+
+        // Debug: print what dependencies are recorded
+        let deps = engine.call_graph.direct_dependencies("main.main");
+        println!("Dependencies for main.main: {:?}", deps);
+
+        // Now use recompile_module_with_content (the actual LSP code path)
+        let result = engine.recompile_module_with_content("main", main_content);
+        println!("recompile_module_with_content result: {:?}", result);
+
+        // Cleanup
+        cleanup_lsp(&temp_path);
+
+        assert!(result.is_ok(), "Expected Ok but got: {:?}", result);
+    }
+
+    #[test]
+    fn test_asint32_exact_user_scenario() {
+        // Exact match of user's /var/tmp/test_status_project structure
+        let temp_path = create_temp_dir_lsp("exact_user_test");
+
+        // Create good.nos
+        let good_content = "# A working function\npub addff(a, b) = a + b\npub multiply(x, y) = x * y\n";
+        fs::write(temp_path.join("good.nos"), good_content).expect("Failed to write good.nos");
+
+        // Create main.nos - exact copy from user
+        let main_content = r#"type XX = AAA | BBB
+
+main() = {
+    x = good.addff(3, 2)
+    y = good.multiply(2,3)
+    yy = [1,2,3]
+    y1 = 33
+    g = asInt32(y1)
+
+}
+"#;
+        fs::write(temp_path.join("main.nos"), main_content).expect("Failed to write main.nos");
+
+        // Create nostos.toml
+        let toml_content = "[project]\nname = \"test-project\"\n";
+        fs::write(temp_path.join("nostos.toml"), toml_content).expect("Failed to write nostos.toml");
+
+        // Create engine and load directory
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        let load_result = engine.load_directory(temp_path.to_str().unwrap());
+        println!("Load directory result: {:?}", load_result);
+        assert!(load_result.is_ok(), "Failed to load directory: {:?}", load_result);
+
+        // Debug: print what dependencies are recorded
+        let deps = engine.call_graph.direct_dependencies("main.main");
+        println!("Dependencies for main.main: {:?}", deps);
+
+        // Check compile statuses
+        for (fn_name, status) in engine.get_all_compile_status_detailed() {
+            println!("Compile status for {}: {:?}", fn_name, status);
+        }
+
+        // Now use recompile_module_with_content (the actual LSP code path)
+        let result = engine.recompile_module_with_content("main", main_content);
+        println!("recompile_module_with_content result: {:?}", result);
+
+        // Cleanup
+        cleanup_lsp(&temp_path);
+
         assert!(result.is_ok(), "Expected Ok but got: {:?}", result);
     }
 }
