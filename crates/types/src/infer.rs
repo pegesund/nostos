@@ -34,6 +34,7 @@ pub struct PendingMethodCall {
     pub method_name: String,
     pub arg_types: Vec<Type>,
     pub ret_ty: Type,
+    pub span: Option<Span>,
 }
 
 /// Type inference context.
@@ -432,6 +433,8 @@ impl<'a> InferCtx<'a> {
                         let max_args = ft.params.len();
                         let provided = call.arg_types.len();
                         if provided < min_args || provided > max_args {
+                            // Set error span for precise error location
+                            self.last_error_span = call.span;
                             return Err(TypeError::ArityMismatch {
                                 expected: if min_args == max_args { max_args } else { min_args },
                                 found: provided,
@@ -1267,6 +1270,7 @@ impl<'a> InferCtx<'a> {
                             let min_args = ft.required_params.unwrap_or(ft.params.len());
                             let max_args = ft.params.len();
                             if arg_types.len() < min_args || arg_types.len() > max_args {
+                                self.last_error_span = Some(*call_span);
                                 return Err(TypeError::ArityMismatch {
                                     expected: if min_args == max_args { max_args } else { min_args },
                                     found: arg_types.len(),
@@ -1305,6 +1309,7 @@ impl<'a> InferCtx<'a> {
                             let min_args = ft.required_params.unwrap_or(ft.params.len());
                             let max_args = ft.params.len();
                             if arg_types.len() < min_args || arg_types.len() > max_args {
+                                self.last_error_span = Some(*call_span);
                                 return Err(TypeError::ArityMismatch {
                                     expected: if min_args == max_args { max_args } else { min_args },
                                     found: arg_types.len(),
@@ -1328,6 +1333,7 @@ impl<'a> InferCtx<'a> {
                     method_name: method.node.clone(),
                     arg_types: arg_types.clone(),
                     ret_ty: ret_ty.clone(),
+                    span: Some(*call_span),
                 });
 
                 Ok(ret_ty)

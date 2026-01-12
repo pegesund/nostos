@@ -14819,8 +14819,14 @@ impl Compiler {
             // for a REPL/TUI session - the stale index just won't be called.
         }
 
-        // Also remove from fn_asts if present
-        self.fn_asts.remove(base_name);
+        // Also remove from fn_asts if present (including signature variants)
+        let ast_keys_to_remove: Vec<String> = self.fn_asts.keys()
+            .filter(|name| name.starts_with(&prefix) || *name == base_name)
+            .cloned()
+            .collect();
+        for key in ast_keys_to_remove {
+            self.fn_asts.remove(&key);
+        }
     }
 
     /// Remove a type definition by name.
@@ -14903,6 +14909,11 @@ impl Compiler {
     /// Get all known module prefixes.
     pub fn get_known_modules(&self) -> impl Iterator<Item = &str> {
         self.known_modules.iter().map(|s| s.as_str())
+    }
+
+    /// Debug function to check what arities exist for a function name
+    pub fn find_all_function_arities_debug(&self, base_name: &str) -> Option<std::collections::HashSet<usize>> {
+        self.find_all_function_arities(base_name)
     }
 
     /// Get all public functions from a module (for `use module.*`).
@@ -16193,9 +16204,13 @@ impl Compiler {
 
         // Infer the function type - this generates constraints
         let span = def.name.span;
-        ctx.infer_function(def).map_err(|e| CompileError::TypeError {
-            message: e.to_string(),
-            span,
+        ctx.infer_function(def).map_err(|e| {
+            // Use the precise span from inference if available (e.g., for arity errors at call sites)
+            let error_span = ctx.last_error_span().unwrap_or(span);
+            CompileError::TypeError {
+                message: e.to_string(),
+                span: error_span,
+            }
         })?;
 
         // Solve constraints - this is where type mismatches are detected

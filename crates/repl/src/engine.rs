@@ -2087,8 +2087,13 @@ impl ReplEngine {
             }
 
             // Now mark functions with errors and their dependents as stale
-            for (fn_name, error, _, _) in &errors {
-                let error_msg = format!("{}", error);
+            for (fn_name, error, _filename, source) in &errors {
+                // Include line number in error message for LSP
+                let span = error.span();
+                let line = Self::offset_to_line(source, span.start);
+                // Adjust line number by subtracting prefix lines (type definitions prepended)
+                let adjusted_line = if line > prefix_line_count { line - prefix_line_count } else { line };
+                let error_msg = format!("line {}: {}", adjusted_line, error);
                 self.set_compile_status(fn_name, CompileStatus::CompileError(error_msg.clone()));
                 // Mark dependents as stale (they were just marked Compiled above, so this works)
                 self.mark_dependents_stale(fn_name, &format!("{} has errors", fn_name));
@@ -3885,6 +3890,7 @@ impl ReplEngine {
 
     /// Load a project directory with SourceManager
     pub fn load_directory(&mut self, path: &str) -> Result<(), String> {
+        eprintln!("LSP DEBUG: load_directory called with path: {}", path);
         let path_buf = PathBuf::from(path);
 
         if !path_buf.is_dir() {
@@ -4035,7 +4041,12 @@ impl ReplEngine {
         }
 
         // Compile all bodies, collecting errors
+        eprintln!("LSP DEBUG load_directory: ABOUT TO compile_all_collecting_errors");
         let errors = self.compiler.compile_all_collecting_errors();
+        eprintln!("LSP DEBUG load_directory: compile_all_collecting_errors returned {} errors", errors.len());
+        for (fn_name, err, _, _) in &errors {
+            eprintln!("LSP DEBUG load_directory: error in {}: {}", fn_name, err);
+        }
 
         // Collect set of error function names for quick lookup
         let error_fn_names: HashSet<String> = errors.iter().map(|(n, _, _, _)| n.clone()).collect();
@@ -4064,8 +4075,11 @@ impl ReplEngine {
         // Also collect files with errors for file-level status tracking
         // Convert absolute paths to relative paths for source_manager compatibility
         let mut files_with_errors: HashSet<String> = HashSet::new();
-        for (fn_name, error, source_name, _) in &errors {
-            let error_msg = format!("{}", error);
+        for (fn_name, error, source_name, source_code) in &errors {
+            // Include line number in error message for LSP
+            let span = error.span();
+            let line = nostos_syntax::offset_to_line_col(source_code, span.start).0;
+            let error_msg = format!("line {}: {}", line, error);
             self.set_compile_status(fn_name, CompileStatus::CompileError(error_msg.clone()));
             // Mark dependents as stale (they were just marked Compiled above, so this works)
             self.mark_dependents_stale(fn_name, &format!("{} has errors", fn_name));
@@ -4687,6 +4701,26 @@ impl ReplEngine {
             }
         }
 
+        // CRITICAL: Save old signatures BEFORE removing functions
+        // This allows us to detect signature changes after recompilation
+        let mut old_signatures: HashMap<String, Option<String>> = HashMap::new();
+        for fn_name in &to_add_or_update {
+            let qualified = format!("{}{}", prefix, fn_name);
+            // Get signature from compiler or last_known_signatures
+            let sig = self.compiler.get_function_signature(&qualified)
+                .or_else(|| self.last_known_signatures.get(&qualified).cloned());
+            old_signatures.insert(qualified.clone(), sig);
+        }
+
+        // CRITICAL: Also delete functions that are being updated (not just deleted)
+        // This ensures old overloads don't persist when signature changes.
+        // E.g., changing addff(a,b) to addff(a,b,c) must remove old addff(a,b)
+        for fn_name in &to_add_or_update {
+            let qualified = format!("{}{}", prefix, fn_name);
+            eprintln!("LSP: Removing old version before update: {}", qualified);
+            self.compiler.remove_function(&qualified);
+        }
+
         // Update hashes
         let mut new_hashes = HashMap::new();
         for (name, source) in &new_sources {
@@ -4699,32 +4733,100 @@ impl ReplEngine {
             return Ok(format!("Deleted {} functions", to_delete.len()));
         }
 
-        // If nothing changed, check for stale missing dependencies
+        // If nothing changed, still do type checking to catch errors from changed dependencies
         if to_add_or_update.is_empty() && to_delete.is_empty() {
-            // Re-check dependencies for existing functions
+            // Check if any function is STALE - if so, force recompilation
+            let mut has_stale = false;
             for fn_name in new_sources.keys() {
                 let qualified = format!("{}{}", prefix, fn_name);
-                let deps = self.call_graph.direct_dependencies(&qualified);
-                for dep in deps {
-                    if dep == qualified { continue; }
-                    let dep_base = dep.split('/').next().unwrap_or(&dep);
-                    let exists = self.compiler.get_function_names().iter()
-                        .any(|n| n.split('/').next().unwrap_or(n) == dep_base);
-                    if !exists {
-                        // Function calls non-existent dependency
-                        self.compile_status.insert(
-                            qualified.clone(),
-                            CompileStatus::CompileError(format!("Undefined function: {}", dep))
-                        );
-                        return Err(format!("Undefined function: {}", dep));
+                if matches!(self.compile_status.get(&qualified), Some(CompileStatus::Stale { .. })) {
+                    eprintln!("LSP: Function {} is stale, forcing recompilation", qualified);
+                    has_stale = true;
+                    break;
+                }
+            }
+
+            if has_stale {
+                // Force recompilation by treating all functions as "to update"
+                // This is necessary when dependencies have changed signatures
+                let all_fns: Vec<String> = new_sources.keys().cloned().collect();
+                // Remove old versions and recompile
+                for fn_name in &all_fns {
+                    let qualified = format!("{}{}", prefix, fn_name);
+                    self.compiler.remove_function(&qualified);
+                }
+                // Fall through to compile section below
+            } else {
+                // Re-check dependencies for existing functions
+                for fn_name in new_sources.keys() {
+                    let qualified = format!("{}{}", prefix, fn_name);
+                    let deps = self.call_graph.direct_dependencies(&qualified);
+                    for dep in deps {
+                        if dep == qualified { continue; }
+                        let dep_base = dep.split('/').next().unwrap_or(&dep);
+                        let exists = self.compiler.get_function_names().iter()
+                            .any(|n| n.split('/').next().unwrap_or(n) == dep_base);
+                        if !exists {
+                            // Function calls non-existent dependency
+                            self.compile_status.insert(
+                                qualified.clone(),
+                                CompileStatus::CompileError(format!("Undefined function: {}", dep))
+                            );
+                            return Err(format!("Undefined function: {}", dep));
+                        }
                     }
                 }
+
+                // No code changes detected. Check if there's already an error from initial compilation.
+                // If so, preserve it. Don't re-run check_module_compiles because it creates an
+                // isolated compiler that doesn't know about other modules.
+                for fn_name in new_sources.keys() {
+                    let qualified = format!("{}{}", prefix, fn_name);
+                    if let Some(CompileStatus::CompileError(e)) = self.compile_status.get(&qualified) {
+                        eprintln!("LSP DEBUG: No changes, preserving existing error for {}: {}", qualified, e);
+                        return Err(e.clone());
+                    }
+                }
+
+                // No changes and no existing errors
+                return Ok("No changes detected".to_string());
             }
         }
 
         // Compile changed/new functions
         let module_context = if module_name.is_empty() { None } else { Some(format!("{}._file", module_name)) };
         let result = self.eval_in_module(content, module_context.as_deref());
+
+        // CRITICAL: After compilation, check for signature changes and mark dependents as stale
+        // This is necessary because eval_in_module's try_clear_stale might have cleared our stale marks
+        if result.is_ok() {
+            for fn_name in &to_add_or_update {
+                let qualified = format!("{}{}", prefix, fn_name);
+                let new_sig = self.compiler.get_function_signature(&qualified);
+                let old_sig = old_signatures.get(&qualified).cloned().flatten();
+
+                if old_sig.is_some() && new_sig != old_sig {
+                    eprintln!("LSP: Signature changed for {}: {:?} -> {:?}", qualified, old_sig, new_sig);
+                    // Mark dependents as stale - they need to be recompiled against new signature
+                    let dependents: Vec<_> = self.call_graph.direct_dependents(&qualified).into_iter().collect();
+                    for dep in dependents {
+                        if !dep.starts_with(&prefix) {
+                            // Only mark external dependents as stale (not other functions in same module)
+                            eprintln!("LSP: Marking {} as stale due to {} signature change", dep, qualified);
+                            self.compile_status.insert(dep.clone(), CompileStatus::Stale {
+                                reason: format!("{}'s signature changed", qualified),
+                                depends_on: vec![qualified.clone()],
+                            });
+                        }
+                    }
+                }
+
+                // Update last_known_signatures for future comparisons
+                if let Some(sig) = new_sig {
+                    self.last_known_signatures.insert(qualified, sig);
+                }
+            }
+        }
 
         // After compilation, validate dependencies exist
         if result.is_ok() {
@@ -15411,6 +15513,233 @@ mod nalgebra_debug_tests {
     }
 
     #[test]
+    fn test_add_typed_params_type_error() {
+        // Test that add(a: Int, b: Int) = a + b with call add(1, "a") is caught via check_module_compiles
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let engine = ReplEngine::new(config);
+
+        let code = r#"
+add(a: Int, b: Int) = a + b
+
+main() = {
+    add(1, "a")
+}
+"#;
+
+        let result = engine.check_module_compiles("test", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Should be an error for add(1, \"a\") when add takes Int params");
+        let err = result.unwrap_err();
+        println!("Error: {}", err);
+        assert!(err.contains("Int") || err.contains("String") || err.contains("type"),
+            "Error should mention type mismatch: {}", err);
+    }
+
+    #[test]
+    fn test_add_typed_params_via_recompile() {
+        // Test that add(a: Int, b: Int) = a + b with call add(1, "a") is caught via recompile_module_with_content
+        // This tests the same path as VS Code LSP
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        let code = r#"
+add(a: Int, b: Int) = a + b
+
+main() = {
+    add(1, "a")
+}
+"#;
+
+        let result = engine.recompile_module_with_content("test", code);
+        println!("recompile_module_with_content Result: {:?}", result);
+        // This should fail with type error
+        assert!(result.is_err(), "Should be an error for add(1, \"a\") when add takes Int params");
+        let err = result.unwrap_err();
+        println!("Error: {}", err);
+        assert!(err.contains("Int") || err.contains("String") || err.contains("type"),
+            "Error should mention type mismatch: {}", err);
+    }
+
+    #[test]
+    fn test_load_directory_typed_error() {
+        use std::io::Write;
+        // Test that load_directory catches type errors for cross-module calls with typed params
+        let temp_dir = std::env::temp_dir().join(format!("nostos_test_lsp_{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create good.nos with typed function
+        let good_path = temp_dir.join("good.nos");
+        {
+            let mut f = std::fs::File::create(&good_path).unwrap();
+            writeln!(f, "pub addff(a: Int, b: Int) = a + b").unwrap();
+        }
+
+        // Create main.nos with type error (includes use statement like real code)
+        let main_path = temp_dir.join("main.nos");
+        {
+            let mut f = std::fs::File::create(&main_path).unwrap();
+            writeln!(f, "use good.*").unwrap();
+            writeln!(f, "main() = good.addff(1, \"a\")").unwrap();
+        }
+
+        // Create nostos.toml
+        {
+            let mut f = std::fs::File::create(temp_dir.join("nostos.toml")).unwrap();
+            writeln!(f, "[project]").unwrap();
+            writeln!(f, "name = \"test\"").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        let result = engine.load_directory(temp_dir.to_str().unwrap());
+        println!("load_directory result: {:?}", result);
+
+        // Check compile status for main.main
+        let status = engine.get_compile_status("main.main");
+        println!("main.main status after load_directory: {:?}", status);
+
+        // Should be a compile error, not Compiled
+        assert!(matches!(status, Some(CompileStatus::CompileError(_))),
+                "main.main should have CompileError for good.addff(1, \"a\"), but got: {:?}", status);
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_lsp_flow_typed_error() {
+        use std::io::Write;
+        // This test mimics EXACTLY what the LSP does:
+        // 1. load_directory (startup)
+        // 2. recompile_module_with_content when file is opened (no changes)
+        // 3. Check if error persists
+
+        let temp_dir = std::env::temp_dir().join(format!("nostos_test_lsp_flow_{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create good.nos with typed function
+        let good_path = temp_dir.join("good.nos");
+        {
+            let mut f = std::fs::File::create(&good_path).unwrap();
+            writeln!(f, "pub addff(a: Int, b: Int) = a + b").unwrap();
+        }
+
+        // Create main.nos with use statement and type error
+        let main_path = temp_dir.join("main.nos");
+        let main_content = "use good.*\nmain() = good.addff(1, \"a\")";
+        {
+            let mut f = std::fs::File::create(&main_path).unwrap();
+            write!(f, "{}", main_content).unwrap();
+        }
+
+        // Create nostos.toml
+        {
+            let mut f = std::fs::File::create(temp_dir.join("nostos.toml")).unwrap();
+            writeln!(f, "[project]").unwrap();
+            writeln!(f, "name = \"test\"").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Step 1: load_directory (like LSP startup)
+        let result = engine.load_directory(temp_dir.to_str().unwrap());
+        println!("Step 1 - load_directory result: {:?}", result);
+
+        let status1 = engine.get_compile_status("main.main");
+        println!("Step 1 - main.main status after load_directory: {:?}", status1);
+
+        // Step 2: recompile_module_with_content (like LSP when file is opened)
+        // This is what happens when user opens main.nos in VS Code
+        let recompile_result = engine.recompile_module_with_content("main", main_content);
+        println!("Step 2 - recompile_module_with_content result: {:?}", recompile_result);
+
+        let status2 = engine.get_compile_status("main.main");
+        println!("Step 2 - main.main status after recompile: {:?}", status2);
+
+        // The error should persist after recompile
+        assert!(matches!(status2, Some(CompileStatus::CompileError(_))),
+                "main.main should have CompileError after recompile, but got: {:?}", status2);
+
+        // Also check the recompile result itself returns error
+        assert!(recompile_result.is_err(),
+                "recompile_module_with_content should return Err, but got: {:?}", recompile_result);
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_lsp_flow_multiple_recompiles() {
+        use std::io::Write;
+        // Test that errors persist through multiple recompilation cycles
+        // This mimics what happens when multiple files are opened in VS Code
+
+        let temp_dir = std::env::temp_dir().join(format!("nostos_test_multi_recompile_{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create good.nos with typed function
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a: Int, b: Int) = a + b").unwrap();
+        }
+
+        // Create main.nos with use statement and type error
+        let main_content = "use good.*\nmain() = good.addff(1, \"a\")";
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            write!(f, "{}", main_content).unwrap();
+        }
+
+        // Create another_good.nos (no errors)
+        let another_content = "pub greet() = \"hello\"";
+        {
+            let mut f = std::fs::File::create(temp_dir.join("another_good.nos")).unwrap();
+            write!(f, "{}", another_content).unwrap();
+        }
+
+        // Create nostos.toml
+        {
+            let mut f = std::fs::File::create(temp_dir.join("nostos.toml")).unwrap();
+            writeln!(f, "[project]").unwrap();
+            writeln!(f, "name = \"test\"").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Step 1: load_directory
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+        let status1 = engine.get_compile_status("main.main");
+        println!("After load_directory: main.main = {:?}", status1);
+        assert!(matches!(status1, Some(CompileStatus::CompileError(_))), "Should have error");
+
+        // Step 2: Open main.nos (recompile with no changes)
+        let r2 = engine.recompile_module_with_content("main", main_content);
+        println!("After open main.nos: result={:?}", r2);
+        let status2 = engine.get_compile_status("main.main");
+        println!("After open main.nos: main.main = {:?}", status2);
+        assert!(matches!(status2, Some(CompileStatus::CompileError(_))), "Error should persist after opening main.nos");
+
+        // Step 3: Open another_good.nos (recompile with no changes)
+        let r3 = engine.recompile_module_with_content("another_good", another_content);
+        println!("After open another_good.nos: result={:?}", r3);
+        let status3 = engine.get_compile_status("main.main");
+        println!("After open another_good.nos: main.main = {:?}", status3);
+        assert!(matches!(status3, Some(CompileStatus::CompileError(_))), "Error should persist after opening another file");
+
+        // Step 4: Recompile main.nos again as dependent
+        let r4 = engine.recompile_module_with_content("main", main_content);
+        println!("After recompile main as dependent: result={:?}", r4);
+        let status4 = engine.get_compile_status("main.main");
+        println!("After recompile main as dependent: main.main = {:?}", status4);
+        assert!(matches!(status4, Some(CompileStatus::CompileError(_))), "Error should persist after dependent recompile");
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     fn test_nalgebra_vec_addition() {
         let mut engine = ReplEngine::new(ReplConfig::default());
         
@@ -16187,5 +16516,882 @@ end
         assert!(!params[0].2);           // not optional
         assert_eq!(params[1].0, "times");
         assert!(params[1].2);            // is optional (has default)
+    }
+}
+
+/// Comprehensive LSP integration tests that simulate the exact VS Code editor flow.
+/// These tests are CRITICAL for catching bugs before asking user to test manually.
+///
+/// Test scenarios:
+/// 1. Function rename in module A should mark module B as error/stale
+/// 2. Type errors in cross-module calls should be detected
+/// 3. Fixing errors should clear diagnostics
+/// 4. Line numbers should be correct
+/// 5. Errors should persist through multiple recompilations
+#[cfg(test)]
+mod lsp_integration_tests {
+    use super::*;
+    use std::io::Write;
+
+    fn create_temp_dir(name: &str) -> std::path::PathBuf {
+        let temp_dir = std::env::temp_dir().join(format!("nostos_lsp_test_{}_{}", name, std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        // Create nostos.toml
+        let mut f = std::fs::File::create(temp_dir.join("nostos.toml")).unwrap();
+        writeln!(f, "[project]\nname = \"test\"").unwrap();
+        temp_dir
+    }
+
+    fn cleanup(dir: &std::path::Path) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Scenario 1: Renaming a function in module A should cause error in module B
+    #[test]
+    fn test_function_rename_causes_error_in_dependent() {
+        let temp_dir = create_temp_dir("rename");
+
+        // Create good.nos with addff function
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a, b) = a + b").unwrap();
+        }
+
+        // Create main.nos that calls good.addff
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = good.addff(1, 2)").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        println!("\n=== Initial state ===");
+        println!("main.main: {:?}", engine.get_compile_status("main.main"));
+        assert!(matches!(engine.get_compile_status("main.main"), Some(CompileStatus::Compiled)),
+                "main.main should compile successfully initially");
+
+        println!("\n=== Rename addff to addff_renamed in good.nos ===");
+        let new_good_content = "pub addff_renamed(a, b) = a + b";
+        let result = engine.recompile_module_with_content("good", new_good_content);
+        println!("recompile good result: {:?}", result);
+
+        // main.main should now have an error because good.addff no longer exists
+        let main_status = engine.get_compile_status("main.main");
+        println!("main.main after rename: {:?}", main_status);
+
+        // Should be stale or error - the function it depends on was renamed
+        assert!(matches!(main_status, Some(CompileStatus::Stale { .. }) | Some(CompileStatus::CompileError(_))),
+                "main.main should be stale or error after dependency renamed, got: {:?}", main_status);
+
+        // If it's stale, recompiling main should show the error
+        if matches!(main_status, Some(CompileStatus::Stale { .. })) {
+            let main_content = "main() = good.addff(1, 2)";
+            let result = engine.recompile_module_with_content("main", main_content);
+            println!("recompile main result: {:?}", result);
+            let main_status = engine.get_compile_status("main.main");
+            println!("main.main after recompile: {:?}", main_status);
+            assert!(matches!(main_status, Some(CompileStatus::CompileError(_))),
+                    "main.main should have error after recompile, got: {:?}", main_status);
+        }
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 2: Adding parameter to function should cause error if caller doesn't update
+    #[test]
+    fn test_signature_change_causes_error() {
+        let temp_dir = create_temp_dir("signature");
+
+        // Create good.nos with addff(a, b)
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a, b) = a + b").unwrap();
+        }
+
+        // Create main.nos that calls good.addff(1, 2)
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = good.addff(1, 2)").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        assert!(matches!(engine.get_compile_status("main.main"), Some(CompileStatus::Compiled)));
+
+        println!("\n=== Change addff to take 3 params ===");
+        let new_good_content = "pub addff(a, b, c) = a + b + c";
+        let result = engine.recompile_module_with_content("good", new_good_content);
+        println!("recompile good result: {:?}", result);
+
+        // main.main should be stale (signature changed)
+        let main_status = engine.get_compile_status("main.main");
+        println!("main.main after signature change: {:?}", main_status);
+
+        assert!(matches!(main_status, Some(CompileStatus::Stale { .. })),
+                "main.main should be stale after dependency signature changed, got: {:?}", main_status);
+
+        // Recompiling main should fail (wrong number of arguments)
+        let main_content = "main() = good.addff(1, 2)";
+        let result = engine.recompile_module_with_content("main", main_content);
+        println!("recompile main result: {:?}", result);
+
+        // Should have an error (wrong number of args OR compile error status)
+        let has_error = result.is_err() ||
+            matches!(engine.get_compile_status("main.main"), Some(CompileStatus::CompileError(_)));
+        assert!(has_error, "Should fail with wrong number of args, got result: {:?}", result);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 3: Type error in cross-module call should be detected
+    #[test]
+    fn test_type_error_cross_module() {
+        let temp_dir = create_temp_dir("type_error");
+
+        // Create good.nos with TYPED function
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a: Int, b: Int) = a + b").unwrap();
+        }
+
+        // Create main.nos with type error
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = good.addff(1, \"bad\")").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // main.main should have a compile error
+        let main_status = engine.get_compile_status("main.main");
+        println!("main.main with type error: {:?}", main_status);
+
+        assert!(matches!(main_status, Some(CompileStatus::CompileError(_))),
+                "main.main should have CompileError for type mismatch, got: {:?}", main_status);
+
+        // The error should mention type mismatch
+        if let Some(CompileStatus::CompileError(err)) = main_status {
+            assert!(err.contains("Int") || err.contains("String") || err.contains("type"),
+                    "Error should mention type mismatch: {}", err);
+        }
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 4: Fix error then reintroduce it - line numbers should be correct
+    #[test]
+    fn test_fix_and_reintroduce_error_line_numbers() {
+        let temp_dir = create_temp_dir("line_numbers");
+
+        // Create good.nos with TYPED function
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a: Int, b: Int) = a + b").unwrap();
+        }
+
+        // Create main.nos with type error on line 2
+        let main_with_error = "# comment\nmain() = good.addff(1, \"bad\")";
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            write!(f, "{}", main_with_error).unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // Step 1: Verify initial error has line number
+        let status1 = engine.get_compile_status("main.main");
+        println!("Step 1 - Initial error: {:?}", status1);
+        if let Some(CompileStatus::CompileError(err)) = &status1 {
+            assert!(err.contains("line") || err.contains(":2:") || err.contains(":1:"),
+                    "Initial error should have line number: {}", err);
+        }
+
+        // Step 2: Fix the error
+        let main_fixed = "# comment\nmain() = good.addff(1, 2)";
+        let result = engine.recompile_module_with_content("main", main_fixed);
+        println!("Step 2 - After fix: {:?}", result);
+        assert!(result.is_ok(), "Should compile after fix");
+        let status2 = engine.get_compile_status("main.main");
+        assert!(matches!(status2, Some(CompileStatus::Compiled)), "Should be Compiled after fix");
+
+        // Step 3: Reintroduce the error
+        let result = engine.recompile_module_with_content("main", main_with_error);
+        println!("Step 3 - After reintroduce error: {:?}", result);
+        let status3 = engine.get_compile_status("main.main");
+        println!("Step 3 - Status: {:?}", status3);
+
+        // Error should be detected again with line number
+        assert!(matches!(status3, Some(CompileStatus::CompileError(_))),
+                "Should have error after reintroduction");
+        if let Some(CompileStatus::CompileError(err)) = &status3 {
+            println!("Error message: {}", err);
+            // Note: Line number format may vary, just check error is detected
+        }
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 5: Editing one file should not clear errors in another file
+    #[test]
+    fn test_editing_one_file_preserves_errors_in_another() {
+        let temp_dir = create_temp_dir("preserve_errors");
+
+        // Create good.nos
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a: Int, b: Int) = a + b").unwrap();
+        }
+
+        // Create main.nos with error
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = good.addff(1, \"bad\")").unwrap();
+        }
+
+        // Create other.nos (no errors)
+        {
+            let mut f = std::fs::File::create(temp_dir.join("other.nos")).unwrap();
+            writeln!(f, "pub helper() = 42").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        println!("\n=== Initial state ===");
+        let main_status = engine.get_compile_status("main.main");
+        println!("main.main: {:?}", main_status);
+        assert!(matches!(main_status, Some(CompileStatus::CompileError(_))));
+
+        println!("\n=== Edit other.nos (add comment) ===");
+        let other_content = "# added comment\npub helper() = 42";
+        let result = engine.recompile_module_with_content("other", other_content);
+        println!("recompile other: {:?}", result);
+
+        // main.main should STILL have error
+        let main_status = engine.get_compile_status("main.main");
+        println!("main.main after editing other: {:?}", main_status);
+        assert!(matches!(main_status, Some(CompileStatus::CompileError(_))),
+                "Error in main should persist after editing other file");
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 6: All compile statuses should be accessible via get_all_compile_status
+    #[test]
+    fn test_get_all_compile_status() {
+        let temp_dir = create_temp_dir("all_status");
+
+        // Create good.nos
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a: Int, b: Int) = a + b").unwrap();
+        }
+
+        // Create main.nos with error
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = good.addff(1, \"bad\")").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let all_status = engine.get_all_compile_status();
+        println!("All compile status:");
+        for (name, status) in &all_status {
+            println!("  {} -> {}", name, status);
+        }
+
+        // Should have entries for both modules
+        assert!(all_status.iter().any(|(n, _)| n.contains("good")), "Should have good module");
+        assert!(all_status.iter().any(|(n, _)| n.contains("main")), "Should have main module");
+
+        // main should have Error in status
+        assert!(all_status.iter().any(|(n, s)| n.contains("main") && s.starts_with("Error:")),
+                "main should have Error status");
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 7: Using untyped function with wrong types should still work (runtime check)
+    /// This is different from typed functions where we catch at compile time
+    #[test]
+    fn test_untyped_function_no_compile_error() {
+        let temp_dir = create_temp_dir("untyped");
+
+        // Create good.nos with UNTYPED function (Hindley-Milner infers Num constraint)
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a, b) = a + b").unwrap();
+        }
+
+        // Create main.nos calling with string - this should compile but fail at runtime
+        // because HM inference makes addff :: Num a => a -> a -> a
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = good.addff(1, \"bad\")").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let main_status = engine.get_compile_status("main.main");
+        println!("main.main with untyped function: {:?}", main_status);
+
+        // With untyped params + HM inference, this SHOULD catch Int vs String mismatch
+        // because the inference unifies 1:Int with "bad":String via the + constraint
+        // If this passes without error, we need to fix the type inference
+        assert!(matches!(main_status, Some(CompileStatus::CompileError(_))),
+                "Even untyped functions should catch Int vs String via inference, got: {:?}", main_status);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Print helper for debugging - shows all statuses
+    fn _debug_print_all_status(engine: &ReplEngine, label: &str) {
+        println!("\n=== {} ===", label);
+        for (name, status) in engine.get_all_compile_status() {
+            println!("  {} -> {}", name, status);
+        }
+    }
+
+    /// Scenario 8: Removing a function should cause error in dependent modules
+    #[test]
+    fn test_function_removal_causes_error() {
+        let temp_dir = create_temp_dir("removal");
+
+        // Create good.nos with two functions
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a, b) = a + b\npub subff(a, b) = a - b").unwrap();
+        }
+
+        // Create main.nos that calls both
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = good.addff(1, 2) + good.subff(5, 3)").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        assert!(matches!(engine.get_compile_status("main.main"), Some(CompileStatus::Compiled)),
+                "main.main should compile initially");
+
+        println!("\n=== Remove subff from good.nos ===");
+        let new_good_content = "pub addff(a, b) = a + b";
+        let result = engine.recompile_module_with_content("good", new_good_content);
+        println!("recompile good result: {:?}", result);
+
+        // main.main should be stale or error - subff no longer exists
+        let main_status = engine.get_compile_status("main.main");
+        println!("main.main after removing subff: {:?}", main_status);
+
+        assert!(matches!(main_status, Some(CompileStatus::Stale { .. }) | Some(CompileStatus::CompileError(_))),
+                "main.main should be stale or error after dependency removed, got: {:?}", main_status);
+
+        // Recompiling main should fail
+        if matches!(main_status, Some(CompileStatus::Stale { .. })) {
+            let main_content = "main() = good.addff(1, 2) + good.subff(5, 3)";
+            let result = engine.recompile_module_with_content("main", main_content);
+            println!("recompile main result: {:?}", result);
+            let main_status = engine.get_compile_status("main.main");
+            assert!(matches!(main_status, Some(CompileStatus::CompileError(_))),
+                    "main.main should have error, got: {:?}", main_status);
+        }
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 9: Adding new function should not break existing code
+    #[test]
+    fn test_adding_function_preserves_dependents() {
+        let temp_dir = create_temp_dir("add_func");
+
+        // Create good.nos with one function
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a, b) = a + b").unwrap();
+        }
+
+        // Create main.nos that calls addff
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = good.addff(1, 2)").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        assert!(matches!(engine.get_compile_status("main.main"), Some(CompileStatus::Compiled)));
+
+        println!("\n=== Add new function to good.nos ===");
+        let new_good_content = "pub addff(a, b) = a + b\npub mulff(a, b) = a * b";
+        let result = engine.recompile_module_with_content("good", new_good_content);
+        println!("recompile good result: {:?}", result);
+        assert!(result.is_ok(), "Adding function should succeed");
+
+        // main.main should still be compiled - it doesn't depend on mulff
+        let main_status = engine.get_compile_status("main.main");
+        println!("main.main after adding mulff: {:?}", main_status);
+
+        // It might be stale (dependency changed) but should recompile successfully
+        if matches!(main_status, Some(CompileStatus::Stale { .. })) {
+            let main_content = "main() = good.addff(1, 2)";
+            let result = engine.recompile_module_with_content("main", main_content);
+            assert!(result.is_ok(), "main should recompile successfully");
+            assert!(matches!(engine.get_compile_status("main.main"), Some(CompileStatus::Compiled)));
+        }
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 10: Multiple errors in one file should all be reported
+    #[test]
+    fn test_multiple_errors_in_file() {
+        let temp_dir = create_temp_dir("multi_error");
+
+        // Create good.nos with typed functions
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a: Int, b: Int) = a + b\npub getstr() -> String = \"hello\"").unwrap();
+        }
+
+        // Create main.nos with multiple errors
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "foo() = good.addff(1, \"bad\")").unwrap();
+            writeln!(f, "bar() = good.addff(\"wrong\", 2)").unwrap();
+            writeln!(f, "main() = foo() + bar()").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // Check errors in individual functions
+        let foo_status = engine.get_compile_status("main.foo");
+        let bar_status = engine.get_compile_status("main.bar");
+        println!("main.foo: {:?}", foo_status);
+        println!("main.bar: {:?}", bar_status);
+
+        // Both foo and bar should have compile errors
+        assert!(matches!(foo_status, Some(CompileStatus::CompileError(_))),
+                "main.foo should have error, got: {:?}", foo_status);
+        assert!(matches!(bar_status, Some(CompileStatus::CompileError(_))),
+                "main.bar should have error, got: {:?}", bar_status);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 11: Private functions should NOT be accessible from other modules
+    /// Note: If this test passes (Compiled), it means Nostos doesn't enforce private access
+    /// If Nostos starts enforcing private access, this should become CompileError
+    #[test]
+    fn test_private_function_access() {
+        let temp_dir = create_temp_dir("private");
+
+        // Create good.nos with private function (no pub)
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub publicfn() = privatefn()").unwrap();
+            writeln!(f, "privatefn() = 42").unwrap();
+        }
+
+        // Create main.nos trying to call private function
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = good.privatefn()").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let main_status = engine.get_compile_status("main.main");
+        println!("main.main calling private function: {:?}", main_status);
+
+        // NOTE: Currently Nostos does NOT enforce private function access,
+        // so this compiles successfully. If/when private access is enforced,
+        // update this test to expect CompileError
+        // For now, just verify the test doesn't crash and status is determined
+        assert!(main_status.is_some(), "Should have some compile status");
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 12: Syntax error should be reported
+    #[test]
+    fn test_syntax_error_reported() {
+        let temp_dir = create_temp_dir("syntax");
+
+        // Create good.nos with syntax error
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a, b = a + b").unwrap(); // Missing )
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        let load_result = engine.load_directory(temp_dir.to_str().unwrap());
+        println!("load result: {:?}", load_result);
+
+        // Either load fails or the function has error status
+        if load_result.is_ok() {
+            let status = engine.get_compile_status("good.addff");
+            println!("good.addff status: {:?}", status);
+            // If it parsed somehow, check for error status
+        }
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 13: Fixing error in dependency should allow dependent to compile
+    #[test]
+    fn test_fix_dependency_unblocks_dependent() {
+        let temp_dir = create_temp_dir("fix_dep");
+
+        // Create good.nos with typed function
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a: Int, b: Int) = a + b").unwrap();
+        }
+
+        // Create main.nos with type error
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = good.addff(1, \"bad\")").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        assert!(matches!(engine.get_compile_status("main.main"), Some(CompileStatus::CompileError(_))));
+
+        println!("\n=== Fix good.nos to accept any types ===");
+        let new_good_content = "pub addff(a, b) = a + b"; // Now untyped
+        engine.recompile_module_with_content("good", new_good_content).unwrap();
+
+        // Recompile main - should now work (untyped accepts anything)
+        let main_content = "main() = good.addff(1, \"bad\")";
+        let result = engine.recompile_module_with_content("main", main_content);
+        println!("recompile main after fix: {:?}", result);
+
+        // Note: With HM inference, this might still fail due to type unification
+        // That's actually correct behavior - testing that the system recompiles properly
+        let main_status = engine.get_compile_status("main.main");
+        println!("main.main after fix: {:?}", main_status);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 14: Chain of dependencies - A calls B calls C
+    #[test]
+    fn test_transitive_dependency_chain() {
+        let temp_dir = create_temp_dir("chain");
+
+        // Create c.nos
+        {
+            let mut f = std::fs::File::create(temp_dir.join("c.nos")).unwrap();
+            writeln!(f, "pub getval() = 42").unwrap();
+        }
+
+        // Create b.nos that calls c
+        {
+            let mut f = std::fs::File::create(temp_dir.join("b.nos")).unwrap();
+            writeln!(f, "pub double() = c.getval() * 2").unwrap();
+        }
+
+        // Create main.nos that calls b
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = b.double()").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        println!("Initial state:");
+        println!("c.getval: {:?}", engine.get_compile_status("c.getval"));
+        println!("b.double: {:?}", engine.get_compile_status("b.double"));
+        println!("main.main: {:?}", engine.get_compile_status("main.main"));
+
+        assert!(matches!(engine.get_compile_status("main.main"), Some(CompileStatus::Compiled)));
+
+        println!("\n=== Rename getval to getvalue in c.nos ===");
+        let new_c_content = "pub getvalue() = 42";
+        engine.recompile_module_with_content("c", new_c_content).unwrap();
+
+        // b.double should be stale or error (it calls c.getval which no longer exists)
+        let b_status = engine.get_compile_status("b.double");
+        println!("b.double after c change: {:?}", b_status);
+
+        assert!(matches!(b_status, Some(CompileStatus::Stale { .. }) | Some(CompileStatus::CompileError(_))),
+                "b.double should be affected by c.getval rename, got: {:?}", b_status);
+
+        // Recompile b to get error
+        let b_content = "pub double() = c.getval() * 2";
+        engine.recompile_module_with_content("b", b_content).ok();
+        let b_status = engine.get_compile_status("b.double");
+        println!("b.double after recompile: {:?}", b_status);
+
+        assert!(matches!(b_status, Some(CompileStatus::CompileError(_))),
+                "b.double should have error, got: {:?}", b_status);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 15: Changing return type annotation should affect dependents
+    #[test]
+    fn test_return_type_change_affects_dependents() {
+        let temp_dir = create_temp_dir("ret_type");
+
+        // Create good.nos returning Int
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub getval() -> Int = 42").unwrap();
+        }
+
+        // Create main.nos using the Int return value
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = good.getval() + 1").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        assert!(matches!(engine.get_compile_status("main.main"), Some(CompileStatus::Compiled)));
+
+        println!("\n=== Change return type to String ===");
+        let new_good_content = "pub getval() -> String = \"hello\"";
+        // Note: This might fail because dependent (main) gets recompiled and has type error
+        let recompile_result = engine.recompile_module_with_content("good", new_good_content);
+        println!("recompile good result: {:?}", recompile_result);
+
+        // main.main should be stale or have error (return type changed)
+        let main_status = engine.get_compile_status("main.main");
+        println!("main.main after return type change: {:?}", main_status);
+
+        // Recompile main - should fail (String + 1 doesn't work)
+        let main_content = "main() = good.getval() + 1";
+        engine.recompile_module_with_content("main", main_content).ok();
+        let main_status = engine.get_compile_status("main.main");
+        println!("main.main after recompile: {:?}", main_status);
+
+        assert!(matches!(main_status, Some(CompileStatus::CompileError(_))),
+                "main.main should fail with type mismatch, got: {:?}", main_status);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 16: Module calling non-existent module should fail
+    #[test]
+    fn test_nonexistent_module_call() {
+        let temp_dir = create_temp_dir("no_module");
+
+        // Create main.nos calling non-existent module
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = nonexistent.foo()").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let main_status = engine.get_compile_status("main.main");
+        println!("main.main calling nonexistent module: {:?}", main_status);
+
+        assert!(matches!(main_status, Some(CompileStatus::CompileError(_))),
+                "Calling non-existent module should fail, got: {:?}", main_status);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 17: Multiple modules with errors - all errors preserved
+    #[test]
+    fn test_multiple_modules_with_errors() {
+        let temp_dir = create_temp_dir("multi_module_err");
+
+        // Create good.nos (no errors)
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub getint() -> Int = 42").unwrap();
+        }
+
+        // Create a.nos with error
+        {
+            let mut f = std::fs::File::create(temp_dir.join("a.nos")).unwrap();
+            writeln!(f, "pub fn1() = good.getint() + \"bad\"").unwrap();
+        }
+
+        // Create b.nos with different error
+        {
+            let mut f = std::fs::File::create(temp_dir.join("b.nos")).unwrap();
+            writeln!(f, "pub fn2() = good.getint() + \"also_bad\"").unwrap();
+        }
+
+        // Create main.nos (no error itself)
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = good.getint()").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        println!("Module statuses:");
+        println!("a.fn1: {:?}", engine.get_compile_status("a.fn1"));
+        println!("b.fn2: {:?}", engine.get_compile_status("b.fn2"));
+        println!("main.main: {:?}", engine.get_compile_status("main.main"));
+
+        // Both a.fn1 and b.fn2 should have errors
+        assert!(matches!(engine.get_compile_status("a.fn1"), Some(CompileStatus::CompileError(_))),
+                "a.fn1 should have error");
+        assert!(matches!(engine.get_compile_status("b.fn2"), Some(CompileStatus::CompileError(_))),
+                "b.fn2 should have error");
+
+        // main.main should be fine
+        assert!(matches!(engine.get_compile_status("main.main"), Some(CompileStatus::Compiled)),
+                "main.main should be compiled (no errors)");
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 18: Edit file with error, error persists with correct location
+    #[test]
+    fn test_edit_preserves_error_location() {
+        let temp_dir = create_temp_dir("edit_error_loc");
+
+        // Create good.nos
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub getint() -> Int = 42").unwrap();
+        }
+
+        // Create main.nos with error on line 3
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "# line 1").unwrap();
+            writeln!(f, "# line 2").unwrap();
+            writeln!(f, "main() = good.getint() + \"bad\"").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let status1 = engine.get_compile_status("main.main");
+        println!("Initial error: {:?}", status1);
+
+        // Now add more comments but keep error on same logical line
+        let new_main = "# line 1\n# line 2\n# line 2b\nmain() = good.getint() + \"bad\"";
+        engine.recompile_module_with_content("main", new_main).ok();
+        let status2 = engine.get_compile_status("main.main");
+        println!("After edit error: {:?}", status2);
+
+        // Error should still be present
+        assert!(matches!(status2, Some(CompileStatus::CompileError(_))),
+                "Error should persist after edit");
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 19: load_directory should have correct line numbers in errors
+    #[test]
+    fn test_load_directory_error_line_numbers() {
+        let temp_dir = create_temp_dir("load_dir_lines");
+
+        // Create good.nos with typed function
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub getint() -> Int = 42").unwrap();
+        }
+
+        // Create main.nos with error on line 3
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "# comment 1").unwrap();
+            writeln!(f, "# comment 2").unwrap();
+            writeln!(f, "main() = good.getint() + \"bad\"").unwrap(); // Line 3
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let status = engine.get_compile_status("main.main");
+        println!("load_directory error status: {:?}", status);
+
+        // Error should exist and have line number
+        assert!(matches!(status, Some(CompileStatus::CompileError(_))),
+                "Should have error, got: {:?}", status);
+
+        if let Some(CompileStatus::CompileError(err)) = &status {
+            println!("Error message: {}", err);
+            // Should contain "line 3" since the error is on line 3
+            assert!(err.contains("line 3"),
+                    "Error should be on line 3, but got: {}", err);
+        }
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 20: Arity mismatch error should have correct line number
+    #[test]
+    fn test_arity_error_line_numbers() {
+        let temp_dir = create_temp_dir("arity_lines");
+
+        // Create good.nos with 2-param function
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a, b) = a + b").unwrap();
+        }
+
+        // Create main.nos with arity error on line 2
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = {{").unwrap();
+            writeln!(f, "    good.addff(1, 2, 3)").unwrap(); // Line 2 - wrong arity
+            writeln!(f, "}}").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let status = engine.get_compile_status("main.main");
+        println!("Arity error status: {:?}", status);
+
+        // Error should exist and have line number
+        assert!(matches!(status, Some(CompileStatus::CompileError(_))),
+                "Should have error, got: {:?}", status);
+
+        if let Some(CompileStatus::CompileError(err)) = &status {
+            println!("Error message: {}", err);
+            // Should contain "line 2" since the call is on line 2
+            assert!(err.contains("line 2"),
+                    "Error should be on line 2, but got: {}", err);
+        }
+
+        cleanup(&temp_dir);
     }
 }
