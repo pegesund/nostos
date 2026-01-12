@@ -179,6 +179,9 @@ pub struct ReplEngine {
     compile_status: HashMap<String, CompileStatus>,
     /// Last known good signature for each function (for detecting signature changes after error fix)
     last_known_signatures: HashMap<String, String>,
+    /// Function source hashes per module: module_name -> (function_name -> source_hash)
+    /// Used to detect which functions actually changed when recompiling a module
+    module_function_hashes: HashMap<String, HashMap<String, u64>>,
     /// Receiver for inspect() calls from VM
     inspect_receiver: Option<InspectReceiver>,
     /// Receiver for output (println) from all VM processes
@@ -719,6 +722,7 @@ impl ReplEngine {
             single_file_path: None,
             compile_status: HashMap::new(),
             last_known_signatures: HashMap::new(),
+            module_function_hashes: HashMap::new(),
             inspect_receiver,
             output_receiver,
             panel_receiver,
@@ -3969,6 +3973,15 @@ impl ReplEngine {
                 }
 
                 // Update call graph with function dependencies
+                // Also populate module_function_hashes for LSP rename detection
+                let module_name = components.join(".");
+                let new_sources = Self::extract_function_sources(&source, &module);
+                let mut module_hashes = HashMap::new();
+                for (fn_name, fn_source) in &new_sources {
+                    module_hashes.insert(fn_name.clone(), Self::hash_source(fn_source));
+                }
+                self.module_function_hashes.insert(module_name, module_hashes);
+
                 for fn_def in Self::get_fn_defs(&module) {
                     let fn_name = fn_def.name.node.clone();
                     let qualified_name = format!("{}{}", prefix, fn_name);
@@ -4567,6 +4580,175 @@ impl ReplEngine {
             };
             (k.clone(), status_str)
         }).collect()
+    }
+
+    /// Get all compile status entries with full CompileStatus (for LSP)
+    pub fn get_all_compile_status_detailed(&self) -> Vec<(String, CompileStatus)> {
+        self.compile_status.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    }
+
+    /// Get source file paths for all modules (for LSP)
+    pub fn get_module_source_paths(&self) -> Vec<String> {
+        self.module_sources.values()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect()
+    }
+
+    /// Compute a hash of a string (for function source comparison)
+    fn hash_source(source: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        let mut hasher = DefaultHasher::new();
+        // Normalize whitespace for comparison
+        let normalized: String = source.split_whitespace().collect::<Vec<_>>().join(" ");
+        normalized.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Extract function source texts from parsed module
+    fn extract_function_sources(input: &str, module: &nostos_syntax::Module) -> HashMap<String, String> {
+        let mut sources = HashMap::new();
+        for fn_def in Self::get_fn_defs(module) {
+            let fn_name = fn_def.name.node.clone();
+            let start = fn_def.name.span.start;
+            let end = fn_def.span.end;
+            if end <= input.len() {
+                let source = input[start..end].to_string();
+                sources.insert(fn_name, source);
+            }
+        }
+        sources
+    }
+
+    /// Diff old and new function sources, returning (to_delete, to_add_or_update)
+    fn diff_module_functions(
+        old_hashes: &HashMap<String, u64>,
+        new_sources: &HashMap<String, String>,
+    ) -> (Vec<String>, Vec<String>) {
+        let mut to_delete = Vec::new();
+        let mut to_add_or_update = Vec::new();
+
+        // Find deleted functions
+        for old_name in old_hashes.keys() {
+            if !new_sources.contains_key(old_name) {
+                to_delete.push(old_name.clone());
+            }
+        }
+
+        // Find new or changed functions
+        for (new_name, new_source) in new_sources {
+            let new_hash = Self::hash_source(new_source);
+            match old_hashes.get(new_name) {
+                None => to_add_or_update.push(new_name.clone()),
+                Some(&old_hash) if old_hash != new_hash => to_add_or_update.push(new_name.clone()),
+                _ => {}
+            }
+        }
+
+        (to_delete, to_add_or_update)
+    }
+
+    /// Recompile a module with new content, detecting function additions/deletions/changes
+    /// Returns Ok with description or Err with error message
+    pub fn recompile_module_with_content(&mut self, module_name: &str, content: &str) -> Result<String, String> {
+        use nostos_syntax::parse;
+
+        // Parse the new content
+        let (maybe_module, _errors) = parse(content);
+        let module = match maybe_module {
+            Some(m) => m,
+            None => return Err("Failed to parse module".to_string()),
+        };
+
+        // Extract function sources from new content
+        let new_sources = Self::extract_function_sources(content, &module);
+
+        // Get old hashes for this module
+        let old_hashes = self.module_function_hashes.get(module_name).cloned().unwrap_or_default();
+
+        // Diff to find what changed
+        let (to_delete, to_add_or_update) = Self::diff_module_functions(&old_hashes, &new_sources);
+
+        let prefix = if module_name.is_empty() { String::new() } else { format!("{}.", module_name) };
+
+        // Delete removed functions
+        for fn_name in &to_delete {
+            let qualified = format!("{}{}", prefix, fn_name);
+            eprintln!("LSP: Deleting removed function: {}", qualified);
+            self.compiler.remove_function(&qualified);
+
+            // Mark dependents as stale
+            let dependents: Vec<_> = self.call_graph.direct_dependents(&qualified).into_iter().collect();
+            for dep in dependents {
+                self.compile_status.insert(dep.clone(), CompileStatus::Stale {
+                    reason: format!("{} was deleted", qualified),
+                    depends_on: vec![qualified.clone()],
+                });
+            }
+        }
+
+        // Update hashes
+        let mut new_hashes = HashMap::new();
+        for (name, source) in &new_sources {
+            new_hashes.insert(name.clone(), Self::hash_source(source));
+        }
+        self.module_function_hashes.insert(module_name.to_string(), new_hashes);
+
+        // If only deletions, return early
+        if to_add_or_update.is_empty() && !to_delete.is_empty() {
+            return Ok(format!("Deleted {} functions", to_delete.len()));
+        }
+
+        // If nothing changed, check for stale missing dependencies
+        if to_add_or_update.is_empty() && to_delete.is_empty() {
+            // Re-check dependencies for existing functions
+            for fn_name in new_sources.keys() {
+                let qualified = format!("{}{}", prefix, fn_name);
+                let deps = self.call_graph.direct_dependencies(&qualified);
+                for dep in deps {
+                    if dep == qualified { continue; }
+                    let dep_base = dep.split('/').next().unwrap_or(&dep);
+                    let exists = self.compiler.get_function_names().iter()
+                        .any(|n| n.split('/').next().unwrap_or(n) == dep_base);
+                    if !exists {
+                        // Function calls non-existent dependency
+                        self.compile_status.insert(
+                            qualified.clone(),
+                            CompileStatus::CompileError(format!("Undefined function: {}", dep))
+                        );
+                        return Err(format!("Undefined function: {}", dep));
+                    }
+                }
+            }
+        }
+
+        // Compile changed/new functions
+        let module_context = if module_name.is_empty() { None } else { Some(format!("{}._file", module_name)) };
+        let result = self.eval_in_module(content, module_context.as_deref());
+
+        // After compilation, validate dependencies exist
+        if result.is_ok() {
+            for fn_name in new_sources.keys() {
+                let qualified = format!("{}{}", prefix, fn_name);
+                let deps = self.call_graph.direct_dependencies(&qualified);
+                for dep in deps {
+                    if dep == qualified { continue; }
+                    let dep_base = dep.split('/').next().unwrap_or(&dep);
+                    let exists = self.compiler.get_function_names().iter()
+                        .any(|n| n.split('/').next().unwrap_or(n) == dep_base);
+                    if !exists {
+                        // Function calls non-existent dependency
+                        self.compile_status.insert(
+                            qualified.clone(),
+                            CompileStatus::CompileError(format!("Undefined function: {}", dep))
+                        );
+                        return Err(format!("Undefined function: {}", dep));
+                    }
+                }
+            }
+        }
+
+        result
     }
 
     /// Check if module content would compile without actually saving it
@@ -9667,10 +9849,10 @@ mod call_graph_tests {
     use super::*;
 
     fn create_engine() -> ReplEngine {
+        // Note: Don't load stdlib - these tests use single-letter function names
+        // like a(), b(), c() which conflict with stdlib.html functions
         let config = ReplConfig { enable_jit: false, num_threads: 1 };
-        let mut engine = ReplEngine::new(config);
-        engine.load_stdlib().ok();
-        engine
+        ReplEngine::new(config)
     }
 
     // ==================== Basic Error Propagation ====================
@@ -15068,6 +15250,165 @@ pub vec(data) -> Vec = Vec(data)
 #[cfg(test)]
 mod nalgebra_debug_tests {
     use super::*;
+
+    /// Test that calling a previously-existing-but-now-deleted function properly fails.
+    /// This tests the fix where deleted functions were still "compiling" because
+    /// the compiler wasn't validating that called functions actually exist.
+    #[test]
+    fn test_deleted_function_not_callable_chain() {
+        use std::io::Write;
+
+        // Use a unique temp dir for this test
+        let temp_dir = std::env::temp_dir().join(format!("nostos_test_deleted_fn_{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create good.nos with add, addx, addf functions
+        let good_path = temp_dir.join("good.nos");
+        {
+            let mut f = std::fs::File::create(&good_path).unwrap();
+            writeln!(f, "pub add(a, b) = a + b").unwrap();
+            writeln!(f, "pub addx(a, b) = a + b").unwrap();
+            writeln!(f, "pub addf(a, b) = a + b").unwrap();
+        }
+
+        // Create main.nos that calls good.addx
+        let main_path = temp_dir.join("main.nos");
+        {
+            let mut f = std::fs::File::create(&main_path).unwrap();
+            writeln!(f, "use good.*").unwrap();
+            writeln!(f, "main() = good.addx(1, 2)").unwrap();
+        }
+
+        // Create ONE engine and use it for the entire chain
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        // Load the directory
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        println!("\n=== Step 1: Initial state ===");
+        let fn_names: Vec<_> = engine.compiler.get_function_names().into_iter()
+            .filter(|n| n.starts_with("good.") || n.starts_with("main."))
+            .collect();
+        println!("Functions in compiler: {:?}", fn_names);
+        println!("main.main: {:?}", engine.get_compile_status("main.main"));
+
+        println!("\n=== Step 2: Delete functions from good.nos ===");
+        // Rewrite good.nos with only addf
+        {
+            let mut f = std::fs::File::create(&good_path).unwrap();
+            writeln!(f, "pub addf(a, b) = a + b").unwrap();
+        }
+        let good_content = std::fs::read_to_string(&good_path).unwrap();
+        let result = engine.recompile_module_with_content("good", &good_content);
+        println!("Recompile good after delete: {:?}", result);
+
+        let fn_names: Vec<_> = engine.compiler.get_function_names().into_iter()
+            .filter(|n| n.starts_with("good."))
+            .collect();
+        println!("Functions in compiler after delete: {:?}", fn_names);
+
+        println!("\n=== Step 3: Recompile main (calls deleted good.addx) ===");
+        let main_content = std::fs::read_to_string(&main_path).unwrap();
+        let result = engine.recompile_module_with_content("main", &main_content);
+        println!("Recompile main calling deleted addx: {:?}", result);
+        println!("main.main status: {:?}", engine.get_compile_status("main.main"));
+
+        // Should have an error
+        assert!(result.is_err() || matches!(engine.get_compile_status("main.main"),
+            Some(CompileStatus::CompileError(_)) | Some(CompileStatus::Stale { .. })),
+            "Calling deleted function should error or be stale");
+
+        println!("\n=== Step 4: Change main to call good.add (also deleted) ===");
+        {
+            let mut f = std::fs::File::create(&main_path).unwrap();
+            writeln!(f, "use good.*").unwrap();
+            writeln!(f, "main() = good.add(1, 2)").unwrap();
+        }
+        let main_content = std::fs::read_to_string(&main_path).unwrap();
+        let result = engine.recompile_module_with_content("main", &main_content);
+        println!("Recompile main calling deleted add: {:?}", result);
+        println!("main.main status: {:?}", engine.get_compile_status("main.main"));
+
+        // Should STILL have an error (good.add was also deleted)
+        assert!(result.is_err() || matches!(engine.get_compile_status("main.main"),
+            Some(CompileStatus::CompileError(_)) | Some(CompileStatus::Stale { .. })),
+            "Calling deleted function should error or be stale");
+
+        println!("\n=== Step 5: Change main to call good.addf (exists) ===");
+        {
+            let mut f = std::fs::File::create(&main_path).unwrap();
+            writeln!(f, "use good.*").unwrap();
+            writeln!(f, "main() = good.addf(1, 2)").unwrap();
+        }
+        let main_content = std::fs::read_to_string(&main_path).unwrap();
+        let result = engine.recompile_module_with_content("main", &main_content);
+        println!("Recompile main calling existing addf: {:?}", result);
+        println!("main.main status: {:?}", engine.get_compile_status("main.main"));
+
+        // Should compile successfully
+        assert!(result.is_ok(), "Calling existing function should succeed: {:?}", result);
+    }
+
+    /// Test that type mismatches are caught at compile time.
+    /// Calling good.addf(1, "a") where addf expects two Num values should fail.
+    #[test]
+    fn test_type_mismatch_detection() {
+        use std::io::Write;
+
+        let temp_dir = std::env::temp_dir().join(format!("nostos_test_type_mismatch_{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create good.nos with typed function
+        let good_path = temp_dir.join("good.nos");
+        {
+            let mut f = std::fs::File::create(&good_path).unwrap();
+            writeln!(f, "pub addf(a, b) = a + b").unwrap();
+        }
+
+        // Create main.nos with correct call
+        let main_path = temp_dir.join("main.nos");
+        {
+            let mut f = std::fs::File::create(&main_path).unwrap();
+            writeln!(f, "use good.*").unwrap();
+            writeln!(f, "main() = good.addf(1, 2)").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        println!("\n=== Step 1: Correct call good.addf(1, 2) ===");
+        println!("main.main status: {:?}", engine.get_compile_status("main.main"));
+
+        assert!(matches!(engine.get_compile_status("main.main"), Some(CompileStatus::Compiled)),
+                "Correct call should compile");
+
+        println!("\n=== Step 2: Type mismatch good.addf(1, \"a\") ===");
+        {
+            let mut f = std::fs::File::create(&main_path).unwrap();
+            writeln!(f, "use good.*").unwrap();
+            writeln!(f, "main() = good.addf(1, \"a\")").unwrap();
+        }
+        let main_content = std::fs::read_to_string(&main_path).unwrap();
+
+        // Test check_module_compiles directly - this should catch the type error
+        let check_result = engine.check_module_compiles("main", &main_content);
+        println!("check_module_compiles result: {:?}", check_result);
+
+        // Should have a type error
+        let err_msg = check_result.as_ref().err().unwrap();
+        assert!(err_msg.contains("Int") && err_msg.contains("String"),
+                "Error should mention type mismatch between Int and String, got: {}", err_msg);
+
+        let result = engine.recompile_module_with_content("main", &main_content);
+        println!("Recompile with type mismatch: {:?}", result);
+        println!("main.main status: {:?}", engine.get_compile_status("main.main"));
+
+        // Status should show compile error
+        assert!(matches!(engine.get_compile_status("main.main"), Some(CompileStatus::CompileError(_))),
+                "main.main should have compile error");
+    }
 
     #[test]
     fn test_nalgebra_vec_addition() {

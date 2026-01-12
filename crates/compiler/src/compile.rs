@@ -9689,6 +9689,20 @@ impl Compiler {
                         span: func.span(),
                     });
                 }
+            } else {
+                // Function does not exist
+                // Only error for qualified names (module.function), not simple identifiers
+                // Simple identifiers might be captured variables from outer scope (closures)
+                if qualified_name.contains('.') {
+                    let fn_names: Vec<&str> = self.functions.keys().map(|s| s.as_str()).collect();
+                    let suggestions = find_similar_names(&final_call_name, &fn_names, 3);
+                    return Err(CompileError::UnknownFunction {
+                        name: final_call_name,
+                        suggestions,
+                        span: func.span(),
+                    });
+                }
+                // Fall through to generic call path for simple identifiers
             }
             } // Close the else block for local variable check
         }
@@ -16350,14 +16364,33 @@ impl Compiler {
     fn expr_calls_function_with_untyped_params(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Call(func, _type_args, args, _) => {
-                // Check the called function
-                if let Expr::Var(ident) = func.as_ref() {
-                    let name = &ident.node;
+                // Extract function name - handle both Var and FieldAccess (module.function)
+                let called_name = match func.as_ref() {
+                    Expr::Var(ident) => Some(ident.node.clone()),
+                    Expr::FieldAccess(base, field, _) => {
+                        // Check for module.function pattern
+                        if let Expr::Var(base_ident) = base.as_ref() {
+                            Some(format!("{}.{}", base_ident.node, field.node))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+
+                if let Some(name) = called_name {
                     // Look up the function to see if it has untyped params
                     // Try different name formats
                     for (fn_name, fn_val) in &self.functions {
                         let base_name = fn_name.split('/').next().unwrap_or(fn_name);
-                        if base_name == name || fn_name == name {
+                        if base_name == &name || fn_name == &name {
+                            // If the function has a fully inferred signature, it's considered typed
+                            // even if the original param_types contain "?" or "_"
+                            // The signature is inferred after compilation and contains the actual types
+                            if fn_val.signature.is_some() {
+                                // Has inferred signature - types are known
+                                continue;
+                            }
                             // Check if any param type is "?" or "_"
                             if fn_val.param_types.iter().any(|t| t == "?" || t == "_") {
                                 return true;

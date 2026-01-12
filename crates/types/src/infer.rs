@@ -865,6 +865,20 @@ impl<'a> InferCtx<'a> {
                     } else {
                         return Err(TypeError::UnknownIdent(name.clone()));
                     }
+                } else if let Expr::FieldAccess(base_expr, field, _) = func.as_ref() {
+                    // Special handling for qualified function calls like good.addf(1, 2)
+                    // Need to use arity-aware lookup since function keys include arity suffix
+                    if let Expr::Var(base_ident) = base_expr.as_ref() {
+                        let qualified_name = format!("{}.{}", base_ident.node, field.node);
+                        if let Some(sig) = self.env.lookup_function_with_arity(&qualified_name, args.len()).cloned() {
+                            self.instantiate_function(&sig)
+                        } else {
+                            // Fall back to inferring as regular field access
+                            self.infer_expr(func)?
+                        }
+                    } else {
+                        self.infer_expr(func)?
+                    }
                 } else {
                     // For non-variable function expressions, infer normally
                     self.infer_expr(func)?
@@ -1227,6 +1241,42 @@ impl<'a> InferCtx<'a> {
                                 }
                                 return Ok(*ft.ret);
                             }
+                        }
+                    }
+                }
+
+                // Check if receiver is a module name: module.func(args)
+                // This handles qualified function calls like good.addf(1, 2)
+                if let Expr::Var(module_ident) = receiver.as_ref() {
+                    let qualified_name = format!("{}.{}", module_ident.node, method.node);
+                    // Use arity-aware lookup since function keys include arity suffix
+                    if let Some(fn_type) = self.env.lookup_function_with_arity(&qualified_name, args.len()).cloned() {
+                        // Found the function - infer argument types and unify
+                        let mut arg_types = Vec::new();
+                        for arg in args {
+                            let expr = match arg {
+                                CallArg::Positional(e) | CallArg::Named(_, e) => e,
+                            };
+                            arg_types.push(self.infer_expr(expr)?);
+                        }
+
+                        // Instantiate the function type
+                        let func_ty = self.instantiate_function(&fn_type);
+                        if let Type::Function(ft) = func_ty {
+                            // Check arity (accounting for optional parameters)
+                            let min_args = ft.required_params.unwrap_or(ft.params.len());
+                            let max_args = ft.params.len();
+                            if arg_types.len() < min_args || arg_types.len() > max_args {
+                                return Err(TypeError::ArityMismatch {
+                                    expected: if min_args == max_args { max_args } else { min_args },
+                                    found: arg_types.len(),
+                                });
+                            }
+                            // Use unify_at with call span for precise error reporting
+                            for (param_ty, arg_ty) in ft.params.iter().zip(arg_types.iter()) {
+                                self.unify_at(arg_ty.clone(), param_ty.clone(), *call_span);
+                            }
+                            return Ok(*ft.ret);
                         }
                     }
                 }
