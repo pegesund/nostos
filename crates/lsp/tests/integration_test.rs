@@ -1192,3 +1192,55 @@ fn test_lsp_errors_shown_on_open() {
         "Expected diagnostics for incomplete 'x2.' expression, got none"
     );
 }
+
+/// Test autocomplete for method chains: x2.chars(). should show List[Char] methods
+#[test]
+fn test_lsp_autocomplete_method_chain() {
+    let project_path = create_test_project("method_chain");
+
+    let content = r#"main() = {
+    x2:String = "hello"
+    x2.chars().
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions after "x2.chars()." (line 3, 0-based: 2)
+    // Line 3: "    x2.chars()."
+    let completions = client.completion(&main_uri, 2, 15);
+
+    println!("=== Completions for method chain (x2.chars().) ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+    println!("Completions count: {}", completions.len());
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // Should have List methods since chars() returns List[Char]
+    assert!(
+        !completions.is_empty(),
+        "Expected completions for x2.chars() (List[Char]), got none"
+    );
+
+    // Check for List methods
+    let has_list_method = completions.iter().any(|c|
+        c == "map" || c == "filter" || c == "fold" || c == "length"
+    );
+    assert!(
+        has_list_method,
+        "Expected List methods like 'map' or 'filter', got: {:?}",
+        completions
+    );
+}

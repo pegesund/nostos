@@ -3350,14 +3350,265 @@ impl ReplEngine {
     }
 
     /// Infer the type of an expression string (for LSP autocomplete)
-    /// Returns the type name if it can be inferred, None otherwise
-    pub fn infer_expression_type(&self, expr: &str) -> Option<String> {
-        // Try the structure-based inference first (handles method chains)
-        if let Some(ty) = self.infer_expr_type_from_structure(expr) {
+    /// Returns the type name if it can be inferred, None otherwise.
+    ///
+    /// Handles:
+    /// - Simple variables: x -> lookup in local_bindings
+    /// - Index expressions: g2[0][0] -> unwrap List types
+    /// - Method chains: x.chars().filter(f) -> trace through return types
+    /// - Literals: [1,2,3] -> List[Int], "hello" -> String
+    pub fn infer_expression_type(&self, expr: &str, local_bindings: &std::collections::HashMap<String, String>) -> Option<String> {
+        let trimmed = expr.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        // Split into method chain parts: "x.chars().filter(f)" -> ["x", "chars()", "filter(f)"]
+        let parts = self.split_method_chain(trimmed);
+        if parts.is_empty() {
+            return None;
+        }
+
+        // Get the type of the base expression (first part)
+        let mut current_type = self.infer_base_expr_type(&parts[0], local_bindings)?;
+
+        // Process each method call in the chain
+        for i in 1..parts.len() {
+            let method_call = &parts[i];
+            // Extract method name (strip arguments if present)
+            let method_name = if let Some(paren_pos) = method_call.find('(') {
+                method_call[..paren_pos].trim()
+            } else {
+                method_call.trim()
+            };
+
+            if method_name.is_empty() {
+                continue;
+            }
+
+            // Get the return type of this method called on current_type
+            if let Some(ret_type) = self.get_method_return_type(&current_type, method_name) {
+                current_type = ret_type;
+            } else {
+                // Can't determine return type, stop here
+                return None;
+            }
+        }
+
+        Some(current_type)
+    }
+
+    /// Split an expression into method chain parts, respecting parentheses and brackets.
+    fn split_method_chain(&self, expr: &str) -> Vec<String> {
+        let mut parts = Vec::new();
+        let mut current = String::new();
+        let mut paren_depth = 0;
+        let mut bracket_depth = 0;
+        let mut in_string = false;
+
+        let chars: Vec<char> = expr.chars().collect();
+        for (i, &c) in chars.iter().enumerate() {
+            // Handle string literals
+            if c == '"' && (i == 0 || chars[i - 1] != '\\') {
+                in_string = !in_string;
+                current.push(c);
+                continue;
+            }
+
+            if in_string {
+                current.push(c);
+                continue;
+            }
+
+            match c {
+                '(' => { paren_depth += 1; current.push(c); }
+                ')' => { paren_depth -= 1; current.push(c); }
+                '[' => { bracket_depth += 1; current.push(c); }
+                ']' => { bracket_depth -= 1; current.push(c); }
+                '.' if paren_depth == 0 && bracket_depth == 0 => {
+                    if !current.is_empty() {
+                        parts.push(current.clone());
+                        current.clear();
+                    }
+                }
+                _ => { current.push(c); }
+            }
+        }
+
+        if !current.is_empty() {
+            parts.push(current);
+        }
+
+        parts
+    }
+
+    /// Infer the type of a base expression (first part of a method chain)
+    fn infer_base_expr_type(&self, expr: &str, local_bindings: &std::collections::HashMap<String, String>) -> Option<String> {
+        let trimmed = expr.trim();
+
+        // Check for index expression: var[idx] or var[idx1][idx2]
+        if let Some(bracket_pos) = trimmed.find('[') {
+            let base_var = trimmed[..bracket_pos].trim();
+            if let Some(base_type) = local_bindings.get(base_var) {
+                let index_count = trimmed.matches('[').count();
+                let mut current_type = base_type.clone();
+                for _ in 0..index_count {
+                    if current_type.starts_with("List[") && current_type.ends_with(']') {
+                        current_type = current_type
+                            .strip_prefix("List[")?
+                            .strip_suffix(']')?
+                            .to_string();
+                    } else {
+                        return None;
+                    }
+                }
+                return Some(current_type);
+            }
+        }
+
+        // Check local bindings
+        if let Some(ty) = local_bindings.get(trimmed) {
+            return Some(ty.clone());
+        }
+
+        // Check REPL variables
+        if let Some(ty) = self.get_variable_type(trimmed) {
             return Some(ty);
         }
-        // Fall back to base type detection
-        self.get_expr_base_type(expr)
+
+        // Infer literal types
+        if trimmed.starts_with('"') {
+            return Some("String".to_string());
+        }
+        if trimmed.starts_with('[') {
+            return self.infer_list_literal_type(trimmed);
+        }
+        if trimmed.starts_with("%{") {
+            return Some("Map".to_string());
+        }
+        if trimmed.starts_with("#{") {
+            return Some("Set".to_string());
+        }
+        if trimmed.parse::<i64>().is_ok() {
+            return Some("Int".to_string());
+        }
+        if trimmed.parse::<f64>().is_ok() {
+            return Some("Float".to_string());
+        }
+        if trimmed == "true" || trimmed == "false" {
+            return Some("Bool".to_string());
+        }
+
+        // Check for function call: func(...) or Module.func(...)
+        if let Some(paren_pos) = trimmed.find('(') {
+            let func_name = trimmed[..paren_pos].trim();
+            if let Some(ret_type) = self.compiler.get_function_return_type(func_name) {
+                return Some(ret_type);
+            }
+        }
+
+        // Fall back to existing structure-based inference
+        self.infer_expr_type_from_structure(expr)
+    }
+
+    /// Infer the type of a list literal
+    fn infer_list_literal_type(&self, expr: &str) -> Option<String> {
+        let trimmed = expr.trim();
+        if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+            return None;
+        }
+
+        let inner = trimmed[1..trimmed.len()-1].trim();
+        if inner.is_empty() {
+            return Some("List".to_string());
+        }
+
+        // Find first element
+        let first_elem = self.extract_first_list_element(inner)?;
+        let first_trimmed = first_elem.trim();
+
+        let elem_type = if first_trimmed.starts_with('[') {
+            self.infer_list_literal_type(first_trimmed)?
+        } else if first_trimmed.starts_with('"') {
+            "String".to_string()
+        } else if first_trimmed.parse::<i64>().is_ok() {
+            "Int".to_string()
+        } else if first_trimmed.parse::<f64>().is_ok() {
+            "Float".to_string()
+        } else {
+            return Some("List".to_string());
+        };
+
+        Some(format!("List[{}]", elem_type))
+    }
+
+    /// Extract the first element from a list literal content
+    fn extract_first_list_element(&self, inner: &str) -> Option<String> {
+        let mut depth = 0;
+        let mut in_string = false;
+        let chars: Vec<char> = inner.chars().collect();
+
+        for (i, &c) in chars.iter().enumerate() {
+            if c == '"' && (i == 0 || chars[i-1] != '\\') {
+                in_string = !in_string;
+            }
+            if in_string { continue; }
+
+            match c {
+                '[' | '(' | '{' => depth += 1,
+                ']' | ')' | '}' => depth -= 1,
+                ',' | ' ' if depth == 0 && i > 0 => {
+                    return Some(inner[..i].to_string());
+                }
+                _ => {}
+            }
+        }
+        Some(inner.to_string())
+    }
+
+    /// Get the return type of a method called on a given type
+    fn get_method_return_type(&self, type_name: &str, method_name: &str) -> Option<String> {
+        // First check builtin methods
+        let builtins = Self::get_builtin_methods_for_type(type_name);
+        for (name, sig, _) in builtins {
+            if name == method_name {
+                if let Some(arrow_pos) = sig.find("->") {
+                    let ret = sig[arrow_pos + 2..].trim();
+                    return Some(self.resolve_generic_return_type(type_name, ret));
+                }
+            }
+        }
+
+        // Check UFCS methods from stdlib
+        let ufcs_methods = self.get_ufcs_methods_for_type(type_name);
+        for (name, sig, _) in ufcs_methods {
+            if name == method_name {
+                if let Some(arrow_pos) = sig.rfind("->") {
+                    return Some(sig[arrow_pos + 2..].trim().to_string());
+                }
+            }
+        }
+
+        // Try qualified function name
+        let qualified = format!("stdlib.{}.{}", type_name.to_lowercase(), method_name);
+        if let Some(ret_type) = self.compiler.get_function_return_type(&qualified) {
+            return Some(ret_type);
+        }
+
+        None
+    }
+
+    /// Resolve generic return types based on the actual type
+    fn resolve_generic_return_type(&self, base_type: &str, return_type: &str) -> String {
+        // String.chars() returns List[Char]
+        if base_type == "String" && return_type == "List" {
+            return "List[Char]".to_string();
+        }
+        // List[X].filter/map returns List[X]
+        if base_type.starts_with("List[") && return_type == "List" {
+            return base_type.to_string();
+        }
+        return_type.to_string()
     }
 
     /// Get the signature for a function (for autocomplete display)

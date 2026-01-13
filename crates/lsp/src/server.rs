@@ -1277,13 +1277,9 @@ impl NostosLanguageServer {
                     .last()
                     .unwrap_or(before_dot);
 
-                if let Some(var_type) = local_vars.get(var_name) {
-                    eprintln!("Found local var '{}' with type: {}", var_name, var_type);
-                    Some(var_type.clone())
-                } else {
-                    // Try to infer the type of the expression from the engine
-                    engine.infer_expression_type(before_dot)
-                }
+                // Use the engine's general expression type inference
+                // which handles method chains, index expressions, and local bindings
+                engine.infer_expression_type(before_dot, &local_vars)
             };
             eprintln!("Inferred type: {:?}", inferred_type);
 
