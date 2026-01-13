@@ -3,6 +3,19 @@
 - build release, not debug
 - remember that comments in nostos are with # and NOT with //
 
+## CRITICAL: LSP Testing - READ docs/LSP_TESTING.md FIRST
+
+**BEFORE fixing ANY LSP issue, READ `docs/LSP_TESTING.md`!**
+
+The LSP has multiple code paths. Tests that load files and call `recompile_module_with_content` with the SAME content will return "No changes detected" and NOT test the actual recompilation path!
+
+**Correct pattern:**
+1. Create files WITHOUT the problematic code
+2. Load directory
+3. Call `recompile_module_with_content` with CHANGED content (simulating user edit)
+
+This is the ONLY way to test the actual code path users experience.
+
 ## CRITICAL: Do NOT Run Full Test Suite Constantly
 
 **STOP running `cd tests && ./runall.sh` after every small change!**
@@ -12,6 +25,29 @@
 - For focused changes: just `cargo build --release` and let user test manually
 - For unit tests: run only the specific test (e.g., `cargo test --release -p nostos-repl test_name`)
 - The user will tell you when to run the full suite
+
+## CRITICAL: Update LSP Binary After Building
+
+**VS Code uses the LSP binary from PATH, NOT from ./target/release/**
+
+The LSP binary is installed at: `~/.local/bin/nostos-lsp`
+
+After making changes to the LSP server:
+```bash
+# Build the LSP
+cargo build --release -p nostos-lsp
+
+# Copy to PATH (VS Code won't see changes otherwise!)
+cp ./target/release/nostos-lsp ~/.local/bin/nostos-lsp
+
+# If "Text file busy" error, kill VS Code first:
+pkill -9 code
+cp ./target/release/nostos-lsp ~/.local/bin/nostos-lsp
+
+# Then restart VS Code
+```
+
+**ALWAYS copy after building** - otherwise you'll waste hours debugging with the old binary!
 
 ## CRITICAL: Debug Output Must Go To FILE, Not Console
 
@@ -199,6 +235,76 @@ cargo test --release -p nostos-repl check_module_tests -- --nocapture
 4. Tests document expected behavior and prevent regressions
 
 **Key function:** `ReplEngine::check_module_compiles(&self, module_name: &str, content: &str) -> Result<(), String>`
+
+## CRITICAL: LSP Testing - DO NOT Ask User To Test Manually
+
+**Every time you ask the user to test LSP in VS Code, you waste their time and create whack-a-mole bugs!**
+
+### The Problem
+The LSP uses multiple code paths that must work together:
+1. `load_directory` - initial project load
+2. `recompile_module_with_content` - when files are edited
+3. `publish_file_diagnostics_filtered` - sending errors to VS Code
+
+Fixing one path often breaks another. Manual testing catches ONE scenario, then next change breaks previous fixes.
+
+### The Solution: Automated LSP Integration Tests
+
+**ALWAYS write tests that simulate the EXACT editor flow before making LSP changes.**
+
+**Location:** `crates/repl/src/engine.rs` - module `lsp_integration_tests`
+
+**Test pattern:**
+```rust
+#[test]
+fn test_lsp_scenario() {
+    // 1. Create temp directory with multiple .nos files
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("good.nos"), "pub add(a: Int, b: Int) = a + b").unwrap();
+    std::fs::write(dir.path().join("main.nos"), "main() = good.add(1, \"bad\")").unwrap();
+
+    // 2. Create engine and load directory (simulates VS Code opening project)
+    let mut engine = ReplEngine::new(ReplConfig::default());
+    engine.load_directory(dir.path().to_str().unwrap()).unwrap();
+
+    // 3. Check compile status (what VS Code sees)
+    let status = engine.get_all_compile_status();
+    assert!(status.iter().any(|(_, s)| s.contains("Error")), "Should detect type error");
+
+    // 4. Simulate edit (user changes file)
+    let new_content = "main() = good.add(1, 2)"; // Fixed
+    engine.recompile_module_with_content("main", new_content, dir.path().to_str().unwrap()).unwrap();
+
+    // 5. Verify error is gone
+    let status = engine.get_all_compile_status();
+    assert!(!status.iter().any(|(n, s)| n.contains("main") && s.contains("Error")));
+}
+```
+
+**Scenarios that MUST be tested:**
+1. Initial load detects type errors
+2. Fixing error clears diagnostic
+3. Reintroducing error shows diagnostic again
+4. Changing function signature in module A marks module B as stale/error
+5. Renaming function in module A shows "undefined function" in module B
+6. Line numbers are correct in all scenarios
+
+**Run LSP tests:**
+```bash
+cargo test --release -p nostos-repl lsp_integration_tests -- --nocapture
+```
+
+**Workflow:**
+1. FIRST: Write failing test for the bug/feature
+2. THEN: Fix the code
+3. VERIFY: Test passes
+4. ONLY THEN: Ask user to test if needed (rare)
+
+### VS Code Binary Update
+After LSP changes:
+```bash
+cargo build --release -p nostos-lsp && cp ./target/release/nostos-lsp ~/.local/bin/nostos-lsp
+```
 
 ## BUILTINS Array Notes
 

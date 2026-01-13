@@ -699,7 +699,25 @@ impl NostosLanguageServer {
                 continue;
             }
 
-            // Look for simple bindings: "x = expr" or "x = Module.func(...)"
+            // Check for mvar declarations: "mvar name: Type = expr"
+            if trimmed.starts_with("mvar ") {
+                let rest = trimmed[5..].trim(); // Skip "mvar "
+                if let Some(colon_pos) = rest.find(':') {
+                    let var_name = rest[..colon_pos].trim();
+                    let after_colon = rest[colon_pos + 1..].trim();
+                    // Find the = sign to separate type from initial value
+                    if let Some(eq_pos) = after_colon.find('=') {
+                        let type_name = after_colon[..eq_pos].trim();
+                        if !var_name.is_empty() && !type_name.is_empty() {
+                            eprintln!("Extracted mvar binding: {} : {}", var_name, type_name);
+                            bindings.insert(var_name.to_string(), type_name.to_string());
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Look for simple bindings: "x = expr" or "x:Type = expr"
             if let Some(eq_pos) = trimmed.find('=') {
                 // Make sure it's not == or other operators
                 let before_eq = trimmed[..eq_pos].trim();
@@ -707,16 +725,35 @@ impl NostosLanguageServer {
                 if after_eq_start < trimmed.len() && !trimmed[after_eq_start..].starts_with('=') {
                     let after_eq = trimmed[after_eq_start..].trim();
 
-                    // Check if before_eq is a simple identifier (variable name)
-                    if !before_eq.is_empty()
-                        && before_eq.chars().next().map_or(false, |c| c.is_lowercase())
-                        && before_eq.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    // Check for type annotation: "x:Type" or "x : Type"
+                    let (var_name, explicit_type) = if let Some(colon_pos) = before_eq.find(':') {
+                        let name = before_eq[..colon_pos].trim();
+                        let ty = before_eq[colon_pos + 1..].trim();
+                        (name, Some(ty.to_string()))
+                    } else {
+                        (before_eq, None)
+                    };
+
+                    // Check if var_name is a simple identifier (variable name)
+                    if !var_name.is_empty()
+                        && var_name.chars().next().map_or(false, |c| c.is_lowercase())
+                        && var_name.chars().all(|c| c.is_alphanumeric() || c == '_')
                     {
-                        // Try to infer the type from the RHS
-                        let inferred_type = Self::infer_rhs_type(after_eq, engine);
-                        if let Some(ty) = inferred_type {
-                            eprintln!("Extracted binding: {} = {} (type: {})", before_eq, after_eq, ty);
-                            bindings.insert(before_eq.to_string(), ty);
+                        // Use explicit type annotation if available, otherwise infer from RHS
+                        let final_type = if let Some(ty) = explicit_type {
+                            eprintln!("Extracted binding with explicit type: {} : {}", var_name, ty);
+                            Some(ty)
+                        } else {
+                            // Pass current bindings so we can resolve index expressions like g2[0][0]
+                            let inferred = Self::infer_rhs_type(after_eq, engine, &bindings);
+                            if let Some(ref ty) = inferred {
+                                eprintln!("Extracted binding: {} = {} (inferred type: {})", var_name, after_eq, ty);
+                            }
+                            inferred
+                        };
+
+                        if let Some(ty) = final_type {
+                            bindings.insert(var_name.to_string(), ty);
                         }
                     }
                 }
@@ -727,8 +764,17 @@ impl NostosLanguageServer {
     }
 
     /// Infer the type of an expression on the right-hand side of a binding
-    fn infer_rhs_type(expr: &str, engine: Option<&nostos_repl::ReplEngine>) -> Option<String> {
+    fn infer_rhs_type(expr: &str, engine: Option<&nostos_repl::ReplEngine>, current_bindings: &std::collections::HashMap<String, String>) -> Option<String> {
         let trimmed = expr.trim();
+
+        // Check for index expressions like g2[0][0] - use current bindings to resolve
+        if trimmed.contains('[') && !trimmed.starts_with('[') {
+            // This looks like an index expression (not a list literal)
+            if let Some(inferred) = Self::infer_index_expr_type(trimmed, current_bindings) {
+                eprintln!("Inferred index expression type: {} -> {}", trimmed, inferred);
+                return Some(inferred);
+            }
+        }
 
         // List literals - analyze element type recursively
         if trimmed.starts_with('[') {
@@ -1067,6 +1113,54 @@ impl NostosLanguageServer {
         None
     }
 
+    /// Infer type of an index expression like g2[0] or g2[0][0]
+    /// If g2 has type List[List[String]], then:
+    ///   g2[0] -> List[String]
+    ///   g2[0][0] -> String
+    fn infer_index_expr_type(expr: &str, local_vars: &std::collections::HashMap<String, String>) -> Option<String> {
+        let trimmed = expr.trim();
+
+        // Check if expression contains index access
+        if !trimmed.contains('[') {
+            return None;
+        }
+
+        // Find the base variable (everything before the first '[')
+        let first_bracket = trimmed.find('[')?;
+        let base_var = trimmed[..first_bracket].trim();
+
+        if base_var.is_empty() {
+            return None;
+        }
+
+        // Get the base variable's type
+        let base_type = local_vars.get(base_var)?;
+
+        // Count the number of index operations
+        let index_count = trimmed.matches('[').count();
+
+        // "Unwrap" the List type for each index operation
+        let mut current_type = base_type.clone();
+        for _ in 0..index_count {
+            // Strip one level of List[...]
+            if current_type.starts_with("List[") && current_type.ends_with(']') {
+                current_type = current_type
+                    .strip_prefix("List[")?
+                    .strip_suffix(']')?
+                    .to_string();
+            } else if current_type == "List" {
+                // Generic List without element type - can't infer further
+                return None;
+            } else {
+                // Not a List type, can't index further
+                return None;
+            }
+        }
+
+        eprintln!("Inferred index expr type for '{}': {}", expr, current_type);
+        Some(current_type)
+    }
+
     /// Get completions after a dot (module functions or UFCS methods)
     fn get_dot_completions(&self, before_dot: &str, local_vars: &std::collections::HashMap<String, String>, lambda_param_type: Option<&str>) -> Vec<CompletionItem> {
         let mut items = Vec::new();
@@ -1171,19 +1265,25 @@ impl NostosLanguageServer {
             // Not a module - try to infer the type and show methods
             eprintln!("Not a module, trying to infer type of: '{}'", before_dot);
 
-            // First check if it's a local variable we know about
-            // Extract just the identifier (handle cases like "    yy" -> "yy")
-            let var_name = before_dot.split(|c: char| !c.is_alphanumeric() && c != '_')
-                .filter(|s| !s.is_empty())
-                .last()
-                .unwrap_or(before_dot);
-
-            let inferred_type = if let Some(var_type) = local_vars.get(var_name) {
-                eprintln!("Found local var '{}' with type: {}", var_name, var_type);
-                Some(var_type.clone())
+            // First check if it's an index expression like g2[0] or g2[0][0]
+            let inferred_type = if let Some(idx_type) = Self::infer_index_expr_type(before_dot, local_vars) {
+                eprintln!("Inferred index expression type: {}", idx_type);
+                Some(idx_type)
             } else {
-                // Try to infer the type of the expression from the engine
-                engine.infer_expression_type(before_dot)
+                // Check if it's a local variable we know about
+                // Extract just the identifier (handle cases like "    yy" -> "yy")
+                let var_name = before_dot.split(|c: char| !c.is_alphanumeric() && c != '_')
+                    .filter(|s| !s.is_empty())
+                    .last()
+                    .unwrap_or(before_dot);
+
+                if let Some(var_type) = local_vars.get(var_name) {
+                    eprintln!("Found local var '{}' with type: {}", var_name, var_type);
+                    Some(var_type.clone())
+                } else {
+                    // Try to infer the type of the expression from the engine
+                    engine.infer_expression_type(before_dot)
+                }
             };
             eprintln!("Inferred type: {:?}", inferred_type);
 
