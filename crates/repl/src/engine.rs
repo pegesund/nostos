@@ -3584,7 +3584,8 @@ impl ReplEngine {
         for (name, sig, _) in ufcs_methods {
             if name == method_name {
                 if let Some(arrow_pos) = sig.rfind("->") {
-                    return Some(sig[arrow_pos + 2..].trim().to_string());
+                    let ret = sig[arrow_pos + 2..].trim();
+                    return Some(self.resolve_generic_return_type(type_name, ret));
                 }
             }
         }
@@ -3592,7 +3593,7 @@ impl ReplEngine {
         // Try qualified function name
         let qualified = format!("stdlib.{}.{}", type_name.to_lowercase(), method_name);
         if let Some(ret_type) = self.compiler.get_function_return_type(&qualified) {
-            return Some(ret_type);
+            return Some(self.resolve_generic_return_type(type_name, &ret_type));
         }
 
         None
@@ -3604,10 +3605,31 @@ impl ReplEngine {
         if base_type == "String" && return_type == "List" {
             return "List[Char]".to_string();
         }
-        // List[X].filter/map returns List[X]
-        if base_type.starts_with("List[") && return_type == "List" {
-            return base_type.to_string();
+
+        // Handle List[X] methods
+        if base_type.starts_with("List[") && base_type.ends_with(']') {
+            let elem_type = &base_type[5..base_type.len()-1]; // Extract X from List[X]
+
+            // List[X].filter/map/drop/take returns List[X]
+            if return_type == "List" {
+                return base_type.to_string();
+            }
+
+            // List[X].get/head/last returns X (the element type)
+            // Generic return types like "a" should resolve to the element type
+            if return_type.len() == 1 && return_type.chars().next().map_or(false, |c| c.is_lowercase()) {
+                return elem_type.to_string();
+            }
+
+            // Option[a] -> Option[X]
+            if return_type.starts_with("Option[") && return_type.ends_with(']') {
+                let inner = &return_type[7..return_type.len()-1];
+                if inner.len() == 1 && inner.chars().next().map_or(false, |c| c.is_lowercase()) {
+                    return format!("Option[{}]", elem_type);
+                }
+            }
         }
+
         return_type.to_string()
     }
 

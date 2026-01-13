@@ -1244,3 +1244,45 @@ fn test_lsp_autocomplete_method_chain() {
         completions
     );
 }
+
+/// Test autocomplete for complex method chains with generic return types
+/// x2.chars().drop(1).get(0). should show Char methods (not generic 'a')
+#[test]
+fn test_lsp_autocomplete_method_chain_generic() {
+    let project_path = create_test_project("method_chain_generic");
+
+    let content = r#"main() = {
+    x2:String = "hello"
+    x2.chars().drop(1).get(0).
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions after "x2.chars().drop(1).get(0)." (line 3, 0-based: 2)
+    let completions = client.completion(&main_uri, 2, 30);
+
+    println!("=== Completions for method chain with get() ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+    println!("Completions count: {}", completions.len());
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // Should have Char methods since get() on List[Char] returns Char
+    assert!(
+        !completions.is_empty(),
+        "Expected completions for get(0) result (Char), got none"
+    );
+}
