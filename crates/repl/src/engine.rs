@@ -2866,6 +2866,11 @@ impl ReplEngine {
         self.compiler.get_type_constructors(type_name)
     }
 
+    /// Given a constructor name, find which type it belongs to.
+    pub fn get_type_for_constructor(&self, ctor_name: &str) -> Option<String> {
+        self.compiler.get_type_for_constructor(ctor_name)
+    }
+
     /// Get UFCS methods for a type (functions whose first parameter matches the type)
     /// Returns (local_name, signature, doc) tuples
     pub fn get_ufcs_methods_for_type(&self, type_name: &str) -> Vec<(String, String, Option<String>)> {

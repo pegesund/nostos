@@ -15595,6 +15595,21 @@ impl Compiler {
         Vec::new()
     }
 
+    /// Given a constructor name, find which type it belongs to.
+    /// Returns None if the constructor is not found.
+    pub fn get_type_for_constructor(&self, ctor_name: &str) -> Option<String> {
+        for (type_name, type_info) in &self.types {
+            if let TypeInfoKind::Variant { constructors } = &type_info.kind {
+                for (name, _) in constructors {
+                    if name == ctor_name {
+                        return Some(type_name.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Infer the type signature of a function definition using Hindley-Milner type inference.
     /// Returns a formatted signature string like "Int -> Int -> Int" or "a -> a -> a".
     ///

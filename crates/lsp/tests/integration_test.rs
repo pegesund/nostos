@@ -1514,3 +1514,88 @@ pub multiply(x, y) = x * y
     println!("Has Int type indicator: {}", has_int_type);
     assert!(has_int_type, "Expected type indicator ': Int' for y, but didn't find it. Got: {:?}", completions);
 }
+
+/// Test autocomplete for record construction with literal syntax: TypeName { field = value }
+#[test]
+fn test_lsp_autocomplete_record_literal_syntax() {
+    let project_path = create_test_project("record_literal");
+
+    let content = r#"type Person = { name: String, age: Int }
+
+main() = {
+    p = Person { name = "Alice", age = 30 }
+    p.
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions after "p." (line 4, 0-based: 4)
+    let completions = client.completion(&main_uri, 4, 6);
+
+    println!("=== Completions for record literal (Person {{ }}) ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+    println!("Completions count: {}", completions.len());
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // Should show type indicator for Person
+    let has_person_type = completions.iter().any(|c| c == ": Person");
+    println!("Has Person type indicator: {}", has_person_type);
+    assert!(has_person_type, "Expected type indicator ': Person' for p, but didn't find it. Got: {:?}", completions);
+}
+
+/// Test autocomplete for variant construction without explicit type annotation
+/// e.g., "r = Ok 42" should infer type from constructor name
+#[test]
+fn test_lsp_autocomplete_variant_constructor_inference() {
+    let project_path = create_test_project("variant_ctor");
+
+    let content = r#"type Result = Ok(Int) | Err(String)
+
+main() = {
+    r = Ok 42
+    r.
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions after "r." (line 4, 0-based: 4)
+    let completions = client.completion(&main_uri, 4, 6);
+
+    println!("=== Completions for variant constructor (r = Ok 42) ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+    println!("Completions count: {}", completions.len());
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // Should show type indicator for Result (or stdlib.list.Result since Ok is a stdlib constructor)
+    let has_result_type = completions.iter().any(|c| c.contains("Result"));
+    println!("Has Result type indicator: {}", has_result_type);
+    assert!(has_result_type, "Expected type indicator containing 'Result' for r (from Ok constructor), but didn't find it. Got: {:?}", completions);
+}
