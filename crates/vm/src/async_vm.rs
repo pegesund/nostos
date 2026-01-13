@@ -9065,9 +9065,29 @@ impl AsyncProcess {
     }
 
     /// Try to handle an exception with registered handlers.
-    fn handle_exception(&mut self, _error: &RuntimeError) -> bool {
-        // TODO: Implement exception handling
-        false
+    /// Converts RuntimeError to a catchable exception and tries to find a handler.
+    fn handle_exception(&mut self, error: &RuntimeError) -> bool {
+        // Convert RuntimeError to exception tuple (kind, message)
+        let (kind, message) = error.to_exception_info();
+        let kind_val = GcValue::String(self.heap.alloc_string(kind.to_string()));
+        let msg_val = GcValue::String(self.heap.alloc_string(message));
+        let tuple_ptr = self.heap.alloc_tuple(vec![kind_val, msg_val]);
+        let exception = GcValue::Tuple(tuple_ptr);
+        self.current_exception = Some(exception);
+
+        // Find the most recent handler
+        if let Some(handler) = self.handlers.pop() {
+            // Unwind stack to handler's frame
+            while self.frames.len() > handler.frame_index + 1 {
+                self.frames.pop();
+            }
+            // Jump to catch block
+            self.frames[handler.frame_index].ip = handler.catch_ip;
+            true
+        } else {
+            // No handler - let it propagate
+            false
+        }
     }
 
     /// Throw a catchable exception as a (kind, message) tuple.

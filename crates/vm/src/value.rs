@@ -627,6 +627,69 @@ impl RuntimeError {
             stack_trace,
         }
     }
+
+    /// Get the exception type and message as strings for VM exception handling.
+    /// Returns (error_type, message) tuple.
+    pub fn to_exception_info(&self) -> (&'static str, String) {
+        match self {
+            RuntimeError::TypeError { expected, found } => {
+                ("TypeError", format!("expected {}, got {}", expected, found))
+            }
+            RuntimeError::DivisionByZero => {
+                ("DivisionByZero", "division by zero".to_string())
+            }
+            RuntimeError::IndexOutOfBounds { index, length } => {
+                ("IndexOutOfBounds", format!("index {} out of bounds (length {})", index, length))
+            }
+            RuntimeError::UnknownField { type_name, field } => {
+                ("UnknownField", format!("unknown field '{}' on type '{}'", field, type_name))
+            }
+            RuntimeError::ImmutableField { field } => {
+                ("ImmutableField", format!("cannot mutate immutable field '{}'", field))
+            }
+            RuntimeError::ImmutableBinding { name } => {
+                ("ImmutableBinding", format!("cannot mutate immutable binding '{}'", name))
+            }
+            RuntimeError::UnknownVariable(name) => {
+                ("UnknownVariable", format!("unknown variable '{}'", name))
+            }
+            RuntimeError::UnknownFunction(name) => {
+                ("UnknownFunction", format!("unknown function '{}'", name))
+            }
+            RuntimeError::ArityMismatch { expected, found } => {
+                ("ArityMismatch", format!("expected {} arguments, got {}", expected, found))
+            }
+            RuntimeError::MatchFailed => {
+                ("MatchFailed", "pattern match failed".to_string())
+            }
+            RuntimeError::AssertionFailed(msg) => {
+                ("AssertionFailed", msg.clone())
+            }
+            RuntimeError::Panic(msg) => {
+                ("Panic", msg.clone())
+            }
+            RuntimeError::StackOverflow => {
+                ("StackOverflow", "stack overflow".to_string())
+            }
+            RuntimeError::ProcessNotFound(pid) => {
+                ("ProcessNotFound", format!("process {:?} not found", pid))
+            }
+            RuntimeError::Timeout => {
+                ("Timeout", "operation timed out".to_string())
+            }
+            RuntimeError::IOError(msg) => {
+                ("IOError", msg.clone())
+            }
+            RuntimeError::Interrupted => {
+                ("Interrupted", "execution interrupted (Ctrl+C)".to_string())
+            }
+            RuntimeError::WithStackTrace { error, .. } => {
+                // Delegate to the inner error
+                error.to_exception_info()
+            }
+        }
+    }
+
     /// Convert this runtime error to an exception Value that can be caught by try/catch.
     /// Returns a record with `type` and `message` fields.
     pub fn to_exception_value(&self) -> Value {

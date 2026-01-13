@@ -12260,6 +12260,9 @@ impl Compiler {
         for (i, arm) in catch_arms.iter().enumerate() {
             let is_last = i == catch_arms.len() - 1;
 
+            // Save locals before processing arm (pattern bindings should be scoped to this arm)
+            let saved_locals = self.locals.clone();
+
             // Try to match the pattern
             let (match_success, bindings) = self.compile_pattern_test(&arm.pattern, exc_reg)?;
 
@@ -12298,6 +12301,9 @@ impl Compiler {
                 let next_target = self.chunk.code.len();
                 self.chunk.patch_jump(next_arm_jump, next_target);
             }
+
+            // Restore locals after arm (pattern bindings shouldn't leak to next arm or subsequent code)
+            self.locals = saved_locals;
         }
 
         // 7.5 Re-throw block: if no pattern matched, handle rethrow
