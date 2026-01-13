@@ -15584,6 +15584,32 @@ impl Compiler {
         Vec::new()
     }
 
+    /// Get the type of a specific field in a record type.
+    /// Returns None if the type is not a record or the field doesn't exist.
+    pub fn get_field_type(&self, type_name: &str, field_name: &str) -> Option<String> {
+        // Check user-defined types first
+        if let Some(type_info) = self.types.get(type_name) {
+            if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
+                for (name, field_type) in fields {
+                    if name == field_name {
+                        return Some(field_type.clone());
+                    }
+                }
+            }
+        }
+        // Then check builtin types
+        if let Some(type_info) = self.builtin_types.get(type_name) {
+            if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
+                for (name, field_type) in fields {
+                    if name == field_name {
+                        return Some(field_type.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Get constructor names for a variant type.
     /// Returns empty vec for non-variant types or unknown types.
     pub fn get_type_constructors(&self, type_name: &str) -> Vec<String> {

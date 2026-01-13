@@ -2861,6 +2861,11 @@ impl ReplEngine {
         self.compiler.get_type_fields(type_name)
     }
 
+    /// Get the type of a specific field in a record type
+    pub fn get_field_type(&self, type_name: &str, field_name: &str) -> Option<String> {
+        self.compiler.get_field_type(type_name, field_name)
+    }
+
     /// Get constructor names for a variant type
     pub fn get_type_constructors(&self, type_name: &str) -> Vec<String> {
         self.compiler.get_type_constructors(type_name)
@@ -3603,6 +3608,22 @@ impl ReplEngine {
         let qualified = format!("stdlib.{}.{}", type_name.to_lowercase(), method_name);
         if let Some(ret_type) = self.compiler.get_function_return_type(&qualified) {
             return Some(self.resolve_generic_return_type(type_name, &ret_type));
+        }
+
+        // Check if this is a record field access (not a method call)
+        // For example: p.age where p: Person and age is a field of Person
+        if let Some(field_type) = self.get_field_type(type_name, method_name) {
+            return Some(field_type);
+        }
+
+        // Also try looking up with possible module prefixes for user-defined types
+        for registered_type in self.get_types() {
+            // Match types that end with ".TypeName" or are exactly "TypeName"
+            if registered_type.ends_with(&format!(".{}", type_name)) || registered_type == type_name {
+                if let Some(field_type) = self.get_field_type(&registered_type, method_name) {
+                    return Some(field_type);
+                }
+            }
         }
 
         None

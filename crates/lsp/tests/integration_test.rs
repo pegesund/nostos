@@ -1782,3 +1782,57 @@ main() = {
         diagnostics.iter().map(|d| format!("Line {}: {}", d.line + 1, &d.message)).collect::<Vec<_>>()
     );
 }
+
+/// Test autocomplete for chained field access: p.age. should show Int methods
+/// since age is an Int field of Person
+#[test]
+fn test_lsp_autocomplete_chained_field_access() {
+    let project_path = create_test_project("chained_field_access");
+
+    // p.age is an Int, so p.age. should show Int methods like show, asFloat32, etc.
+    // Note: file must be syntactically valid for type registration to work
+    let content = r#"type Person = { name: String, age: Int }
+
+main() = {
+    p = Person(name: "petter", age: 11)
+    p.age.show()
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions after "p.age." (line 4, character 10)
+    let completions = client.completion(&main_uri, 4, 10);
+
+    println!("=== Completions for p.age. (chained field access) ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+    println!("Completions count: {}", completions.len());
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // Should show type indicator for Int (since p.age is an Int field)
+    let has_int_type = completions.iter().any(|c| c == ": Int");
+    println!("Has Int type indicator: {}", has_int_type);
+
+    // Should show Int methods like show, hash, etc.
+    let has_show_method = completions.iter().any(|c| c == "show");
+    let has_hash_method = completions.iter().any(|c| c == "hash");
+    println!("Has show method: {}", has_show_method);
+    println!("Has hash method: {}", has_hash_method);
+
+    assert!(has_int_type, "Expected ': Int' type indicator for p.age. Got: {:?}", completions);
+    assert!(has_show_method, "Expected 'show' method for Int type. Got: {:?}", completions);
+    assert!(has_hash_method, "Expected 'hash' method for Int type. Got: {:?}", completions);
+}
