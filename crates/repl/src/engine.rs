@@ -1991,8 +1991,12 @@ impl ReplEngine {
             let add_result = self.compiler.add_module(&module_to_compile, module_path.clone(), Arc::new(input_with_types.clone()), "<repl>".to_string());
             if let Err(ref e) = add_result {
                 eprintln!("LSP DEBUG eval_in_module: add_module FAILED: {}", e);
+                // Return error with line number
+                let span = e.span();
+                let line = Self::offset_to_line(&input_with_types, span.start);
+                let adjusted_line = if line > prefix_line_count { line - prefix_line_count } else { line };
+                return Err(format!("line {}: {}", adjusted_line, e));
             }
-            add_result.map_err(|e| format!("Error: {}", e))?;
 
             // Extract import mappings from "use" statements in the module
             // This maps local names to fully qualified names (e.g., "helper" -> "lib.helper")
@@ -5196,10 +5200,21 @@ impl ReplEngine {
     /// Recompile a module with new content, detecting function additions/deletions/changes
     /// Returns Ok with description or Err with error message
     pub fn recompile_module_with_content(&mut self, module_name: &str, content: &str) -> Result<String, String> {
-        use nostos_syntax::parse;
+        use nostos_syntax::{parse, parse_errors_to_source_errors, offset_to_line_col};
 
         // Parse the new content
-        let (maybe_module, _errors) = parse(content);
+        let (maybe_module, errors) = parse(content);
+
+        // Handle parse errors with proper line numbers
+        if !errors.is_empty() {
+            let source_errors = parse_errors_to_source_errors(&errors);
+            if let Some(first) = source_errors.first() {
+                let (line, _col) = offset_to_line_col(content, first.span.start);
+                return Err(format!("line {}: {}", line, first.message));
+            }
+            return Err("Parse error".to_string());
+        }
+
         let module = match maybe_module {
             Some(m) => m,
             None => return Err("Failed to parse module".to_string()),
@@ -15554,6 +15569,84 @@ broken_func() = {
             "Error should have correct line number in user content, not 0: {}", err);
         // Should NOT have line 0
         assert!(!err.contains("line 0:"), "Error should not be on line 0: {}", err);
+
+        // Cleanup
+        std::fs::remove_file(&file_path).ok();
+    }
+
+    #[test]
+    fn test_recompile_module_with_content_line_numbers() {
+        // Test that recompile_module_with_content returns errors with correct line numbers
+        // This is used by the LSP
+        let mut engine = ReplEngine::new(ReplConfig::default());
+
+        // Create a file with a valid function first
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("recompile_test.nos");
+        let initial_content = r#"
+hello() = "world"
+"#;
+        std::fs::write(&file_path, initial_content).expect("Failed to write temp file");
+        let load_result = engine.load_file(file_path.to_str().unwrap());
+        assert!(load_result.is_ok(), "File should load: {:?}", load_result);
+
+        // Now try to recompile with an error on line 5
+        let content_with_error = r#"# comment line 1
+# comment line 2
+hello() = {
+    x = 1
+    unknown_var
+    x
+}
+"#;
+        let result = engine.recompile_module_with_content("recompile_test", content_with_error);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected error for unknown_var");
+
+        let err = result.unwrap_err();
+        println!("Error: {}", err);
+        // The error is on line 5 (unknown_var) - format is "filename:line: message"
+        // Check for :5: or line 5 format
+        assert!(err.contains(":5:") || err.contains("line 5"),
+            "Error should have correct line number (5): {}", err);
+        // Should NOT have :0:
+        assert!(!err.contains(":0:"), "Error should not be on line 0: {}", err);
+
+        // Cleanup
+        std::fs::remove_file(&file_path).ok();
+    }
+
+    #[test]
+    fn test_recompile_module_parse_error_line_numbers() {
+        // Test that parse errors in recompile_module_with_content have line numbers
+        let mut engine = ReplEngine::new(ReplConfig::default());
+
+        // Create a file first
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("parse_error_test.nos");
+        let initial_content = "hello() = 42\n";
+        std::fs::write(&file_path, initial_content).expect("Failed to write temp file");
+        let _ = engine.load_file(file_path.to_str().unwrap());
+
+        // Now try to recompile with a parse error on line 4
+        // Use truly invalid syntax that can't be recovered
+        let content_with_parse_error = r#"# line 1
+# line 2
+# line 3
+hello() = {{{
+"#;
+        let result = engine.recompile_module_with_content("parse_error_test", content_with_parse_error);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected parse error");
+
+        let err = result.unwrap_err();
+        println!("Error: {}", err);
+        // The parse error is around line 4
+        // Should have a line number, not "Failed to parse module"
+        assert!(!err.contains("Failed to parse module"), "Should have specific error, not generic: {}", err);
+        // Error should contain "line " prefix (our new format) or :N: (old format)
+        assert!(err.contains("line ") || err.contains(":4:") || err.contains(":5:"),
+            "Error should include line number: {}", err);
 
         // Cleanup
         std::fs::remove_file(&file_path).ok();

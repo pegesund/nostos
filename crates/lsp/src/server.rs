@@ -503,7 +503,7 @@ impl NostosLanguageServer {
 
 // Increment BUILD_ID manually when making changes to easily verify binary is updated
 const LSP_VERSION: &str = env!("CARGO_PKG_VERSION");
-const LSP_BUILD_ID: &str = "2026-01-13-hover-completion";
+const LSP_BUILD_ID: &str = "2026-01-13-fix-line-numbers";
 
 #[tower_lsp::async_trait]
 impl LanguageServer for NostosLanguageServer {
