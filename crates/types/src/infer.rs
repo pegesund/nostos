@@ -424,7 +424,8 @@ impl<'a> InferCtx<'a> {
             if let Some(type_name) = self.get_type_name(&resolved_receiver) {
                 let qualified_name = format!("{}.{}", type_name, call.method_name);
 
-                // Look up the function
+                // Look up the function by qualified name
+                // Multi-param list methods (map, fold) use a separate code path below
                 if let Some(fn_type) = self.env.functions.get(&qualified_name).cloned() {
                     let func_ty = self.instantiate_function(&fn_type);
                     if let Type::Function(ft) = func_ty {
@@ -441,12 +442,10 @@ impl<'a> InferCtx<'a> {
                             });
                         }
 
-                        // Resolve arg types and check against params (only for provided args)
+                        // Resolve arg types and check against params
                         for (param_ty, arg_ty) in ft.params.iter().zip(call.arg_types.iter()) {
                             let resolved_arg = self.env.apply_subst(arg_ty);
                             let resolved_param = self.env.apply_subst(param_ty);
-
-                            // Try to unify - this will fail if types are incompatible
                             self.unify_types(&resolved_arg, &resolved_param)?;
                         }
 
@@ -455,6 +454,10 @@ impl<'a> InferCtx<'a> {
                         self.unify_types(&resolved_ret, &ft.ret)?;
                     }
                 }
+                // Note: Multi-param list methods (map, fold, filter) are NOT type-checked here.
+                // Their return types propagate through the constraint system during inference.
+                // Full deferred type checking for these methods would require tracking type
+                // param bindings, which conflicts with lambda pattern inference.
                 // If function not found, we don't error here - let the existing
                 // unknown function checks handle it
             }
@@ -1301,6 +1304,11 @@ impl<'a> InferCtx<'a> {
                 // Try immediate UFCS lookup if receiver type is already resolved
                 if let Some(type_name) = self.get_type_name(&receiver_ty) {
                     let qualified_name = format!("{}.{}", type_name, method.node);
+                    // Only look up qualified names (e.g., List.get, List.head)
+                    // We DON'T fall back to unqualified names here because that would
+                    // cause eager unification for multi-param methods like map/fold,
+                    // which breaks nested pattern inference in lambdas.
+                    // Unregistered methods use deferred checking via pending_method_calls.
                     if let Some(fn_type) = self.env.functions.get(&qualified_name).cloned() {
                         // Found the function - instantiate and unify
                         let func_ty = self.instantiate_function(&fn_type);

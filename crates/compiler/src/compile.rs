@@ -16032,19 +16032,20 @@ impl Compiler {
             if let Some(fn_type) = self.parse_signature_string(builtin.signature) {
                 env.functions.insert(builtin.name.to_string(), fn_type.clone());
 
-                // Also register SIMPLE list methods with "List." prefix for UFCS type inference
+                // Also register single-param list methods with "List." prefix for UFCS type inference
                 // This allows `list.get(0)` to properly propagate element types
-                // Only register methods with single type param 'a' - multi-param functions
-                // like map/fold need deferred resolution via pending_method_calls
-                let sig = builtin.signature;
-                let is_simple_list_method = sig.starts_with("[a]")
-                    && !builtin.name.contains('.')
-                    && !sig.contains(" b") && !sig.contains("(b") && !sig.contains("[b")
-                    && !sig.contains(" c") && !sig.contains("(c") && !sig.contains("[c");
-                if is_simple_list_method {
-                    let qualified_name = format!("List.{}", builtin.name);
-                    if !env.functions.contains_key(&qualified_name) {
-                        env.functions.insert(qualified_name, fn_type);
+                // Note: Multi-param methods (map, fold, etc.) use deferred resolution in check_pending_method_calls
+                // because eager registration breaks constraint solving order for higher-order functions
+                if builtin.signature.starts_with("[a]") && !builtin.name.contains('.') {
+                    // Only register methods with pattern "[a] -> ... -> a" (returns element type)
+                    // Skip methods like map "[a] -> (a -> b) -> [b]" which have multiple type params
+                    let has_single_type_param = !builtin.signature.contains(" b")
+                        && !builtin.signature.contains("(b");
+                    if has_single_type_param {
+                        let qualified_name = format!("List.{}", builtin.name);
+                        if !env.functions.contains_key(&qualified_name) {
+                            env.functions.insert(qualified_name, fn_type);
+                        }
                     }
                 }
             }
