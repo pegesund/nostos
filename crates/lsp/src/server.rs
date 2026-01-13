@@ -503,7 +503,7 @@ impl NostosLanguageServer {
 
 // Increment BUILD_ID manually when making changes to easily verify binary is updated
 const LSP_VERSION: &str = env!("CARGO_PKG_VERSION");
-const LSP_BUILD_ID: &str = "2026-01-13-i-line-fix";
+const LSP_BUILD_ID: &str = "2026-01-13-hover-completion";
 
 #[tower_lsp::async_trait]
 impl LanguageServer for NostosLanguageServer {
@@ -537,10 +537,16 @@ impl LanguageServer for NostosLanguageServer {
                     trigger_characters: Some(vec![".".to_string()]),
                     ..Default::default()
                 }),
-                // We'll add more capabilities later:
-                // - hover_provider
-                // - definition_provider
-                // - references_provider
+                // Hover support for type information
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
+                // Go to definition support
+                definition_provider: Some(OneOf::Left(true)),
+                // Signature help for function calls
+                signature_help_provider: Some(SignatureHelpOptions {
+                    trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+                    retrigger_characters: None,
+                    work_done_progress_options: Default::default(),
+                }),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -678,6 +684,231 @@ impl LanguageServer for NostosLanguageServer {
         };
 
         Ok(Some(CompletionResponse::Array(items)))
+    }
+
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        eprintln!("Hover request at {:?}", position);
+
+        // Get document content
+        let content = match self.documents.get(uri) {
+            Some(c) => c.clone(),
+            None => return Ok(None),
+        };
+
+        // Get the word at cursor position
+        let lines: Vec<&str> = content.lines().collect();
+        let line_num = position.line as usize;
+        if line_num >= lines.len() {
+            return Ok(None);
+        }
+
+        let line = lines[line_num];
+        let cursor = position.character as usize;
+
+        // Extract the word/expression at cursor
+        let (word, word_start, word_end) = Self::extract_word_at_cursor(line, cursor);
+        if word.is_empty() {
+            return Ok(None);
+        }
+
+        eprintln!("Hover word: '{}' at {}..{}", word, word_start, word_end);
+
+        // Get local bindings for type inference
+        let engine_guard = self.engine.lock().unwrap();
+        let engine_ref = engine_guard.as_ref();
+        let local_vars = Self::extract_local_bindings(&content, line_num + 1, engine_ref);
+
+        // Try to get type/signature information
+        let hover_info = if let Some(engine) = engine_ref {
+            self.get_hover_info(engine, &word, &local_vars, line)
+        } else {
+            None
+        };
+
+        drop(engine_guard);
+
+        if let Some(info) = hover_info {
+            let range = Range {
+                start: Position { line: position.line, character: word_start as u32 },
+                end: Position { line: position.line, character: word_end as u32 },
+            };
+
+            Ok(Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: info,
+                }),
+                range: Some(range),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn goto_definition(&self, params: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        eprintln!("Goto definition at {:?}", position);
+
+        // Get document content
+        let content = match self.documents.get(uri) {
+            Some(c) => c.clone(),
+            None => return Ok(None),
+        };
+
+        // Get the word at cursor position
+        let lines: Vec<&str> = content.lines().collect();
+        let line_num = position.line as usize;
+        if line_num >= lines.len() {
+            return Ok(None);
+        }
+
+        let line = lines[line_num];
+        let cursor = position.character as usize;
+
+        let (word, _, _) = Self::extract_word_at_cursor(line, cursor);
+        if word.is_empty() {
+            return Ok(None);
+        }
+
+        eprintln!("Goto definition for: '{}'", word);
+
+        // Try to find the definition
+        let engine_guard = self.engine.lock().unwrap();
+        let Some(engine) = engine_guard.as_ref() else {
+            return Ok(None);
+        };
+
+        // Check if it's a function
+        if let Some(source_file) = engine.get_function_source_file(&word) {
+            // Try to find the line in the source file
+            if let Some(file_content) = std::fs::read_to_string(&source_file).ok() {
+                if let Some(line_num) = Self::find_definition_line(&file_content, &word) {
+                    if let Ok(target_uri) = Url::from_file_path(&source_file) {
+                        return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                            uri: target_uri,
+                            range: Range {
+                                start: Position { line: line_num, character: 0 },
+                                end: Position { line: line_num, character: 0 },
+                            },
+                        })));
+                    }
+                }
+            }
+        }
+
+        // Check if it's a type
+        if let Some(type_def_info) = engine.get_type_definition_location(&word) {
+            if let Ok(target_uri) = Url::from_file_path(&type_def_info.0) {
+                return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                    uri: target_uri,
+                    range: Range {
+                        start: Position { line: type_def_info.1, character: 0 },
+                        end: Position { line: type_def_info.1, character: 0 },
+                    },
+                })));
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        // Get document content
+        let content = match self.documents.get(uri) {
+            Some(c) => c.clone(),
+            None => return Ok(None),
+        };
+
+        let lines: Vec<&str> = content.lines().collect();
+        let line_num = position.line as usize;
+        if line_num >= lines.len() {
+            return Ok(None);
+        }
+
+        let line = lines[line_num];
+        let cursor = position.character as usize;
+        let prefix = if cursor <= line.len() { &line[..cursor] } else { line };
+
+        // Find the function name before the opening paren
+        let (fn_name, active_param) = Self::extract_function_call_context(prefix);
+        if fn_name.is_empty() {
+            return Ok(None);
+        }
+
+        eprintln!("Signature help for: '{}', param {}", fn_name, active_param);
+
+        let engine_guard = self.engine.lock().unwrap();
+        let Some(engine) = engine_guard.as_ref() else {
+            return Ok(None);
+        };
+
+        // Get function signature
+        if let Some(sig) = engine.get_function_signature(&fn_name) {
+            // Get parameter info
+            let params_info = engine.get_function_params(&fn_name);
+            let doc = engine.get_function_doc(&fn_name);
+
+            let parameters: Vec<ParameterInformation> = if let Some(params) = params_info {
+                params.iter().map(|(name, ty, has_default, default_val)| {
+                    let label = if *has_default {
+                        if let Some(def) = default_val {
+                            format!("{}: {} = {}", name, ty, def)
+                        } else {
+                            format!("{}: {} = ?", name, ty)
+                        }
+                    } else {
+                        format!("{}: {}", name, ty)
+                    };
+                    ParameterInformation {
+                        label: ParameterLabel::Simple(label),
+                        documentation: None,
+                    }
+                }).collect()
+            } else {
+                vec![]
+            };
+
+            let signature = SignatureInformation {
+                label: format!("{}: {}", fn_name, sig),
+                documentation: doc.map(|d| Documentation::String(d)),
+                parameters: Some(parameters),
+                active_parameter: Some(active_param as u32),
+            };
+
+            return Ok(Some(SignatureHelp {
+                signatures: vec![signature],
+                active_signature: Some(0),
+                active_parameter: Some(active_param as u32),
+            }));
+        }
+
+        // Try builtin
+        if let Some(sig) = nostos_compiler::Compiler::get_builtin_signature(&fn_name) {
+            let doc = nostos_compiler::Compiler::get_builtin_doc(&fn_name);
+
+            let signature = SignatureInformation {
+                label: format!("{}: {}", fn_name, sig),
+                documentation: doc.map(|d| Documentation::String(d.to_string())),
+                parameters: None,
+                active_parameter: Some(active_param as u32),
+            };
+
+            return Ok(Some(SignatureHelp {
+                signatures: vec![signature],
+                active_signature: Some(0),
+                active_parameter: Some(active_param as u32),
+            }));
+        }
+
+        Ok(None)
     }
 }
 
@@ -1393,5 +1624,183 @@ impl NostosLanguageServer {
         }
 
         items
+    }
+
+    /// Extract the word/identifier at the cursor position
+    /// Returns (word, start_index, end_index)
+    fn extract_word_at_cursor(line: &str, cursor: usize) -> (String, usize, usize) {
+        let chars: Vec<char> = line.chars().collect();
+        let cursor = cursor.min(chars.len());
+
+        // Find start of word (including dots for qualified names)
+        let mut start = cursor;
+        while start > 0 {
+            let c = chars[start - 1];
+            if c.is_alphanumeric() || c == '_' || c == '.' {
+                start -= 1;
+            } else {
+                break;
+            }
+        }
+
+        // Find end of word
+        let mut end = cursor;
+        while end < chars.len() {
+            let c = chars[end];
+            if c.is_alphanumeric() || c == '_' {
+                end += 1;
+            } else {
+                break;
+            }
+        }
+
+        let word: String = chars[start..end].iter().collect();
+        (word, start, end)
+    }
+
+    /// Get hover information for a word
+    fn get_hover_info(
+        &self,
+        engine: &nostos_repl::ReplEngine,
+        word: &str,
+        local_vars: &std::collections::HashMap<String, String>,
+        _line: &str,
+    ) -> Option<String> {
+        // Check if it's a local variable
+        if let Some(ty) = local_vars.get(word) {
+            return Some(format!("```nostos\n{}: {}\n```\n*(local variable)*", word, ty));
+        }
+
+        // Check if it's a function
+        if let Some(sig) = engine.get_function_signature(word) {
+            let mut info = format!("```nostos\n{}: {}\n```", word, sig);
+            if let Some(doc) = engine.get_function_doc(word) {
+                info.push_str(&format!("\n\n{}", doc));
+            }
+            return Some(info);
+        }
+
+        // Try with module prefix stripped
+        let simple_name = word.rsplit('.').next().unwrap_or(word);
+        if simple_name != word {
+            if let Some(sig) = engine.get_function_signature(simple_name) {
+                let mut info = format!("```nostos\n{}: {}\n```", simple_name, sig);
+                if let Some(doc) = engine.get_function_doc(simple_name) {
+                    info.push_str(&format!("\n\n{}", doc));
+                }
+                return Some(info);
+            }
+        }
+
+        // Check if it's a builtin
+        if let Some(sig) = nostos_compiler::Compiler::get_builtin_signature(word) {
+            let mut info = format!("```nostos\n{}: {}\n```\n*(builtin)*", word, sig);
+            if let Some(doc) = nostos_compiler::Compiler::get_builtin_doc(word) {
+                info.push_str(&format!("\n\n{}", doc));
+            }
+            return Some(info);
+        }
+
+        // Check if it's a type
+        for type_name in engine.get_types() {
+            let short = type_name.rsplit('.').next().unwrap_or(&type_name);
+            if short == word || type_name == word {
+                // Get type info
+                let fields = engine.get_type_fields(&type_name);
+                let constructors = engine.get_type_constructors(&type_name);
+
+                let mut info = format!("```nostos\ntype {}\n```", short);
+
+                if !fields.is_empty() {
+                    info.push_str("\n\n**Fields:**\n");
+                    for field in fields {
+                        info.push_str(&format!("- `{}`\n", field));
+                    }
+                }
+
+                if !constructors.is_empty() {
+                    info.push_str("\n\n**Constructors:**\n");
+                    for ctor in constructors {
+                        info.push_str(&format!("- `{}`\n", ctor));
+                    }
+                }
+
+                return Some(info);
+            }
+        }
+
+        // Try to infer expression type
+        if let Some(ty) = engine.infer_expression_type(word, local_vars) {
+            return Some(format!("```nostos\n{}: {}\n```\n*(inferred)*", word, ty));
+        }
+
+        None
+    }
+
+    /// Find the line number where a function is defined
+    fn find_definition_line(content: &str, fn_name: &str) -> Option<u32> {
+        let simple_name = fn_name.rsplit('.').next().unwrap_or(fn_name);
+        let pattern = format!("{}(", simple_name);
+        let pattern2 = format!("{} (", simple_name);
+
+        for (line_num, line) in content.lines().enumerate() {
+            let trimmed = line.trim();
+            // Look for function definition: name(...) = or name (...) =
+            if (trimmed.starts_with(&pattern) || trimmed.starts_with(&pattern2))
+                && trimmed.contains('=')
+            {
+                return Some(line_num as u32);
+            }
+        }
+        None
+    }
+
+    /// Extract function name and active parameter index from a partial call expression
+    /// e.g., "foo(1, 2," -> ("foo", 2)
+    fn extract_function_call_context(prefix: &str) -> (String, usize) {
+        // Find the last unmatched opening paren
+        let mut paren_depth = 0;
+        let mut last_open_paren = None;
+
+        for (i, c) in prefix.char_indices() {
+            match c {
+                '(' => {
+                    if paren_depth == 0 {
+                        last_open_paren = Some(i);
+                    }
+                    paren_depth += 1;
+                }
+                ')' => paren_depth = (paren_depth - 1).max(0),
+                _ => {}
+            }
+        }
+
+        let Some(paren_pos) = last_open_paren else {
+            return (String::new(), 0);
+        };
+
+        // Get function name before the paren
+        let before_paren = prefix[..paren_pos].trim();
+        let fn_name = before_paren
+            .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '.')
+            .last()
+            .unwrap_or("")
+            .to_string();
+
+        // Count commas to determine active parameter
+        let after_paren = &prefix[paren_pos + 1..];
+        let mut comma_count = 0;
+        let mut depth = 0;
+
+        for c in after_paren.chars() {
+            match c {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth = (depth - 1).max(0),
+                ',' if depth == 0 => comma_count += 1,
+                _ => {}
+            }
+        }
+
+        (fn_name, comma_count)
     }
 }

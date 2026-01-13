@@ -5059,6 +5059,78 @@ impl ReplEngine {
         self.compiler.get_prelude_imports().contains_key(name)
     }
 
+    /// Get the source file path for a function (for goto definition)
+    pub fn get_function_source_file(&self, name: &str) -> Option<String> {
+        // Try exact name first
+        if let Some(func) = self.compiler.get_function(name) {
+            if let Some(ref source_file) = func.source_file {
+                if source_file != "<repl>" && source_file != "repl" {
+                    return Some(source_file.clone());
+                }
+            }
+        }
+
+        // Try qualified names
+        for fn_name in self.compiler.get_function_names() {
+            let short = fn_name.rsplit('.').next().unwrap_or(fn_name);
+            if short == name {
+                if let Some(func) = self.compiler.get_function(fn_name) {
+                    if let Some(ref source_file) = func.source_file {
+                        if source_file != "<repl>" && source_file != "repl" {
+                            return Some(source_file.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check module sources
+        if let Some(dot_pos) = name.rfind('.') {
+            let module = &name[..dot_pos];
+            if let Some(path) = self.module_sources.get(module) {
+                return Some(path.to_string_lossy().to_string());
+            }
+        }
+
+        None
+    }
+
+    /// Get the source file and line number for a type definition (for goto definition)
+    pub fn get_type_definition_location(&self, name: &str) -> Option<(String, u32)> {
+        // Get the type from the compiler
+        let types = self.compiler.get_all_types();
+
+        for (type_name, _type_val) in types {
+            let short = type_name.rsplit('.').next().unwrap_or(&type_name);
+            if short == name || type_name == name {
+                // Find the module this type belongs to
+                if let Some(dot_pos) = type_name.rfind('.') {
+                    let module = &type_name[..dot_pos];
+                    if let Some(path) = self.module_sources.get(module) {
+                        // Read file and find the type definition line
+                        if let Ok(content) = std::fs::read_to_string(path) {
+                            let pattern = format!("type {} ", short);
+                            let pattern2 = format!("type {}[", short);
+                            let pattern3 = format!("reactive {} ", short);
+
+                            for (line_num, line) in content.lines().enumerate() {
+                                let trimmed = line.trim();
+                                if trimmed.starts_with(&pattern)
+                                    || trimmed.starts_with(&pattern2)
+                                    || trimmed.starts_with(&pattern3)
+                                {
+                                    return Some((path.to_string_lossy().to_string(), line_num as u32));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
     /// Compute a hash of a string (for function source comparison)
     fn hash_source(source: &str) -> u64 {
         use std::hash::{Hash, Hasher};
