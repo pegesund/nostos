@@ -1021,35 +1021,49 @@ impl NostosLanguageServer {
             return Some("Set".to_string());
         }
 
-        // Record construction: TypeName { field = value, ... }
-        // Pattern: starts with uppercase letter, followed by alphanumeric, then space and {
-        if let Some(brace_pos) = trimmed.find('{') {
-            let before_brace = trimmed[..brace_pos].trim();
-            // Check if it looks like a type name (starts with uppercase)
-            if !before_brace.is_empty()
-                && before_brace.chars().next().map_or(false, |c| c.is_uppercase())
-                && before_brace.chars().all(|c| c.is_alphanumeric() || c == '_')
-            {
-                eprintln!("Inferred record construction type: {}", before_brace);
-                return Some(before_brace.to_string());
-            }
-        }
-
-        // Variant construction: ConstructorName value or ConstructorName
-        // Check if it starts with uppercase letter (potential constructor)
+        // Record/Variant construction: TypeName(field: value, ...) or ConstructorName(value)
+        // Both start with uppercase letter followed by parentheses
         if let Some(first_char) = trimmed.chars().next() {
             if first_char.is_uppercase() {
-                // Extract the constructor name (first word)
-                let ctor_name: String = trimmed.chars()
+                // Extract the type/constructor name (before parenthesis or space)
+                let name: String = trimmed.chars()
                     .take_while(|c| c.is_alphanumeric() || *c == '_')
                     .collect();
 
-                if !ctor_name.is_empty() {
-                    // Try to look up the type that this constructor belongs to
+                if !name.is_empty() {
+                    // Check if it's followed by ( - indicates construction call
+                    let rest = trimmed[name.len()..].trim_start();
+                    let is_construction = rest.starts_with('(');
+
                     if let Some(engine) = engine {
-                        if let Some(type_name) = engine.get_type_for_constructor(&ctor_name) {
-                            eprintln!("Inferred variant construction type: {} from constructor {}", type_name, ctor_name);
+                        // First check if it's a variant constructor (e.g., Success -> MyResult)
+                        if let Some(type_name) = engine.get_type_for_constructor(&name) {
+                            eprintln!("Inferred variant construction type: {} from constructor {}", type_name, name);
                             return Some(type_name);
+                        }
+
+                        // Otherwise check if it's a record type name directly (e.g., Person -> Person)
+                        // Record types are their own constructors
+                        let types = engine.get_types();
+                        if types.contains(&name) {
+                            eprintln!("Inferred record construction type: {}", name);
+                            return Some(name);
+                        }
+                    }
+
+                    // Fallback: If it looks like a record construction (TypeName(field: value))
+                    // and the type isn't registered yet, assume the type name equals the constructor name
+                    if is_construction {
+                        if rest.contains(':') {
+                            // Pattern: TypeName(field: value, ...) - the colon indicates named field (record)
+                            eprintln!("Inferred record type from construction pattern: {}", name);
+                            return Some(name);
+                        } else {
+                            // Pattern: ConstructorName(value) - could be a variant constructor
+                            // Without engine, we can't determine parent type, so just use the constructor name
+                            // This is a best-effort fallback
+                            eprintln!("Inferred type from constructor pattern (fallback): {}", name);
+                            return Some(name);
                         }
                     }
                 }
