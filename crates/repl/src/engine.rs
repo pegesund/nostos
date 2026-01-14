@@ -2115,6 +2115,10 @@ impl ReplEngine {
 
             // Now mark functions with errors and their dependents as stale
             for (fn_name, error, _filename, source) in &errors {
+                // Skip errors with empty source (duplicate entries that would produce wrong line numbers)
+                if source.is_empty() {
+                    continue;
+                }
                 // Include line number in error message for LSP
                 let span = error.span();
                 let line = Self::offset_to_line(source, span.start);
@@ -2218,8 +2222,10 @@ impl ReplEngine {
                 }
             }
 
-            // If there were errors, return the first one with filename and line number
-            if let Some((_fn_name, error, filename, source)) = errors.into_iter().next() {
+            // If there were errors, return the first one with non-empty source
+            if let Some((_fn_name, error, filename, source)) = errors.into_iter()
+                .find(|(_, _, _, s)| !s.is_empty())
+            {
                 let span = error.span();
                 let line = Self::offset_to_line(&source, span.start);
                 // Adjust line number by subtracting prefix lines (type definitions prepended)
@@ -4632,6 +4638,10 @@ impl ReplEngine {
         // Convert absolute paths to relative paths for source_manager compatibility
         let mut files_with_errors: HashSet<String> = HashSet::new();
         for (fn_name, error, source_name, source_code) in &errors {
+            // Skip errors with empty source (duplicate entries that would produce wrong line numbers)
+            if source_code.is_empty() {
+                continue;
+            }
             // Include line number in error message for LSP
             let span = error.span();
             let line = nostos_syntax::offset_to_line_col(source_code, span.start).0;
@@ -19608,5 +19618,33 @@ main() = {
         }
 
         cleanup_lsp(&temp_path);
+    }
+
+    #[test]
+    fn test_check_module_map_arity_error_line() {
+        // Test that gg.map() (missing args) shows error on correct line
+        // when using check_module_compiles
+        let engine = ReplEngine::new(ReplConfig::default());
+        // Line numbers (1-based):
+        // 1: main() = {
+        // 2:     a = 1
+        // 3:     b = 2
+        // 4:     gg = [[0,1]]
+        // 5:     gg.map()  <-- Error should be here
+        // 6: }
+        let code = r#"main() = {
+    a = 1
+    b = 2
+    gg = [[0,1]]
+    gg.map()
+}"#;
+        let result = engine.check_module_compiles("", code);
+        println!("check_module_compiles result: {:?}", result);
+        assert!(result.is_err(), "Expected arity error for gg.map()");
+        let err = result.unwrap_err();
+        println!("Error message: {}", err);
+        // Should be line 5, not line 1
+        assert!(err.contains("line 5:") || err.contains(":5:"),
+            "Error should be on line 5 (gg.map()), got: {}", err);
     }
 }

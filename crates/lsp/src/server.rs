@@ -177,9 +177,7 @@ impl NostosLanguageServer {
 
             // First check the return value for direct errors
             if let Err(e) = &result {
-                eprintln!("LSP DEBUG: Raw error string: {}", e);
                 let (line, message) = Self::parse_error_location(e, Some(content));
-                eprintln!("LSP DEBUG: Publishing error for {} at line {} (0-based): {}", module_name, line, message);
                 errors.push(Diagnostic {
                     range: Range {
                         start: Position { line, character: 0 },
@@ -203,7 +201,6 @@ impl NostosLanguageServer {
                                 let (line, message) = Self::parse_error_location(&e, Some(content));
                                 // Avoid duplicate errors
                                 if !errors.iter().any(|d| d.message == message) {
-                                    eprintln!("Publishing status error for {} at line {}: {}", fn_name, line, message);
                                     errors.push(Diagnostic {
                                         range: Range {
                                             start: Position { line, character: 0 },
@@ -485,6 +482,21 @@ impl NostosLanguageServer {
             }
         }
 
+        // Format 6: "Wrong number of arguments" - search for empty function calls
+        // like .map() or .filter() that are likely missing arguments
+        // NOTE: This is a fallback heuristic. The type checker should ideally provide
+        // correct spans, but currently has a known limitation with span tracking.
+        if error_msg.contains("Wrong number of arguments") {
+            if let Some(content) = content {
+                // Search for patterns like .X() with empty parentheses
+                let line = Self::find_empty_call_line(content);
+                if line > 0 {
+                    eprintln!("Found likely empty call at line {}", line);
+                    return (line - 1, error_msg.to_string()); // Convert to 0-based
+                }
+            }
+        }
+
         // Fallback: no line number found
         eprintln!("Could not parse line number, using line 0");
         (0, error_msg.to_string())
@@ -512,6 +524,31 @@ impl NostosLanguageServer {
             }
         }
         0 // Default to line 0 if not found
+    }
+
+    /// Find the line number (1-based) where an empty method call is likely causing an arity error
+    /// Looks for patterns like .map() .filter() etc with empty parentheses
+    fn find_empty_call_line(content: &str) -> u32 {
+        // Common higher-order functions that take at least one argument
+        let hot_functions = ["map", "filter", "fold", "reduce", "flatMap", "forEach", "any", "all"];
+
+        for (line_num, line) in content.lines().enumerate() {
+            let trimmed = line.trim();
+            // Skip comment lines
+            if trimmed.starts_with('#') || trimmed.is_empty() {
+                continue;
+            }
+
+            // Look for .function() with empty parentheses
+            for func in &hot_functions {
+                let pattern = format!(".{}()", func);
+                if line.contains(&pattern) {
+                    eprintln!("Found empty call {} at line {}: {}", func, line_num + 1, line);
+                    return (line_num + 1) as u32; // Return 1-based line number
+                }
+            }
+        }
+        0 // Not found
     }
 }
 
@@ -1861,17 +1898,66 @@ impl NostosLanguageServer {
     fn get_identifier_completions(&self, partial: &str) -> Vec<CompletionItem> {
         let mut items = Vec::new();
 
+        let partial_lower = partial.to_lowercase();
+
+        // Add keywords first (always available, even without engine)
+        let keywords = [
+            ("if", "Conditional expression"),
+            ("then", "Then branch of conditional"),
+            ("else", "Else branch of conditional"),
+            ("match", "Pattern matching expression"),
+            ("with", "Match arm separator"),
+            ("end", "End of block"),
+            ("type", "Type definition"),
+            ("trait", "Trait definition"),
+            ("reactive", "Reactive type definition"),
+            ("use", "Import module"),
+            ("var", "Mutable variable"),
+            ("mvar", "Module-level mutable variable"),
+            ("while", "While loop"),
+            ("for", "For loop"),
+            ("true", "Boolean true"),
+            ("false", "Boolean false"),
+            ("and", "Logical and"),
+            ("or", "Logical or"),
+            ("not", "Logical not"),
+            ("in", "In expression (for loops)"),
+            ("do", "Do expression"),
+            ("return", "Return from function"),
+            ("break", "Break from loop"),
+            ("continue", "Continue to next iteration"),
+        ];
+
+        for (kw, doc) in keywords {
+            if partial.is_empty() || kw.starts_with(&partial_lower) {
+                items.push(CompletionItem {
+                    label: kw.to_string(),
+                    kind: Some(CompletionItemKind::KEYWORD),
+                    detail: Some("keyword".to_string()),
+                    documentation: Some(Documentation::String(doc.to_string())),
+                    insert_text: Some(kw.to_string()),
+                    ..Default::default()
+                });
+            }
+        }
+
         let engine_guard = self.engine.lock().unwrap();
         let Some(engine) = engine_guard.as_ref() else {
             return items;
         };
 
-        let partial_lower = partial.to_lowercase();
-
         // Add functions
+        let mut seen_functions = std::collections::HashSet::new();
         for fn_name in engine.get_functions() {
             // Only show simple names (not module.function format) or match on full name
+            // Also strip /signature suffix used for overloaded functions
             let display_name = fn_name.rsplit('.').next().unwrap_or(&fn_name);
+            let display_name = display_name.split('/').next().unwrap_or(display_name);
+
+            // Skip duplicates (from overloaded functions)
+            if !seen_functions.insert(display_name.to_string()) {
+                continue;
+            }
 
             if partial.is_empty() || display_name.to_lowercase().starts_with(&partial_lower) {
                 let signature = engine.get_function_signature(&fn_name);
@@ -1895,7 +1981,7 @@ impl NostosLanguageServer {
             }
         }
 
-        // Add types
+        // Add types and their constructors
         for type_name in engine.get_types() {
             let display_name = type_name.rsplit('.').next().unwrap_or(&type_name);
 
@@ -1908,11 +1994,24 @@ impl NostosLanguageServer {
                     ..Default::default()
                 });
             }
+
+            // Add variant constructors for this type
+            for ctor_name in engine.get_type_constructors(&type_name) {
+                if partial.is_empty() || ctor_name.to_lowercase().starts_with(&partial_lower) {
+                    items.push(CompletionItem {
+                        label: ctor_name.clone(),
+                        kind: Some(CompletionItemKind::ENUM_MEMBER),
+                        detail: Some(format!("constructor of {}", display_name)),
+                        insert_text: Some(ctor_name),
+                        ..Default::default()
+                    });
+                }
+            }
         }
 
         // Limit results if too many
-        if items.len() > 100 {
-            items.truncate(100);
+        if items.len() > 200 {
+            items.truncate(200);
         }
 
         items

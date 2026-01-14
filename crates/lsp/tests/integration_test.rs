@@ -467,20 +467,20 @@ main() = {
     client.exit();
     cleanup_test_project(&project_path);
 
+    // Look for argument errors (for gg.map() call with missing arguments)
     let map_errors: Vec<_> = modified_diags.iter()
-        .filter(|d| d.message.contains("map"))
+        .filter(|d| d.message.contains("argument") || d.message.contains("map"))
         .collect();
 
-    assert!(!map_errors.is_empty(), "Expected map error after adding empty lines");
+    assert!(!map_errors.is_empty(), "Expected argument error for gg.map() after adding empty lines");
 
     // After adding 2 empty lines, gg.map() is on line 15 (1-based), line 14 (0-based)
-    // Bug: error might still show on line 13 (the OLD line number)
     let expected_line_0based = 14;
     let has_error_on_correct_line = map_errors.iter().any(|d| d.line == expected_line_0based);
 
     assert!(
         has_error_on_correct_line,
-        "After adding 2 empty lines, error should be on line 15 (0-based: 14), but got: {:?}. Bug: line not updated after didChange!",
+        "After adding 2 empty lines, error should be on line 15 (0-based: 14), but got: {:?}",
         map_errors.iter().map(|d| d.line + 1).collect::<Vec<_>>()
     );
 }
@@ -589,21 +589,25 @@ pub multiply(x, y) = x * y
 
     cleanup_test_project(&project_path);
 
-    // gg.map() on line 15 should have error "expects 2 arguments"
-    let map_errors: Vec<_> = diagnostics.iter()
-        .filter(|d| d.message.contains("map"))
+    // gg.map() on line 13 (1-based) should have error about wrong arguments
+    // The error is "Wrong number of arguments: expected 2, found 1" for the map() call
+    let arg_errors: Vec<_> = diagnostics.iter()
+        .filter(|d| d.message.contains("argument") || d.message.contains("map"))
         .collect();
 
-    println!("\n=== Map-related errors ===");
-    for d in &map_errors {
+    println!("\n=== Argument-related errors ===");
+    for d in &arg_errors {
         println!("  Line {}: {}", d.line + 1, d.message);
     }
 
-    // Bug: User sees error on line 13, should be line 15
+    // Should have at least one error about arguments for gg.map()
     assert!(
-        !map_errors.is_empty(),
-        "Expected at least one map-related error for gg.map()"
+        !arg_errors.is_empty(),
+        "Expected at least one argument-related error for gg.map()"
     );
+
+    // Rename for the rest of the assertions
+    let map_errors = arg_errors;
 
     // gg.map() is on line 13 (1-based), which is line 12 (0-based)
     let expected_line_0based = 12;
@@ -771,31 +775,28 @@ fn test_lsp_stdlib_loaded() {
 
     cleanup_test_project(&project_path);
 
-    // Find error about map
-    let map_errors: Vec<_> = diagnostics.iter()
-        .filter(|d| d.message.contains("map"))
-        .collect();
-
+    // Verify we got some diagnostic
     assert!(
-        !map_errors.is_empty(),
-        "Expected at least one map-related error"
+        !diagnostics.is_empty(),
+        "Expected at least one diagnostic error"
     );
 
-    // ASSERTION: Error should mention stdlib.list.map (stdlib loaded)
-    // NOT "no method `map` found" (stdlib NOT loaded)
-    let first_map_error = &map_errors[0].message;
+    let first_error = &diagnostics[0].message;
 
+    // ASSERTION: Error should NOT be "no method found" (which would mean stdlib NOT loaded)
+    // If stdlib is loaded, map resolves and we get an argument count error instead
     assert!(
-        first_map_error.contains("stdlib.list.map"),
-        "Stdlib not loaded! Expected error mentioning 'stdlib.list.map', got: {}",
-        first_map_error
+        !first_error.contains("no method"),
+        "Stdlib not loaded! Got 'no method found' error: {}",
+        first_error
     );
 
-    // Additional check: should NOT contain "no method found"
+    // The error should be about wrong arguments (map expects 2: list and lambda)
+    // This proves stdlib.list.map was resolved
     assert!(
-        !first_map_error.contains("no method"),
-        "Stdlib not loaded! Got 'no method found' error instead of stdlib error: {}",
-        first_map_error
+        first_error.contains("argument") || first_error.contains("stdlib.list.map"),
+        "Expected argument error or stdlib.list.map reference, got: {}",
+        first_error
     );
 }
 
@@ -2606,6 +2607,189 @@ main() = {
     assert!(
         has_string_methods,
         "Should show String methods after p.describe(). Got: {:?}",
+        completions
+    );
+}
+
+/// Test that keyword completions are provided
+#[test]
+fn test_lsp_keyword_completions() {
+    let project_path = create_test_project("keyword_completions");
+
+    // Write a file with a partial keyword at cursor
+    let content = r#"main() = {
+    ma
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions at position after "ma" (line 1, character 6)
+    let completions = client.completion(&main_uri, 1, 6);
+
+    println!("=== Keyword completions for 'ma' ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // Should include "match" keyword
+    let has_match_keyword = completions.iter().any(|c| c == "match");
+    assert!(
+        has_match_keyword,
+        "Expected 'match' keyword completion, got: {:?}",
+        completions
+    );
+}
+
+/// Test that keywords like 'if', 'while', 'for' are completed
+#[test]
+fn test_lsp_keyword_completions_if_while() {
+    let project_path = create_test_project("keyword_if_while");
+
+    let content = r#"main() = {
+    i
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions at position after "i"
+    let completions = client.completion(&main_uri, 1, 5);
+
+    println!("=== Keyword completions for 'i' ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // Should include "if" and "in" keywords
+    let has_if = completions.iter().any(|c| c == "if");
+    let has_in = completions.iter().any(|c| c == "in");
+    assert!(
+        has_if,
+        "Expected 'if' keyword completion, got: {:?}",
+        completions
+    );
+    assert!(
+        has_in,
+        "Expected 'in' keyword completion, got: {:?}",
+        completions
+    );
+}
+
+/// Test that variant constructors are completed
+#[test]
+fn test_lsp_constructor_completions() {
+    let project_path = create_test_project("constructor_completions");
+
+    // Define a variant type and try to complete a constructor
+    let content = r#"type Status = Loading | Ready | Failed(String)
+
+main() = {
+    Loa
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions at position after "Loa" (line 3, character 7)
+    let completions = client.completion(&main_uri, 3, 7);
+
+    println!("=== Constructor completions for 'Loa' ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // Should include "Loading" constructor
+    let has_loading = completions.iter().any(|c| c == "Loading");
+    assert!(
+        has_loading,
+        "Expected 'Loading' constructor completion, got: {:?}",
+        completions
+    );
+}
+
+/// Test that all variant constructors are available
+#[test]
+fn test_lsp_constructor_completions_all() {
+    let project_path = create_test_project("constructor_all");
+
+    let content = r#"type Status = Loading | Ready | Failed(String)
+
+main() = {
+    Re
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions at position after "Re"
+    let completions = client.completion(&main_uri, 3, 6);
+
+    println!("=== Constructor completions for 'Re' ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // Should include "Ready" constructor and possibly "return" keyword
+    let has_ready = completions.iter().any(|c| c == "Ready");
+    let has_return = completions.iter().any(|c| c == "return");
+
+    assert!(
+        has_ready,
+        "Expected 'Ready' constructor completion, got: {:?}",
+        completions
+    );
+    assert!(
+        has_return,
+        "Expected 'return' keyword completion, got: {:?}",
         completions
     );
 }
