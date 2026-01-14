@@ -204,368 +204,13 @@ impl SourceManager {
         // Initialize .nostos directory and git
         git::init_repo(&nostos_dir)?;
 
-        // Load definitions
-        let defs_dir = nostos_dir.join("defs");
-        if defs_dir.exists() {
-            self.load_from_defs_dir(&defs_dir)?;
-            // Check for new .nos files that don't have defs yet
-            self.import_new_source_files(&defs_dir)?;
-            // Check for .nos files that are newer than defs (external edits)
-            self.sync_updated_source_files(&defs_dir)?;
-        } else {
-            // Bootstrap from .nos files
-            self.bootstrap_from_source_files()?;
-        }
+        // Bootstrap from .nos source files (source of truth)
+        self.bootstrap_from_source_files()?;
 
         Ok(())
     }
 
-    /// Load definitions from .nostos/defs/
-    fn load_from_defs_dir(&mut self, defs_dir: &Path) -> Result<(), String> {
-        for entry in WalkDir::new(defs_dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map(|ext| ext == "nos").unwrap_or(false))
-        {
-            let path = entry.path();
-            let relative = path.strip_prefix(defs_dir).unwrap();
-
-            // Parse module path from directory structure
-            let module_path: ModulePath = relative
-                .parent()
-                .map(|p| {
-                    p.components()
-                        .map(|c| c.as_os_str().to_string_lossy().to_string())
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let file_name = path.file_stem().unwrap().to_string_lossy();
-
-            // Skip special files, handle separately
-            if file_name == "_imports" || file_name == "_meta" {
-                continue;
-            }
-
-            // Read content
-            let content = fs::read_to_string(path)
-                .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-
-            // Determine kind from filename
-            let kind = if file_name.starts_with(char::is_uppercase) {
-                // Could be Type or Trait - check content
-                if content.trim_start().starts_with("trait ") {
-                    DefKind::Trait
-                } else {
-                    DefKind::Type
-                }
-            } else if content.trim_start().starts_with("var ") {
-                DefKind::Variable
-            } else {
-                DefKind::Function
-            };
-
-            // Create definition group
-            let group = if kind == DefKind::Function && content.contains("\n\n") {
-                // Multiple overloads
-                let sources: Vec<String> = content
-                    .split("\n\n")
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-                DefinitionGroup::from_sources(file_name.to_string(), kind, sources)
-            } else {
-                DefinitionGroup::new(file_name.to_string(), kind, content.trim().to_string())
-            };
-
-            // Add to module
-            let module_key = module_path_to_string(&module_path);
-            let module = self.modules
-                .entry(module_key.clone())
-                .or_insert_with(|| Module::new(module_path.clone()));
-
-            // Update def_index
-            self.def_index.insert(file_name.to_string(), module_key);
-
-            module.add_definition(group);
-        }
-
-        // Load imports and use statements for each module
-        for entry in WalkDir::new(defs_dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().file_name().map(|n| n == "_imports.nos").unwrap_or(false))
-        {
-            let path = entry.path();
-            let relative = path.strip_prefix(defs_dir).unwrap();
-            let module_path: ModulePath = relative
-                .parent()
-                .map(|p| {
-                    p.components()
-                        .map(|c| c.as_os_str().to_string_lossy().to_string())
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let content = fs::read_to_string(path)
-                .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-
-            let mut imports: Vec<String> = Vec::new();
-            let mut use_stmts: Vec<String> = Vec::new();
-            for line in content.lines() {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                if trimmed.starts_with("import ") {
-                    imports.push(trimmed.to_string());
-                } else if trimmed.starts_with("use ") {
-                    use_stmts.push(trimmed.to_string());
-                }
-            }
-
-            let module_key = module_path_to_string(&module_path);
-            if let Some(module) = self.modules.get_mut(&module_key) {
-                module.set_imports(imports);
-                module.set_use_stmts(use_stmts);
-            }
-        }
-
-        // Load _meta.nos (together directives) for each module
-        for entry in WalkDir::new(defs_dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().file_name().map(|n| n == "_meta.nos").unwrap_or(false))
-        {
-            let path = entry.path();
-            let relative = path.strip_prefix(defs_dir).unwrap();
-            let module_path: ModulePath = relative
-                .parent()
-                .map(|p| {
-                    p.components()
-                        .map(|c| c.as_os_str().to_string_lossy().to_string())
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let content = fs::read_to_string(path)
-                .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-
-            let groups = parse_together_directives(&content);
-
-            let module_key = module_path_to_string(&module_path);
-            if let Some(module) = self.modules.get_mut(&module_key) {
-                module.set_groups(groups);
-                // Validate no duplicates
-                if let Err(dups) = module.validate_groups() {
-                    return Err(format!(
-                        "Duplicate definitions in groups for module '{}': {}",
-                        module_key,
-                        dups.join(", ")
-                    ));
-                }
-            }
-        }
-
-        // Mark all as git clean since we just loaded from git
-        for module in self.modules.values_mut() {
-            module.mark_all_git_clean();
-            module.dirty = false;
-        }
-
-        Ok(())
-    }
-
-    /// Import new .nos files that don't have corresponding defs directories
-    fn import_new_source_files(&mut self, defs_dir: &Path) -> Result<(), String> {
-        let nostos_exclude = self.project_root.join(".nostos");
-
-        // Find .nos files that don't have a defs directory
-        let new_files: Vec<(PathBuf, ModulePath, String)> = WalkDir::new(&self.project_root)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                let path = e.path();
-                path.extension().map(|ext| ext == "nos").unwrap_or(false)
-                    && !path.starts_with(&nostos_exclude)
-            })
-            .filter_map(|entry| {
-                let path = entry.path().to_path_buf();
-                let relative = path.strip_prefix(&self.project_root).ok()?;
-
-                // Module path from file path
-                let module_path: ModulePath = {
-                    let mut components: Vec<String> = relative
-                        .parent()
-                        .map(|p| {
-                            p.components()
-                                .map(|c| c.as_os_str().to_string_lossy().to_string())
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    if let Some(stem) = relative.file_stem() {
-                        components.push(stem.to_string_lossy().to_string());
-                    }
-                    components
-                };
-
-                // Check if this module already has defs
-                let module_defs_dir = module_path.iter().fold(
-                    defs_dir.to_path_buf(),
-                    |p, s| p.join(s),
-                );
-
-                // Skip if defs directory already exists
-                if module_defs_dir.exists() {
-                    return None;
-                }
-
-                let content = fs::read_to_string(&path).ok()?;
-                Some((path, module_path, content))
-            })
-            .collect();
-
-        if new_files.is_empty() {
-            return Ok(());
-        }
-
-        // Import each new file - continue on errors
-        for (path, module_path, content) in new_files {
-            if let Err(e) = self.parse_and_add_definitions(&module_path, &content) {
-                eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
-                if let Ok(relative) = path.strip_prefix(&self.project_root) {
-                    self.files_with_errors.insert(relative.to_string_lossy().to_string());
-                }
-            }
-        }
-
-        // Write new definitions to .nostos/defs/
-        self.write_all_to_defs()?;
-
-        // Git commit
-        let nostos_dir = self.project_root.join(".nostos");
-        git::add_and_commit(&nostos_dir, &["defs"], "Import new source files")?;
-
-        Ok(())
-    }
-
-    /// Sync updated .nos files that are newer than their corresponding defs
-    fn sync_updated_source_files(&mut self, defs_dir: &Path) -> Result<(), String> {
-        let nostos_exclude = self.project_root.join(".nostos");
-
-        // Find .nos files that are newer than their defs
-        let updated_files: Vec<(PathBuf, ModulePath, String)> = WalkDir::new(&self.project_root)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                let path = e.path();
-                path.extension().map(|ext| ext == "nos").unwrap_or(false)
-                    && !path.starts_with(&nostos_exclude)
-            })
-            .filter_map(|entry| {
-                let path = entry.path().to_path_buf();
-                let relative = path.strip_prefix(&self.project_root).ok()?;
-
-                // Module path from file path
-                let module_path: ModulePath = {
-                    let mut components: Vec<String> = relative
-                        .parent()
-                        .map(|p| {
-                            p.components()
-                                .map(|c| c.as_os_str().to_string_lossy().to_string())
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    if let Some(stem) = relative.file_stem() {
-                        components.push(stem.to_string_lossy().to_string());
-                    }
-                    components
-                };
-
-                // Find the defs directory for this module
-                let module_defs_dir = module_path.iter().fold(
-                    defs_dir.to_path_buf(),
-                    |p, s| p.join(s),
-                );
-
-                // Skip if defs directory doesn't exist (handled by import_new_source_files)
-                if !module_defs_dir.exists() {
-                    return None;
-                }
-
-                // Get .nos file mtime
-                let nos_mtime = path.metadata().ok()?.modified().ok()?;
-
-                // Get latest mtime from defs directory
-                let defs_mtime = WalkDir::new(&module_defs_dir)
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.path().extension().map(|ext| ext == "nos").unwrap_or(false))
-                    .filter_map(|e| e.path().metadata().ok()?.modified().ok())
-                    .max();
-
-                // If .nos is newer than all defs files, we need to re-import
-                if let Some(defs_mtime) = defs_mtime {
-                    if nos_mtime > defs_mtime {
-                        let content = fs::read_to_string(&path).ok()?;
-                        return Some((path, module_path, content));
-                    }
-                }
-
-                None
-            })
-            .collect();
-
-        if updated_files.is_empty() {
-            return Ok(());
-        }
-
-        // Re-import each updated file - continue on errors
-        for (path, module_path, content) in &updated_files {
-            let module_key = module_path_to_string(module_path);
-
-            // Clear existing definitions for this module
-            if let Some(module) = self.modules.get_mut(&module_key) {
-                // Remove old definitions from index
-                for name in module.definition_names() {
-                    self.def_index.remove(name);
-                }
-                module.clear_definitions();
-            }
-
-            // Re-parse and add definitions
-            let relative_path = path.strip_prefix(&self.project_root)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if let Err(e) = self.parse_and_add_definitions(module_path, content) {
-                eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
-                self.files_with_errors.insert(relative_path);
-            } else {
-                // File is now valid, remove from errors
-                self.files_with_errors.remove(&relative_path);
-            }
-        }
-
-        // Write updated definitions to .nostos/defs/
-        for (_path, module_path, _content) in &updated_files {
-            let module_key = module_path_to_string(module_path);
-            if let Some(module) = self.modules.get(&module_key) {
-                for name in module.definition_names() {
-                    self.write_definition_to_defs(&module_key, &name)?;
-                }
-            }
-        }
-
-        // Git commit
-        let nostos_dir = self.project_root.join(".nostos");
-        git::add_and_commit(&nostos_dir, &["defs"], "Sync updated source files")?;
-
-        Ok(())
-    }
-
-    /// Bootstrap from existing .nos files when .nostos/defs/ doesn't exist
+    /// Bootstrap from existing .nos files (source of truth)
     fn bootstrap_from_source_files(&mut self) -> Result<(), String> {
         // First, collect all file paths and their contents to avoid borrow issues
         let nostos_exclude = self.project_root.join(".nostos");
@@ -614,13 +259,6 @@ impl SourceManager {
                 }
             }
         }
-
-        // Write all definitions to .nostos/defs/
-        self.write_all_to_defs()?;
-
-        // Git commit
-        let nostos_dir = self.project_root.join(".nostos");
-        git::add_and_commit(&nostos_dir, &["defs"], "Import from source files")?;
 
         Ok(())
     }
@@ -749,51 +387,17 @@ impl SourceManager {
             }
         }
 
-        Ok(())
-    }
-
-    /// Write all definitions to .nostos/defs/
-    fn write_all_to_defs(&self) -> Result<(), String> {
-        let defs_dir = self.project_root.join(".nostos").join("defs");
-
-        for module in self.modules.values() {
-            let module_dir = module.path.iter().fold(defs_dir.clone(), |p, s| p.join(s));
-            fs::create_dir_all(&module_dir)
-                .map_err(|e| format!("Failed to create directory: {}", e))?;
-
-            // Write imports and use statements
-            if !module.imports.is_empty() || !module.use_stmts.is_empty() {
-                let imports_path = module_dir.join("_imports.nos");
-                let mut content = module.imports.join("\n");
-                if !module.imports.is_empty() && !module.use_stmts.is_empty() {
-                    content.push('\n');
-                }
-                content.push_str(&module.use_stmts.join("\n"));
-                if !content.is_empty() {
-                    content.push('\n');
-                }
-                fs::write(&imports_path, content)
-                    .map_err(|e| format!("Failed to write imports: {}", e))?;
-            }
-
-            // Write each definition
-            for def in module.definitions() {
-                let def_path = module_dir.join(format!("{}.nos", def.name));
-                let content = def.combined_source() + "\n";
-                fs::write(&def_path, content)
-                    .map_err(|e| format!("Failed to write {}: {}", def.name, e))?;
-            }
-
-            // Write _meta.nos for together directives
-            let meta_path = module_dir.join("_meta.nos");
-            if !module.groups.is_empty() {
-                let meta_content = generate_meta_content(&module.groups);
-                fs::write(&meta_path, meta_content + "\n")
-                    .map_err(|e| format!("Failed to write _meta.nos: {}", e))?;
-            } else if meta_path.exists() {
-                // Remove _meta.nos if no groups
-                fs::remove_file(&meta_path)
-                    .map_err(|e| format!("Failed to remove _meta.nos: {}", e))?;
+        // Parse together directives from the source content
+        let groups = parse_together_directives(content);
+        if !groups.is_empty() {
+            module.set_groups(groups);
+            // Validate no duplicates
+            if let Err(dups) = module.validate_groups() {
+                return Err(format!(
+                    "Duplicate definitions in groups for module '{}': {}",
+                    module_key,
+                    dups.join(", ")
+                ));
             }
         }
 
@@ -910,119 +514,6 @@ impl SourceManager {
         self.modules.get(module_name).map(|module| module.generate_file_content())
     }
 
-    /// Get git commit history for a definition
-    /// Returns list of commits that modified this definition, newest first
-    pub fn get_definition_history(&self, name: &str) -> Result<Vec<git::CommitInfo>, String> {
-        // Parse qualified name
-        let (module_key, simple_name) = if name.contains('.') {
-            let last_dot = name.rfind('.').unwrap();
-            (name[..last_dot].to_string(), &name[last_dot + 1..])
-        } else {
-            // Look up module from def_index
-            let module_key = self.def_index.get(name)
-                .ok_or_else(|| format!("Definition not found: {}", name))?
-                .clone();
-            (module_key, name)
-        };
-
-        // Build path to definition file
-        let module_path: Vec<&str> = if module_key.is_empty() {
-            vec![]
-        } else {
-            module_key.split('.').collect()
-        };
-
-        let relative_path = if module_path.is_empty() {
-            format!("defs/{}.nos", simple_name)
-        } else {
-            format!("defs/{}/{}.nos", module_path.join("/"), simple_name)
-        };
-
-        let nostos_dir = self.project_root.join(".nostos");
-        git::get_file_history(&nostos_dir, &relative_path)
-    }
-
-    /// Get git commit history for a module
-    /// Returns list of commits that modified any definition in the module, newest first
-    pub fn get_module_history(&self, module_name: &str) -> Result<Vec<git::CommitInfo>, String> {
-        let module_path: Vec<&str> = if module_name.is_empty() {
-            vec![]
-        } else {
-            module_name.split('.').collect()
-        };
-
-        let relative_dir = if module_path.is_empty() {
-            "defs".to_string()
-        } else {
-            format!("defs/{}", module_path.join("/"))
-        };
-
-        let nostos_dir = self.project_root.join(".nostos");
-        git::get_directory_history(&nostos_dir, &relative_dir)
-    }
-
-    /// Get the source of a definition at a specific commit
-    pub fn get_definition_at_commit(&self, name: &str, commit: &str) -> Result<String, String> {
-        // Parse qualified name
-        let (module_key, simple_name) = if name.contains('.') {
-            let last_dot = name.rfind('.').unwrap();
-            (name[..last_dot].to_string(), &name[last_dot + 1..])
-        } else {
-            // Look up module from def_index
-            let module_key = self.def_index.get(name)
-                .ok_or_else(|| format!("Definition not found: {}", name))?
-                .clone();
-            (module_key, name)
-        };
-
-        // Build path to definition file
-        let module_path: Vec<&str> = if module_key.is_empty() {
-            vec![]
-        } else {
-            module_key.split('.').collect()
-        };
-
-        let relative_path = if module_path.is_empty() {
-            format!("defs/{}.nos", simple_name)
-        } else {
-            format!("defs/{}/{}.nos", module_path.join("/"), simple_name)
-        };
-
-        let nostos_dir = self.project_root.join(".nostos");
-        git::get_file_at_commit(&nostos_dir, commit, &relative_path)
-    }
-
-    /// Get the diff for a definition at a specific commit
-    pub fn get_definition_diff(&self, name: &str, commit: &str) -> Result<String, String> {
-        // Parse qualified name
-        let (module_key, simple_name) = if name.contains('.') {
-            let last_dot = name.rfind('.').unwrap();
-            (name[..last_dot].to_string(), &name[last_dot + 1..])
-        } else {
-            // Look up module from def_index
-            let module_key = self.def_index.get(name)
-                .ok_or_else(|| format!("Definition not found: {}", name))?
-                .clone();
-            (module_key, name)
-        };
-
-        // Build path to definition file
-        let module_path: Vec<&str> = if module_key.is_empty() {
-            vec![]
-        } else {
-            module_key.split('.').collect()
-        };
-
-        let relative_path = if module_path.is_empty() {
-            format!("defs/{}.nos", simple_name)
-        } else {
-            format!("defs/{}/{}.nos", module_path.join("/"), simple_name)
-        };
-
-        let nostos_dir = self.project_root.join(".nostos");
-        git::get_file_diff(&nostos_dir, commit, &relative_path)
-    }
-
     /// Save module metadata (together directives etc.)
     /// Parses together directives from content and updates the module
     pub fn save_module_metadata(&mut self, module_name: &str, content: &str) -> Result<(), String> {
@@ -1042,9 +533,6 @@ impl SourceManager {
                 dups.join(", ")
             ));
         }
-
-        // Write _meta.nos
-        self.write_meta_to_defs(module_name)?;
 
         Ok(())
     }
@@ -1068,10 +556,8 @@ impl SourceManager {
                     let changed = group.update_from_source(new_source);
                     if changed {
                         module.dirty = true;
-                        // Write to .nos first (source of truth), then copy to defs for git history
+                        // Write to source file (source of truth)
                         self.write_module_files()?;
-                        self.write_definition_to_defs(&module_key, simple_name)?;
-                        self.commit_definition(&module_key, simple_name)?;
                     }
                     return Ok(changed);
                 }
@@ -1117,10 +603,8 @@ impl SourceManager {
         // Update def_index
         self.def_index.insert(simple_name.to_string(), module_key.clone());
 
-        // Write to .nos first (source of truth), then copy to defs for git history
+        // Write to source file (source of truth)
         self.write_module_files()?;
-        self.write_definition_to_defs(&module_key, simple_name)?;
-        self.commit_definition(&module_key, simple_name)?;
 
         Ok(true)
     }
@@ -1373,21 +857,9 @@ impl SourceManager {
             self.def_index.insert(name.clone(), module_key.clone());
         }
 
-        // Write to .nos first (source of truth), then copy to defs for git history
+        // Write to source file (source of truth)
         if !changed_names.is_empty() || groups_changed {
             self.write_module_files()?;
-        }
-
-        // Write _meta.nos if groups changed
-        if groups_changed {
-            self.write_meta_to_defs(&module_key)?;
-        }
-
-        // Write and commit definitions that changed to defs for git history
-        for name in &changed_names {
-            debug_log!("[SourceManager] Writing definition to defs: {}", name);
-            self.write_definition_to_defs(&module_key, name)?;
-            self.commit_definition(&module_key, name)?;
         }
 
         debug_log!("[SourceManager] update_group_source completed, returning {:?}", changed_names);
@@ -1413,10 +885,8 @@ impl SourceManager {
         module.dirty = true;
         self.def_index.insert(name.to_string(), module_key.clone());
 
-        // Write to .nos first (source of truth), then copy to defs for git history
+        // Write to source file (source of truth)
         self.write_module_files()?;
-        self.write_definition_to_defs(&module_key, name)?;
-        self.commit_definition(&module_key, name)?;
 
         Ok(())
     }
@@ -1434,22 +904,7 @@ impl SourceManager {
                 module.remove_definition(name);
                 module.dirty = true;
 
-                // Delete from .nostos/defs/
-                let module_path: ModulePath = module_key.split('.').map(String::from).collect();
-                let def_path = self.get_def_path(&module_path, name);
-                let relative_path = def_path
-                    .strip_prefix(self.project_root.join(".nostos"))
-                    .unwrap()
-                    .to_string_lossy();
-
-                let nostos_dir = self.project_root.join(".nostos");
-                git::delete_and_commit(
-                    &nostos_dir,
-                    &relative_path,
-                    &format!("Delete {}.{}", module_key, name),
-                )?;
-
-                // Also update the main .nos source file
+                // Update the source file (source of truth)
                 self.write_module_files()?;
 
                 return Ok(());
@@ -1482,36 +937,23 @@ impl SourceManager {
             .and_then(|m| m.remove_definition(name))
             .ok_or_else(|| format!("Failed to remove definition: {}", name))?;
 
+        // Mark old module dirty
+        if let Some(old_module) = self.modules.get_mut(&old_module_key) {
+            old_module.dirty = true;
+        }
+
         // Add to new module
         let new_module = self.modules
             .entry(new_module_key.clone())
             .or_insert_with(|| Module::new(new_module_path.clone()));
         new_module.add_definition(group);
+        new_module.dirty = true;
 
         // Update index
         self.def_index.insert(name.to_string(), new_module_key.clone());
 
-        // Move in .nostos/defs/
-        let old_path: ModulePath = old_module_key.split('.').map(String::from).collect();
-        let old_def_path = self.get_def_path(&old_path, name);
-        let new_def_path = self.get_def_path(new_module_path, name);
-
-        let nostos_dir = self.project_root.join(".nostos");
-        let old_relative = old_def_path
-            .strip_prefix(&nostos_dir)
-            .unwrap()
-            .to_string_lossy();
-        let new_relative = new_def_path
-            .strip_prefix(&nostos_dir)
-            .unwrap()
-            .to_string_lossy();
-
-        git::move_and_commit(
-            &nostos_dir,
-            &old_relative,
-            &new_relative,
-            &format!("Move {} from {} to {}", name, old_module_key, new_module_key),
-        )?;
+        // Write both modules to source files (source of truth)
+        self.write_module_files()?;
 
         Ok(())
     }
@@ -1547,50 +989,13 @@ impl SourceManager {
         group.name = new_name.to_string();
         group.update_from_source(&new_source);
         module.add_definition(group);
+        module.dirty = true;
 
         // Update def_index
         self.def_index.remove(old_name);
         self.def_index.insert(new_name.to_string(), module_key.clone());
 
-        // Rename the file in .nostos/defs/
-        let module_path: ModulePath = module_key.split('.').map(String::from).collect();
-        let old_def_path = self.get_def_path(&module_path, old_name);
-        let new_def_path = self.get_def_path(&module_path, new_name);
-
-        let nostos_dir = self.project_root.join(".nostos");
-
-        // Write new file first
-        if let Some(parent) = new_def_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create directory: {}", e))?;
-        }
-        fs::write(&new_def_path, &new_source)
-            .map_err(|e| format!("Failed to write renamed definition: {}", e))?;
-
-        // Delete old file
-        if old_def_path.exists() {
-            fs::remove_file(&old_def_path)
-                .map_err(|e| format!("Failed to delete old definition: {}", e))?;
-        }
-
-        // Commit both changes
-        let old_relative = old_def_path
-            .strip_prefix(&nostos_dir)
-            .unwrap()
-            .to_string_lossy();
-        let new_relative = new_def_path
-            .strip_prefix(&nostos_dir)
-            .unwrap()
-            .to_string_lossy();
-
-        git::rename_and_commit(
-            &nostos_dir,
-            &old_relative,
-            &new_relative,
-            &format!("Rename {} to {} in {}", old_name, new_name, module_key),
-        )?;
-
-        // Also update the main .nos source file
+        // Update the source file (source of truth)
         self.write_module_files()?;
 
         // Return the new fully-qualified name
@@ -1630,31 +1035,12 @@ impl SourceManager {
         // Update the definition
         group.update_from_source(&new_source);
 
-        // Update the .nostos/defs file
-        let module_path: ModulePath = module_key.split('.').map(String::from).collect();
-        let def_path = self.get_def_path(&module_path, simple_name);
-        fs::write(&def_path, &new_source)
-            .map_err(|e| format!("Failed to write updated caller: {}", e))?;
-
-        // Commit the change
-        let nostos_dir = self.project_root.join(".nostos");
-        let relative = def_path
-            .strip_prefix(&nostos_dir)
-            .unwrap()
-            .to_string_lossy();
-
-        git::commit_file(
-            &nostos_dir,
-            &relative,
-            &format!("Update {} to call {} instead of {}", simple_name, new_call, old_call),
-        )?;
-
-        // Mark module as dirty so it gets written to .nos file
+        // Mark module as dirty so it gets written to source file
         if let Some(module) = self.modules.get_mut(&module_key) {
             module.dirty = true;
         }
 
-        // Write module files
+        // Write to source file (source of truth)
         self.write_module_files()?;
 
         Ok(Some(new_source))
@@ -1755,92 +1141,6 @@ impl SourceManager {
             .get(module_key)
             .map(|m| m.definition_names().map(String::from).collect())
             .unwrap_or_default()
-    }
-
-    // ===== Internal helpers =====
-
-    fn get_def_path(&self, module_path: &ModulePath, name: &str) -> PathBuf {
-        let mut path = self.project_root.join(".nostos").join("defs");
-        for component in module_path {
-            path = path.join(component);
-        }
-        path.join(format!("{}.nos", name))
-    }
-
-    fn write_definition_to_defs(&self, module_key: &str, name: &str) -> Result<(), String> {
-        let module = self.modules.get(module_key)
-            .ok_or_else(|| format!("Module not found: {}", module_key))?;
-
-        let group = module.get_definition(name)
-            .ok_or_else(|| format!("Definition not found: {}", name))?;
-
-        let module_path: ModulePath = module_key.split('.').map(String::from).collect();
-        let def_path = self.get_def_path(&module_path, name);
-
-        // Create directories
-        if let Some(parent) = def_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create directory: {}", e))?;
-        }
-
-        let content = group.combined_source() + "\n";
-        fs::write(&def_path, content)
-            .map_err(|e| format!("Failed to write definition: {}", e))?;
-
-        Ok(())
-    }
-
-    fn commit_definition(&self, module_key: &str, name: &str) -> Result<(), String> {
-        let module_path: ModulePath = module_key.split('.').map(String::from).collect();
-        let def_path = self.get_def_path(&module_path, name);
-
-        let nostos_dir = self.project_root.join(".nostos");
-        let relative_path = def_path
-            .strip_prefix(&nostos_dir)
-            .unwrap()
-            .to_string_lossy();
-
-        git::commit_file(
-            &nostos_dir,
-            &relative_path,
-            &format!("Update {}.{}", module_key, name),
-        )
-    }
-
-    fn write_meta_to_defs(&self, module_key: &str) -> Result<(), String> {
-        let module = self.modules.get(module_key)
-            .ok_or_else(|| format!("Module not found: {}", module_key))?;
-
-        let module_path: ModulePath = module_key.split('.').map(String::from).collect();
-        let mut meta_dir = self.project_root.join(".nostos").join("defs");
-        for component in &module_path {
-            meta_dir = meta_dir.join(component);
-        }
-        let meta_path = meta_dir.join("_meta.nos");
-
-        // Create directory if needed
-        fs::create_dir_all(&meta_dir)
-            .map_err(|e| format!("Failed to create directory: {}", e))?;
-
-        if !module.groups.is_empty() {
-            let content = generate_meta_content(&module.groups);
-            fs::write(&meta_path, content + "\n")
-                .map_err(|e| format!("Failed to write _meta.nos: {}", e))?;
-
-            // Commit _meta.nos
-            let nostos_dir = self.project_root.join(".nostos");
-            let relative_path = meta_path
-                .strip_prefix(&nostos_dir)
-                .unwrap()
-                .to_string_lossy();
-            git::commit_file(&nostos_dir, &relative_path, &format!("Update {}.groups", module_key))?;
-        } else if meta_path.exists() {
-            // Remove _meta.nos if no groups
-            fs::remove_file(&meta_path)
-                .map_err(|e| format!("Failed to remove _meta.nos: {}", e))?;
-        }
-
-        Ok(())
     }
 
     // ============================================================
@@ -2077,9 +1377,6 @@ cube(n: Int) = n * n * n
         assert!(sm.get_source("greet").is_some(), "Should have 'greet' function");
         assert!(sm.get_source("square").is_some(), "Should have 'square' function from utils/math");
         assert!(sm.get_source("cube").is_some(), "Should have 'cube' function from utils/math");
-
-        // Check .nostos/defs/ was created
-        assert!(root.join(".nostos").join("defs").exists());
     }
 
     #[test]
@@ -2099,14 +1396,14 @@ cube(n: Int) = n * n * n
     }
 
     #[test]
-    fn test_source_manager_loads_from_defs() {
+    fn test_source_manager_reloads_from_source() {
         let temp = create_test_project();
         let root = temp.path();
 
-        // First create the .nostos/defs/ structure
+        // First load to parse the source files
         let _ = SourceManager::new(root.to_path_buf()).unwrap();
 
-        // Now create a fresh SourceManager - it should load from .nostos/defs/
+        // Now create a fresh SourceManager - it should load from source files
         let sm2 = SourceManager::new(root.to_path_buf()).unwrap();
 
         // Verify definitions are still there
@@ -2136,10 +1433,9 @@ cube(n: Int) = n * n * n
         assert!(updated.contains("Hi,"), "Should have updated source");
         assert!(!updated.contains("Hello"), "Should not have old source");
 
-        // Verify file was written
-        let defs_dir = root.join(".nostos").join("defs");
-        let def_file = defs_dir.join("main").join("greet.nos");
-        let file_content = fs::read_to_string(&def_file).unwrap();
+        // Verify source file was written
+        let nos_file = root.join("main.nos");
+        let file_content = fs::read_to_string(&nos_file).unwrap();
         assert!(file_content.contains("Hi,"));
     }
 
@@ -2179,9 +1475,9 @@ cube(n: Int) = n * n * n
         // Verify it exists
         assert!(sm.get_source("bar").is_some());
 
-        // Verify file was created
-        let def_file = root.join(".nostos").join("defs").join("main").join("bar.nos");
-        assert!(def_file.exists());
+        // Verify source file was updated
+        let nos_content = fs::read_to_string(root.join("main.nos")).unwrap();
+        assert!(nos_content.contains("bar(x: Int) = x * 2"));
     }
 
     #[test]
@@ -2200,9 +1496,9 @@ cube(n: Int) = n * n * n
         // Verify it's gone
         assert!(sm.get_source("greet").is_none());
 
-        // Verify file was deleted
-        let def_file = root.join(".nostos").join("defs").join("main").join("greet.nos");
-        assert!(!def_file.exists());
+        // Verify source file was updated (greet removed)
+        let nos_content = fs::read_to_string(root.join("main.nos")).unwrap();
+        assert!(!nos_content.contains("greet("), "greet should be removed from source file");
     }
 
     #[test]
@@ -2252,27 +1548,6 @@ cube(n: Int) = n * n * n
         assert!(point_source.contains("y: Int"));
     }
 
-    #[test]
-    fn test_source_manager_git_commits() {
-        let temp = create_test_project();
-        let root = temp.path();
-
-        let mut sm = SourceManager::new(root.to_path_buf()).unwrap();
-
-        // Update a definition (should trigger commit)
-        sm.update_definition("greet", "greet(name: String) = \"Howdy, \" ++ name").unwrap();
-
-        // Check git log
-        let nostos_dir = root.join(".nostos");
-        let output = std::process::Command::new("git")
-            .args(["log", "--oneline", "-5"])
-            .current_dir(&nostos_dir)
-            .output()
-            .unwrap();
-
-        let log = String::from_utf8_lossy(&output.stdout);
-        assert!(log.contains("Update"), "Git log should contain update commit");
-    }
 
     #[test]
     fn test_source_manager_definition_names() {
@@ -2355,13 +1630,13 @@ cube(n: Int) = n * n * n
         // Should now be in utils.math
         assert_eq!(sm.get_definition_module("greet"), Some("utils.math"));
 
-        // Old file should be gone
-        let old_file = root.join(".nostos").join("defs").join("main").join("greet.nos");
-        assert!(!old_file.exists());
+        // main.nos should no longer have greet
+        let main_content = fs::read_to_string(root.join("main.nos")).unwrap();
+        assert!(!main_content.contains("greet("), "main.nos should not have greet");
 
-        // New file should exist
-        let new_file = root.join(".nostos").join("defs").join("utils").join("math").join("greet.nos");
-        assert!(new_file.exists());
+        // utils/math.nos should have greet
+        let math_content = fs::read_to_string(root.join("utils").join("math.nos")).unwrap();
+        assert!(math_content.contains("greet("), "utils/math.nos should have greet");
     }
 
     #[test]
@@ -2435,15 +1710,6 @@ increment() = counter + 1
         assert!(sm.get_source("counter").is_some(), "Variable counter should exist");
         assert!(sm.get_source("greet").is_some(), "Function greet should exist");
         assert!(sm.get_source("increment").is_some(), "Function increment should exist");
-
-        // Verify each file was created in .nostos/defs/
-        let defs_dir = root.join(".nostos").join("defs").join("mixed");
-        assert!(defs_dir.join("Person.nos").exists());
-        assert!(defs_dir.join("Status.nos").exists());
-        assert!(defs_dir.join("greeting.nos").exists());
-        assert!(defs_dir.join("counter.nos").exists());
-        assert!(defs_dir.join("greet.nos").exists());
-        assert!(defs_dir.join("increment.nos").exists());
     }
 
     #[test]
@@ -2552,7 +1818,7 @@ add(x: String, y: String) = x ++ y"#;
 
     #[test]
     fn test_decompose_and_recompose_module() {
-        // Test the full cycle: file -> defs -> file
+        // Test the full cycle: file -> source manager -> file
         let temp = TempDir::new().unwrap();
         let root = temp.path();
 
@@ -2568,22 +1834,13 @@ origin = Point(0, 0)
 "#;
         fs::write(root.join("geom.nos"), original).unwrap();
 
-        // Load (decompose into defs)
+        // Load
         let mut sm = SourceManager::new(root.to_path_buf()).unwrap();
 
-        // Verify decomposition
-        let defs_dir = root.join(".nostos").join("defs").join("geom");
-        assert!(defs_dir.join("Point.nos").exists());
-        assert!(defs_dir.join("distance.nos").exists());
-        assert!(defs_dir.join("origin.nos").exists());
-
-        // Read individual def files
-        let point_content = fs::read_to_string(defs_dir.join("Point.nos")).unwrap();
-        assert!(point_content.contains("type Point"));
-
-        let distance_content = fs::read_to_string(defs_dir.join("distance.nos")).unwrap();
-        assert!(distance_content.contains("distance("));
-        assert!(distance_content.contains("sqrt"));
+        // Verify definitions were loaded
+        assert!(sm.get_source("Point").is_some());
+        assert!(sm.get_source("distance").is_some());
+        assert!(sm.get_source("origin").is_some());
 
         // Mark dirty and recompose
         sm.update_definition("origin", "origin = Point(0, 0)").unwrap();
@@ -2652,22 +1909,23 @@ baz() = 3
         // Modify only foo
         sm.update_definition("foo", "foo() = 10").unwrap();
 
-        // Check that only foo's file changed
-        let foo_content = fs::read_to_string(
-            root.join(".nostos").join("defs").join("main").join("foo.nos")
-        ).unwrap();
-        assert!(foo_content.contains("10"), "foo should be updated");
+        // Check that foo is updated in memory
+        let foo_src = sm.get_source("foo").unwrap();
+        assert!(foo_src.contains("10"), "foo should be updated");
 
         // bar and baz should still have original values
-        let bar_content = fs::read_to_string(
-            root.join(".nostos").join("defs").join("main").join("bar.nos")
-        ).unwrap();
-        assert!(bar_content.contains("2"), "bar should be unchanged");
+        let bar_src = sm.get_source("bar").unwrap();
+        assert!(bar_src.contains("2"), "bar should be unchanged");
 
-        let baz_content = fs::read_to_string(
-            root.join(".nostos").join("defs").join("main").join("baz.nos")
-        ).unwrap();
-        assert!(baz_content.contains("3"), "baz should be unchanged");
+        let baz_src = sm.get_source("baz").unwrap();
+        assert!(baz_src.contains("3"), "baz should be unchanged");
+
+        // After write, source file should have correct values
+        sm.write_module_files().unwrap();
+        let file_content = fs::read_to_string(root.join("main.nos")).unwrap();
+        assert!(file_content.contains("foo() = 10"), "source file should have updated foo");
+        assert!(file_content.contains("bar() = 2"), "source file should have original bar");
+        assert!(file_content.contains("baz() = 3"), "source file should have original baz");
     }
 
     #[test]
@@ -2727,49 +1985,6 @@ len([_ | tail]) = 1 + len(tail)
     }
 
     #[test]
-    fn test_git_history_per_definition() {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path();
-
-        fs::write(root.join("main.nos"), r#"foo() = 1
-
-bar() = 2
-"#).unwrap();
-
-        let mut sm = SourceManager::new(root.to_path_buf()).unwrap();
-
-        // Make several changes to foo only
-        sm.update_definition("foo", "foo() = 10").unwrap();
-        sm.update_definition("foo", "foo() = 100").unwrap();
-        sm.update_definition("foo", "foo() = 1000").unwrap();
-
-        // Check git log for foo.nos specifically
-        let nostos_dir = root.join(".nostos");
-        let output = std::process::Command::new("git")
-            .args(["log", "--oneline", "defs/main/foo.nos"])
-            .current_dir(&nostos_dir)
-            .output()
-            .unwrap();
-
-        let log = String::from_utf8_lossy(&output.stdout);
-        let commit_count = log.lines().count();
-        // Should have at least the initial import + 3 updates = 4 commits
-        // (might be fewer if some commits were combined)
-        assert!(commit_count >= 3, "Should have multiple commits for foo: {}", log);
-
-        // bar should have fewer commits (only initial)
-        let output2 = std::process::Command::new("git")
-            .args(["log", "--oneline", "defs/main/bar.nos"])
-            .current_dir(&nostos_dir)
-            .output()
-            .unwrap();
-
-        let log2 = String::from_utf8_lossy(&output2.stdout);
-        let bar_commits = log2.lines().count();
-        assert!(bar_commits < commit_count, "bar should have fewer commits than foo");
-    }
-
-    #[test]
     fn test_complex_nested_modules() {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
@@ -2817,7 +2032,7 @@ bar() = 2
     }
 
     #[test]
-    fn test_reload_after_external_def_change() {
+    fn test_reload_after_external_source_change() {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
 
@@ -2826,15 +2041,14 @@ bar() = 2
         // First load
         let _sm1 = SourceManager::new(root.to_path_buf()).unwrap();
 
-        // Simulate external edit to def file
-        let def_file = root.join(".nostos").join("defs").join("main").join("foo.nos");
-        fs::write(&def_file, "foo() = 999\n").unwrap();
+        // Simulate external edit to source file
+        fs::write(root.join("main.nos"), "foo() = 999\n").unwrap();
 
         // Reload - should pick up external change
         let sm2 = SourceManager::new(root.to_path_buf()).unwrap();
 
         let src = sm2.get_source("foo").unwrap();
-        assert!(src.contains("999"), "Should pick up external def file change");
+        assert!(src.contains("999"), "Should pick up external source file change");
     }
 
     #[test]
@@ -2854,18 +2068,16 @@ var mutableVar = 0
 
         let sm = SourceManager::new(root.to_path_buf()).unwrap();
 
-        // Each should be in separate file with correct content
-        let defs_dir = root.join(".nostos").join("defs").join("main");
+        // Each definition should be loaded correctly
+        let type_src = sm.get_source("MyType").unwrap();
+        assert!(type_src.starts_with("type "), "Type should start with 'type '");
 
-        let type_content = fs::read_to_string(defs_dir.join("MyType.nos")).unwrap();
-        assert!(type_content.starts_with("type "), "Type file should start with 'type '");
-
-        let func_content = fs::read_to_string(defs_dir.join("myFunc.nos")).unwrap();
-        assert!(func_content.contains("myFunc()"), "Function file should have function def");
+        let func_src = sm.get_source("myFunc").unwrap();
+        assert!(func_src.contains("myFunc()"), "Function should have function def");
 
         // Variables should also be stored
-        assert!(defs_dir.join("myVar.nos").exists());
-        assert!(defs_dir.join("mutableVar.nos").exists());
+        assert!(sm.get_source("myVar").is_some(), "myVar should be loaded");
+        assert!(sm.get_source("mutableVar").is_some(), "mutableVar should be loaded");
     }
 
     #[test]
@@ -2914,24 +2126,18 @@ var mutableVar = 0
     }
 
     #[test]
-    fn test_together_directive_in_meta_file() {
+    fn test_together_directive_in_source_file() {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
 
-        // Create source file with functions
-        fs::write(root.join("main.nos"), r#"foo() = 1
+        // Create source file with together directive
+        fs::write(root.join("main.nos"), r#"# together foo bar
+foo() = 1
 bar() = 2
 baz() = 3
 "#).unwrap();
 
-        // First initialize with SourceManager
-        let _ = SourceManager::new(root.to_path_buf()).unwrap();
-
-        // Now manually create _meta.nos with together directive
-        let meta_path = root.join(".nostos").join("defs").join("main").join("_meta.nos");
-        fs::write(&meta_path, "# together foo bar\n").unwrap();
-
-        // Reload and check
+        // Load and check
         let sm = SourceManager::new(root.to_path_buf()).unwrap();
 
         // foo should return both foo and bar
@@ -2955,24 +2161,19 @@ baz() = 3
         let temp = TempDir::new().unwrap();
         let root = temp.path();
 
-        fs::write(root.join("main.nos"), r#"foo() = 1
-bar() = 2
-"#).unwrap();
-
-        // Initialize
-        let _ = SourceManager::new(root.to_path_buf()).unwrap();
-
-        // Create invalid _meta.nos with same definition in multiple groups
-        let meta_path = root.join(".nostos").join("defs").join("main").join("_meta.nos");
-        fs::write(&meta_path, r#"# together foo bar
+        // Create source file with invalid duplicate groups
+        fs::write(root.join("main.nos"), r#"# together foo bar
 # together bar baz
+foo() = 1
+bar() = 2
+baz() = 3
 "#).unwrap();
 
-        // Should fail to load
-        let result = SourceManager::new(root.to_path_buf());
-        assert!(result.is_err(), "Should fail with duplicate definition in groups");
-        let err = result.err().unwrap();
-        assert!(err.contains("Duplicate"), "Error should mention Duplicate: {}", err);
+        // Loads but marks file as having errors
+        let sm = SourceManager::new(root.to_path_buf()).unwrap();
+
+        // The file with duplicate groups should be marked as having errors
+        assert!(sm.file_has_errors("main.nos"), "main.nos should have errors");
     }
 
     #[test]
@@ -2980,24 +2181,19 @@ bar() = 2
         let temp = TempDir::new().unwrap();
         let root = temp.path();
 
-        fs::write(root.join("main.nos"), r#"foo() = 1
+        // Create source file with together directive
+        fs::write(root.join("main.nos"), r#"# together foo bar
+foo() = 1
 bar() = 2
 baz() = 3
 "#).unwrap();
-
-        // Initialize
-        let _ = SourceManager::new(root.to_path_buf()).unwrap();
-
-        // Add together directive
-        let meta_path = root.join(".nostos").join("defs").join("main").join("_meta.nos");
-        fs::write(&meta_path, "# together foo bar\n").unwrap();
 
         // Load and write module files
         let mut sm = SourceManager::new(root.to_path_buf()).unwrap();
 
         // Check groups were loaded
         let grouped = sm.get_grouped_names("foo");
-        assert_eq!(grouped, vec!["foo", "bar"], "Groups should be loaded from _meta.nos");
+        assert_eq!(grouped, vec!["foo", "bar"], "Groups should be loaded from source file");
 
         // Mark dirty - this won't change since same source, so use different source
         sm.update_definition("baz", "baz() = 33").unwrap();
@@ -3023,17 +2219,12 @@ baz() = 3
         let temp = TempDir::new().unwrap();
         let root = temp.path();
 
-        fs::write(root.join("main.nos"), r#"foo() = 1
+        // Create source file with together directive
+        fs::write(root.join("main.nos"), r#"# together foo bar
+foo() = 1
 bar() = 2
 baz() = 3
 "#).unwrap();
-
-        // Initialize
-        let _ = SourceManager::new(root.to_path_buf()).unwrap();
-
-        // Add together directive
-        let meta_path = root.join(".nostos").join("defs").join("main").join("_meta.nos");
-        fs::write(&meta_path, "# together foo bar\n").unwrap();
 
         let sm = SourceManager::new(root.to_path_buf()).unwrap();
 
@@ -3075,11 +2266,9 @@ bar() = 20"#;
         assert!(foo_src.contains("foo() = 10"), "foo should be updated");
         assert!(foo_src.contains("bar() = 20"), "bar should be updated in same group");
 
-        // Verify _meta.nos was created
-        let meta_path = root.join(".nostos").join("defs").join("main").join("_meta.nos");
-        assert!(meta_path.exists(), "_meta.nos should exist");
-        let meta_content = fs::read_to_string(&meta_path).unwrap();
-        assert!(meta_content.contains("# together foo bar"), "Should have together directive");
+        // Verify source file has together directive
+        let nos_content = fs::read_to_string(root.join("main.nos")).unwrap();
+        assert!(nos_content.contains("# together foo bar"), "Source file should have together directive");
     }
 
     #[test]
@@ -3087,17 +2276,13 @@ bar() = 20"#;
         let temp = TempDir::new().unwrap();
         let root = temp.path();
 
-        // Types can also be in groups
-        fs::write(root.join("main.nos"), r#"type Point = { x: Int, y: Int }
+        // Types can also be in groups via together directive in source
+        fs::write(root.join("main.nos"), r#"# together Point distance
+
+type Point = { x: Int, y: Int }
 
 distance(p1: Point, p2: Point) = 0
 "#).unwrap();
-
-        let _ = SourceManager::new(root.to_path_buf()).unwrap();
-
-        // Group type with function
-        let meta_path = root.join(".nostos").join("defs").join("main").join("_meta.nos");
-        fs::write(&meta_path, "# together Point distance\n").unwrap();
 
         let sm = SourceManager::new(root.to_path_buf()).unwrap();
 
@@ -3138,18 +2323,13 @@ bar() = 200"#;
         let temp = TempDir::new().unwrap();
         let root = temp.path();
 
-        fs::write(root.join("main.nos"), r#"zoo() = 1
+        // Create source file with two groups
+        fs::write(root.join("main.nos"), r#"# together zoo mango
+# together apple banana
+zoo() = 1
 apple() = 2
 mango() = 3
 banana() = 4
-"#).unwrap();
-
-        let _ = SourceManager::new(root.to_path_buf()).unwrap();
-
-        // Create two groups
-        let meta_path = root.join(".nostos").join("defs").join("main").join("_meta.nos");
-        fs::write(&meta_path, r#"# together zoo mango
-# together apple banana
 "#).unwrap();
 
         let mut sm = SourceManager::new(root.to_path_buf()).unwrap();
@@ -3190,11 +2370,9 @@ bar() = 20"#;
         assert!(updated.contains(&"foo".to_string()), "Should update foo");
         assert!(updated.contains(&"bar".to_string()), "Should update bar");
 
-        // Check _meta.nos was created with together directive
-        let meta_path = root.join(".nostos").join("defs").join("main").join("_meta.nos");
-        assert!(meta_path.exists(), "_meta.nos should exist");
-        let meta_content = fs::read_to_string(&meta_path).unwrap();
-        assert!(meta_content.contains("# together foo bar"), "Should have together directive");
+        // Check source file has together directive
+        let nos_content = fs::read_to_string(root.join("main.nos")).unwrap();
+        assert!(nos_content.contains("# together foo bar"), "Source file should have together directive");
 
         // Verify groups are recognized
         let grouped_names = sm.get_grouped_names("foo");
@@ -3206,17 +2384,13 @@ bar() = 20"#;
         let temp = TempDir::new().unwrap();
         let root = temp.path();
 
-        fs::write(root.join("main.nos"), r#"init() = 0
+        // Use together directive in source file
+        fs::write(root.join("main.nos"), r#"# together init process cleanup
+init() = 0
 process() = 1
 cleanup() = 2
 other() = 3
 "#).unwrap();
-
-        let _ = SourceManager::new(root.to_path_buf()).unwrap();
-
-        // Group three functions together
-        let meta_path = root.join(".nostos").join("defs").join("main").join("_meta.nos");
-        fs::write(&meta_path, "# together init process cleanup\n").unwrap();
 
         let sm = SourceManager::new(root.to_path_buf()).unwrap();
 
@@ -3285,16 +2459,13 @@ other() = 3
         let temp = TempDir::new().unwrap();
         let root = temp.path();
 
-        fs::write(root.join("main.nos"), r#"foo() = 1
+        // Together directive in source file
+        fs::write(root.join("main.nos"), r#"# together foo bar
+foo() = 1
 bar() = 2
 "#).unwrap();
 
-        // First load and add group
-        let _ = SourceManager::new(root.to_path_buf()).unwrap();
-        let meta_path = root.join(".nostos").join("defs").join("main").join("_meta.nos");
-        fs::write(&meta_path, "# together foo bar\n").unwrap();
-
-        // Reload multiple times
+        // Reload multiple times - groups should persist from source file
         for _ in 0..3 {
             let sm = SourceManager::new(root.to_path_buf()).unwrap();
             let names = sm.get_grouped_names("foo");
@@ -3391,7 +2562,7 @@ bar() = 2
     }
 
     #[test]
-    fn test_sync_updated_source_files() {
+    fn test_reload_picks_up_external_changes() {
         use std::thread::sleep;
         use std::time::Duration;
 
@@ -3401,7 +2572,7 @@ bar() = 2
         // Create initial file
         fs::write(root.join("main.nos"), "greet() = \"Hello\"").unwrap();
 
-        // First load - initializes .nostos/defs/
+        // First load
         let sm = SourceManager::new(root.to_path_buf()).unwrap();
         assert_eq!(sm.get_source("greet").unwrap(), "greet() = \"Hello\"");
         drop(sm);
@@ -3415,26 +2586,10 @@ bar() = 2
         // Reload - should pick up the external edit
         let sm2 = SourceManager::new(root.to_path_buf()).unwrap();
         assert_eq!(sm2.get_source("greet").unwrap(), "greet() = \"Bonjour\"");
-
-        // Check that defs were updated too
-        let defs_file = root.join(".nostos/defs/main/greet.nos");
-        let defs_content = fs::read_to_string(defs_file).unwrap();
-        assert!(defs_content.contains("Bonjour"), "Defs should be updated: {}", defs_content);
-
-        // Check git log shows the sync
-        let nostos_dir = root.join(".nostos");
-        let output = std::process::Command::new("git")
-            .args(["log", "--oneline", "-5"])
-            .current_dir(&nostos_dir)
-            .output()
-            .unwrap();
-        let log = String::from_utf8_lossy(&output.stdout);
-        assert!(log.contains("Sync updated source files"), "Git log should contain sync commit: {}", log);
     }
 
     #[test]
-    fn test_update_writes_nos_first() {
-        // Verify that REPL edits write to .nos first, then to defs
+    fn test_update_writes_to_source_file() {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
 
@@ -3450,99 +2605,5 @@ bar() = 2
         // Check .nos file was updated
         let nos_content = fs::read_to_string(root.join("main.nos")).unwrap();
         assert!(nos_content.contains("Hola"), ".nos should be updated: {}", nos_content);
-
-        // Check defs were also updated
-        let defs_file = root.join(".nostos/defs/main/greet.nos");
-        let defs_content = fs::read_to_string(defs_file).unwrap();
-        assert!(defs_content.contains("Hola"), "Defs should be updated: {}", defs_content);
-    }
-
-    #[test]
-    fn test_get_definition_history() {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path();
-
-        // Create initial file
-        fs::write(root.join("main.nos"), "greet() = \"Hello\"").unwrap();
-
-        // Initialize SourceManager
-        let mut sm = SourceManager::new(root.to_path_buf()).unwrap();
-
-        // Get initial history
-        let history = sm.get_definition_history("greet").unwrap();
-        assert!(!history.is_empty(), "Should have at least one commit");
-        assert!(history[0].message.contains("Import"), "First commit should be import: {}", history[0].message);
-
-        // Update the definition
-        sm.update_definition("greet", "greet() = \"Bonjour\"").unwrap();
-
-        // Get updated history
-        let history2 = sm.get_definition_history("greet").unwrap();
-        assert!(history2.len() > history.len(), "Should have more commits after update");
-        assert!(history2[0].message.contains("Update"), "Latest commit should be update: {}", history2[0].message);
-    }
-
-    #[test]
-    fn test_get_definition_at_commit() {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path();
-
-        // Create initial file
-        fs::write(root.join("main.nos"), "greet() = \"Hello\"").unwrap();
-
-        // Initialize and update
-        let mut sm = SourceManager::new(root.to_path_buf()).unwrap();
-        sm.update_definition("greet", "greet() = \"Bonjour\"").unwrap();
-
-        // Get history
-        let history = sm.get_definition_history("greet").unwrap();
-        assert!(history.len() >= 2, "Should have at least 2 commits");
-
-        // Get current version
-        let current = sm.get_definition_at_commit("greet", &history[0].hash).unwrap();
-        assert!(current.contains("Bonjour"), "Current should be Bonjour: {}", current);
-
-        // Get previous version
-        let previous = sm.get_definition_at_commit("greet", &history[1].hash).unwrap();
-        assert!(previous.contains("Hello"), "Previous should be Hello: {}", previous);
-    }
-
-    #[test]
-    fn test_get_definition_diff() {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path();
-
-        // Create initial file
-        fs::write(root.join("main.nos"), "greet() = \"Hello\"").unwrap();
-
-        // Initialize and update
-        let mut sm = SourceManager::new(root.to_path_buf()).unwrap();
-        sm.update_definition("greet", "greet() = \"Bonjour\"").unwrap();
-
-        // Get history
-        let history = sm.get_definition_history("greet").unwrap();
-
-        // Get diff for the update commit
-        let diff = sm.get_definition_diff("greet", &history[0].hash).unwrap();
-        assert!(diff.contains("-") || diff.contains("+"), "Diff should show changes: {}", diff);
-    }
-
-    #[test]
-    fn test_get_module_history() {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path();
-
-        // Create initial file with two functions
-        fs::write(root.join("main.nos"), "foo() = 1\nbar() = 2").unwrap();
-
-        // Initialize SourceManager
-        let mut sm = SourceManager::new(root.to_path_buf()).unwrap();
-
-        // Update one function
-        sm.update_definition("foo", "foo() = 42").unwrap();
-
-        // Get module history
-        let history = sm.get_module_history("main").unwrap();
-        assert!(history.len() >= 2, "Should have at least 2 commits (import + update)");
     }
 }

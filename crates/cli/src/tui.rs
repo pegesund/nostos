@@ -2010,29 +2010,11 @@ fn close_git_panel(s: &mut Cursive) {
 }
 
 /// Create the git history panel view
-fn create_git_view(engine: &Rc<RefCell<ReplEngine>>, target: &HistoryTarget) -> impl View {
+fn create_git_view(_engine: &Rc<RefCell<ReplEngine>>, target: &HistoryTarget) -> impl View {
     let mut panel = GitHistoryPanel::new(target.clone());
 
-    // Load commits for the target
-    let engine_ref = engine.borrow();
-    if engine_ref.has_source_manager() {
-        match target {
-            HistoryTarget::Definition(name) => {
-                match engine_ref.get_definition_history(name) {
-                    Ok(commits) => panel.set_commits(commits),
-                    Err(e) => panel.set_error(e),
-                }
-            }
-            HistoryTarget::Module(name) => {
-                match engine_ref.get_module_history(name) {
-                    Ok(commits) => panel.set_commits(commits),
-                    Err(e) => panel.set_error(e),
-                }
-            }
-        }
-    } else {
-        panel.set_error("No project loaded (need directory mode)".to_string());
-    }
+    // Git history feature has been removed (defs no longer tracked)
+    panel.set_error("Git history feature not available".to_string());
 
     let panel_with_events = OnEventView::new(panel.with_name("git_panel"))
         .on_event(Key::Esc, |s| {
@@ -2121,27 +2103,10 @@ fn poll_git_panel(s: &mut Cursive) {
     }).flatten();
 
     if let Some(commit_hash) = needs_diff {
-        let (target, engine) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
-            (state.borrow().git_panel_target.clone(), state.borrow().engine.clone())
-        }).unwrap();
-
-        if let Some(target) = target {
-            let diff = match &target {
-                HistoryTarget::Definition(name) => {
-                    engine.borrow().get_definition_diff(name, &commit_hash)
-                }
-                HistoryTarget::Module(_) => {
-                    // For module, we'd need a different approach
-                    Ok("(module diffs not yet supported)".to_string())
-                }
-            };
-
-            if let Ok(diff) = diff {
-                s.call_on_name("git_panel", |panel: &mut GitHistoryPanel| {
-                    panel.set_diff(&commit_hash, diff);
-                });
-            }
-        }
+        // Git history feature not available - defs no longer tracked
+        s.call_on_name("git_panel", |panel: &mut GitHistoryPanel| {
+            panel.set_diff(&commit_hash, "(git history not available)".to_string());
+        });
     }
 
     // Check if panel needs content data (for full view)
@@ -2150,26 +2115,10 @@ fn poll_git_panel(s: &mut Cursive) {
     }).flatten();
 
     if let Some(commit_hash) = needs_content {
-        let (target, engine) = s.with_user_data(|state: &mut Rc<RefCell<TuiState>>| {
-            (state.borrow().git_panel_target.clone(), state.borrow().engine.clone())
-        }).unwrap();
-
-        if let Some(target) = target {
-            let content = match &target {
-                HistoryTarget::Definition(name) => {
-                    engine.borrow().get_definition_at_commit(name, &commit_hash)
-                }
-                HistoryTarget::Module(_) => {
-                    Ok("(module content view not yet supported)".to_string())
-                }
-            };
-
-            if let Ok(content) = content {
-                s.call_on_name("git_panel", |panel: &mut GitHistoryPanel| {
-                    panel.set_content(&commit_hash, content);
-                });
-            }
-        }
+        // Git history feature not available - defs no longer tracked
+        s.call_on_name("git_panel", |panel: &mut GitHistoryPanel| {
+            panel.set_content(&commit_hash, "(git history not available)".to_string());
+        });
     }
 }
 

@@ -2,7 +2,6 @@
 //!
 //! This crate handles:
 //! - Loading projects from directories
-//! - Per-definition storage in `.nostos/defs/`
 //! - Incremental compilation via content hashing
 //! - Generating module files on `:w`
 
