@@ -1295,7 +1295,9 @@ impl ReplEngine {
            input.starts_with("module ") ||
            input.starts_with("pub ") ||
            input.starts_with("extern ") ||
-           input.starts_with("for ") {
+           input.starts_with("for ") ||
+           input.starts_with("use ") ||
+           input.starts_with("reactive ") {
             return None;
         }
 

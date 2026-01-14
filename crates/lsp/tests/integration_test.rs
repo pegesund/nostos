@@ -2793,3 +2793,143 @@ main() = {
         completions
     );
 }
+
+/// Test that errors introduced by editing are reported on the CORRECT line,
+/// not on line 1 (use statement). This reproduces a bug where any error
+/// in test_types.nos would show on line 1 and couldn't be fixed.
+#[test]
+fn test_lsp_error_line_number_after_edit() {
+    let project_path = create_test_project("error_line_number");
+
+    // nostos.toml
+    fs::write(project_path.join("nostos.toml"), r#"[project]
+name = "test"
+"#).unwrap();
+
+    // good.nos - module with exported functions
+    fs::write(project_path.join("good.nos"), r#"# A working function
+pub addff(a, b) = a + b
+
+# A working function
+pub addfff(a, b) = a + b
+
+pub multiply(x, y) = x * y
+"#).unwrap();
+
+    // test_types.nos - with use statement on line 1
+    // This is the EXACT user file content that triggers the bug
+    let initial_content = r#"use good.*
+
+# Variant type for testing
+type MyResult = Success(Int) | Failure(String)
+
+# Record type for testing
+type Person = { name: String, age: Int }
+
+# Trait for testing
+trait Describable
+    describe(self) -> String
+end
+
+# Implement trait for Person
+Person: Describable
+    describe(self) = "Person: " ++ self.name ++ ", age " ++ self.age.show()
+end
+
+main() = {
+    x = good.addff(3, 2)
+    y = good.multiply(2,3)
+    p = Person(name: "petter", age: 11)
+    p.describe()
+}
+"#;
+    fs::write(project_path.join("test_types.nos"), initial_content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let test_types_uri = format!("file://{}/test_types.nos", project_path.display());
+
+    // Open the file
+    client.did_open(&test_types_uri, initial_content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Initial file should have NO errors
+    let initial_diags = client.read_diagnostics(&test_types_uri, Duration::from_secs(2));
+    println!("=== Initial diagnostics (should be empty) ===");
+    for d in &initial_diags {
+        println!("  Line {}: {}", d.line + 1, d.message);
+    }
+    assert!(initial_diags.is_empty(), "Initial file should have no errors, got: {:?}",
+        initial_diags.iter().map(|d| format!("Line {}: {}", d.line + 1, &d.message)).collect::<Vec<_>>());
+
+    // Now simulate user typing an error - add "asdf" on line 20 (inside main)
+    // The error should appear on line 20, NOT on line 1
+    let content_with_error = r#"use good.*
+
+# Variant type for testing
+type MyResult = Success(Int) | Failure(String)
+
+# Record type for testing
+type Person = { name: String, age: Int }
+
+# Trait for testing
+trait Describable
+    describe(self) -> String
+end
+
+# Implement trait for Person
+Person: Describable
+    describe(self) = "Person: " ++ self.name ++ ", age " ++ self.age.show()
+end
+
+main() = {
+    asdf
+    x = good.addff(3, 2)
+    y = good.multiply(2,3)
+    p = Person(name: "petter", age: 11)
+    p.describe()
+}
+"#;
+    client.did_change(&test_types_uri, content_with_error, 2);
+
+    let error_diags = client.read_diagnostics(&test_types_uri, Duration::from_secs(3));
+    println!("=== Diagnostics after introducing 'asdf' error ===");
+    for d in &error_diags {
+        println!("  Line {}: {}", d.line + 1, d.message);
+    }
+
+    // CRITICAL: Error should NOT be on line 1
+    // The 'asdf' was added on line 20, so error should be around there
+    let has_error_on_line_1 = error_diags.iter().any(|d| d.line == 0);
+    let has_error_near_line_20 = error_diags.iter().any(|d| d.line >= 18 && d.line <= 22);
+
+    assert!(
+        !has_error_on_line_1 || has_error_near_line_20,
+        "BUG REPRODUCED: Error appeared on line 1 (use statement) instead of near line 20 where 'asdf' was added. Diagnostics: {:?}",
+        error_diags.iter().map(|d| format!("Line {}: {}", d.line + 1, &d.message)).collect::<Vec<_>>()
+    );
+
+    // Now fix the error by removing 'asdf' - diagnostics should clear
+    client.did_change(&test_types_uri, initial_content, 3);
+
+    let fixed_diags = client.read_diagnostics(&test_types_uri, Duration::from_secs(3));
+    println!("=== Diagnostics after fixing the error ===");
+    for d in &fixed_diags {
+        println!("  Line {}: {}", d.line + 1, d.message);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // After fixing, should have no errors (or at least no error on line 1)
+    let still_has_error_on_line_1 = fixed_diags.iter().any(|d| d.line == 0);
+    assert!(
+        !still_has_error_on_line_1,
+        "BUG: After fixing the error, there's still an error on line 1. Diagnostics: {:?}",
+        fixed_diags.iter().map(|d| format!("Line {}: {}", d.line + 1, &d.message)).collect::<Vec<_>>()
+    );
+}
