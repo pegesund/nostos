@@ -26,8 +26,8 @@ put([], key, value) = [(key, value)]
 put([(k, _) | rest], key, value) when k == key = [(key, value) | rest]
 put([(k, v) | rest], key, value) = [(k, v) | put(rest, key, value)]
 
-get([], _) = NotFound
-get([(k, v) | rest], key) = if k == key then Found(v) else get(rest, key)
+lookup([], _) = NotFound
+lookup([(k, v) | rest], key) = if k == key then Found(v) else lookup(rest, key)
 
 type LookupResult = Found(UserData) | NotFound
 
@@ -67,13 +67,13 @@ main() = {
     store3 = put(store2, UserId(2), UserData("Bob", 85))
     store4 = put(store3, UserId(3), UserData("Charlie", 92))
 
-    println("Looking up UserId(1): " ++ show(get(store4, UserId(1))))
-    println("Looking up UserId(2): " ++ show(get(store4, UserId(2))))
-    println("Looking up UserId(99): " ++ show(get(store4, UserId(99))))
+    println("Looking up UserId(1): " ++ show(lookup(store4, UserId(1))))
+    println("Looking up UserId(2): " ++ show(lookup(store4, UserId(2))))
+    println("Looking up UserId(99): " ++ show(lookup(store4, UserId(99))))
 
     # Update a user
     store5 = put(store4, UserId(1), UserData("Alice", 150))
-    println("After update, UserId(1): " ++ show(get(store5, UserId(1))))
+    println("After update, UserId(1): " ++ show(lookup(store5, UserId(1))))
     println("")
 
     # ----- Hash Consistency -----

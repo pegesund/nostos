@@ -37,7 +37,7 @@ hashable[T: Hash](x: T) -> Int = hash(x)
 are_equal[T: Eq](x: T, y: T) -> Bool = x == y
 
 # A function that requires string representation
-stringify[T: Show](x: T) -> String = show(x)
+showValue[T: Show](x: T) -> String = show(x)
 
 # A function requiring multiple traits
 hash_and_show[T: Hash + Show](x: T) -> String = {
@@ -109,9 +109,9 @@ main() = {
     # ----- Show with Bounds -----
     println("--- Show Bounds ---")
 
-    println("stringify Point: " ++ stringify(p))
-    println("stringify Color: " ++ stringify(Green))
-    println("stringify Int: " ++ stringify(42))
+    println("stringify Point: " ++ showValue(p))
+    println("stringify Color: " ++ showValue(Green))
+    println("stringify Int: " ++ showValue(42))
     println("")
 
     # ----- Multiple Constraints -----

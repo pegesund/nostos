@@ -44,13 +44,13 @@ extract_values([]) = []
 extract_values([(_, v) | t]) = [v | extract_values(t)]
 
 # Length of list
-length([]) = 0
-length([_ | t]) = 1 + length(t)
+listLength([]) = 0
+listLength([_ | t]) = 1 + listLength(t)
 
 # Parallel map
 pmap(f, lst) = {
     me = self()
-    n = length(lst)
+    n = listLength(lst)
     spawn_workers(me, f, lst, 0)
     results = collect(n, [])
     sort_by_index(results)
@@ -60,8 +60,8 @@ pmap(f, lst) = {
 square(x) = x * x
 
 # Sum a list
-sum([]) = 0
-sum([h | t]) = h + sum(t)
+listSum([]) = 0
+listSum([h | t]) = h + listSum(t)
 
 main() = {
     input = [1, 2, 3, 4, 5]
@@ -71,13 +71,13 @@ main() = {
     assert_eq([1, 4, 9, 16, 25], squared)
 
     # Test sum
-    result = sum(squared)
+    result = listSum(squared)
     assert_eq(55, result)
 
     # Test with different function
     doubled = pmap(x => x * 2, input)
     assert_eq([2, 4, 6, 8, 10], doubled)
-    assert_eq(30, sum(doubled))
+    assert_eq(30, listSum(doubled))
 
     println("Parallel map tests passed!")
     result

@@ -21,14 +21,14 @@ myFold([], acc, _) = acc
 myFold([h | t], acc, f) = myFold(t, f(acc, h), f)
 
 # Sum all elements in a list (using stdlib via method chaining)
-sum(lst) = lst.fold(0, (a, b) => a + b)
+listSum(lst) = lst.fold(0, (a, b) => a + b)
 
 # Product of all elements
-product(lst) = lst.fold(1, (a, b) => a * b)
+listProduct(lst) = lst.fold(1, (a, b) => a * b)
 
 # Length of a list
-len([]) = 0
-len([_ | t]) = 1 + len(t)
+listLen([]) = 0
+listLen([_ | t]) = 1 + listLen(t)
 
 # Reverse a list
 rev(lst) = lst.fold([], (acc, x) => [x | acc])
@@ -59,11 +59,11 @@ main() = {
     assert_eq([6, 8, 10], result)
 
     # Test sum and product (use stdlib fold via method chaining)
-    assert_eq(15, sum(nums))
-    assert_eq(120, product(nums))
+    assert_eq(15, listSum(nums))
+    assert_eq(120, listProduct(nums))
 
     # Test length
-    assert_eq(5, len(nums))
+    assert_eq(5, listLen(nums))
 
     # Test reverse via method chaining
     assert_eq([5, 4, 3, 2, 1], rev(nums))
@@ -80,5 +80,5 @@ main() = {
     assert_eq(220, complexResult)
 
     println("List operations tests passed!")
-    sum(evens)  # 2 + 4 = 6
+    listSum(evens)  # 2 + 4 = 6
 }

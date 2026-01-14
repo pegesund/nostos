@@ -20,7 +20,7 @@ handleRequest(server, req, main_pid) = {
   }
 }
 
-acceptLoop(server, main_pid) = {
+workerLoop(server, main_pid) = {
   result = try {
     req = Server.accept(server)
     (signal, _) = handleRequest(server, req, main_pid)
@@ -28,7 +28,7 @@ acceptLoop(server, main_pid) = {
     if signal == "shutdown_signal" then {
       ()
     } else {
-      acceptLoop(server, main_pid)
+      workerLoop(server, main_pid)
     }
     ()
   } catch { e ->
@@ -39,7 +39,7 @@ acceptLoop(server, main_pid) = {
 
 spawnWorkers(server, main_pid, 0) = ()
 spawnWorkers(server, main_pid, n) = {
-  spawn { acceptLoop(server, main_pid) }
+  spawn { workerLoop(server, main_pid) }
   spawnWorkers(server, main_pid, n - 1)
 }
 

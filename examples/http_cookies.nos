@@ -22,7 +22,7 @@ handleProfile(req) = {
     else respondText(req, "Profile page\nSession: " ++ session)
 }
 
-handleLogout(req) =
+doLogout(req) =
     respondTextWith(req, "Logged out", [clearCookie("session")])
 
 handlePreferences(req) = {
@@ -36,7 +36,7 @@ route(req) = match req.path {
     "/" -> respondText(req, "Cookie Demo\n  /login?user=name\n  /profile\n  /logout\n  /preferences")
     "/login" -> handleLogin(req)
     "/profile" -> handleProfile(req)
-    "/logout" -> handleLogout(req)
+    "/logout" -> doLogout(req)
     "/preferences" -> handlePreferences(req)
     _ -> respond404(req)
 }

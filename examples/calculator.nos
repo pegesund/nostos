@@ -16,12 +16,12 @@ type Expr =
     | Neg(Expr)
 
 # Evaluate an expression
-eval(Num(n)) = n
-eval(Add(a, b)) = eval(a) + eval(b)
-eval(Sub(a, b)) = eval(a) - eval(b)
-eval(Mul(a, b)) = eval(a) * eval(b)
-eval(Div(a, b)) = eval(a) / eval(b)
-eval(Neg(e)) = -eval(e)
+evaluate(Num(n)) = n
+evaluate(Add(a, b)) = evaluate(a) + evaluate(b)
+evaluate(Sub(a, b)) = evaluate(a) - evaluate(b)
+evaluate(Mul(a, b)) = evaluate(a) * evaluate(b)
+evaluate(Div(a, b)) = evaluate(a) / evaluate(b)
+evaluate(Neg(e)) = -evaluate(e)
 
 # Simplify constant expressions using algebraic identities
 simplify(Add(Num(0), e)) = simplify(e)
@@ -40,20 +40,20 @@ simplify(e) = e
 main() = {
     # Test basic evaluation: (3 + 4) * (10 - 5) = 7 * 5 = 35
     expr1 = Mul(Add(Num(3), Num(4)), Sub(Num(10), Num(5)))
-    assert_eq(35, eval(expr1))
+    assert_eq(35, evaluate(expr1))
 
     # Test negation: -(5 - 8) = -(-3) = 3
     expr2 = Neg(Sub(Num(5), Num(8)))
-    assert_eq(3, eval(expr2))
+    assert_eq(3, evaluate(expr2))
 
     # Test simplification: 0 + (1 * 42) simplifies to 42
     expr3 = Add(Num(0), Mul(Num(1), Num(42)))
-    assert_eq(42, eval(simplify(expr3)))
+    assert_eq(42, evaluate(simplify(expr3)))
 
     # Test x * 0 = 0
     expr4 = Mul(Add(Num(100), Num(200)), Num(0))
-    assert_eq(0, eval(simplify(expr4)))
+    assert_eq(0, evaluate(simplify(expr4)))
 
     println("Calculator tests passed!")
-    eval(expr1)
+    evaluate(expr1)
 }
