@@ -9,7 +9,7 @@
 #   curl -X POST -d "name=Alice" http://localhost:8080/users
 
 use stdlib.server.{serve, getParam, respondText, respond400, respond405}
-use stdlib.pool.{init, query, execute}
+use stdlib.pool.{initPool, query, execute}
 
 # --- Database Setup ---
 
@@ -48,7 +48,7 @@ route(req) = match req.path {
 }
 
 main() = {
-    init("host=localhost user=postgres password=postgres")
+    initPool("host=localhost user=postgres password=postgres")
     setupDatabase()
     println("Postgres server: http://localhost:8080/users")
     serve(8080, route)

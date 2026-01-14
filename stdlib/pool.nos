@@ -4,10 +4,10 @@
 # Limits concurrent connections to avoid exhausting database resources.
 #
 # Usage:
-#   use stdlib.pool.{init, query, execute, withConn}
+#   use stdlib.pool.{initPool, query, execute, withConn}
 #
 #   main() = {
-#       init("host=localhost user=postgres password=postgres")
+#       initPool("host=localhost user=postgres password=postgres")
 #       rows = query("SELECT * FROM users", [])
 #       execute("INSERT INTO users (name) VALUES ($1)", ["Alice"])
 #   }
@@ -17,7 +17,7 @@
 mvar poolState: (List[Int], String, Int, Int, (String, Int, String)) = ([], "", 0, 25, ("none", 0, ""))
 
 # Initialize the pool with a connection string
-init(connStr) = {
+initPool(connStr) = {
     poolState.update(state => {
         (conns, _, active, maxP, _) = state
         (conns, connStr, active, maxP, ("none", 0, ""))

@@ -17,7 +17,7 @@
 #   curl http://localhost:8080/orders         - List orders with products
 
 use stdlib.server.{serve, getParam, respondText, respondJson, respond400, respond404, respond503}
-use stdlib.pool.{init, initWithMax, query, execute, withConn, transaction, tryTransaction, stats}
+use stdlib.pool.{initPool, initWithMax, query, execute, withConn, transaction, tryTransaction, stats}
 
 # --- Database Setup ---
 

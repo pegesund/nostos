@@ -3,7 +3,7 @@
 
 use stdlib.html.{Html, render}
 use stdlib.server.{serve, getParam, respondHtml, redirect, respond400, respond405}
-use stdlib.pool.{init, execute, stats}
+use stdlib.pool.{initPool, execute, stats}
 
 setupDatabase() = {
     execute("
@@ -55,7 +55,7 @@ route(req) = match req.path {
 }
 
 main() = {
-    init("host=localhost user=postgres password=postgres")
+    initPool("host=localhost user=postgres password=postgres")
     setupDatabase()
     println("Simple Transfer Server: http://localhost:8080")
     serve(8080, route)

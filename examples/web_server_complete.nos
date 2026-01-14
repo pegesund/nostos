@@ -18,7 +18,7 @@
 
 use stdlib.html.{Html, render}
 use stdlib.server.{serve, getParam, respondHtml, redirect, redirectWith, respond400, respond405, respond503, setCookieWithAge}
-use stdlib.pool.{init, query, execute, withConn, transaction, tryTransaction}
+use stdlib.pool.{initPool, query, execute, withConn, transaction, tryTransaction}
 
 # --- Database Setup ---
 
@@ -218,7 +218,7 @@ route(req) = match req.path {
 
 main() = {
     # Initialize connection pool (default 25 connections)
-    init("host=localhost user=postgres password=postgres")
+    initPool("host=localhost user=postgres password=postgres")
     setupDatabase()
 
     println("Web App: http://localhost:8080")

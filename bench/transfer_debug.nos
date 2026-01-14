@@ -3,7 +3,7 @@
 
 use stdlib.html.{Html, render}
 use stdlib.server.{serve, getParam, respondHtml, redirect, respond400, respond405}
-use stdlib.pool.{init, query, execute, transaction, stats}
+use stdlib.pool.{initPool, query, execute, transaction, stats}
 
 setupDatabase() = {
     execute("
@@ -84,7 +84,7 @@ route(req) = match req.path {
 }
 
 main() = {
-    init("host=localhost user=postgres password=postgres")
+    initPool("host=localhost user=postgres password=postgres")
     setupDatabase()
     println("Transfer Debug Server: http://localhost:8080")
     println("Watch for pool stats and errors...")
