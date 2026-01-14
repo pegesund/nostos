@@ -1,0 +1,7 @@
+# A working function
+pub addff(a, b) = a + b
+
+# A working function
+pub addfff(a, b) = a + b
+
+pub multiply(x, y) = x * y

@@ -1,0 +1,4 @@
+also_broken() = 2
+
+# This file has an error
+broken_func() = 1 . 5

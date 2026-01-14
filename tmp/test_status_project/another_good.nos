@@ -1,0 +1,2 @@
+# Another working file
+greet(name) = "Hello, " ++ name

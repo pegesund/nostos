@@ -1,0 +1,27 @@
+main() = {
+    x = good.addff(3, 2)
+    y = good.multiply(2,3)
+    yy = [1,2,3]
+    yy.map(m => m.asInt8())
+    y1 = 33
+    g = asInt32(y1)
+    
+    y1.asInt32()
+
+gg = [[0,1]]
+    gg.map(m => m.map(n => n.asFloat32()))
+    # test
+    g2 = [["a" ,"b"]]
+    x2 = g2[0][0]
+    y3 = "ffff"
+    x2.chars().drop(1).get(1).show()
+
+p = Person(name: "petter", age: 11)
+    # p.
+    a = p.age
+    r = Failure("hupp")
+    r.show()
+    # p.describe()
+    p.describe()
+
+}
