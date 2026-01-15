@@ -3193,6 +3193,55 @@ main() = {
     );
 }
 
+/// Test that numeric conversion functions (asInt32, asFloat64, etc.) report type errors
+/// when called with non-numeric arguments like String
+#[test]
+fn test_lsp_numeric_conversion_type_check() {
+    let project_path = create_test_project("numeric_conversion_type_check");
+
+    // asInt32("xxx") should be a type error - String is not numeric
+    let content = r#"main() = {
+    x = asInt32("hello")
+    x
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+
+    // Read diagnostics
+    let diagnostics = client.read_diagnostics(&main_uri, Duration::from_secs(3));
+
+    println!("=== Diagnostics for asInt32(String) type check ===");
+    for d in &diagnostics {
+        println!("  Line {}: {}", d.line + 1, d.message);
+    }
+    println!("Total diagnostics: {}", diagnostics.len());
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // Should have a type error for asInt32("hello")
+    let has_type_error = diagnostics.iter().any(|d| {
+        d.message.to_lowercase().contains("type") &&
+        (d.message.to_lowercase().contains("mismatch") ||
+         d.message.to_lowercase().contains("expected"))
+    });
+
+    assert!(
+        has_type_error,
+        "Expected type error for asInt32(String). Got: {:?}",
+        diagnostics
+    );
+}
+
 fn get_nostos_binary() -> String {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent().unwrap()

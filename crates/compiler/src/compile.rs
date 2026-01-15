@@ -9200,6 +9200,42 @@ impl Compiler {
             }
         }
 
+        // Type check for numeric conversion functions
+        // These functions (asInt32, asFloat64, etc.) require numeric arguments
+        if let Some(ref qname) = maybe_qualified_name {
+            if !qname.contains('.') && arg_exprs.len() == 1 {
+                let is_numeric_conversion = matches!(qname.as_str(),
+                    "asInt" | "asInt8" | "asInt16" | "asInt32" | "asInt64" |
+                    "asUInt8" | "asUInt16" | "asUInt32" | "asUInt64" |
+                    "asFloat" | "asFloat32" | "asFloat64" |
+                    "toInt" | "toInt8" | "toInt16" | "toInt32" | "toInt64" |
+                    "toUInt8" | "toUInt16" | "toUInt32" | "toUInt64" |
+                    "toFloat" | "toFloat32" | "toFloat64" |
+                    "asBigInt" | "toBigInt"
+                );
+
+                if is_numeric_conversion {
+                    if let Some(arg_type) = self.expr_type_name(arg_exprs[0]) {
+                        let is_numeric = matches!(arg_type.as_str(),
+                            "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
+                            "UInt8" | "UInt16" | "UInt32" | "UInt64" |
+                            "Float" | "Float32" | "Float64" | "BigInt"
+                        );
+
+                        if !is_numeric {
+                            return Err(CompileError::TypeError {
+                                message: format!(
+                                    "type mismatch in argument 1: `{}` expects numeric type (Int, Float, etc.) but found `{}`",
+                                    qname, arg_type
+                                ),
+                                span: arg_exprs[0].span(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
         // Compile arguments, handling polymorphic function arguments specially
         let mut arg_regs = Vec::new();
         for (i, arg) in resolved_args.iter().enumerate() {
