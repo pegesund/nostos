@@ -520,11 +520,39 @@ impl<'a> InferCtx<'a> {
                         let resolved_ret = self.env.apply_subst(&call.ret_ty);
                         self.unify_types(&resolved_ret, &ft.ret)?;
                     }
+                } else {
+                    // Method not found for this type - report an error
+                    // This catches cases like calling .length() on Int
+                    self.last_error_span = call.span;
+                    return Err(TypeError::UndefinedMethod {
+                        method: call.method_name.clone(),
+                        receiver_type: type_name.to_string(),
+                    });
                 }
-                // If function not found, we don't error here - let the existing
-                // unknown function checks handle it
+            } else {
+                // Type is still not resolved to a concrete name - check if it's a primitive
+                // that definitely doesn't support the method
+                let resolved = self.env.apply_subst(&call.receiver_ty);
+                let is_primitive_without_method = match &resolved {
+                    Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 |
+                    Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64 |
+                    Type::Float | Type::Float32 | Type::Float64 |
+                    Type::Bool | Type::Char | Type::BigInt | Type::Decimal => {
+                        // Check if this is a method that works on these types
+                        !matches!(call.method_name.as_str(), "toString" | "show" | "abs")
+                    }
+                    _ => false
+                };
+
+                if is_primitive_without_method {
+                    let type_name = resolved.display();
+                    self.last_error_span = call.span;
+                    return Err(TypeError::UndefinedMethod {
+                        method: call.method_name.clone(),
+                        receiver_type: type_name,
+                    });
+                }
             }
-            // If type still not resolved, skip the check
         }
 
         Ok(())

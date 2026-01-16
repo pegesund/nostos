@@ -1663,27 +1663,10 @@ impl Compiler {
                         let is_overload_confusion = false;
                         // Check for type variable errors (List[?N] vs Function)
                         let is_type_var_confusion = message.contains("List[?") && message.contains("->");
-                        // Check for List/primitive confusion (often from named parameter reordering)
-                        let is_list_primitive_confusion = (message.contains("List[String]") && message.contains(" String")) ||
-                            (message.contains("List[Int]") && message.contains(" Int"));
-                        // Check for type unification errors with custom types
-                        // HM inference struggles with user-defined types in conditional branches
-                        // Raw message format is "Cannot unify types: X and Y"
-                        let is_custom_type_confusion = if let Some(types_part) = message.strip_prefix("Cannot unify types: ") {
-                            let parts: Vec<&str> = types_part.split(" and ").collect();
-                            if parts.len() == 2 {
-                                let t1 = parts[0].trim();
-                                let t2 = parts[1].trim();
-                                let primitives = ["Int", "String", "Bool", "Float", "()"];
-                                let is_primitive = |t: &str| primitives.iter().any(|p| t == *p || t.starts_with("List[") || t.starts_with("?"));
-                                // If one type is Int and other is a custom type (not primitive), it's likely inference confusion
-                                (t1 == "Int" && !is_primitive(t2)) || (t2 == "Int" && !is_primitive(t1))
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
+                        // DISABLED: These filters were incorrectly hiding legitimate type errors
+                        // like List[Int] vs Int and Point vs Int
+                        let is_list_primitive_confusion = false;
+                        let is_custom_type_confusion = false;
                         let is_spurious = message.contains("Unknown identifier") ||
                             message.contains("Unknown type") ||
                             message.contains("has no field") ||
@@ -4525,27 +4508,10 @@ impl Compiler {
                     let is_overload_confusion = false;
                     // Check for type variable errors (List[?N] vs Function)
                     let is_type_var_confusion = message.contains("List[?") && message.contains("->");
-                    // Check for List/primitive confusion (often from named parameter reordering)
-                    let is_list_primitive_confusion = (message.contains("List[String]") && message.contains(" String")) ||
-                        (message.contains("List[Int]") && message.contains(" Int"));
-                    // Check for type unification errors with custom types
-                    // HM inference struggles with user-defined types in conditional branches
-                    // Raw message format is "Cannot unify types: X and Y"
-                    let is_custom_type_confusion = if let Some(types_part) = message.strip_prefix("Cannot unify types: ") {
-                        let parts: Vec<&str> = types_part.split(" and ").collect();
-                        if parts.len() == 2 {
-                            let t1 = parts[0].trim();
-                            let t2 = parts[1].trim();
-                            let primitives = ["Int", "String", "Bool", "Float", "()"];
-                            let is_primitive = |t: &str| primitives.iter().any(|p| t == *p || t.starts_with("List[") || t.starts_with("?"));
-                            // If one type is Int and other is a custom type (not primitive), it's likely inference confusion
-                            (t1 == "Int" && !is_primitive(t2)) || (t2 == "Int" && !is_primitive(t1))
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
+                    // DISABLED: These filters were incorrectly hiding legitimate type errors
+                    // like List[Int] vs Int and Point vs Int
+                    let is_list_primitive_confusion = false;
+                    let is_custom_type_confusion = false;
                     let is_spurious = message.contains("Unknown identifier") ||
                         message.contains("Unknown type") ||
                         message.contains("has no field") ||
@@ -17065,10 +17031,12 @@ impl Compiler {
                     let type1 = parts[0].trim();
                     let type2 = parts[1].trim();
 
-                    // Check for structural type mismatch (e.g., List vs Function, List vs String)
+                    // Check for structural type mismatch (e.g., List vs Function, List vs primitive)
                     // These are REAL errors even if types contain variables
                     let is_list_type = |s: &str| s.starts_with("List[") || s.starts_with("[");
                     let is_func_type = |s: &str| s.contains("->");
+                    let is_primitive = |s: &str| s == "Int" || s == "Float" || s == "Bool" || s == "String" || s == "()";
+                    let is_record_type = |s: &str| s.starts_with("{") || (s.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) && !s.contains('[') && !s.contains("->"));
 
                     // If one type is a List and the other is a Function, this is a real error
                     // (common when passing arguments in wrong order to filter/map)
@@ -17077,9 +17045,25 @@ impl Compiler {
                         return false;  // NOT a type-variable-only error - report it!
                     }
 
-                    // Note: We DON'T special-case List vs String here because it's often
-                    // an inference limitation (e.g., polymorphic length() function)
-                    // String.join wrong-order errors may be filtered but this avoids false positives
+                    // If one type is a List and the other is a primitive, this is a real error
+                    // (e.g., passing Int where List[Int] expected)
+                    if (is_list_type(type1) && is_primitive(type2)) ||
+                       (is_list_type(type2) && is_primitive(type1)) {
+                        return false;  // NOT a type-variable-only error - report it!
+                    }
+
+                    // If one type is a record/named type and the other is a primitive, this is a real error
+                    // (e.g., passing Point where Int expected)
+                    if (is_record_type(type1) && is_primitive(type2)) ||
+                       (is_record_type(type2) && is_primitive(type1)) {
+                        return false;  // NOT a type-variable-only error - report it!
+                    }
+
+                    // If one type is a List and the other is a record/named type, this is a real error
+                    if (is_list_type(type1) && is_record_type(type2)) ||
+                       (is_list_type(type2) && is_record_type(type1)) {
+                        return false;  // NOT a type-variable-only error - report it!
+                    }
 
                     // Check if a type contains type variables (used in higher-order function inference)
                     let contains_type_var = |s: &str| {

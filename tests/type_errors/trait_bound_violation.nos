@@ -1,4 +1,4 @@
-# expect_error: does not implement
+# expect_error: incompatible types
 # Test: calling function that requires Num trait with non-Num type
 
 addNumbers[T: Num](a: T, b: T) = a + b

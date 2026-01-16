@@ -1,6 +1,5 @@
-# expect_error: expected matching numeric types
+# expect_error: incompatible types
 # Test: passing record where Int is expected
-# NOTE: Currently caught at runtime. Ideally should be compile-time.
 
 type Point = { x: Int, y: Int }
 

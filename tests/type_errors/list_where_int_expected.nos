@@ -1,6 +1,5 @@
-# expect_error: expected matching numeric types
+# expect_error: expected `Int`, found `List
 # Test: passing List where Int is expected
-# NOTE: Currently caught at runtime. Ideally should be compile-time.
 
 double(x: Int) = x * 2
 

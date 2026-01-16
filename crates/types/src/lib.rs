@@ -251,6 +251,9 @@ pub enum TypeError {
     #[error("Ambiguous type: cannot infer type for {0}")]
     AmbiguousType(String),
 
+    #[error("Type {receiver_type} has no method {method}")]
+    UndefinedMethod { method: String, receiver_type: String },
+
     #[error("Recursive type without indirection: {0}")]
     InvalidRecursiveType(String),
 

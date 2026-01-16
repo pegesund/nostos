@@ -1,6 +1,5 @@
-# expect_error: unsupported type
+# expect_error: has no method length
 # Test: type error in nested lambda calling wrong method
-# NOTE: Currently caught at runtime. Ideally should be compile-time.
 
 main() = {
     outer = x => {
