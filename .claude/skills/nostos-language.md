@@ -1046,3 +1046,382 @@ main() = {
     0
 }
 ```
+
+---
+
+## 15. UFCS (Uniform Function Call Syntax)
+
+Nostos uses **receiver-first UFCS** - method calls are transformed to function calls with the receiver as the first argument.
+
+### How It Works
+
+```nostos
+# These are equivalent:
+[1, 2, 3].map(x => x * 2)
+map([1, 2, 3], x => x * 2)
+
+# Method chaining works via UFCS
+[1, 2, 3].filter(x => x > 1).map(x => x * 2)
+# Equivalent to:
+map(filter([1, 2, 3], x => x > 1), x => x * 2)
+```
+
+### Implications
+
+1. **Any function can be called as a method** if its first parameter matches the receiver type
+2. **Stdlib functions** are designed with receiver-first for chaining: `[a] -> (a -> b) -> [b]`
+3. **Custom functions** work the same way:
+
+```nostos
+# Define a function
+double(x: Int) = x * 2
+
+# Call as method
+result = 5.double()  # 10
+
+# With multiple params
+add(a: Int, b: Int) = a + b
+result = 5.add(3)    # 8 - same as add(5, 3)
+```
+
+### UFCS in BUILTINS Signatures
+
+BUILTIN signatures show receiver-first order:
+
+| Signature | Method Call | Function Call |
+|-----------|-------------|---------------|
+| `[a] -> (a -> b) -> [b]` | `list.map(f)` | `map(list, f)` |
+| `[a] -> b -> ((b, a) -> b) -> b` | `list.fold(init, f)` | `fold(list, init, f)` |
+| `String -> String -> Bool` | `s.contains(sub)` | `String.contains(s, sub)` |
+
+---
+
+## 16. Common Error Messages
+
+### Type Mismatch
+```
+Error: type mismatch: expected `Int`, found `String`
+```
+**Cause:** Using incompatible types together (e.g., `5 + "hello"`)
+**Fix:** Use correct types or convert: `show(5) ++ "hello"` for string concat
+
+### Unknown Variable
+```
+Error: unknown variable `unknownVar`
+```
+**Cause:** Using a variable that hasn't been defined
+**Fix:** Define the variable first, or check spelling
+
+### Unknown Method
+```
+Error: no method `unknownMethod` found for type `List[Int]`
+```
+**Cause:** Calling a method that doesn't exist for the type
+**Fix:** Check available methods for the type, verify spelling
+
+### Wrong Arity
+```
+Error: function `add` expects 2 arguments, but 1 was provided
+```
+**Cause:** Calling a function with wrong number of arguments
+**Fix:** Provide all required arguments
+
+### Immutable Reassignment
+```
+Error: cannot reassign immutable variable 'x'; use 'var' to declare a mutable variable
+```
+**Cause:** Trying to reassign a value bound with `=`
+**Fix:** Use `var x = 5` then `x = 10`, or use different names
+
+### Non-Exhaustive Match (Runtime)
+```
+Runtime error: No clause matched for function 'describe/_'
+```
+**Cause:** Pattern match doesn't cover all cases
+**Fix:** Add missing cases or a wildcard `_ -> ...`
+
+### String Does Not Implement Num
+```
+Error: String does not implement Num
+```
+**Cause:** Using arithmetic operators on strings
+**Fix:** Use `++` for concatenation, or convert to numbers first
+
+### Index Out of Bounds (Runtime)
+```
+Runtime error: Index out of bounds
+```
+**Cause:** Accessing list/array at invalid index
+**Fix:** Check bounds before access, use `find` for safe lookup
+
+---
+
+## 17. Project Structure
+
+### Directory Layout
+```
+nostos/
+├── crates/                 # Rust source code
+│   ├── cli/               # TUI, REPL, editor
+│   ├── compiler/          # Parser, compiler, BUILTINS
+│   ├── jit/               # JIT compilation
+│   ├── lsp/               # Language Server Protocol
+│   ├── repl/              # REPL engine, compile checking
+│   ├── source/            # Source file management
+│   ├── syntax/            # Lexer, parser, AST
+│   ├── types/             # Type inference, checking
+│   └── vm/                # Virtual machine, GC, scheduler
+├── stdlib/                 # Standard library (Nostos code)
+├── examples/               # Example programs
+├── tests/                  # Test files (.nos)
+└── target/release/         # Built binaries
+```
+
+### Key Crates
+
+| Crate | Purpose | Key Files |
+|-------|---------|-----------|
+| `compiler` | Compiles AST to bytecode | `compile.rs` (BUILTINS defined here) |
+| `types` | HM type inference | `infer.rs` (type inference), `check.rs` |
+| `syntax` | Parsing | `lexer.rs`, `parser.rs`, `ast.rs` |
+| `vm` | Execution | `async_vm.rs`, `gc.rs`, `scheduler.rs` |
+| `repl` | Interactive mode | `engine.rs` (compile checking for LSP) |
+| `lsp` | VS Code support | `server.rs` |
+
+### Builtin vs Stdlib
+
+**Builtins** (in `crates/compiler/src/compile.rs`):
+- Implemented in Rust
+- Low-level operations: `+`, `-`, `spawn`, `receive`
+- I/O: `File.*`, `Http.*`, `Server.*`, `Pg.*`
+- Collections: `map`, `filter`, `fold` (optimized)
+- Type operations: `show`, `typeOf`, `reflect`
+
+**Stdlib** (in `stdlib/*.nos`):
+- Implemented in Nostos
+- Higher-level abstractions
+- Can be modified without recompiling
+
+### Stdlib Files
+
+| File | Contents |
+|------|----------|
+| `list.nos` | Option, Result, list operations (many also as builtins) |
+| `json.nos` | JSON parser, Json type, serialization |
+| `html.nos` | HTML DSL for building HTML |
+| `server.nos` | HTTP server helpers (getParam, respondText, etc.) |
+| `validation.nos` | Form validation framework |
+| `pool.nos` | PostgreSQL connection pooling |
+| `traits.nos` | Built-in trait definitions (Eq, Ord, Num, Show, Hash, Copy) |
+| `io.nos` | I/O handle types (FileHandle, ServerHandle, etc.) |
+| `url.nos` | URL parsing utilities |
+| `logging.nos` | Logging framework |
+| `ws.nos` | WebSocket helpers |
+| `rhtml.nos` | Reactive HTML components |
+| `rweb.nos` | Reactive web framework |
+
+---
+
+## 18. Type Inference Edge Cases
+
+Nostos uses Hindley-Milner type inference. Most types are inferred automatically, but some cases need help.
+
+### What HM Infers Well
+
+```nostos
+# Literals - type is obvious
+x = 42          # Int
+s = "hello"     # String
+b = true        # Bool
+
+# Function calls - types flow from arguments
+result = [1, 2, 3].map(x => x * 2)  # [Int]
+
+# Generic functions - instantiated at call site
+identity(x) = x
+n = identity(42)      # Int
+s = identity("hi")    # String
+
+# Variant constructors
+opt = Some(42)        # Option[Int] inferred from 42
+```
+
+### When Annotations Help
+
+**Empty collections:**
+```nostos
+# Type is ambiguous without context
+xs: [Int] = []
+m: Map[String, Int] = {| |}
+```
+
+**Numeric literals in generic contexts:**
+```nostos
+# 0 could be Int, Float, etc.
+# Usually fine, but annotation can clarify
+initial: Float = 0.0
+```
+
+**Complex function signatures:**
+```nostos
+# For documentation and error messages
+transform(items: [a], f: a -> b) -> [b] = items.map(f)
+```
+
+### What Works Without Annotations
+
+```nostos
+# Type flows through the expression
+result = [1, 2, 3]
+    .filter(x => x > 1)     # x inferred as Int
+    .map(x => x * 2)        # still Int
+    .fold(0, (a, b) => a + b)  # accumulator Int
+
+# Generic functions just work
+first([x | _]) = x
+head = first([1, 2, 3])  # Int
+
+# Variants with data
+data = Some(42)
+match data {
+    Some(n) -> n * 2     # n is Int
+    None -> 0
+}
+```
+
+### Type Errors Caught at Compile Time
+
+```nostos
+# Mismatched types in operations
+bad = 5 + "hello"           # Error: expected Int, found String
+
+# Wrong callback signature
+bad = [1,2,3].fold(0, (acc, x) => acc ++ show(x))
+# Error: fold accumulator must match return type
+
+# Incompatible branch types
+bad = if true then 42 else "hello"  # Error: branches must match
+```
+
+### Not Caught Until Runtime
+
+```nostos
+# Non-exhaustive patterns (warning but compiles)
+describe(Red) = "red"
+describe(Green) = "green"
+# Blue case missing - runtime error if called with Blue
+
+# Division by zero
+x = 10 / 0  # Runtime error
+
+# Index out of bounds
+x = [1, 2, 3].nth(10)  # Runtime error
+```
+
+---
+
+## 19. Data Processing Pipeline Example
+
+A complete example showing records, variants, traits, and pipelines together:
+
+```nostos
+# Data Processing Pipeline
+# Demonstrates: records, variants, traits, pipelines, error handling
+
+# --- Types ---
+
+type User = {
+    id: Int,
+    name: String,
+    email: String,
+    age: Int,
+    active: Bool
+}
+
+type ProcessingError =
+    | ValidationError(String)
+    | TransformError(String)
+
+type ProcessResult = Ok(User) | Err(ProcessingError)
+
+# --- Validation Trait ---
+
+trait Validate
+    validate(self) -> ProcessResult
+end
+
+User: Validate
+    validate(self) = {
+        if self.name.isEmpty() then
+            Err(ValidationError("Name cannot be empty"))
+        else if self.age < 0 then
+            Err(ValidationError("Age cannot be negative"))
+        else if !self.email.contains("@") then
+            Err(ValidationError("Invalid email format"))
+        else
+            Ok(self)
+    }
+end
+
+# --- Processing Functions ---
+
+# Parse raw data into User
+parseUser(data: (Int, String, String, Int, Bool)) -> User = {
+    (id, name, email, age, active) = data
+    User { id: id, name: name, email: email, age: age, active: active }
+}
+
+# Transform: normalize email to lowercase
+normalizeEmail(user: User) -> User =
+    user { email: user.email.toLower() }
+
+# Transform: anonymize for export
+anonymize(user: User) -> User =
+    user { email: "***@***", name: user.name.take(1) ++ "***" }
+
+# Filter: only active adults
+isActiveAdult(user: User) -> Bool =
+    user.active && user.age >= 18
+
+# Summarize: extract key info
+summarize(user: User) -> String =
+    user.name ++ " (" ++ show(user.age) ++ ")"
+
+# --- Pipeline ---
+
+processUsers(rawData: [(Int, String, String, Int, Bool)]) -> [String] = {
+    rawData
+        .map(parseUser)                    # Parse raw tuples to Users
+        .map(normalizeEmail)               # Normalize emails
+        .filter(isActiveAdult)             # Keep active adults only
+        .filter(u => u.validate().isOk())  # Keep only valid users
+        .map(summarize)                    # Extract summaries
+}
+
+# Helper for Result
+isOk(Ok(_)) = true
+isOk(Err(_)) = false
+
+main() = {
+    # Sample data: (id, name, email, age, active)
+    rawData = [
+        (1, "Alice", "ALICE@example.com", 30, true),
+        (2, "Bob", "bob@test.com", 17, true),      # Too young
+        (3, "Charlie", "charlie@work.com", 25, false),  # Not active
+        (4, "", "empty@test.com", 40, true),       # Empty name - invalid
+        (5, "Diana", "DIANA@CORP.COM", 28, true),
+        (6, "Eve", "invalid-email", 35, true)      # Bad email - invalid
+    ]
+
+    results = processUsers(rawData)
+
+    # Should only have Alice and Diana
+    assert_eq(2, results.length())
+    assert_eq("Alice (30)", results.nth(0))
+    assert_eq("Diana (28)", results.nth(1))
+
+    println("Results: " ++ show(results))
+    println("Data processing pipeline tests passed!")
+    0
+}
+```
