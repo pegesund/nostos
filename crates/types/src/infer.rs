@@ -184,6 +184,121 @@ impl<'a> InferCtx<'a> {
         }
     }
 
+    /// Find the best matching overload for a function call based on argument types.
+    /// Returns the INDEX of the overload whose parameter types best match the (resolved) argument types.
+    /// This is the key to proper overload resolution in HM type inference.
+    fn find_best_overload_idx(&self, overloads: &[&FunctionType], arg_types: &[Type]) -> Option<usize> {
+        // Resolve argument types through current substitution
+        let resolved_args: Vec<Type> = arg_types.iter()
+            .map(|t| self.env.apply_subst(t))
+            .collect();
+
+        // Try each overload and score how well it matches
+        let mut best_match: Option<(usize, usize)> = None;  // (index, score)
+
+        for (idx, &overload) in overloads.iter().enumerate() {
+            if overload.params.len() != arg_types.len() {
+                continue;
+            }
+
+            let mut score = 0;
+            let mut compatible = true;
+
+            for (param_ty, arg_ty) in overload.params.iter().zip(resolved_args.iter()) {
+                match self.types_compatible(param_ty, arg_ty) {
+                    Some(s) => score += s,
+                    None => {
+                        compatible = false;
+                        break;
+                    }
+                }
+            }
+
+            if compatible {
+                // Higher score = better match
+                // Prefer exact matches over generic matches
+                if best_match.is_none() || score > best_match.unwrap().1 {
+                    best_match = Some((idx, score));
+                }
+            }
+        }
+
+        best_match.map(|(idx, _)| idx)
+    }
+
+    /// Check if a parameter type is compatible with an argument type.
+    /// Returns Some(score) if compatible (higher = better match), None if incompatible.
+    fn types_compatible(&self, param_ty: &Type, arg_ty: &Type) -> Option<usize> {
+        // Resolve both types through substitution
+        let param = self.env.apply_subst(param_ty);
+        let arg = self.env.apply_subst(arg_ty);
+
+        match (&param, &arg) {
+            // Exact match - highest score
+            _ if param == arg => Some(100),
+
+            // Type variable in param position - can match anything (generic function)
+            (Type::Var(_), _) | (Type::TypeParam(_), _) => Some(10),
+
+            // Type variable in arg position - can match anything (not yet resolved)
+            (_, Type::Var(_)) | (_, Type::TypeParam(_)) => Some(50),
+
+            // Same base type with potentially different type args
+            (Type::List(p), Type::List(a)) => {
+                self.types_compatible(p, a).map(|s| s / 2 + 50)
+            }
+            (Type::Array(p), Type::Array(a)) => {
+                self.types_compatible(p, a).map(|s| s / 2 + 50)
+            }
+            (Type::Map(pk, pv), Type::Map(ak, av)) => {
+                let k_compat = self.types_compatible(pk, ak)?;
+                let v_compat = self.types_compatible(pv, av)?;
+                Some((k_compat + v_compat) / 2 + 30)
+            }
+            (Type::Set(p), Type::Set(a)) => {
+                self.types_compatible(p, a).map(|s| s / 2 + 50)
+            }
+
+            // Named types must match by name
+            (Type::Named { name: pn, .. }, Type::Named { name: an, .. }) => {
+                if pn == an { Some(90) } else { None }
+            }
+
+            // Variant types must match by name
+            (Type::Variant(pv), Type::Variant(av)) => {
+                if pv.name == av.name { Some(90) } else { None }
+            }
+
+            // Tuples must have same length and compatible elements
+            (Type::Tuple(pt), Type::Tuple(at)) => {
+                if pt.len() != at.len() {
+                    return None;
+                }
+                let mut total = 0;
+                for (p, a) in pt.iter().zip(at.iter()) {
+                    total += self.types_compatible(p, a)?;
+                }
+                Some(total / pt.len().max(1) + 50)
+            }
+
+            // Function types
+            (Type::Function(pf), Type::Function(af)) => {
+                if pf.params.len() != af.params.len() {
+                    return None;
+                }
+                let mut total = 0;
+                for (p, a) in pf.params.iter().zip(af.params.iter()) {
+                    total += self.types_compatible(p, a)?;
+                }
+                total += self.types_compatible(&pf.ret, &af.ret)?;
+                Some(total / (pf.params.len() + 1).max(1) + 30)
+            }
+
+            // Incompatible types
+            _ => None,
+        }
+    }
+
     /// Instantiate a polymorphic function type.
     /// Replaces type parameters AND existing Var types with fresh type variables.
     /// This ensures each call site gets its own type variables for proper unification.
@@ -1017,33 +1132,60 @@ impl<'a> InferCtx<'a> {
 
             // Function call (with optional type args)
             Expr::Call(func, _type_args, args, call_span) => {
-                // Special handling for simple variable function calls: use arity-aware lookup
-                // This is essential for resolving overloaded functions correctly
+                // Infer argument types first (needed for overload resolution)
+                let mut arg_types = Vec::new();
+                for arg in args {
+                    let expr = match arg {
+                        CallArg::Positional(e) | CallArg::Named(_, e) => e,
+                    };
+                    arg_types.push(self.infer_expr(expr)?);
+                }
+
+                // Special handling for simple variable function calls: try all overloads
                 let func_ty = if let Expr::Var(ident) = func.as_ref() {
                     let name = &ident.node;
                     // First check if it's a local binding (lambdas, let-bound functions)
                     if let Some((ty, _)) = self.env.lookup(name) {
                         ty.clone()
-                    } else if let Some(sig) = self.env.lookup_function_with_arity(name, args.len()).cloned() {
-                        // Use arity-aware lookup for overloaded functions
-                        let is_recursive = self.current_function.as_ref() == Some(name);
-                        if is_recursive {
-                            Type::Function(sig)
-                        } else {
-                            self.instantiate_function(&sig)
-                        }
-                    } else if let Some(ty) = self.lookup_constructor(name) {
-                        // Could be a constructor call
-                        ty
                     } else {
-                        return Err(TypeError::UnknownIdent(name.clone()));
+                        // Get ALL overloads and find the best match based on argument types
+                        // Clone to avoid borrow issues with instantiate_function
+                        let overloads: Vec<FunctionType> = self.env.lookup_all_functions_with_arity(name, args.len())
+                            .into_iter().cloned().collect();
+                        if !overloads.is_empty() {
+                            let is_recursive = self.current_function.as_ref() == Some(name);
+                            // Find best overload index first to avoid borrow issues
+                            let best_idx = {
+                                let overload_refs: Vec<&FunctionType> = overloads.iter().collect();
+                                self.find_best_overload_idx(&overload_refs, &arg_types)
+                            };
+                            let sig = overloads[best_idx.unwrap_or(0)].clone();
+                            if is_recursive {
+                                Type::Function(sig)
+                            } else {
+                                self.instantiate_function(&sig)
+                            }
+                        } else if let Some(ty) = self.lookup_constructor(name) {
+                            // Could be a constructor call
+                            ty
+                        } else {
+                            return Err(TypeError::UnknownIdent(name.clone()));
+                        }
                     }
                 } else if let Expr::FieldAccess(base_expr, field, _) = func.as_ref() {
                     // Special handling for qualified function calls like good.addf(1, 2)
-                    // Need to use arity-aware lookup since function keys include arity suffix
                     if let Expr::Var(base_ident) = base_expr.as_ref() {
                         let qualified_name = format!("{}.{}", base_ident.node, field.node);
-                        if let Some(sig) = self.env.lookup_function_with_arity(&qualified_name, args.len()).cloned() {
+                        // Clone to avoid borrow issues
+                        let overloads: Vec<FunctionType> = self.env.lookup_all_functions_with_arity(&qualified_name, args.len())
+                            .into_iter().cloned().collect();
+                        if !overloads.is_empty() {
+                            // Find best overload index first to avoid borrow issues
+                            let best_idx = {
+                                let overload_refs: Vec<&FunctionType> = overloads.iter().collect();
+                                self.find_best_overload_idx(&overload_refs, &arg_types)
+                            };
+                            let sig = overloads[best_idx.unwrap_or(0)].clone();
                             self.instantiate_function(&sig)
                         } else {
                             // Fall back to inferring as regular field access
@@ -1056,14 +1198,6 @@ impl<'a> InferCtx<'a> {
                     // For non-variable function expressions, infer normally
                     self.infer_expr(func)?
                 };
-
-                let mut arg_types = Vec::new();
-                for arg in args {
-                    let expr = match arg {
-                        CallArg::Positional(e) | CallArg::Named(_, e) => e,
-                    };
-                    arg_types.push(self.infer_expr(expr)?);
-                }
 
                 let ret_ty = self.fresh();
                 let expected_func_ty = Type::Function(FunctionType { required_params: None,

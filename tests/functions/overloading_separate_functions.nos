@@ -7,7 +7,7 @@ factorial(0: Int) = 1
 factorial(n: Int) = n * factorial(n - 1)
 
 # Completely separate "factorial" for String (counts characters) - different signature
-factorial(s: String) = length(s)
+factorial(s: String) = s.length()
 
 # Another overload test: describe function
 describe(x: Int) = "integer"

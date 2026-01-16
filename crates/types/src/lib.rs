@@ -444,6 +444,60 @@ impl TypeEnv {
         self.functions.get(name)
     }
 
+    /// Look up ALL functions matching name and arity (for overload resolution).
+    /// Returns all typed overloads like `add/Int,Int` and `add/String,String`.
+    /// The caller should try each one to find the best match for argument types.
+    pub fn lookup_all_functions_with_arity(&self, name: &str, arity: usize) -> Vec<&FunctionType> {
+        let mut results = Vec::new();
+
+        if !name.contains('/') {
+            // First check wildcard entry (untyped overload)
+            let arity_suffix = if arity == 0 {
+                "/".to_string()
+            } else {
+                format!("/{}", vec!["_"; arity].join(","))
+            };
+            let qualified_name = format!("{}{}", name, arity_suffix);
+            if let Some(ft) = self.functions.get(&qualified_name) {
+                results.push(ft);
+            }
+
+            // Check higher arities for functions with optional params
+            for extra in 1..=10 {
+                let total_arity = arity + extra;
+                let arity_suffix = format!("/{}", vec!["_"; total_arity].join(","));
+                let qualified_name = format!("{}{}", name, arity_suffix);
+                if let Some(ft) = self.functions.get(&qualified_name) {
+                    let min_required = ft.required_params.unwrap_or(ft.params.len());
+                    if arity >= min_required && arity <= ft.params.len() {
+                        results.push(ft);
+                    }
+                }
+            }
+
+            // Collect ALL typed overloads with matching prefix and arity
+            let prefix = format!("{}/", name);
+            for (fn_name, ft) in &self.functions {
+                if fn_name.starts_with(&prefix) && ft.params.len() == arity {
+                    let suffix = &fn_name[prefix.len()..];
+                    // Only include typed entries (not wildcard entries already checked)
+                    if !suffix.chars().all(|c| c == '_' || c == ',') {
+                        results.push(ft);
+                    }
+                }
+            }
+        }
+
+        // Check exact match
+        if let Some(ft) = self.functions.get(name) {
+            if !results.contains(&ft) {
+                results.push(ft);
+            }
+        }
+
+        results
+    }
+
     /// Look up the field types for a variant constructor.
     /// Given a type name (e.g., "Expr") and constructor name (e.g., "Add"),
     /// returns the concrete field types from the type definition.
