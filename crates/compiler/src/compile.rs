@@ -1657,9 +1657,8 @@ impl Compiler {
                         // - Cannot unify types with stdlib types: cross-module type confusion
                         // - Cannot unify types involving type parameters: inference can't instantiate generics
                         // - Int and String: common overloading confusion (add(Int,Int) vs add(String,String))
-                        // Check if the error involves types that could be from overloaded functions
-                        // Disabled: was hiding legitimate type errors like variant constructor mismatches
-                        // e.g., Good("string") when Good(Int) is expected
+                        // DISABLED: This filter was hiding legitimate type errors like 5 + "hello"
+                        // The trait method issues are now handled in infer.rs check_pending_method_calls
                         let is_overload_confusion = false;
                         // Check for type variable errors (List[?N] vs Function)
                         let is_type_var_confusion = message.contains("List[?") && message.contains("->");
@@ -4502,9 +4501,8 @@ impl Compiler {
                     // - Cannot unify types with stdlib types: cross-module type confusion
                     // - Cannot unify types involving type parameters: inference can't instantiate generics
                     // - Int and String: common overloading confusion (add(Int,Int) vs add(String,String))
-                    // Check if the error involves types that could be from overloaded functions
-                    // Disabled: was hiding legitimate type errors like variant constructor mismatches
-                    // e.g., Good("string") when Good(Int) is expected
+                    // DISABLED: This filter was hiding legitimate type errors like 5 + "hello"
+                    // The trait method issues are now handled in infer.rs check_pending_method_calls
                     let is_overload_confusion = false;
                     // Check for type variable errors (List[?N] vs Function)
                     let is_type_var_confusion = message.contains("List[?") && message.contains("->");
@@ -17035,8 +17033,22 @@ impl Compiler {
                     // These are REAL errors even if types contain variables
                     let is_list_type = |s: &str| s.starts_with("List[") || s.starts_with("[");
                     let is_func_type = |s: &str| s.contains("->");
+                    let builtin_types = ["Int", "Float", "Bool", "String", "Char", "Unit", "Never",
+                                         "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64",
+                                         "Float32", "Float64", "BigInt", "Decimal", "Pid", "Ref", "Option", "Result"];
                     let is_primitive = |s: &str| s == "Int" || s == "Float" || s == "Bool" || s == "String" || s == "()";
-                    let is_record_type = |s: &str| s.starts_with("{") || (s.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) && !s.contains('[') && !s.contains("->"));
+                    let is_user_record_type = |s: &str| {
+                        // Must start with uppercase, not contain type params or arrow, and NOT be a builtin type
+                        // Also exclude type parameters (single or double uppercase letters/digits like T, T1, E, K, V)
+                        let is_type_param = s.len() <= 2 && s.chars().all(|c| c.is_uppercase() || c.is_numeric());
+                        if is_type_param {
+                            return false;
+                        }
+                        s.starts_with("{") ||
+                        (s.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) &&
+                         !s.contains('[') && !s.contains("->") &&
+                         !builtin_types.iter().any(|&b| s == b))
+                    };
 
                     // If one type is a List and the other is a Function, this is a real error
                     // (common when passing arguments in wrong order to filter/map)
@@ -17052,16 +17064,16 @@ impl Compiler {
                         return false;  // NOT a type-variable-only error - report it!
                     }
 
-                    // If one type is a record/named type and the other is a primitive, this is a real error
+                    // If one type is a user-defined record/named type and the other is a primitive, this is a real error
                     // (e.g., passing Point where Int expected)
-                    if (is_record_type(type1) && is_primitive(type2)) ||
-                       (is_record_type(type2) && is_primitive(type1)) {
+                    if (is_user_record_type(type1) && is_primitive(type2)) ||
+                       (is_user_record_type(type2) && is_primitive(type1)) {
                         return false;  // NOT a type-variable-only error - report it!
                     }
 
-                    // If one type is a List and the other is a record/named type, this is a real error
-                    if (is_list_type(type1) && is_record_type(type2)) ||
-                       (is_list_type(type2) && is_record_type(type1)) {
+                    // If one type is a List and the other is a user-defined record/named type, this is a real error
+                    if (is_list_type(type1) && is_user_record_type(type2)) ||
+                       (is_list_type(type2) && is_user_record_type(type1)) {
                         return false;  // NOT a type-variable-only error - report it!
                     }
 

@@ -521,30 +521,73 @@ impl<'a> InferCtx<'a> {
                         self.unify_types(&resolved_ret, &ft.ret)?;
                     }
                 } else {
-                    // Method not found for this type - report an error
-                    // This catches cases like calling .length() on Int
-                    self.last_error_span = call.span;
-                    return Err(TypeError::UndefinedMethod {
-                        method: call.method_name.clone(),
-                        receiver_type: type_name.to_string(),
-                    });
+                    // Method not found for this type in the inference environment
+                    // For known builtin methods that only work on List/String, we can
+                    // definitively report an error if called on a primitive.
+                    // For unknown methods, assume they might be trait methods.
+                    let list_only_methods = [
+                        "length", "len", "head", "tail", "init", "last", "nth",
+                        "push", "pop", "get", "set", "slice", "concat", "reverse", "sort",
+                        "map", "filter", "fold", "any", "all", "find", "position",
+                        "unique", "flatten", "zip", "unzip", "take", "drop",
+                        "empty", "isEmpty", "sum", "product", "indexOf", "sortBy",
+                        "intersperse", "spanList", "groupBy", "transpose", "pairwise",
+                        "isSorted", "isSortedBy", "enumerate",
+                    ];
+                    let string_methods = ["split", "trim", "trimStart", "trimEnd",
+                                           "toUpper", "toLower", "startsWith", "endsWith",
+                                           "contains", "replace", "chars"];
+
+                    let is_list_only = list_only_methods.contains(&call.method_name.as_str());
+                    let is_string_method = string_methods.contains(&call.method_name.as_str());
+                    let is_primitive = matches!(type_name.as_str(), "Int" | "Float" | "Bool" | "Char" |
+                                                           "Int8" | "Int16" | "Int32" | "Int64" |
+                                                           "UInt8" | "UInt16" | "UInt32" | "UInt64" |
+                                                           "Float32" | "Float64" | "BigInt" | "Decimal");
+
+                    // Report error for list-only methods on non-List types
+                    if is_list_only && is_primitive {
+                        self.last_error_span = call.span;
+                        return Err(TypeError::UndefinedMethod {
+                            method: call.method_name.clone(),
+                            receiver_type: type_name.to_string(),
+                        });
+                    }
+
+                    // Report error for string methods on non-String primitives
+                    if is_string_method && is_primitive && type_name.as_str() != "String" {
+                        self.last_error_span = call.span;
+                        return Err(TypeError::UndefinedMethod {
+                            method: call.method_name.clone(),
+                            receiver_type: type_name.to_string(),
+                        });
+                    }
+
+                    // For other methods, don't report - might be trait implementations
                 }
             } else {
-                // Type is still not resolved to a concrete name - check if it's a primitive
-                // that definitely doesn't support the method
+                // Type is still not resolved to a concrete name
+                // Check for known methods on resolved primitive types
                 let resolved = self.env.apply_subst(&call.receiver_ty);
-                let is_primitive_without_method = match &resolved {
+                let list_only_methods = [
+                    "length", "len", "head", "tail", "init", "last", "nth",
+                    "push", "pop", "get", "set", "slice", "concat", "reverse", "sort",
+                    "map", "filter", "fold", "any", "all", "find", "position",
+                    "unique", "flatten", "zip", "unzip", "take", "drop",
+                    "empty", "isEmpty", "sum", "product", "indexOf", "sortBy",
+                    "intersperse", "spanList", "groupBy", "transpose", "pairwise",
+                    "isSorted", "isSortedBy", "enumerate",
+                ];
+
+                let is_list_only = list_only_methods.contains(&call.method_name.as_str());
+                let is_primitive = matches!(&resolved,
                     Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 |
                     Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64 |
                     Type::Float | Type::Float32 | Type::Float64 |
-                    Type::Bool | Type::Char | Type::BigInt | Type::Decimal => {
-                        // Check if this is a method that works on these types
-                        !matches!(call.method_name.as_str(), "toString" | "show" | "abs")
-                    }
-                    _ => false
-                };
+                    Type::Bool | Type::Char | Type::BigInt | Type::Decimal
+                );
 
-                if is_primitive_without_method {
+                if is_list_only && is_primitive {
                     let type_name = resolved.display();
                     self.last_error_span = call.span;
                     return Err(TypeError::UndefinedMethod {

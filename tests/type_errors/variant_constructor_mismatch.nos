@@ -1,5 +1,5 @@
 # expect_error: type mismatch
-# Test that variant constructor argument type mismatch is caught
+# Test variant constructor type mismatch - Good expects Int but gets String
 
 type Status = Good(Int) | Bad(String)
 
