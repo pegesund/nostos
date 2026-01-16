@@ -129,6 +129,22 @@ impl<'a> InferCtx<'a> {
             .push(Constraint::HasField(ty, field.to_string(), field_ty));
     }
 
+    /// Uncurry a curried function type into an uncurried one.
+    /// For example, `b -> a -> b` (curried) becomes `(b, a) -> b` (uncurried).
+    /// Returns the flattened parameter list and the final return type.
+    fn uncurry_function_type(ft: &FunctionType) -> (Vec<Type>, Type) {
+        let mut params = ft.params.clone();
+        let mut ret = ft.ret.as_ref().clone();
+
+        // While the return type is also a function, flatten it
+        while let Type::Function(inner_ft) = ret {
+            params.extend(inner_ft.params.clone());
+            ret = inner_ft.ret.as_ref().clone();
+        }
+
+        (params, ret)
+    }
+
     /// Get the base type name from a resolved type (for UFCS method lookup).
     /// Returns None for type variables or types without a clear base name.
     fn get_type_name(&self, ty: &Type) -> Option<String> {
@@ -461,12 +477,34 @@ impl<'a> InferCtx<'a> {
                             let resolved_arg = self.env.apply_subst(arg_ty);
                             let resolved_param = self.env.apply_subst(param_ty);
 
-                            // Handle tuple/multi-param callback mismatch
-                            // In Nostos, (a, b) => creates a 2-param lambda, but map on [(Int,Int)]
-                            // expects (tuple) -> b. Skip unification for these cases to avoid false errors.
+                            // Handle function type mismatches between curried and uncurried forms
                             if let (Type::Function(expected_fn), Type::Function(actual_fn)) =
                                 (&resolved_param, &resolved_arg)
                             {
+                                // Case 1: Expected is curried (e.g., b -> a -> b), actual is uncurried (e.g., (b, a) -> b)
+                                // This is common for fold-like functions where the signature is parsed as curried
+                                // but the lambda is written as uncurried
+                                let expected_is_curried = matches!(*expected_fn.ret, Type::Function(_));
+
+                                if expected_is_curried && actual_fn.params.len() > 1 {
+                                    // Uncurry the expected type and compare
+                                    let (expected_params, expected_ret) = Self::uncurry_function_type(expected_fn);
+
+                                    // Check parameter counts match
+                                    if expected_params.len() == actual_fn.params.len() {
+                                        // Unify each parameter
+                                        for (expected_p, actual_p) in expected_params.iter().zip(actual_fn.params.iter()) {
+                                            self.unify_types(actual_p, expected_p)?;
+                                        }
+                                        // Unify return types
+                                        self.unify_types(&actual_fn.ret, &expected_ret)?;
+                                        continue; // Skip the normal unification below
+                                    }
+                                }
+
+                                // Case 2: Expected takes 1 tuple and actual takes multiple
+                                // In Nostos, (a, b) => creates a 2-param lambda, but map on [(Int,Int)]
+                                // expects (tuple) -> b. Skip unification for these cases to avoid false errors.
                                 let expected_single_tuple = expected_fn.params.len() == 1
                                     && matches!(expected_fn.params.first(), Some(Type::Tuple(_)));
                                 let actual_multi = actual_fn.params.len() > 1;

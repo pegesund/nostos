@@ -392,11 +392,12 @@ impl TypeEnv {
     /// Look up a function by name with arity-aware resolution.
     /// First tries arity-qualified name (e.g., `foo/_` for 1 arg), then falls back to exact match.
     /// Also handles optional parameters by trying higher arities.
+    /// For typed overloads (e.g., `add/Int,Int`), searches all functions with matching prefix.
     /// This is essential for resolving overloaded functions by call arity.
     pub fn lookup_function_with_arity(&self, name: &str, arity: usize) -> Option<&FunctionType> {
         // Don't apply arity resolution if name already has a slash (already qualified)
         if !name.contains('/') {
-            // First try exact arity match
+            // First try exact arity match with wildcards
             let arity_suffix = if arity == 0 {
                 "/".to_string()
             } else {
@@ -417,6 +418,20 @@ impl TypeEnv {
                     // Check if this function accepts our arity (has enough defaults)
                     let min_required = ft.required_params.unwrap_or(ft.params.len());
                     if arity >= min_required && arity <= ft.params.len() {
+                        return Some(ft);
+                    }
+                }
+            }
+
+            // Try to find ANY typed overload with matching prefix and arity
+            // This handles cases like `add/Int,Int` and `add/String,String`
+            let prefix = format!("{}/", name);
+            for (fn_name, ft) in &self.functions {
+                if fn_name.starts_with(&prefix) && ft.params.len() == arity {
+                    // Check that this isn't a wildcard entry (those were checked above)
+                    // Wildcard entries have "_" in the suffix
+                    let suffix = &fn_name[prefix.len()..];
+                    if !suffix.contains('_') || suffix.split(',').any(|p| p != "_") {
                         return Some(ft);
                     }
                 }

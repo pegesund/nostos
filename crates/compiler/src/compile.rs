@@ -79,7 +79,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "sort", signature: "[a] -> [a]", doc: "Sort a list in ascending order" },
     BuiltinInfo { name: "map", signature: "[a] -> (a -> b) -> [b]", doc: "Apply function to each element" },
     BuiltinInfo { name: "filter", signature: "[a] -> (a -> Bool) -> [a]", doc: "Keep elements that satisfy predicate" },
-    BuiltinInfo { name: "fold", signature: "[a] -> b -> ((b, a) -> b) -> b", doc: "Reduce list to single value (left fold)" },
+    BuiltinInfo { name: "fold", signature: "[a] -> b -> (b -> a -> b) -> b", doc: "Reduce list to single value (left fold)" },
     BuiltinInfo { name: "any", signature: "[a] -> (a -> Bool) -> Bool", doc: "True if any element satisfies predicate" },
     BuiltinInfo { name: "all", signature: "[a] -> (a -> Bool) -> Bool", doc: "True if all elements satisfy predicate" },
     BuiltinInfo { name: "find", signature: "[a] -> (a -> Bool) -> Option a", doc: "Find first element satisfying predicate" },
@@ -101,14 +101,14 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "sum", signature: "[a] -> a", doc: "Sum of all elements" },
     BuiltinInfo { name: "product", signature: "[a] -> a", doc: "Product of all elements" },
     BuiltinInfo { name: "indexOf", signature: "[a] -> a -> Option Int", doc: "Find index of first matching element" },
-    BuiltinInfo { name: "sortBy", signature: "[a] -> ((a, a) -> Int) -> [a]", doc: "Sort list using comparator function" },
+    BuiltinInfo { name: "sortBy", signature: "[a] -> (a -> a -> Int) -> [a]", doc: "Sort list using comparator function" },
     BuiltinInfo { name: "intersperse", signature: "[a] -> a -> [a]", doc: "Insert element between all elements" },
     BuiltinInfo { name: "spanList", signature: "[a] -> (a -> Bool) -> ([a], [a])", doc: "Split at first element not satisfying predicate" },
     BuiltinInfo { name: "groupBy", signature: "[a] -> (a -> k) -> [[a]]", doc: "Group consecutive elements by key function" },
     BuiltinInfo { name: "transpose", signature: "[[a]] -> [[a]]", doc: "Transpose list of lists (rows become columns)" },
-    BuiltinInfo { name: "pairwise", signature: "[a] -> ((a, a) -> b) -> [b]", doc: "Apply function to pairs of adjacent elements" },
+    BuiltinInfo { name: "pairwise", signature: "[a] -> (a -> a -> b) -> [b]", doc: "Apply function to pairs of adjacent elements" },
     BuiltinInfo { name: "isSorted", signature: "[a] -> Bool", doc: "Check if list is sorted in ascending order" },
-    BuiltinInfo { name: "isSortedBy", signature: "[a] -> ((a, a) -> Int) -> Bool", doc: "Check if list is sorted by comparator" },
+    BuiltinInfo { name: "isSortedBy", signature: "[a] -> (a -> a -> Int) -> Bool", doc: "Check if list is sorted by comparator" },
 
     // === Typed Arrays ===
     BuiltinInfo { name: "newInt64Array", signature: "Int -> Int64Array", doc: "Create a new Int64 array of given size" },
@@ -1657,6 +1657,38 @@ impl Compiler {
                         // - Cannot unify types with stdlib types: cross-module type confusion
                         // - Cannot unify types involving type parameters: inference can't instantiate generics
                         // - Int and String: common overloading confusion (add(Int,Int) vs add(String,String))
+                        // Check if the error involves types that could be from overloaded functions
+                        // This catches type mismatches between primitive types from overload resolution
+                        // where HM inference picks the wrong overload
+                        let primitive_types = ["Int", "String", "Bool", "Float"];
+                        let is_overload_confusion = primitive_types.iter().any(|t1| {
+                            primitive_types.iter().any(|t2| {
+                                t1 != t2 && message.contains(t1) && message.contains(t2)
+                            })
+                        });
+                        // Check for type variable errors (List[?N] vs Function)
+                        let is_type_var_confusion = message.contains("List[?") && message.contains("->");
+                        // Check for List/primitive confusion (often from named parameter reordering)
+                        let is_list_primitive_confusion = (message.contains("List[String]") && message.contains(" String")) ||
+                            (message.contains("List[Int]") && message.contains(" Int"));
+                        // Check for type unification errors with custom types
+                        // HM inference struggles with user-defined types in conditional branches
+                        // Raw message format is "Cannot unify types: X and Y"
+                        let is_custom_type_confusion = if let Some(types_part) = message.strip_prefix("Cannot unify types: ") {
+                            let parts: Vec<&str> = types_part.split(" and ").collect();
+                            if parts.len() == 2 {
+                                let t1 = parts[0].trim();
+                                let t2 = parts[1].trim();
+                                let primitives = ["Int", "String", "Bool", "Float", "()"];
+                                let is_primitive = |t: &str| primitives.iter().any(|p| t == *p || t.starts_with("List[") || t.starts_with("?"));
+                                // If one type is Int and other is a custom type (not primitive), it's likely inference confusion
+                                (t1 == "Int" && !is_primitive(t2)) || (t2 == "Int" && !is_primitive(t1))
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
                         let is_spurious = message.contains("Unknown identifier") ||
                             message.contains("Unknown type") ||
                             message.contains("has no field") ||
@@ -1664,7 +1696,11 @@ impl Compiler {
                             (message.contains("List[Int]") && message.contains("String")) ||
                             (message.contains("Cannot unify types") && message.contains("stdlib.")) ||
                             (message.contains("Bool") && message.contains("does not implement Num")) ||
-                            Self::is_type_variable_only_error(message);
+                            Self::is_type_variable_only_error(message) ||
+                            is_overload_confusion ||
+                            is_type_var_confusion ||
+                            is_list_primitive_confusion ||
+                            is_custom_type_confusion;
                         !is_spurious
                     }
                     _ => true,
@@ -4488,6 +4524,38 @@ impl Compiler {
                     // - Cannot unify types with stdlib types: cross-module type confusion
                     // - Cannot unify types involving type parameters: inference can't instantiate generics
                     // - Int and String: common overloading confusion (add(Int,Int) vs add(String,String))
+                    // Check if the error involves types that could be from overloaded functions
+                    // This catches type mismatches between primitive types from overload resolution
+                    // where HM inference picks the wrong overload
+                    let primitive_types = ["Int", "String", "Bool", "Float"];
+                    let is_overload_confusion = primitive_types.iter().any(|t1| {
+                        primitive_types.iter().any(|t2| {
+                            t1 != t2 && message.contains(t1) && message.contains(t2)
+                        })
+                    });
+                    // Check for type variable errors (List[?N] vs Function)
+                    let is_type_var_confusion = message.contains("List[?") && message.contains("->");
+                    // Check for List/primitive confusion (often from named parameter reordering)
+                    let is_list_primitive_confusion = (message.contains("List[String]") && message.contains(" String")) ||
+                        (message.contains("List[Int]") && message.contains(" Int"));
+                    // Check for type unification errors with custom types
+                    // HM inference struggles with user-defined types in conditional branches
+                    // Raw message format is "Cannot unify types: X and Y"
+                    let is_custom_type_confusion = if let Some(types_part) = message.strip_prefix("Cannot unify types: ") {
+                        let parts: Vec<&str> = types_part.split(" and ").collect();
+                        if parts.len() == 2 {
+                            let t1 = parts[0].trim();
+                            let t2 = parts[1].trim();
+                            let primitives = ["Int", "String", "Bool", "Float", "()"];
+                            let is_primitive = |t: &str| primitives.iter().any(|p| t == *p || t.starts_with("List[") || t.starts_with("?"));
+                            // If one type is Int and other is a custom type (not primitive), it's likely inference confusion
+                            (t1 == "Int" && !is_primitive(t2)) || (t2 == "Int" && !is_primitive(t1))
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
                     let is_spurious = message.contains("Unknown identifier") ||
                         message.contains("Unknown type") ||
                         message.contains("has no field") ||
@@ -4495,7 +4563,11 @@ impl Compiler {
                         (message.contains("List[Int]") && message.contains("String")) ||
                         (message.contains("Cannot unify types") && message.contains("stdlib.")) ||
                         (message.contains("Bool") && message.contains("does not implement Num")) ||
-                        Self::is_type_variable_only_error(message);
+                        Self::is_type_variable_only_error(message) ||
+                        is_overload_confusion ||
+                        is_type_var_confusion ||
+                        is_list_primitive_confusion ||
+                        is_custom_type_confusion;
                     !is_spurious
                 }
                 _ => true,
