@@ -4,26 +4,37 @@
 
 test_query_syntax_error(conn) = {
     # Catch SQL syntax error with pattern match
-    result = try { Pg.query(conn, "SELEC INVALID SYNTAX", []) } catch {
-        ("query_error", msg) -> msg
-        e -> "unexpected: " ++ show(e)
+    # Use Ok/Err to have consistent return type
+    result = try { Ok(Pg.query(conn, "SELEC INVALID SYNTAX", [])) } catch {
+        ("query_error", msg) -> Err(msg)
+        e -> Err("unexpected: " ++ show(e))
     }
-    # Result should be a string containing error info
-    assert(result.length() > 0)
+    # Result should be an error containing error info
+    match result {
+        Err(msg) -> assert(msg.length() > 0)
+        Ok(_) -> assert(false)  # Should have thrown
+    }
 }
 
 test_query_missing_table(conn) = {
     # Catch missing table error
-    result = try { Pg.query(conn, "SELECT * FROM nonexistent_table_xyz_123", []) } catch {
-        ("query_error", msg) -> msg
-        e -> "unexpected"
+    result = try { Ok(Pg.query(conn, "SELECT * FROM nonexistent_table_xyz_123", [])) } catch {
+        ("query_error", msg) -> Err(msg)
+        e -> Err("unexpected")
     }
-    assert(result.length() > 0)
+    match result {
+        Err(msg) -> assert(msg.length() > 0)
+        Ok(_) -> assert(false)
+    }
 }
 
 test_execute_syntax_error(conn) = {
     # Catch SQL syntax error in execute
-    result = try { Pg.execute(conn, "INSER INTO foo VALUES (1)", []) } catch {
+    # Return empty string on success, error message on failure
+    result = try {
+        Pg.execute(conn, "INSER INTO foo VALUES (1)", [])
+        ""
+    } catch {
         ("execute_error", msg) -> msg
         e -> "unexpected"
     }
@@ -39,7 +50,11 @@ test_no_exception_on_success(conn) = {
 
 test_exception_pattern_match_kind(conn) = {
     # Can pattern match on error kind
-    kind = try { Pg.query(conn, "INVALID", []) } catch {
+    # Return "success" if no error, otherwise the error kind
+    kind = try {
+        Pg.query(conn, "INVALID", [])
+        "success"
+    } catch {
         ("query_error", _) -> "query"
         ("execute_error", _) -> "execute"
         ("connection_error", _) -> "connection"
@@ -50,7 +65,11 @@ test_exception_pattern_match_kind(conn) = {
 
 test_exception_catch_all(conn) = {
     # Catch any error with tuple pattern
-    result = try { Pg.query(conn, "BAD SQL", []) } catch { (kind, msg) -> kind ++ ": " ++ msg }
+    # Return empty string on success, formatted error on failure
+    result = try {
+        Pg.query(conn, "BAD SQL", [])
+        ""
+    } catch { (kind, msg) -> kind ++ ": " ++ msg }
     # Should start with "query_error: "
     assert(result.length() > 12)
 }
@@ -58,7 +77,10 @@ test_exception_catch_all(conn) = {
 test_nested_try_catch(conn) = {
     # Nested try-catch blocks
     outer = try {
-        inner = try { Pg.query(conn, "BAD SQL", []) } catch {
+        inner = try {
+            Pg.query(conn, "BAD SQL", [])
+            "inner success"
+        } catch {
             ("query_error", _) -> "inner caught"
             _ -> "inner unknown"
         }
