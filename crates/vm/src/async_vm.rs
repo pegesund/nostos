@@ -53,44 +53,45 @@ use crate::extensions::{ext_value_to_vm, vm_value_to_ext, ExtensionManager};
 // Output Capture for Remote REPL
 // ============================================================================
 
-use std::cell::RefCell;
+use std::sync::Mutex;
 
-thread_local! {
-    /// Thread-local output capture buffer
-    static OUTPUT_CAPTURE: RefCell<Option<String>> = RefCell::new(None);
-}
+/// Global output capture buffer - accessible from all threads (tokio workers)
+static OUTPUT_CAPTURE: Mutex<Option<String>> = Mutex::new(None);
 
 /// Enable output capture - print/println will write to buffer instead of stdout
 pub fn enable_output_capture() {
-    OUTPUT_CAPTURE.with(|cap| {
-        *cap.borrow_mut() = Some(String::new());
-    });
+    if let Ok(mut cap) = OUTPUT_CAPTURE.lock() {
+        *cap = Some(String::new());
+    }
 }
 
 /// Disable output capture and return captured output
 pub fn disable_output_capture() -> String {
-    OUTPUT_CAPTURE.with(|cap| {
-        cap.borrow_mut().take().unwrap_or_default()
-    })
+    if let Ok(mut cap) = OUTPUT_CAPTURE.lock() {
+        cap.take().unwrap_or_default()
+    } else {
+        String::new()
+    }
 }
 
 /// Check if output capture is enabled
 pub fn is_output_capture_enabled() -> bool {
-    OUTPUT_CAPTURE.with(|cap| {
-        cap.borrow().is_some()
-    })
+    if let Ok(cap) = OUTPUT_CAPTURE.lock() {
+        cap.is_some()
+    } else {
+        false
+    }
 }
 
 /// Write to capture buffer if enabled, returns true if captured
 pub fn write_to_capture(s: &str) -> bool {
-    OUTPUT_CAPTURE.with(|cap| {
-        if let Some(ref mut buf) = *cap.borrow_mut() {
+    if let Ok(mut cap) = OUTPUT_CAPTURE.lock() {
+        if let Some(ref mut buf) = *cap {
             buf.push_str(s);
-            true
-        } else {
-            false
+            return true;
         }
-    })
+    }
+    false
 }
 
 // ============================================================================
@@ -2679,8 +2680,12 @@ impl AsyncProcess {
                 let value = reg!(src);
                 let s = self.heap.display_value(&value);
                 self.output.push(s.clone());
-                // Send to output channel if available (for REPL/TUI)
-                if let Some(ref sender) = self.shared.output_sender {
+
+                // Check if output capture is enabled (for remote REPL clients)
+                if write_to_capture(&format!("{}\n", s)) {
+                    // Output was captured, don't also send to stdout/channel
+                } else if let Some(ref sender) = self.shared.output_sender {
+                    // Send to output channel if available (for REPL/TUI)
                     let sender_ptr = sender as *const _ as usize;
                     Self::debug_log(&format!("[Println] sender_ptr={:#x}, sending: {}", sender_ptr, s));
                     match sender.send(s.clone()) {

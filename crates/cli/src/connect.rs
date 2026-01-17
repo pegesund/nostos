@@ -2,13 +2,25 @@
 //!
 //! Usage: `nostos connect -p <port>`
 //!
-//! Connects to a TUI REPL server started with `nostos repl --serve <port>`
-//! and provides a line-based interface to send commands.
+//! Features:
+//! - Readline-style line editing (reedline)
+//! - Command history with persistence
+//! - Syntax highlighting for Nostos code
+//! - Autocomplete via server requests
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::borrow::Cow;
+use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+
+use reedline::{
+    Reedline, Signal, Prompt, PromptHistorySearch, PromptHistorySearchStatus,
+    FileBackedHistory, Highlighter, StyledText, Completer, Suggestion, Span,
+};
+use nu_ansi_term::{Color, Style};
+use nostos_syntax::lexer::{Token, lex};
 
 /// Monotonically increasing command ID
 static COMMAND_ID: AtomicU64 = AtomicU64::new(1);
@@ -84,6 +96,12 @@ fn print_help() {
     eprintln!("    :compile <file>      Compile a file (check for errors)");
     eprintln!("    :quit                Disconnect from server");
     eprintln!();
+    eprintln!("FEATURES:");
+    eprintln!("    - Arrow keys for line editing");
+    eprintln!("    - Up/Down for command history");
+    eprintln!("    - Tab for autocomplete");
+    eprintln!("    - Syntax highlighting");
+    eprintln!();
     eprintln!("EXAMPLE:");
     eprintln!("    # Terminal 1: Start REPL with server");
     eprintln!("    nostos repl --serve 7878");
@@ -91,6 +109,201 @@ fn print_help() {
     eprintln!("    # Terminal 2: Connect to it");
     eprintln!("    nostos connect -p 7878");
 }
+
+// ============================================================================
+// Nostos Syntax Highlighter
+// ============================================================================
+
+struct NostosHighlighter;
+
+impl Highlighter for NostosHighlighter {
+    fn highlight(&self, line: &str, _cursor: usize) -> StyledText {
+        let mut styled = StyledText::new();
+
+        // If it's a command, highlight differently
+        if line.starts_with(':') {
+            styled.push((Style::new().fg(Color::Cyan).bold(), line.to_string()));
+            return styled;
+        }
+
+        let mut pos = 0;
+        for (token, span) in lex(line) {
+            // Add any whitespace/characters between previous token and this one
+            if span.start > pos {
+                styled.push((Style::new(), line[pos..span.start].to_string()));
+            }
+
+            let style = match token {
+                Token::Type | Token::Var | Token::If | Token::Then | Token::Else |
+                Token::Match | Token::When | Token::Trait | Token::Module | Token::End |
+                Token::Use | Token::Private | Token::Pub | Token::SelfKw | Token::SelfType |
+                Token::Try | Token::Catch | Token::Finally | Token::Do |
+                Token::While | Token::For | Token::To | Token::Break | Token::Continue |
+                Token::Spawn | Token::SpawnLink | Token::SpawnMonitor | Token::Receive | Token::After |
+                Token::Panic | Token::Extern | Token::From | Token::Test | Token::Quote =>
+                    Style::new().fg(Color::Magenta).bold(),
+
+                Token::True | Token::False |
+                Token::Int(_) | Token::HexInt(_) | Token::BinInt(_) |
+                Token::Int8(_) | Token::Int16(_) | Token::Int32(_) |
+                Token::UInt8(_) | Token::UInt16(_) | Token::UInt32(_) | Token::UInt64(_) |
+                Token::BigInt(_) | Token::Float(_) | Token::Float32(_) | Token::Decimal(_) =>
+                    Style::new().fg(Color::Yellow),
+
+                Token::String(_) | Token::SingleQuoteString(_) | Token::Char(_) =>
+                    Style::new().fg(Color::Green),
+
+                Token::Plus | Token::Minus | Token::Star | Token::Slash | Token::Percent | Token::StarStar |
+                Token::EqEq | Token::NotEq | Token::Lt | Token::Gt | Token::LtEq | Token::GtEq |
+                Token::AndAnd | Token::OrOr | Token::Bang | Token::PlusPlus | Token::PipeRight |
+                Token::Eq | Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq |
+                Token::LeftArrow | Token::RightArrow | Token::FatArrow | Token::Caret | Token::Dollar | Token::Question |
+                Token::LParen | Token::RParen | Token::LBracket | Token::RBracket |
+                Token::LBrace | Token::RBrace | Token::Comma | Token::Colon | Token::Dot |
+                Token::Pipe | Token::Hash =>
+                    Style::new().fg(Color::LightBlue),
+
+                Token::UpperIdent(_) => Style::new().fg(Color::Yellow),
+                Token::LowerIdent(_) => Style::new().fg(Color::White),
+
+                Token::Comment | Token::MultiLineComment => Style::new().fg(Color::DarkGray),
+                _ => Style::new(),
+            };
+
+            let text = &line[span.start..span.end];
+            styled.push((style, text.to_string()));
+            pos = span.end;
+        }
+
+        // Add any trailing content
+        if pos < line.len() {
+            styled.push((Style::new(), line[pos..].to_string()));
+        }
+
+        styled
+    }
+}
+
+// ============================================================================
+// Nostos Prompt
+// ============================================================================
+
+struct NostosPrompt;
+
+impl Prompt for NostosPrompt {
+    fn render_prompt_left(&self) -> Cow<'_, str> {
+        Cow::Borrowed("nostos> ")
+    }
+
+    fn render_prompt_right(&self) -> Cow<'_, str> {
+        Cow::Borrowed("")
+    }
+
+    fn render_prompt_indicator(&self, _prompt_mode: reedline::PromptEditMode) -> Cow<'_, str> {
+        Cow::Borrowed("")
+    }
+
+    fn render_prompt_multiline_indicator(&self) -> Cow<'_, str> {
+        Cow::Borrowed("... ")
+    }
+
+    fn render_prompt_history_search_indicator(&self, history_search: PromptHistorySearch) -> Cow<'_, str> {
+        let prefix = match history_search.status {
+            PromptHistorySearchStatus::Passing => "",
+            PromptHistorySearchStatus::Failing => "failing ",
+        };
+        Cow::Owned(format!("({}reverse-search: {}) ", prefix, history_search.term))
+    }
+}
+
+// ============================================================================
+// Completer that queries the server
+// ============================================================================
+
+struct ServerCompleter {
+    stream: Arc<Mutex<TcpStream>>,
+}
+
+impl Completer for ServerCompleter {
+    fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
+        // For commands starting with :, provide command completions
+        if line.starts_with(':') {
+            let commands = [":load", ":reload", ":status", ":eval", ":compile", ":quit", ":help"];
+            return commands.iter()
+                .filter(|c| c.starts_with(line))
+                .map(|c| Suggestion {
+                    value: c.to_string(),
+                    description: None,
+                    style: None,
+                    extra: None,
+                    span: Span::new(0, pos),
+                    append_whitespace: true,
+                })
+                .collect();
+        }
+
+        // For code, send completion request to server
+        let json = format!(
+            r#"{{"id":0,"cmd":"complete","code":"{}","pos":{}}}"#,
+            escape_json_string(line),
+            pos
+        );
+
+        if let Ok(mut stream) = self.stream.lock() {
+            // Clone for reading
+            if let Ok(reader_stream) = stream.try_clone() {
+                let mut reader = BufReader::new(reader_stream);
+
+                // Send request
+                if writeln!(stream, "{}", json).is_ok() {
+                    let _ = stream.flush();
+
+                    // Read response
+                    let mut response = String::new();
+                    if reader.read_line(&mut response).is_ok() {
+                        return parse_completion_response(&response, pos);
+                    }
+                }
+            }
+        }
+
+        Vec::new()
+    }
+}
+
+fn parse_completion_response(json: &str, pos: usize) -> Vec<Suggestion> {
+    // Parse completions from server response
+    // Expected format: {"id":0,"status":"ok","output":"","completions":["foo","bar"]}
+    let mut suggestions = Vec::new();
+
+    let completions_pattern = r#""completions":["#;
+    if let Some(start) = json.find(completions_pattern) {
+        let rest = &json[start + completions_pattern.len()..];
+        if let Some(end) = rest.find(']') {
+            let array_content = &rest[..end];
+            // Parse simple string array
+            for item in array_content.split(',') {
+                let item = item.trim().trim_matches('"');
+                if !item.is_empty() {
+                    suggestions.push(Suggestion {
+                        value: item.to_string(),
+                        description: None,
+                        style: None,
+                        extra: None,
+                        span: Span::new(0, pos),
+                        append_whitespace: false,
+                    });
+                }
+            }
+        }
+    }
+
+    suggestions
+}
+
+// ============================================================================
+// Main connection logic
+// ============================================================================
 
 fn connect_to_server(port: u16) -> ExitCode {
     let addr = format!("127.0.0.1:{}", port);
@@ -108,71 +321,87 @@ fn connect_to_server(port: u16) -> ExitCode {
     eprintln!("Type :help for commands, :quit to disconnect");
     eprintln!();
 
+    // Set up history file
+    let history_path = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("nostos")
+        .join("connect_history.txt");
+
+    // Ensure directory exists
+    if let Some(parent) = history_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let history = FileBackedHistory::with_file(1000, history_path)
+        .expect("Failed to create history");
+
+    // Create completer with shared stream
+    let stream_for_complete = Arc::new(Mutex::new(stream.try_clone().expect("Failed to clone stream")));
+    let completer = Box::new(ServerCompleter { stream: stream_for_complete });
+
+    // Create reedline with all features
+    let mut line_editor = Reedline::create()
+        .with_history(Box::new(history))
+        .with_highlighter(Box::new(NostosHighlighter))
+        .with_completer(completer);
+
+    let prompt = NostosPrompt;
+
     let mut reader = BufReader::new(stream.try_clone().expect("Failed to clone stream"));
     let mut writer = stream;
 
-    let stdin = io::stdin();
-    let mut stdout = io::stdout();
-
     loop {
-        // Print prompt
-        print!("nostos> ");
-        stdout.flush().ok();
+        match line_editor.read_line(&prompt) {
+            Ok(Signal::Success(line)) => {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
 
-        // Read user input
-        let mut line = String::new();
-        match stdin.read_line(&mut line) {
-            Ok(0) => {
-                // EOF
+                // Handle local commands
+                if line == ":quit" || line == ":q" || line == ":exit" {
+                    eprintln!("Disconnected.");
+                    break;
+                }
+
+                if line == ":help" || line == ":h" || line == "?" {
+                    print_client_help();
+                    continue;
+                }
+
+                // Parse and send command
+                let (cmd, args) = parse_input(line);
+                let json = format_command(&cmd, &args);
+
+                // Send to server
+                if let Err(e) = writeln!(writer, "{}", json) {
+                    eprintln!("Error sending command: {}", e);
+                    break;
+                }
+                writer.flush().ok();
+
+                // Read response
+                let mut response = String::new();
+                match reader.read_line(&mut response) {
+                    Ok(0) => {
+                        eprintln!("Server disconnected.");
+                        break;
+                    }
+                    Ok(_) => {
+                        print_response(&response);
+                    }
+                    Err(e) => {
+                        eprintln!("Error reading response: {}", e);
+                        break;
+                    }
+                }
+            }
+            Ok(Signal::CtrlD) | Ok(Signal::CtrlC) => {
                 eprintln!("\nDisconnected.");
                 break;
             }
-            Ok(_) => {}
             Err(e) => {
-                eprintln!("Error reading input: {}", e);
-                break;
-            }
-        }
-
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        // Handle local commands
-        if line == ":quit" || line == ":q" || line == ":exit" {
-            eprintln!("Disconnected.");
-            break;
-        }
-
-        if line == ":help" || line == ":h" || line == "?" {
-            print_client_help();
-            continue;
-        }
-
-        // Parse and send command
-        let (cmd, args) = parse_input(line);
-        let json = format_command(&cmd, &args);
-
-        // Send to server
-        if let Err(e) = writeln!(writer, "{}", json) {
-            eprintln!("Error sending command: {}", e);
-            break;
-        }
-        writer.flush().ok();
-
-        // Read response
-        let mut response = String::new();
-        match reader.read_line(&mut response) {
-            Ok(0) => {
-                eprintln!("Server disconnected.");
-                break;
-            }
-            Ok(_) => {
-                print_response(&response);
-            }
-            Err(e) => {
-                eprintln!("Error reading response: {}", e);
+                eprintln!("Error: {}", e);
                 break;
             }
         }
@@ -190,6 +419,12 @@ fn print_client_help() {
     eprintln!("  :compile <file> Compile a file and show errors");
     eprintln!("  :quit           Disconnect from server");
     eprintln!("  :help           Show this help");
+    eprintln!();
+    eprintln!("Keyboard shortcuts:");
+    eprintln!("  Up/Down         Navigate command history");
+    eprintln!("  Ctrl+R          Search history");
+    eprintln!("  Tab             Autocomplete");
+    eprintln!("  Ctrl+C/D        Disconnect");
     eprintln!();
     eprintln!("You can also type code directly to evaluate it.");
 }
