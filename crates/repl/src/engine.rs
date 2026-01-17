@@ -18824,6 +18824,363 @@ mod lsp_integration_tests {
             println!("Person type NOT found after recompile!");
         }
     }
+
+    // ============================================================
+    // Compile-time error propagation tests
+    // ============================================================
+
+    /// Test that type errors are caught at compile time and propagated through LSP
+    #[test]
+    fn test_compile_time_type_error_detected() {
+        let temp_dir = create_temp_dir("compile_type_err");
+
+        // Create a file with an obvious type error
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = \"hello\" + 42").unwrap(); // String + Int is a type error
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let status = engine.get_compile_status("main.main");
+        println!("Type error status: {:?}", status);
+
+        assert!(matches!(status, Some(CompileStatus::CompileError(_))),
+                "Type error should be caught at compile time, got: {:?}", status);
+
+        if let Some(CompileStatus::CompileError(err)) = &status {
+            println!("Error message: {}", err);
+            assert!(err.to_lowercase().contains("type") || err.contains("unify"),
+                    "Error should mention type issue: {}", err);
+        }
+
+        cleanup(&temp_dir);
+    }
+
+    /// Test that type errors from function calls are caught at compile time
+    #[test]
+    fn test_compile_time_function_arg_type_error() {
+        let temp_dir = create_temp_dir("fn_arg_type_err");
+
+        // Create helper module with typed function
+        {
+            let mut f = std::fs::File::create(temp_dir.join("helper.nos")).unwrap();
+            writeln!(f, "pub add(x: Int, y: Int) -> Int = x + y").unwrap();
+        }
+
+        // Create main with wrong argument type
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = helper.add(\"hello\", 42)").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let status = engine.get_compile_status("main.main");
+        println!("Function arg type error: {:?}", status);
+
+        assert!(matches!(status, Some(CompileStatus::CompileError(_))),
+                "Type mismatch should be caught, got: {:?}", status);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Test that fixing a type error clears the error status
+    #[test]
+    fn test_compile_time_error_cleared_on_fix() {
+        let temp_dir = create_temp_dir("err_cleared");
+
+        // Start with broken code
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = \"hello\" + 42").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // Verify error exists
+        let status = engine.get_compile_status("main.main");
+        assert!(matches!(status, Some(CompileStatus::CompileError(_))),
+                "Initial error should exist, got: {:?}", status);
+
+        // Fix the code
+        let fixed_code = "main() = 40 + 2";
+        engine.recompile_module_with_content("main", fixed_code).unwrap();
+
+        // Error should be cleared
+        let status_after = engine.get_compile_status("main.main");
+        println!("Status after fix: {:?}", status_after);
+        assert!(matches!(status_after, Some(CompileStatus::Compiled)),
+                "Error should be cleared after fix, got: {:?}", status_after);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Test that type errors propagate across modules
+    #[test]
+    fn test_compile_time_cross_module_type_error() {
+        let temp_dir = create_temp_dir("cross_mod_type_err");
+
+        // Create helper with function returning Int
+        {
+            let mut f = std::fs::File::create(temp_dir.join("helper.nos")).unwrap();
+            writeln!(f, "pub getnum() -> Int = 42").unwrap();
+        }
+
+        // Create main expecting String
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            // Using result as String when it's Int
+            writeln!(f, "main() = helper.getnum() ++ \" items\"").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let status = engine.get_compile_status("main.main");
+        println!("Cross-module type error: {:?}", status);
+
+        assert!(matches!(status, Some(CompileStatus::CompileError(_))),
+                "Cross-module type error should be caught, got: {:?}", status);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Test that changing a function's return type causes dependents to show errors
+    #[test]
+    fn test_compile_time_return_type_change_propagation() {
+        let temp_dir = create_temp_dir("ret_type_prop");
+
+        // Create helper returning Int
+        {
+            let mut f = std::fs::File::create(temp_dir.join("helper.nos")).unwrap();
+            writeln!(f, "pub getval() -> Int = 42").unwrap();
+        }
+
+        // Create main using the Int value
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = helper.getval() + 10").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // Initially should compile
+        assert!(matches!(engine.get_compile_status("main.main"), Some(CompileStatus::Compiled)),
+                "Should initially compile");
+
+        // Change helper to return String
+        let new_helper = "pub getval() -> String = \"hello\"";
+        engine.recompile_module_with_content("helper", new_helper).ok();
+
+        // main.main should now be stale (depends on helper.getval which changed)
+        let main_status = engine.get_compile_status("main.main");
+        println!("main.main after helper change: {:?}", main_status);
+
+        // It should be stale, and recompiling should reveal the type error
+        if matches!(main_status, Some(CompileStatus::Stale { .. })) {
+            // Force recompile of main
+            let main_code = "main() = helper.getval() + 10";
+            engine.recompile_module_with_content("main", main_code).ok();
+        }
+
+        let final_status = engine.get_compile_status("main.main");
+        println!("main.main final status: {:?}", final_status);
+        assert!(matches!(final_status, Some(CompileStatus::CompileError(_))),
+                "Should have type error after helper's return type changed, got: {:?}", final_status);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Test that record field type errors are caught at compile time
+    #[test]
+    fn test_compile_time_record_field_type_error() {
+        let temp_dir = create_temp_dir("record_type_err");
+
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "type Person = {{ name: String, age: Int }}").unwrap();
+            writeln!(f, "main() = Person(name: 42, age: \"hello\")").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let status = engine.get_compile_status("main.main");
+        println!("Record field type error: {:?}", status);
+
+        assert!(matches!(status, Some(CompileStatus::CompileError(_))),
+                "Record field type mismatch should be caught, got: {:?}", status);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Test that variant constructor type errors are caught at compile time
+    #[test]
+    fn test_compile_time_variant_type_error() {
+        let temp_dir = create_temp_dir("variant_type_err");
+
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            // Use different names to avoid conflict with stdlib Result
+            writeln!(f, "type MyResult = Success(Int) | Failure(String)").unwrap();
+            writeln!(f, "main() = Success(\"not an int\")").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let status = engine.get_compile_status("main.main");
+        println!("Variant type error: {:?}", status);
+
+        assert!(matches!(status, Some(CompileStatus::CompileError(_))),
+                "Variant constructor type mismatch should be caught, got: {:?}", status);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Test that list element type errors are caught at compile time
+    #[test]
+    fn test_compile_time_list_type_error() {
+        let temp_dir = create_temp_dir("list_type_err");
+
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            // Mixing Int and String in a list
+            writeln!(f, "main() = [1, \"two\", 3]").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let status = engine.get_compile_status("main.main");
+        println!("List type error: {:?}", status);
+
+        assert!(matches!(status, Some(CompileStatus::CompileError(_))),
+                "List element type mismatch should be caught, got: {:?}", status);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Test that if-then-else branch type mismatch is caught at compile time
+    #[test]
+    fn test_compile_time_if_branch_type_error() {
+        let temp_dir = create_temp_dir("if_branch_err");
+
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = if true then 42 else \"not an int\"").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let status = engine.get_compile_status("main.main");
+        println!("If branch type error: {:?}", status);
+
+        assert!(matches!(status, Some(CompileStatus::CompileError(_))),
+                "If branch type mismatch should be caught, got: {:?}", status);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Test that callback type errors in higher-order functions are caught
+    #[test]
+    fn test_compile_time_callback_type_error() {
+        let temp_dir = create_temp_dir("callback_type_err");
+
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            // map expects (a -> b), but we return wrong type
+            writeln!(f, "main() = [1,2,3].map(x => if x > 1 then x else \"nope\")").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let status = engine.get_compile_status("main.main");
+        println!("Callback type error: {:?}", status);
+
+        assert!(matches!(status, Some(CompileStatus::CompileError(_))),
+                "Callback type mismatch should be caught, got: {:?}", status);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Test chain of three modules: c -> b -> a, error in c propagates to a
+    #[test]
+    fn test_compile_time_transitive_error_propagation() {
+        let temp_dir = create_temp_dir("trans_err_prop");
+
+        // c.nos: base module with typed function
+        {
+            let mut f = std::fs::File::create(temp_dir.join("c.nos")).unwrap();
+            writeln!(f, "pub getnum() -> Int = 42").unwrap();
+        }
+
+        // b.nos: uses c.getnum()
+        {
+            let mut f = std::fs::File::create(temp_dir.join("b.nos")).unwrap();
+            writeln!(f, "pub doubled() = c.getnum() * 2").unwrap();
+        }
+
+        // a.nos: uses b.doubled()
+        {
+            let mut f = std::fs::File::create(temp_dir.join("a.nos")).unwrap();
+            writeln!(f, "pub result() = b.doubled() + 10").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // All should compile initially
+        assert!(matches!(engine.get_compile_status("a.result"), Some(CompileStatus::Compiled)));
+        assert!(matches!(engine.get_compile_status("b.doubled"), Some(CompileStatus::Compiled)));
+        assert!(matches!(engine.get_compile_status("c.getnum"), Some(CompileStatus::Compiled)));
+
+        // Change c to return String
+        let new_c = "pub getnum() -> String = \"hello\"";
+        engine.recompile_module_with_content("c", new_c).ok();
+
+        // b.doubled should be stale or have error (uses c.getnum which now returns String)
+        let b_status = engine.get_compile_status("b.doubled");
+        println!("b.doubled after c change: {:?}", b_status);
+        assert!(matches!(b_status, Some(CompileStatus::Stale { .. }) | Some(CompileStatus::CompileError(_))),
+                "b.doubled should be stale or have error, got: {:?}", b_status);
+
+        // a.result should also be affected (transitively depends on c.getnum via b.doubled)
+        let a_status = engine.get_compile_status("a.result");
+        println!("a.result after c change: {:?}", a_status);
+        assert!(matches!(a_status, Some(CompileStatus::Stale { .. }) | Some(CompileStatus::CompileError(_))),
+                "a.result should be affected transitively, got: {:?}", a_status);
+
+        // If stale, force recompile of b - should get type error
+        if matches!(b_status, Some(CompileStatus::Stale { .. })) {
+            let b_code = "pub doubled() = c.getnum() * 2";
+            engine.recompile_module_with_content("b", b_code).ok();
+        }
+        let b_final = engine.get_compile_status("b.doubled");
+        println!("b.doubled final: {:?}", b_final);
+        assert!(matches!(b_final, Some(CompileStatus::CompileError(_))),
+                "b.doubled should have type error, got: {:?}", b_final);
+
+        cleanup(&temp_dir);
+    }
 }
 
 #[cfg(test)]
