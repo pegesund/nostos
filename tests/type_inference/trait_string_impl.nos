@@ -2,14 +2,14 @@
 # Trait implemented on String type
 
 trait Lengthy
-    len(self) -> Int
+    getLen(self) -> Int
 end
 
 String: Lengthy
-    len(self) = length(self)
+    getLen(self) = length(self)
 end
 
-doubleLen[T: Lengthy](x: T) -> Int = x.len() * 2
+doubleLen[T: Lengthy](x: T) -> Int = x.getLen() * 2
 
 main() = {
     doubleLen("hello")
