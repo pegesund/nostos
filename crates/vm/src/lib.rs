@@ -29,3 +29,4 @@ pub use supervisor::*;
 pub use value::*;
 pub use extensions::ExtensionManager;
 pub use async_vm::{ThreadedEvalHandle, DebugSession};
+pub use async_vm::{enable_output_capture, disable_output_capture, is_output_capture_enabled};

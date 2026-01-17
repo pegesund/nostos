@@ -1121,12 +1121,22 @@ fn execute_server_command(cmd: &ServerCommand, engine: &Rc<RefCell<ReplEngine>>)
         }
         "eval" => {
             let code = &cmd.args;
-            match engine.borrow_mut().eval(code) {
-                Ok(result) => ServerResponse {
-                    id: cmd.id,
-                    status: "ok".to_string(),
-                    output: result,
-                    errors: vec![],
+            match engine.borrow_mut().eval_with_capture(code) {
+                Ok((result, captured)) => {
+                    // Combine captured output with result
+                    let output = if captured.is_empty() {
+                        result
+                    } else if result.is_empty() || result == "()" {
+                        captured.trim_end().to_string()
+                    } else {
+                        format!("{}{}", captured, result)
+                    };
+                    ServerResponse {
+                        id: cmd.id,
+                        status: "ok".to_string(),
+                        output,
+                        errors: vec![],
+                    }
                 },
                 Err(e) => ServerResponse {
                     id: cmd.id,

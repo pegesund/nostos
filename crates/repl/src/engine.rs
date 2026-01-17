@@ -14,6 +14,7 @@ use nostos_syntax::ast::{Item, Pattern};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::async_vm::{AsyncVM, AsyncConfig, AsyncSharedState};
 use nostos_vm::{InspectReceiver, InspectEntry, OutputReceiver, PanelCommand, PanelCommandReceiver, ExtensionManager, SendableValue};
+use nostos_vm::{enable_output_capture, disable_output_capture};
 use nostos_vm::process::ThreadSafeValue;
 
 /// An item in the browser
@@ -1798,6 +1799,15 @@ impl ReplEngine {
     /// Process input (eval or define). Returns output string or error.
     pub fn eval(&mut self, input: &str) -> Result<String, String> {
         self.eval_in_module(input, None)
+    }
+
+    /// Process input and capture any print/println output.
+    /// Returns (result, captured_output) or error.
+    pub fn eval_with_capture(&mut self, input: &str) -> Result<(String, String), String> {
+        enable_output_capture();
+        let result = self.eval_in_module(input, None);
+        let captured = disable_output_capture();
+        result.map(|r| (r, captured))
     }
 
     /// Process input in the context of a specific module.

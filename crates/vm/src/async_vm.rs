@@ -49,6 +49,52 @@ impl<F: Future> Future for AssertSend<F> {
 
 use crate::extensions::{ext_value_to_vm, vm_value_to_ext, ExtensionManager};
 
+// ============================================================================
+// Output Capture for Remote REPL
+// ============================================================================
+
+use std::cell::RefCell;
+
+thread_local! {
+    /// Thread-local output capture buffer
+    static OUTPUT_CAPTURE: RefCell<Option<String>> = RefCell::new(None);
+}
+
+/// Enable output capture - print/println will write to buffer instead of stdout
+pub fn enable_output_capture() {
+    OUTPUT_CAPTURE.with(|cap| {
+        *cap.borrow_mut() = Some(String::new());
+    });
+}
+
+/// Disable output capture and return captured output
+pub fn disable_output_capture() -> String {
+    OUTPUT_CAPTURE.with(|cap| {
+        cap.borrow_mut().take().unwrap_or_default()
+    })
+}
+
+/// Check if output capture is enabled
+pub fn is_output_capture_enabled() -> bool {
+    OUTPUT_CAPTURE.with(|cap| {
+        cap.borrow().is_some()
+    })
+}
+
+/// Write to capture buffer if enabled, returns true if captured
+pub fn write_to_capture(s: &str) -> bool {
+    OUTPUT_CAPTURE.with(|cap| {
+        if let Some(ref mut buf) = *cap.borrow_mut() {
+            buf.push_str(s);
+            true
+        } else {
+            false
+        }
+    })
+}
+
+// ============================================================================
+
 /// Reactive render context for tracking component dependencies during RHtml rendering.
 /// A node in the component tree
 #[derive(Debug, Clone)]
@@ -10930,10 +10976,14 @@ impl AsyncVM {
             func: Box::new(|args, heap| {
                 use std::io::Write;
                 let s = heap.display_value(&args[0]);
-                let stdout = std::io::stdout();
-                let mut handle = stdout.lock();
-                let _ = write!(handle, "{}", s);
-                let _ = handle.flush();
+                // Check if output capture is enabled
+                if !write_to_capture(&s) {
+                    // Not capturing, write to stdout
+                    let stdout = std::io::stdout();
+                    let mut handle = stdout.lock();
+                    let _ = write!(handle, "{}", s);
+                    let _ = handle.flush();
+                }
                 Ok(GcValue::Unit)
             }),
         }));
@@ -10945,9 +10995,13 @@ impl AsyncVM {
             func: Box::new(|args, heap| {
                 use std::io::Write;
                 let s = heap.display_value(&args[0]);
-                let stdout = std::io::stdout();
-                let mut handle = stdout.lock();
-                let _ = writeln!(handle, "{}", s);
+                // Check if output capture is enabled
+                if !write_to_capture(&format!("{}\n", s)) {
+                    // Not capturing, write to stdout
+                    let stdout = std::io::stdout();
+                    let mut handle = stdout.lock();
+                    let _ = writeln!(handle, "{}", s);
+                }
                 Ok(GcValue::Unit)
             }),
         }));
