@@ -1161,7 +1161,7 @@ impl<'a> InferCtx<'a> {
                             // Find best overload index first to avoid borrow issues
                             // Skip strict matching if named args present (can't reorder without param names)
                             let best_idx = if has_named_args {
-                                None // Use first/wildcard overload, let compiler handle type checking
+                                Some(0) // Use first/wildcard overload for named args
                             } else {
                                 let overload_refs: Vec<&FunctionType> = overloads.iter().collect();
                                 self.find_best_overload_idx(&overload_refs, &arg_types)
@@ -1190,7 +1190,7 @@ impl<'a> InferCtx<'a> {
                             // Find best overload index first to avoid borrow issues
                             // Skip strict matching if named args present
                             let best_idx = if has_named_args {
-                                None
+                                Some(0)
                             } else {
                                 let overload_refs: Vec<&FunctionType> = overloads.iter().collect();
                                 self.find_best_overload_idx(&overload_refs, &arg_types)
@@ -2506,7 +2506,7 @@ impl<'a> InferCtx<'a> {
         self.current_function = Some(name.clone());
 
         // Get pre-registered type if available (for recursive calls to use the same vars)
-        // Try both plain name and qualified name with arity suffix
+        // Try plain name, wildcard qualified name, and any typed overloads
         let arity = func.clauses.first().map(|c| c.params.len()).unwrap_or(0);
         let arity_suffix = if arity == 0 {
             "/".to_string()
@@ -2515,7 +2515,12 @@ impl<'a> InferCtx<'a> {
         };
         let qualified_name = format!("{}{}", name, arity_suffix);
         let pre_registered = self.env.functions.get(name).cloned()
-            .or_else(|| self.env.functions.get(&qualified_name).cloned());
+            .or_else(|| self.env.functions.get(&qualified_name).cloned())
+            .or_else(|| {
+                // Also check typed overloads (e.g., "showCounter/Counter")
+                let all_overloads = self.env.lookup_all_functions_with_arity(name, arity);
+                all_overloads.first().cloned().cloned()
+            });
 
         // Infer the first clause
         let (clause_params, clause_ret) = self.infer_clause(&func.clauses[0])?;

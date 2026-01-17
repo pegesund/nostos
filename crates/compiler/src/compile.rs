@@ -863,13 +863,18 @@ impl CompileError {
                          .with_note("String.join takes the list as the first argument: String.join(list, delimiter)");
                     }
 
-                    // List type mismatch
-                    if type1.starts_with("List[") || type2.starts_with("List[") {
+                    // List type mismatch - but skip if one type is a tuple (defer to runtime)
+                    // Tuples are heterogeneous and their element access is complex for inference
+                    let is_tuple = |s: &str| s.starts_with('(') && s.contains(',');
+                    if (type1.starts_with("List[") || type2.starts_with("List[")) &&
+                       !is_tuple(type1) && !is_tuple(type2) {
                         return SourceError::list_type_mismatch(type1, type2, span);
                     }
 
-                    // Generic if branch mismatch
-                    return SourceError::if_branch_type_mismatch(type1, type2, span);
+                    // Generic if branch mismatch - but skip if tuple involved (defer to runtime)
+                    if !is_tuple(type1) && !is_tuple(type2) {
+                        return SourceError::if_branch_type_mismatch(type1, type2, span);
+                    }
                 }
             }
         }
@@ -1797,7 +1802,11 @@ impl Compiler {
                         // like List[Int] vs Int and Point vs Int
                         let is_list_primitive_confusion = false;
                         let is_custom_type_confusion = false;
-                        let is_spurious = message.contains("Unknown identifier") ||
+                        // Defer tuple type errors to runtime - tuples are heterogeneous
+                        let is_tuple_error = message.contains("(") && message.contains(",") && message.contains(")") &&
+                            (message.contains("Cannot unify") || message.contains("mismatch"));
+                        let is_spurious = is_tuple_error ||
+                            message.contains("Unknown identifier") ||
                             message.contains("Unknown type") ||
                             message.contains("has no field") ||
                             message.contains("() and ()") ||
@@ -4644,7 +4653,11 @@ impl Compiler {
                     // like List[Int] vs Int and Point vs Int
                     let is_list_primitive_confusion = false;
                     let is_custom_type_confusion = false;
-                    let is_spurious = message.contains("Unknown identifier") ||
+                    // Defer tuple type errors to runtime - tuples are heterogeneous
+                    let is_tuple_error = message.contains("(") && message.contains(",") && message.contains(")") &&
+                        (message.contains("Cannot unify") || message.contains("mismatch"));
+                    let is_spurious = is_tuple_error ||
+                        message.contains("Unknown identifier") ||
                         message.contains("Unknown type") ||
                         message.contains("has no field") ||
                         message.contains("() and ()") ||

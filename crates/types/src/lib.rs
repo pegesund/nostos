@@ -554,18 +554,18 @@ impl TypeEnv {
         // These implement Eq and Show if their element types do
         match ty {
             Type::Named { name, args } => {
-                // Common container types that implement Eq/Show/Ord derivatively
-                let container_types = ["Option", "Result", "Json"];
-                if container_types.contains(&name.as_str()) {
-                    match trait_name {
-                        "Eq" | "Show" => {
-                            // Check if all type arguments implement the trait
-                            args.iter().all(|arg| self.implements(arg, trait_name))
-                        }
-                        _ => false,
+                // Eq and Show are auto-derived for all user-defined types (variants/records)
+                // as long as their type arguments also implement the trait
+                match trait_name {
+                    "Eq" | "Show" => {
+                        // Check if all type arguments implement the trait
+                        args.is_empty() || args.iter().all(|arg| self.implements(arg, trait_name))
                     }
-                } else {
-                    false
+                    _ => {
+                        // For other traits, only specific container types are handled
+                        let container_types = ["Option", "Result", "Json"];
+                        container_types.contains(&name.as_str())
+                    }
                 }
             }
             Type::List(elem) | Type::Array(elem) | Type::Set(elem) => {
@@ -587,6 +587,18 @@ impl TypeEnv {
                     "Eq" | "Show" => elems.iter().all(|e| self.implements(e, trait_name)),
                     _ => false,
                 }
+            }
+            // Variant and Record types auto-derive Eq and Show
+            Type::Variant(_) | Type::Record(_) => {
+                matches!(trait_name, "Eq" | "Show")
+            }
+            // Primitives implement Eq and Show
+            Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 |
+            Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64 |
+            Type::Float | Type::Float32 | Type::Float64 |
+            Type::Bool | Type::Char | Type::String | Type::Unit |
+            Type::BigInt | Type::Decimal => {
+                matches!(trait_name, "Eq" | "Show")
             }
             _ => false,
         }
