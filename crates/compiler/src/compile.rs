@@ -16615,20 +16615,21 @@ impl Compiler {
         self.imports.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
-    /// Get field names for a record type.
+    /// Get field names and types for a record type.
+    /// Returns fields in "name: type" format for autocomplete display.
     /// Checks both user-defined types and builtin types.
     /// Returns empty vec for non-record types or unknown types.
     pub fn get_type_fields(&self, type_name: &str) -> Vec<String> {
         // Check user-defined types first
         if let Some(type_info) = self.types.get(type_name) {
             if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
-                return fields.iter().map(|(name, _)| name.clone()).collect();
+                return fields.iter().map(|(name, ty)| format!("{}: {}", name, ty)).collect();
             }
         }
         // Then check builtin types
         if let Some(type_info) = self.builtin_types.get(type_name) {
             if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
-                return fields.iter().map(|(name, _)| name.clone()).collect();
+                return fields.iter().map(|(name, ty)| format!("{}: {}", name, ty)).collect();
             }
         }
         Vec::new()
