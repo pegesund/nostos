@@ -611,6 +611,10 @@ impl LanguageServer for NostosLanguageServer {
                     retrigger_characters: None,
                     work_done_progress_options: Default::default(),
                 }),
+                // Document symbols (outline view)
+                document_symbol_provider: Some(OneOf::Left(true)),
+                // Find references
+                references_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -997,6 +1001,92 @@ impl LanguageServer for NostosLanguageServer {
         }
 
         Ok(None)
+    }
+
+    async fn document_symbol(&self, params: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
+        let uri = &params.text_document.uri;
+
+        eprintln!("Document symbols for: {:?}", uri);
+
+        // Get document content
+        let content = match self.documents.get(uri) {
+            Some(c) => c.clone(),
+            None => return Ok(None),
+        };
+
+        let symbols = Self::extract_document_symbols(&content);
+
+        if symbols.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(DocumentSymbolResponse::Flat(symbols)))
+        }
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        eprintln!("Find references at {:?}", position);
+
+        // Get document content
+        let content = match self.documents.get(uri) {
+            Some(c) => c.clone(),
+            None => return Ok(None),
+        };
+
+        // Get the word at cursor position
+        let lines: Vec<&str> = content.lines().collect();
+        let line_num = position.line as usize;
+        if line_num >= lines.len() {
+            return Ok(None);
+        }
+
+        let line = lines[line_num];
+        let cursor = position.character as usize;
+
+        let (word, _, _) = Self::extract_word_at_cursor(line, cursor);
+        if word.is_empty() {
+            return Ok(None);
+        }
+
+        eprintln!("Find references for: '{}'", word);
+
+        // Get all documents and search for references
+        let mut locations = Vec::new();
+
+        // Search in all open documents
+        for entry in self.documents.iter() {
+            let doc_uri = entry.key();
+            let doc_content = entry.value();
+
+            Self::find_references_in_content(&word, doc_uri, doc_content, &mut locations);
+        }
+
+        // Also search in project files from engine
+        let engine_guard = self.engine.lock().unwrap();
+        if let Some(engine) = engine_guard.as_ref() {
+            // Get all loaded module source paths
+            for file_path in engine.get_module_source_paths() {
+                // Skip if already searched (open document)
+                if let Ok(file_uri) = Url::from_file_path(&file_path) {
+                    if self.documents.contains_key(&file_uri) {
+                        continue;
+                    }
+
+                    // Read file content
+                    if let Ok(file_content) = std::fs::read_to_string(&file_path) {
+                        Self::find_references_in_content(&word, &file_uri, &file_content, &mut locations);
+                    }
+                }
+            }
+        }
+
+        if locations.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(locations))
+        }
     }
 }
 
@@ -1625,6 +1715,145 @@ impl NostosLanguageServer {
     /// Extract record type fields directly from source code
     /// This works even when the file has parse errors elsewhere
     /// Pattern: "type TypeName = { field1: Type1, field2: Type2 }"
+    /// Extract document symbols (functions, types, traits) from source content
+    fn extract_document_symbols(content: &str) -> Vec<SymbolInformation> {
+        let mut symbols = Vec::new();
+
+        for (line_num, line) in content.lines().enumerate() {
+            let trimmed = line.trim();
+
+            // Skip empty lines and comments
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            // Type definitions: "type Foo = ..." or "type Foo[T] = ..."
+            if trimmed.starts_with("type ") {
+                let rest = &trimmed[5..];
+                let name = rest.split(|c: char| !c.is_alphanumeric() && c != '_')
+                    .next()
+                    .unwrap_or("");
+                if !name.is_empty() {
+                    #[allow(deprecated)]
+                    symbols.push(SymbolInformation {
+                        name: name.to_string(),
+                        kind: SymbolKind::STRUCT,
+                        tags: None,
+                        deprecated: None,
+                        location: Location {
+                            uri: Url::parse("file:///").unwrap(), // Will be replaced
+                            range: Range {
+                                start: Position { line: line_num as u32, character: 0 },
+                                end: Position { line: line_num as u32, character: line.len() as u32 },
+                            },
+                        },
+                        container_name: None,
+                    });
+                }
+            }
+            // Trait definitions: "trait Foo" or "trait Foo[T]"
+            else if trimmed.starts_with("trait ") {
+                let rest = &trimmed[6..];
+                let name = rest.split(|c: char| !c.is_alphanumeric() && c != '_')
+                    .next()
+                    .unwrap_or("");
+                if !name.is_empty() {
+                    #[allow(deprecated)]
+                    symbols.push(SymbolInformation {
+                        name: name.to_string(),
+                        kind: SymbolKind::INTERFACE,
+                        tags: None,
+                        deprecated: None,
+                        location: Location {
+                            uri: Url::parse("file:///").unwrap(), // Will be replaced
+                            range: Range {
+                                start: Position { line: line_num as u32, character: 0 },
+                                end: Position { line: line_num as u32, character: line.len() as u32 },
+                            },
+                        },
+                        container_name: None,
+                    });
+                }
+            }
+            // Function definitions: "foo(...) = ..." or "pub foo(...) = ..."
+            // But not inside trait impl blocks (indented), and not trait impl headers
+            else if !line.starts_with(' ') && !line.starts_with('\t') {
+                // Skip trait implementation headers: "TypeName: TraitName" or "TypeName[T]: TraitName"
+                if trimmed.contains(':') && !trimmed.contains('(') && !trimmed.contains('=') {
+                    continue;
+                }
+
+                // Look for function pattern: name(...) = or pub name(...) =
+                let check_line = if trimmed.starts_with("pub ") {
+                    &trimmed[4..]
+                } else {
+                    trimmed
+                };
+
+                // Must have ( and = and not start with keyword
+                if check_line.contains('(') && check_line.contains('=') {
+                    let fn_name = check_line.split('(')
+                        .next()
+                        .unwrap_or("")
+                        .trim();
+
+                    // Skip if it looks like a keyword or invalid
+                    if !fn_name.is_empty()
+                        && fn_name.chars().next().map(|c| c.is_alphabetic() || c == '_').unwrap_or(false)
+                        && !["if", "else", "match", "let", "type", "trait", "end", "import"].contains(&fn_name)
+                    {
+                        #[allow(deprecated)]
+                        symbols.push(SymbolInformation {
+                            name: fn_name.to_string(),
+                            kind: SymbolKind::FUNCTION,
+                            tags: None,
+                            deprecated: None,
+                            location: Location {
+                                uri: Url::parse("file:///").unwrap(), // Will be replaced
+                                range: Range {
+                                    start: Position { line: line_num as u32, character: 0 },
+                                    end: Position { line: line_num as u32, character: line.len() as u32 },
+                                },
+                            },
+                            container_name: None,
+                        });
+                    }
+                }
+            }
+        }
+
+        symbols
+    }
+
+    /// Find all references to a word in content and add to locations
+    fn find_references_in_content(word: &str, uri: &Url, content: &str, locations: &mut Vec<Location>) {
+        for (line_num, line) in content.lines().enumerate() {
+            // Find all occurrences of word in line
+            let mut search_start = 0;
+            while let Some(pos) = line[search_start..].find(word) {
+                let actual_pos = search_start + pos;
+
+                // Check word boundaries - must not be part of a larger identifier
+                let before_ok = actual_pos == 0
+                    || !line.chars().nth(actual_pos - 1).map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false);
+                let after_ok = actual_pos + word.len() >= line.len()
+                    || !line.chars().nth(actual_pos + word.len()).map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false);
+
+                if before_ok && after_ok {
+                    locations.push(Location {
+                        uri: uri.clone(),
+                        range: Range {
+                            start: Position { line: line_num as u32, character: actual_pos as u32 },
+                            end: Position { line: line_num as u32, character: (actual_pos + word.len()) as u32 },
+                        },
+                    });
+                }
+
+                search_start = actual_pos + word.len();
+            }
+        }
+    }
+
     fn extract_type_fields_from_source(content: &str, type_name: &str) -> Vec<String> {
         let mut fields = Vec::new();
 

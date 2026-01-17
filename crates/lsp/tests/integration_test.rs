@@ -253,6 +253,82 @@ impl LspClient {
         vec![]
     }
 
+    /// Request document symbols for a file
+    fn document_symbol(&mut self, uri: &str) -> Vec<(String, String, u32)> {
+        let response = self.send_request("textDocument/documentSymbol", json!({
+            "textDocument": {
+                "uri": uri
+            }
+        }));
+
+        // Parse symbol information - returns (name, kind, line)
+        let mut symbols = Vec::new();
+        if let Some(result) = response.get("result") {
+            if let Some(items) = result.as_array() {
+                for item in items {
+                    let name = item.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+                    let kind = item.get("kind").and_then(|k| k.as_u64()).unwrap_or(0);
+                    let kind_name = match kind {
+                        1 => "File",
+                        2 => "Module",
+                        5 => "Class",
+                        6 => "Method",
+                        11 => "Interface",
+                        12 => "Function",
+                        23 => "Struct",
+                        _ => "Unknown",
+                    }.to_string();
+                    let line = item.get("location")
+                        .and_then(|l| l.get("range"))
+                        .and_then(|r| r.get("start"))
+                        .and_then(|s| s.get("line"))
+                        .and_then(|l| l.as_u64())
+                        .unwrap_or(0) as u32;
+                    symbols.push((name, kind_name, line));
+                }
+            }
+        }
+        symbols
+    }
+
+    /// Find all references to symbol at position
+    fn references(&mut self, uri: &str, line: u32, character: u32) -> Vec<(String, u32, u32)> {
+        let response = self.send_request("textDocument/references", json!({
+            "textDocument": {
+                "uri": uri
+            },
+            "position": {
+                "line": line,
+                "character": character
+            },
+            "context": {
+                "includeDeclaration": true
+            }
+        }));
+
+        // Parse locations - returns (uri, line, character)
+        let mut refs = Vec::new();
+        if let Some(result) = response.get("result") {
+            if let Some(items) = result.as_array() {
+                for item in items {
+                    let loc_uri = item.get("uri").and_then(|u| u.as_str()).unwrap_or("").to_string();
+                    let line = item.get("range")
+                        .and_then(|r| r.get("start"))
+                        .and_then(|s| s.get("line"))
+                        .and_then(|l| l.as_u64())
+                        .unwrap_or(0) as u32;
+                    let char = item.get("range")
+                        .and_then(|r| r.get("start"))
+                        .and_then(|s| s.get("character"))
+                        .and_then(|c| c.as_u64())
+                        .unwrap_or(0) as u32;
+                    refs.push((loc_uri, line, char));
+                }
+            }
+        }
+        refs
+    }
+
     fn shutdown(&mut self) -> Value {
         self.send_request("shutdown", json!(null))
     }
@@ -3385,6 +3461,183 @@ main() = {
         has_show_method,
         "Expected 'show' method for Int type. Got: {:?}",
         completions
+    );
+}
+
+/// Test document symbols (outline view)
+#[test]
+fn test_lsp_document_symbols() {
+    let project_path = create_test_project("document_symbols");
+
+    let content = r#"# A test file with various symbols
+
+type Person = { name: String, age: Int }
+
+type Color
+    | Red
+    | Green
+    | Blue
+end
+
+trait Show
+    show(self) -> String
+end
+
+Person: Show
+    show(self) = self.name
+end
+
+pub greet(person: Person) = "Hello, " ++ person.name
+
+main() = {
+    p = Person(name: "Alice", age: 30)
+    greet(p)
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    let symbols = client.document_symbol(&main_uri);
+
+    println!("=== Document Symbols ===");
+    for (name, kind, line) in &symbols {
+        println!("  {} ({}) at line {}", name, kind, line);
+    }
+    println!("Total symbols: {}", symbols.len());
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // Check that we found the expected symbols
+    let has_person_type = symbols.iter().any(|(name, kind, _)| name == "Person" && kind == "Struct");
+    let has_color_type = symbols.iter().any(|(name, kind, _)| name == "Color" && kind == "Struct");
+    let has_show_trait = symbols.iter().any(|(name, kind, _)| name == "Show" && kind == "Interface");
+    let has_greet_fn = symbols.iter().any(|(name, kind, _)| name == "greet" && kind == "Function");
+    let has_main_fn = symbols.iter().any(|(name, kind, _)| name == "main" && kind == "Function");
+
+    assert!(has_person_type, "Expected Person type. Got: {:?}", symbols);
+    assert!(has_color_type, "Expected Color type. Got: {:?}", symbols);
+    assert!(has_show_trait, "Expected Show trait. Got: {:?}", symbols);
+    assert!(has_greet_fn, "Expected greet function. Got: {:?}", symbols);
+    assert!(has_main_fn, "Expected main function. Got: {:?}", symbols);
+}
+
+/// Test find references
+#[test]
+fn test_lsp_find_references() {
+    let project_path = create_test_project("find_references");
+
+    let content = r#"type Person = { name: String, age: Int }
+
+greet(person: Person) = "Hello, " ++ person.name
+
+farewell(person: Person) = "Goodbye, " ++ person.name
+
+main() = {
+    p = Person(name: "Alice", age: 30)
+    greet(p) ++ " and " ++ farewell(p)
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Find references to "Person" - cursor on line 0 (type Person = ...)
+    let refs = client.references(&main_uri, 0, 5); // "Person" starts at column 5
+
+    println!("=== References to 'Person' ===");
+    for (uri, line, col) in &refs {
+        println!("  {}:{}:{}", uri, line, col);
+    }
+    println!("Total references: {}", refs.len());
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // Should find at least 4 references:
+    // 1. type Person = ...
+    // 2. greet(person: Person)
+    // 3. farewell(person: Person)
+    // 4. p = Person(name: ...)
+    assert!(
+        refs.len() >= 4,
+        "Expected at least 4 references to 'Person'. Got {} references: {:?}",
+        refs.len(),
+        refs
+    );
+}
+
+/// Test find references across multiple files
+#[test]
+fn test_lsp_find_references_cross_file() {
+    let project_path = create_test_project("find_references_cross");
+
+    // Define type in one file
+    let types_content = r#"pub type User = { id: Int, name: String }
+
+pub createUser(name: String) = User(id: 1, name: name)
+"#;
+    fs::write(project_path.join("types.nos"), types_content).unwrap();
+
+    // Use type in another file
+    let main_content = r#"import types
+
+main() = {
+    user = types.createUser("Alice")
+    user.name
+}
+"#;
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let types_uri = format!("file://{}/types.nos", project_path.display());
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&types_uri, types_content);
+    client.did_open(&main_uri, main_content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Find references to "User" from types.nos
+    let refs = client.references(&types_uri, 0, 9); // "User" starts at column 9
+
+    println!("=== References to 'User' across files ===");
+    for (uri, line, col) in &refs {
+        println!("  {}:{}:{}", uri, line, col);
+    }
+    println!("Total references: {}", refs.len());
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // Should find at least 2 references:
+    // 1. pub type User = ... (in types.nos)
+    // 2. User(id: 1, ...) (in types.nos constructor call)
+    assert!(
+        refs.len() >= 2,
+        "Expected at least 2 references to 'User'. Got {} references: {:?}",
+        refs.len(),
+        refs
     );
 }
 
