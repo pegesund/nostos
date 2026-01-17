@@ -416,7 +416,10 @@ fn try_extract_qualified_name_inner(expr: &Expr, is_root: bool) -> Option<String
         }
         Expr::FieldAccess(base, field, _) => {
             // Only capture qualified module.function, not method calls on values
-            if let Some(base_name) = try_extract_qualified_name_inner(base, is_root) {
+            // When inside a FieldAccess, the base is NOT root level anymore -
+            // we're building a qualified name, so single-letter names like `c`
+            // in `c.getval` should be captured as module names.
+            if let Some(base_name) = try_extract_qualified_name_inner(base, false) {
                 Some(format!("{}.{}", base_name, field.node))
             } else {
                 None
@@ -526,20 +529,15 @@ fn extract_dependencies_from_expr(expr: &Expr, deps: &mut HashSet<String>) {
             extract_dependencies_from_expr(index, deps);
         }
         Expr::MethodCall(receiver, method, args, _) => {
-            // For method calls like `good.multiply()`, if receiver is a simple Var,
-            // this could be a qualified module call, so capture "receiver.method"
-            // BUT: single-letter lowercase identifiers (p, x, y, etc.) are likely
-            // local variables, not module names, so don't capture those.
+            // For method calls like `good.multiply()` or `c.getval()`, if receiver
+            // is a simple Var, this could be a qualified module call, so capture
+            // "receiver.method". We include even single-letter names like `c` because
+            // they could be module names, and having extra edges in the call graph
+            // is harmless, while missing edges causes staleness propagation bugs.
             if let Expr::Var(receiver_name) = receiver.as_ref() {
                 let name = &receiver_name.node;
-                let is_likely_local_var = name.len() == 1
-                    && name.chars().next().map(|c| c.is_lowercase()).unwrap_or(false);
-
-                if !is_likely_local_var {
-                    let qualified = format!("{}.{}", name, method.node);
-                    deps.insert(qualified);
-                }
-                // If it's a local var, we don't add it as a dependency
+                let qualified = format!("{}.{}", name, method.node);
+                deps.insert(qualified);
             } else {
                 extract_dependencies_from_expr(receiver, deps);
             }
