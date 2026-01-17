@@ -18,8 +18,8 @@ test6() = checkBounds(-5, fieldName: "age") == Fail("age too small")
 
 # Check string length with defaults
 checkLength(s, minLen = 1, maxLen = 100, fieldName = "string") =
-    if length(s) < minLen then Fail(fieldName ++ " too short")
-    else if length(s) > maxLen then Fail(fieldName ++ " too long")
+    if s.length() < minLen then Fail(fieldName ++ " too short")
+    else if s.length() > maxLen then Fail(fieldName ++ " too long")
     else Pass
 
 test7() = checkLength("hello") == Pass

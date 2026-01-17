@@ -5,7 +5,7 @@ all_traits[T: Hash + Eq + Show](x: T, y: T) -> Bool = {
     h = hash(x)
     s = show(x)
     eq = x == y
-    h != 0 && length(s) > 0 && eq
+    h != 0 && s.length() > 0 && eq
 }
 
 main() = {

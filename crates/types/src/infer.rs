@@ -1154,8 +1154,22 @@ impl<'a> InferCtx<'a> {
                     } else {
                         // Get ALL overloads and find the best match based on argument types
                         // Clone to avoid borrow issues with instantiate_function
-                        let overloads: Vec<FunctionType> = self.env.lookup_all_functions_with_arity(name, args.len())
+                        let mut overloads: Vec<FunctionType> = self.env.lookup_all_functions_with_arity(name, args.len())
                             .into_iter().cloned().collect();
+
+                        // Also check for type-qualified versions (e.g., String.length for length(s) where s: String)
+                        // This enables UFCS-style resolution for bare function calls
+                        if args.len() == 1 && !arg_types.is_empty() {
+                            let resolved_arg_ty = self.env.apply_subst(&arg_types[0]);
+                            if let Some(type_name) = self.get_type_name(&resolved_arg_ty) {
+                                let qualified_name = format!("{}.{}", type_name, name);
+                                let qualified_overloads: Vec<FunctionType> = self.env
+                                    .lookup_all_functions_with_arity(&qualified_name, 1)
+                                    .into_iter().cloned().collect();
+                                overloads.extend(qualified_overloads);
+                            }
+                        }
+
                         if !overloads.is_empty() {
                             let is_recursive = self.current_function.as_ref() == Some(name);
                             // Find best overload index first to avoid borrow issues

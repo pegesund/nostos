@@ -16835,11 +16835,21 @@ impl Compiler {
         // Register built-in functions from BUILTINS for type inference
         // This allows functions calling Panel.*, String.*, etc. to have proper return types
         for builtin in BUILTINS {
-            if env.functions.contains_key(builtin.name) {
-                continue; // Don't overwrite standard_env functions
-            }
             if let Some(fn_type) = self.parse_signature_string(builtin.signature) {
-                env.functions.insert(builtin.name.to_string(), fn_type);
+                // Create a typed suffix for overload resolution (e.g., "length/String" or "length/List")
+                let type_suffix = fn_type.params.iter()
+                    .map(|p| self.format_type_for_suffix(p))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let qualified_name = format!("{}/{}", builtin.name, type_suffix);
+
+                // Always register with type suffix (allows multiple overloads)
+                env.functions.insert(qualified_name, fn_type.clone());
+
+                // Also register under bare name if not already present
+                if !env.functions.contains_key(builtin.name) {
+                    env.functions.insert(builtin.name.to_string(), fn_type);
+                }
             }
         }
 
@@ -17196,11 +17206,21 @@ impl Compiler {
         // Register built-in functions from BUILTINS for type inference
         // This enables UFCS type checking (e.g., String.contains expects String -> Bool)
         for builtin in BUILTINS {
-            if env.functions.contains_key(builtin.name) {
-                continue; // Don't overwrite standard_env functions
-            }
             if let Some(fn_type) = self.parse_signature_string(builtin.signature) {
-                env.functions.insert(builtin.name.to_string(), fn_type.clone());
+                // Create a typed suffix for overload resolution (e.g., "length/String" or "length/List")
+                let type_suffix = fn_type.params.iter()
+                    .map(|p| self.format_type_for_suffix(p))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let qualified_name = format!("{}/{}", builtin.name, type_suffix);
+
+                // Always register with type suffix (allows multiple overloads)
+                env.functions.insert(qualified_name, fn_type.clone());
+
+                // Also register under bare name if not already present
+                if !env.functions.contains_key(builtin.name) {
+                    env.functions.insert(builtin.name.to_string(), fn_type.clone());
+                }
 
                 // Also register single-param list methods with "List." prefix for UFCS type inference
                 // This allows `list.get(0)` to properly propagate element types
@@ -17820,6 +17840,43 @@ impl Compiler {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Format a type for use in function name suffix (for overload resolution).
+    /// E.g., "String", "List", "_" for type variables.
+    fn format_type_for_suffix(&self, ty: &nostos_types::Type) -> String {
+        match ty {
+            nostos_types::Type::Var(_) | nostos_types::Type::TypeParam(_) => "_".to_string(),
+            nostos_types::Type::Int | nostos_types::Type::Int64 => "Int".to_string(),
+            nostos_types::Type::Int8 => "Int8".to_string(),
+            nostos_types::Type::Int16 => "Int16".to_string(),
+            nostos_types::Type::Int32 => "Int32".to_string(),
+            nostos_types::Type::UInt8 => "UInt8".to_string(),
+            nostos_types::Type::UInt16 => "UInt16".to_string(),
+            nostos_types::Type::UInt32 => "UInt32".to_string(),
+            nostos_types::Type::UInt64 => "UInt64".to_string(),
+            nostos_types::Type::Float | nostos_types::Type::Float64 => "Float".to_string(),
+            nostos_types::Type::Float32 => "Float32".to_string(),
+            nostos_types::Type::BigInt => "BigInt".to_string(),
+            nostos_types::Type::Decimal => "Decimal".to_string(),
+            nostos_types::Type::Bool => "Bool".to_string(),
+            nostos_types::Type::Char => "Char".to_string(),
+            nostos_types::Type::String => "String".to_string(),
+            nostos_types::Type::Unit => "Unit".to_string(),
+            nostos_types::Type::Never => "Never".to_string(),
+            nostos_types::Type::Pid => "Pid".to_string(),
+            nostos_types::Type::Ref => "Ref".to_string(),
+            nostos_types::Type::List(_) => "List".to_string(),
+            nostos_types::Type::Array(_) => "Array".to_string(),
+            nostos_types::Type::Set(_) => "Set".to_string(),
+            nostos_types::Type::Map(_, _) => "Map".to_string(),
+            nostos_types::Type::Tuple(_) => "Tuple".to_string(),
+            nostos_types::Type::Function(_) => "Fn".to_string(),
+            nostos_types::Type::Named { name, .. } => name.clone(),
+            nostos_types::Type::Variant(vt) => vt.name.clone(),
+            nostos_types::Type::Record(_) => "Record".to_string(),
+            nostos_types::Type::IO(_) => "IO".to_string(),
         }
     }
 

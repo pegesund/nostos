@@ -9,7 +9,7 @@ test_query_syntax_error(conn) = {
         e -> "unexpected: " ++ show(e)
     }
     # Result should be a string containing error info
-    assert(length(result) > 0)
+    assert(result.length() > 0)
 }
 
 test_query_missing_table(conn) = {
@@ -18,7 +18,7 @@ test_query_missing_table(conn) = {
         ("query_error", msg) -> msg
         e -> "unexpected"
     }
-    assert(length(result) > 0)
+    assert(result.length() > 0)
 }
 
 test_execute_syntax_error(conn) = {
@@ -27,7 +27,7 @@ test_execute_syntax_error(conn) = {
         ("execute_error", msg) -> msg
         e -> "unexpected"
     }
-    assert(length(result) > 0)
+    assert(result.length() > 0)
 }
 
 test_no_exception_on_success(conn) = {
@@ -52,7 +52,7 @@ test_exception_catch_all(conn) = {
     # Catch any error with tuple pattern
     result = try { Pg.query(conn, "BAD SQL", []) } catch { (kind, msg) -> kind ++ ": " ++ msg }
     # Should start with "query_error: "
-    assert(length(result) > 12)
+    assert(result.length() > 12)
 }
 
 test_nested_try_catch(conn) = {

@@ -30,7 +30,7 @@ test10() = withUnicode("✓") == "Status: ✓"
 
 # Multi-line string concept (via explicit newlines)
 multiLine(header = "===\nHeader\n===") = header ++ "\nBody"
-test11() = length(multiLine()) > 10
+test11() = multiLine().length() > 10
 
 # Concatenation in default
 withConcat(s = "hello" ++ " " ++ "world") = s
