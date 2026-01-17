@@ -3184,6 +3184,61 @@ impl Compiler {
         }
     }
 
+    /// Check if a type expression uses a generic type without required type parameters.
+    /// Returns an error message if the type requires parameters but doesn't have them.
+    fn check_generic_type_has_params(&self, ty: &nostos_syntax::TypeExpr) -> Option<(String, Span)> {
+        // Generic types that MUST have type parameters
+        const REQUIRES_PARAMS: &[&str] = &["List", "Map", "Set", "Option", "Result"];
+
+        match ty {
+            nostos_syntax::TypeExpr::Name(ident) => {
+                let name = &ident.node;
+                if REQUIRES_PARAMS.contains(&name.as_str()) {
+                    Some((format!(
+                        "Generic type `{}` requires type parameters. Use `{}[T]` instead of bare `{}`.",
+                        name, name, name
+                    ), ident.span))
+                } else {
+                    None
+                }
+            }
+            nostos_syntax::TypeExpr::Generic(_, args) => {
+                // Check nested type arguments
+                for arg in args {
+                    if let Some(err) = self.check_generic_type_has_params(arg) {
+                        return Some(err);
+                    }
+                }
+                None
+            }
+            nostos_syntax::TypeExpr::Tuple(elems) => {
+                for elem in elems {
+                    if let Some(err) = self.check_generic_type_has_params(elem) {
+                        return Some(err);
+                    }
+                }
+                None
+            }
+            nostos_syntax::TypeExpr::Function(params, ret) => {
+                for param in params {
+                    if let Some(err) = self.check_generic_type_has_params(param) {
+                        return Some(err);
+                    }
+                }
+                self.check_generic_type_has_params(ret)
+            }
+            nostos_syntax::TypeExpr::Record(fields) => {
+                for (_, field_ty) in fields {
+                    if let Some(err) = self.check_generic_type_has_params(field_ty) {
+                        return Some(err);
+                    }
+                }
+                None
+            }
+            nostos_syntax::TypeExpr::Unit => None,
+        }
+    }
+
     fn type_expr_name(&self, ty: &nostos_syntax::TypeExpr) -> String {
         match ty {
             nostos_syntax::TypeExpr::Name(ident) => {
@@ -3736,6 +3791,12 @@ impl Compiler {
 
         let kind = match &def.body {
             TypeBody::Record(fields) => {
+                // Validate that generic types have type parameters
+                for f in fields {
+                    if let Some((msg, span)) = self.check_generic_type_has_params(&f.ty) {
+                        return Err(CompileError::TypeError { message: msg, span });
+                    }
+                }
                 // Register record name as a constructor
                 self.known_constructors.insert(name.clone());
                 let field_info: Vec<(String, String)> = fields.iter()
@@ -3775,6 +3836,27 @@ impl Compiler {
                                             span: v.name.span,
                                         });
                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Validate that generic types have type parameters in variant fields
+                for v in variants {
+                    match &v.fields {
+                        VariantFields::Unit => {}
+                        VariantFields::Positional(fields) => {
+                            for ty in fields {
+                                if let Some((msg, span)) = self.check_generic_type_has_params(ty) {
+                                    return Err(CompileError::TypeError { message: msg, span });
+                                }
+                            }
+                        }
+                        VariantFields::Named(fields) => {
+                            for f in fields {
+                                if let Some((msg, span)) = self.check_generic_type_has_params(&f.ty) {
+                                    return Err(CompileError::TypeError { message: msg, span });
                                 }
                             }
                         }

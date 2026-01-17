@@ -1,7 +1,7 @@
 # expect: 10
 # Deeply nested data structures
 
-type Node = { value: Int, children: List }
+type Node = { value: Int, children: List[Node] }
 
 make_tree(depth) =
     if depth <= 0 then Node(1, [])

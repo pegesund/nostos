@@ -1,7 +1,7 @@
 # expect: 0
 # GC preserves deeply nested list structures
 
-type Nested = Wrap(List) | Val(Int)
+type Nested = Wrap(List[Nested]) | Val(Int)
 
 build_nested(0, inner) = inner
 build_nested(n, inner) = {
