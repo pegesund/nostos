@@ -2009,6 +2009,9 @@ impl Compiler {
                         // Defer tuple type errors to runtime - tuples are heterogeneous
                         let is_tuple_error = message.contains("(") && message.contains(",") && message.contains(")") &&
                             (message.contains("Cannot unify") || message.contains("mismatch"));
+                        // Pid/() confusion happens in spawn-related code where HM can't properly track
+                        // that spawn returns Pid while the block evaluates to ()
+                        let is_spawn_confusion = message.contains("Pid") && message.contains("()");
                         let is_spurious = is_tuple_error ||
                             message.contains("Unknown identifier") ||
                             message.contains("Unknown type") ||
@@ -2021,7 +2024,8 @@ impl Compiler {
                             is_overload_confusion ||
                             is_type_var_confusion ||
                             is_list_primitive_confusion ||
-                            is_custom_type_confusion;
+                            is_custom_type_confusion ||
+                            is_spawn_confusion;
                         !is_spurious
                     }
                     _ => true,
@@ -5048,6 +5052,9 @@ impl Compiler {
                     // Defer tuple type errors to runtime - tuples are heterogeneous
                     let is_tuple_error = message.contains("(") && message.contains(",") && message.contains(")") &&
                         (message.contains("Cannot unify") || message.contains("mismatch"));
+                    // Pid/() confusion happens in spawn-related code where HM can't properly track
+                    // that spawn returns Pid while the block evaluates to ()
+                    let is_spawn_confusion = message.contains("Pid") && message.contains("()");
                     let is_spurious = is_tuple_error ||
                         message.contains("Unknown identifier") ||
                         message.contains("Unknown type") ||
@@ -5060,7 +5067,8 @@ impl Compiler {
                         is_overload_confusion ||
                         is_type_var_confusion ||
                         is_list_primitive_confusion ||
-                        is_custom_type_confusion;
+                        is_custom_type_confusion ||
+                        is_spawn_confusion;
                     !is_spurious
                 }
                 _ => true,

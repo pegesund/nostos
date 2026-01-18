@@ -17790,6 +17790,22 @@ end
     }
 
     #[test]
+    fn test_string_chars_in_repl() {
+        // Test that String.chars works in REPL - reported as failing with
+        // "Cannot unify types: Pid and ()" error
+        let mut engine = ReplEngine::new(ReplConfig::default());
+        engine.load_stdlib().expect("Failed to load stdlib");
+
+        let result = engine.eval("String.chars(\"HOJ\")");
+        println!("String.chars result: {:?}", result);
+        assert!(result.is_ok(), "String.chars should work: {:?}", result);
+
+        let result = engine.eval("\"Hupp\".chars()");
+        println!("UFCS .chars() result: {:?}", result);
+        assert!(result.is_ok(), "UFCS .chars() should work: {:?}", result);
+    }
+
+    #[test]
     fn test_get_function_params_basic() {
         let mut engine = ReplEngine::new(ReplConfig::default());
         // Define a function with typed params
