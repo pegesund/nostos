@@ -301,6 +301,7 @@ fn parse_completion_response(json: &str, line: &str, pos: usize) -> Vec<Suggesti
     // Parse completions from server response
     // New format includes completion_items with detail and documentation
     let mut suggestions = Vec::new();
+    let mut inferred_type: Option<String> = None;
 
     let word_start = find_word_start(line, pos);
 
@@ -310,30 +311,51 @@ fn parse_completion_response(json: &str, line: &str, pos: usize) -> Vec<Suggesti
         let rest = &json[start + items_pattern.len()..];
         // Find matching bracket - we need to handle nested objects
         if let Some(items_json) = extract_json_array_content(rest) {
+            // First pass: extract inferred type if present
+            for item_json in split_json_objects(&items_json) {
+                if let Some((label, _, _)) = parse_completion_item(&item_json) {
+                    if label.starts_with("• ") {
+                        inferred_type = Some(label.clone());
+                        break;
+                    }
+                }
+            }
+
+            // Second pass: build completion items
             for item_json in split_json_objects(&items_json) {
                 if let Some((label, detail, doc)) = parse_completion_item(&item_json) {
-                    // Format description: show signature/type + doc if available
-                    let description = match (&detail, &doc) {
-                        (Some(d), Some(doc)) => Some(format!("{} - {}", d, doc)),
-                        (Some(d), None) => Some(d.clone()),
-                        (None, Some(doc)) => Some(doc.clone()),
-                        (None, None) => None,
-                    };
-
                     // Skip type indicator items (they start with bullet)
-                    // These are informational only and shouldn't be selectable
+                    // We've already extracted it above
                     if label.starts_with("• ") {
                         continue;
-                    } else {
-                        suggestions.push(Suggestion {
-                            value: label,
-                            description,
-                            style: None,
-                            extra: None,
-                            span: Span::new(word_start, pos),
-                            append_whitespace: false,
-                        });
                     }
+
+                    // Format description: show inferred type + signature + doc
+                    let description = {
+                        let sig_and_doc = match (&detail, &doc) {
+                            (Some(d), Some(doc)) => Some(format!("{} - {}", d, doc)),
+                            (Some(d), None) => Some(d.clone()),
+                            (None, Some(doc)) => Some(doc.clone()),
+                            (None, None) => None,
+                        };
+
+                        // Prepend inferred type to description
+                        match (&inferred_type, &sig_and_doc) {
+                            (Some(t), Some(s)) => Some(format!("{} | {}", t, s)),
+                            (Some(t), None) => Some(t.clone()),
+                            (None, Some(s)) => Some(s.clone()),
+                            (None, None) => None,
+                        }
+                    };
+
+                    suggestions.push(Suggestion {
+                        value: label,
+                        description,
+                        style: None,
+                        extra: None,
+                        span: Span::new(word_start, pos),
+                        append_whitespace: false,
+                    });
                 }
             }
         }
