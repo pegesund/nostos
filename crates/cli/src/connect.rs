@@ -371,6 +371,7 @@ fn connect_to_server(port: u16) -> ExitCode {
         ColumnarMenu::default()
             .with_name("completion_menu")
             .with_columns(1)  // Single column for cleaner display
+            .with_marker("")  // Remove the default "| " marker
     );
 
     // Create keybindings

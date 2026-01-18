@@ -3537,11 +3537,26 @@ impl ReplEngine {
             return Some("Bool".to_string());
         }
 
-        // Check for function call: func(...) or Module.func(...)
+        // Check for function call: func(...) or Module.func(...) or Constructor(...)
         if let Some(paren_pos) = trimmed.find('(') {
             let func_name = trimmed[..paren_pos].trim();
+
+            // Try function return type first
             if let Some(ret_type) = self.compiler.get_function_return_type(func_name) {
                 return Some(ret_type);
+            }
+
+            // Try constructor lookup (e.g., Some, None, Person, etc.)
+            if let Some(type_name) = self.compiler.get_type_for_constructor(func_name) {
+                return Some(type_name);
+            }
+
+            // For record constructors like Person("Alice", 30), the constructor name IS the type
+            // Check if func_name is a known type
+            if self.compiler.get_type_names().iter().any(|t| {
+                *t == func_name || t.ends_with(&format!(".{}", func_name))
+            }) {
+                return Some(func_name.to_string());
             }
         }
 

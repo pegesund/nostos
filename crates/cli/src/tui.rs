@@ -535,13 +535,75 @@ struct TuiState {
     server_rx: Option<std::sync::mpsc::Receiver<ServerCommand>>,
 }
 
+/// Run headless REPL server (no TUI, just TCP server)
+fn run_headless_server(port: u16, args: &[String]) -> ExitCode {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    eprintln!("Starting headless REPL server on port {}...", port);
+
+    // Initialize REPL engine
+    let config = ReplConfig::default();
+    let mut engine = ReplEngine::new(config);
+    if let Err(e) = engine.load_stdlib() {
+        eprintln!("Failed to load stdlib: {}", e);
+    }
+
+    // Load any files specified in args
+    for arg in args {
+        if !arg.starts_with('-') {
+            let path = std::path::Path::new(arg);
+            let result = if path.is_dir() {
+                engine.load_directory(arg)
+            } else {
+                engine.load_file(arg)
+            };
+            match result {
+                Ok(_) => eprintln!("Loaded: {}", arg),
+                Err(e) => eprintln!("Error loading {}: {}", arg, e),
+            }
+        }
+    }
+
+    // Start the TCP server
+    let server_rx = match start_server(port) {
+        Ok(rx) => rx,
+        Err(e) => {
+            eprintln!("Failed to start server: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    eprintln!("Headless server ready. Press Ctrl+C to stop.");
+
+    // Wrap engine for command processing
+    let engine = Rc::new(RefCell::new(engine));
+
+    // Process commands in a loop
+    loop {
+        match server_rx.recv() {
+            Ok(cmd) => {
+                let response = execute_server_command(&cmd, &engine);
+                let _ = cmd.response_tx.send(response);
+            }
+            Err(_) => {
+                // Channel closed, exit
+                break;
+            }
+        }
+    }
+
+    ExitCode::SUCCESS
+}
+
 pub fn run_tui(args: &[String]) -> ExitCode {
     // Set interactive mode flag for Env.isInteractive()
     // SAFETY: This is set once at TUI startup before any threads are spawned
     unsafe { std::env::set_var("NOSTOS_INTERACTIVE", "1"); }
 
-    // Parse --serve <port> argument
+    // Parse --serve <port> and --headless arguments
     let mut serve_port: Option<u16> = None;
+    let mut headless = false;
     let mut filtered_args: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -562,11 +624,26 @@ pub fn run_tui(args: &[String]) -> ExitCode {
                 eprintln!("--serve requires a port number");
                 return ExitCode::FAILURE;
             }
+        } else if args[i] == "--headless" {
+            headless = true;
+            i += 1;
+            continue;
         }
         filtered_args.push(args[i].clone());
         i += 1;
     }
     let args = &filtered_args;
+
+    // Headless mode requires --serve
+    if headless && serve_port.is_none() {
+        eprintln!("--headless requires --serve <port>");
+        return ExitCode::FAILURE;
+    }
+
+    // Run headless server if requested
+    if headless {
+        return run_headless_server(serve_port.unwrap(), args);
+    }
 
     // Check that file arguments exist (but don't validate content - allow opening files with errors)
     for arg in args {
@@ -1229,15 +1306,7 @@ fn get_completions(engine: &Rc<RefCell<ReplEngine>>, code: &str, pos: usize) -> 
     if let Some(dot_pos) = prefix.rfind('.') {
         let before_dot = prefix[..dot_pos].trim();
         let after_dot = &prefix[dot_pos + 1..]; // The partial method name typed after dot
-
-        // Extract the identifier before the dot
-        let identifier = before_dot.split(|c: char| !c.is_alphanumeric() && c != '_')
-            .last()
-            .unwrap_or("");
-
-        if !identifier.is_empty() {
-            return get_dot_completions(engine, identifier, after_dot);
-        }
+        return get_dot_completions(engine, before_dot, after_dot);
     }
 
     // Otherwise, do identifier completion
@@ -1271,16 +1340,22 @@ fn get_identifier_completions(engine: &Rc<RefCell<ReplEngine>>, partial: &str) -
 
     // Functions
     for func in engine_ref.get_functions() {
-        // Get just the base name (after last dot)
+        // Get just the base name (after last dot, before any / signature)
         let name = func.split('.').last().unwrap_or(&func);
+        // Strip signature suffix (e.g., "li/List[Html],_,_,_,_" -> "li")
+        let name = name.split('/').next().unwrap_or(name);
         if name.to_lowercase().starts_with(&partial_lower) {
             completions.push(name.to_string());
         }
     }
 
-    // Types
+    // Types - only show base type names, not parameterized types
     for type_name in engine_ref.get_types() {
         let name = type_name.split('.').last().unwrap_or(&type_name);
+        // Skip types with [ (parameterized types like List[Int])
+        if name.contains('[') {
+            continue;
+        }
         if name.to_lowercase().starts_with(&partial_lower) {
             completions.push(name.to_string());
         }
@@ -1297,59 +1372,138 @@ fn get_identifier_completions(engine: &Rc<RefCell<ReplEngine>>, partial: &str) -
 }
 
 /// Get completions after a dot (method completions).
-/// `identifier` is what's before the dot, `partial` is what's typed after the dot.
-fn get_dot_completions(engine: &Rc<RefCell<ReplEngine>>, identifier: &str, partial: &str) -> Vec<String> {
+/// `before_dot` is the full expression before the dot, `partial` is what's typed after the dot.
+fn get_dot_completions(engine: &Rc<RefCell<ReplEngine>>, before_dot: &str, partial: &str) -> Vec<String> {
+    use std::collections::{HashMap, HashSet};
+
     let mut completions = Vec::new();
     let engine_ref = engine.borrow();
     let partial_lower = partial.to_lowercase();
+    let mut seen = HashSet::new();
 
-    // Check if identifier is a module name
-    let potential_module = {
+    // Extract the last identifier from the expression (for module check)
+    let identifier = before_dot
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .last()
+        .unwrap_or("");
+
+    // Check if identifier is a module name (capitalize first letter)
+    let potential_module = if !identifier.is_empty() {
         let mut chars: Vec<char> = identifier.chars().collect();
-        if !chars.is_empty() {
-            chars[0] = chars[0].to_uppercase().next().unwrap_or(chars[0]);
-        }
+        chars[0] = chars[0].to_uppercase().next().unwrap_or(chars[0]);
         chars.into_iter().collect::<String>()
+    } else {
+        String::new()
     };
 
     // Get functions and check if this is a module
     let functions = engine_ref.get_functions();
-    let is_module = functions.iter().any(|f| f.starts_with(&format!("{}.", potential_module)));
+    // Only extract module prefixes from functions that have a dot (are qualified)
+    let known_modules: HashSet<String> = functions
+        .iter()
+        .filter(|f| f.contains('.'))
+        .filter_map(|f| f.split('.').next().map(|s| s.to_string()))
+        .collect();
+
+    let is_module = known_modules.contains(&potential_module) || known_modules.contains(identifier);
 
     if is_module {
         // Show module functions that match the partial
-        let prefix = format!("{}.", potential_module);
+        let module_name = if known_modules.contains(&potential_module) {
+            &potential_module
+        } else {
+            identifier
+        };
+
+        let prefix = format!("{}.", module_name);
         for func in &functions {
             if func.starts_with(&prefix) {
                 let name = func.strip_prefix(&prefix).unwrap_or(func);
                 // Get just the first part (in case of nested modules)
                 let name = name.split('.').next().unwrap_or(name);
+                // Skip internal functions
+                if name.starts_with('_') {
+                    continue;
+                }
                 // Filter by partial
                 if partial.is_empty() || name.to_lowercase().starts_with(&partial_lower) {
-                    completions.push(name.to_string());
+                    if seen.insert(name.to_string()) {
+                        completions.push(name.to_string());
+                    }
                 }
             }
         }
     } else {
-        // Try to infer type and show methods
-        // For now, show common methods based on the identifier pattern
-        let common_methods = [
-            "map", "filter", "fold", "forEach", "length", "isEmpty",
-            "head", "tail", "reverse", "take", "drop", "concat",
-            "toString", "show", "get", "set", "contains", "keys", "values",
-        ];
+        // Not a module - infer the type of the expression and show methods
+        // Build local_vars from REPL-defined variables
+        let mut local_vars: HashMap<String, String> = HashMap::new();
+        for var_name in engine_ref.get_variables() {
+            if let Some(var_type) = engine_ref.get_variable_type(&var_name) {
+                local_vars.insert(var_name, var_type);
+            }
+        }
 
-        for method in &common_methods {
-            // Filter by partial
-            if partial.is_empty() || method.to_lowercase().starts_with(&partial_lower) {
-                completions.push(method.to_string());
+        // Use the engine's type inference
+        let inferred_type = engine_ref.infer_expression_type(before_dot, &local_vars);
+
+        if let Some(ref type_name) = inferred_type {
+            // NOTE: We no longer add the type indicator as a completion item
+            // because selecting it would insert ": Type" which is invalid syntax.
+            // The type information is available via hover/other means.
+
+            // Get builtin methods for the type
+            for (method_name, _signature, _doc) in ReplEngine::get_builtin_methods_for_type(type_name) {
+                if partial.is_empty() || method_name.to_lowercase().starts_with(&partial_lower) {
+                    if seen.insert(method_name.to_string()) {
+                        completions.push(method_name.to_string());
+                    }
+                }
+            }
+
+            // Get UFCS methods from user-defined functions
+            for (method_name, _signature, _doc) in engine_ref.get_ufcs_methods_for_type(type_name) {
+                if partial.is_empty() || method_name.to_lowercase().starts_with(&partial_lower) {
+                    if seen.insert(method_name.clone()) {
+                        completions.push(method_name);
+                    }
+                }
+            }
+
+            // Get trait methods for the type
+            for (method_name, _signature, _doc) in engine_ref.get_trait_methods_for_type(type_name) {
+                if partial.is_empty() || method_name.to_lowercase().starts_with(&partial_lower) {
+                    if seen.insert(method_name.clone()) {
+                        completions.push(method_name);
+                    }
+                }
+            }
+
+            // Get record fields for the type
+            for field in engine_ref.get_type_fields(type_name) {
+                // Parse field name from "name: Type" format
+                let field_name = if let Some(colon_pos) = field.find(':') {
+                    field[..colon_pos].trim().to_string()
+                } else {
+                    field.clone()
+                };
+
+                if partial.is_empty() || field_name.to_lowercase().starts_with(&partial_lower) {
+                    if seen.insert(field_name.clone()) {
+                        completions.push(field_name);
+                    }
+                }
+            }
+        } else {
+            // No type inferred - show generic methods for common types
+            for (method_name, _signature, _doc) in ReplEngine::get_builtin_methods_for_type("Unknown") {
+                if partial.is_empty() || method_name.to_lowercase().starts_with(&partial_lower) {
+                    if seen.insert(method_name.to_string()) {
+                        completions.push(method_name.to_string());
+                    }
+                }
             }
         }
     }
-
-    // Deduplicate and sort
-    completions.sort();
-    completions.dedup();
 
     completions
 }
