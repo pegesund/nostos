@@ -18,6 +18,8 @@ use std::sync::{Arc, Mutex};
 use reedline::{
     Reedline, Signal, Prompt, PromptHistorySearch, PromptHistorySearchStatus,
     FileBackedHistory, Highlighter, StyledText, Completer, Suggestion, Span,
+    ColumnarMenu, ReedlineMenu, KeyCode, KeyModifiers, ReedlineEvent,
+    default_emacs_keybindings, MenuBuilder,
 };
 use nu_ansi_term::{Color, Style};
 use nostos_syntax::lexer::{Token, lex};
@@ -356,11 +358,30 @@ fn connect_to_server(port: u16) -> ExitCode {
     let stream_for_complete = Arc::new(Mutex::new(stream.try_clone().expect("Failed to clone stream")));
     let completer = Box::new(ServerCompleter { stream: stream_for_complete });
 
+    // Create completion menu
+    let completion_menu = Box::new(
+        ColumnarMenu::default()
+            .with_name("completion_menu")
+    );
+
+    // Create keybindings with Tab for completion
+    let mut keybindings = default_emacs_keybindings();
+    keybindings.add_binding(
+        KeyModifiers::NONE,
+        KeyCode::Tab,
+        ReedlineEvent::UntilFound(vec![
+            ReedlineEvent::Menu("completion_menu".to_string()),
+            ReedlineEvent::MenuNext,
+        ]),
+    );
+
     // Create reedline with all features
     let mut line_editor = Reedline::create()
         .with_history(Box::new(history))
         .with_highlighter(Box::new(NostosHighlighter))
-        .with_completer(completer);
+        .with_completer(completer)
+        .with_menu(ReedlineMenu::EngineCompleter(completion_menu))
+        .with_edit_mode(Box::new(reedline::Emacs::new(keybindings)));
 
     let prompt = NostosPrompt;
 
