@@ -11191,11 +11191,14 @@ impl Compiler {
                             _ => None,
                         };
                     }
-                    // List methods (from stdlib) - handles "List[T]", "List", and "List t" (with type vars)
-                    else if obj_type.starts_with("List[") || obj_type == "List" || obj_type.starts_with("List ") {
-                        // Extract element type from List[T]
+                    // List methods (from stdlib) - handles "List[T]", "List", "List t" (with type vars), and "[T]" syntax
+                    else if obj_type.starts_with("List[") || obj_type == "List" || obj_type.starts_with("List ")
+                        || (obj_type.starts_with('[') && obj_type.ends_with(']')) {
+                        // Extract element type from List[T] or [T]
                         let elem_type = if obj_type.starts_with("List[") && obj_type.ends_with(']') {
                             Some(&obj_type[5..obj_type.len()-1])
+                        } else if obj_type.starts_with('[') && obj_type.ends_with(']') {
+                            Some(&obj_type[1..obj_type.len()-1])
                         } else {
                             None
                         };
