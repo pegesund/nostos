@@ -440,11 +440,21 @@ fn extract_dependencies_from_expr(expr: &Expr, deps: &mut HashSet<String>) {
         }
         Expr::Call(callee, _type_args, args, _) => {
             // For calls, try to capture the full qualified name (e.g., good.multiply)
-            // instead of just the base module name
-            if let Some(qualified) = try_extract_qualified_name(callee) {
-                deps.insert(qualified);
-            } else {
-                extract_dependencies_from_expr(callee, deps);
+            // For simple function calls (Var), always capture the name - it's a function call,
+            // not a local variable reference.
+            match callee.as_ref() {
+                Expr::Var(ident) => {
+                    // Simple function call like f() or a() - always capture
+                    deps.insert(ident.node.clone());
+                }
+                _ => {
+                    // Complex callee (field access, etc.) - try qualified name extraction
+                    if let Some(qualified) = try_extract_qualified_name(callee) {
+                        deps.insert(qualified);
+                    } else {
+                        extract_dependencies_from_expr(callee, deps);
+                    }
+                }
             }
             for arg in args {
                 let expr = match arg {
