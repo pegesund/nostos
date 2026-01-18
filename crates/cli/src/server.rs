@@ -51,36 +51,28 @@ fn parse_command(line: &str, response_tx: Sender<ServerResponse>) -> Option<Serv
         return None;
     }
 
-    let inner = &line[1..line.len()-1];
-
     let mut id: u64 = 0;
     let mut cmd = String::new();
     let mut args = String::new();
     let mut pos: Option<usize> = None;
 
-    // Parse key-value pairs
-    for part in inner.split(',') {
-        let part = part.trim();
-        if let Some(colon_pos) = part.find(':') {
-            let key = part[..colon_pos].trim().trim_matches('"');
-            let value = part[colon_pos + 1..].trim().trim_matches('"');
-
-            match key {
-                "id" => {
-                    id = value.parse().unwrap_or(0);
-                }
-                "cmd" => {
-                    cmd = value.to_string();
-                }
-                "file" | "code" | "expr" => {
-                    // Handle escaped strings
-                    args = unescape_json_string(value);
-                }
-                "pos" => {
-                    pos = value.parse().ok();
-                }
-                _ => {}
+    // Parse key-value pairs properly respecting string boundaries
+    let pairs = split_json_pairs(line);
+    for (key, value) in pairs {
+        match key.as_str() {
+            "id" => {
+                id = value.parse().unwrap_or(0);
             }
+            "cmd" => {
+                cmd = value.clone();
+            }
+            "file" | "code" | "expr" => {
+                args = value.clone();
+            }
+            "pos" => {
+                pos = value.parse().ok();
+            }
+            _ => {}
         }
     }
 
@@ -95,6 +87,98 @@ fn parse_command(line: &str, response_tx: Sender<ServerResponse>) -> Option<Serv
         pos,
         response_tx,
     })
+}
+
+/// Split JSON object into key-value pairs, respecting string boundaries
+fn split_json_pairs(json: &str) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    let json = json.trim();
+
+    // Remove outer braces
+    if !json.starts_with('{') || !json.ends_with('}') {
+        return pairs;
+    }
+    let inner = &json[1..json.len()-1];
+
+    let mut chars = inner.chars().peekable();
+
+    while chars.peek().is_some() {
+        // Skip whitespace and commas
+        while let Some(&c) = chars.peek() {
+            if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ',' {
+                chars.next();
+            } else {
+                break;
+            }
+        }
+
+        // Parse key (expect quoted string)
+        if chars.peek() != Some(&'"') {
+            break;
+        }
+        chars.next(); // consume opening quote
+
+        let mut key = String::new();
+        while let Some(c) = chars.next() {
+            if c == '"' {
+                break;
+            }
+            key.push(c);
+        }
+
+        // Skip colon and whitespace
+        while let Some(&c) = chars.peek() {
+            if c == ':' || c == ' ' || c == '\t' {
+                chars.next();
+            } else {
+                break;
+            }
+        }
+
+        // Parse value
+        let value = if chars.peek() == Some(&'"') {
+            // String value
+            chars.next(); // consume opening quote
+            let mut val = String::new();
+            while let Some(c) = chars.next() {
+                if c == '\\' {
+                    // Handle escape sequences
+                    if let Some(escaped) = chars.next() {
+                        match escaped {
+                            'n' => val.push('\n'),
+                            't' => val.push('\t'),
+                            'r' => val.push('\r'),
+                            '"' => val.push('"'),
+                            '\\' => val.push('\\'),
+                            _ => {
+                                val.push('\\');
+                                val.push(escaped);
+                            }
+                        }
+                    }
+                } else if c == '"' {
+                    break;
+                } else {
+                    val.push(c);
+                }
+            }
+            val
+        } else {
+            // Non-string value (number, boolean, null)
+            let mut val = String::new();
+            while let Some(&c) = chars.peek() {
+                if c == ',' || c == '}' || c == ' ' || c == '\t' || c == '\n' {
+                    break;
+                }
+                val.push(chars.next().unwrap());
+            }
+            val
+        };
+
+        pairs.push((key, value));
+    }
+
+    pairs
 }
 
 /// Unescape JSON string (basic implementation)
