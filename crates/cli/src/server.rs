@@ -15,6 +15,8 @@ pub struct ServerCommand {
     pub id: u64,
     pub cmd: String,
     pub args: String,
+    /// Position for completion requests
+    pub pos: Option<usize>,
     /// Channel to send response back to the client
     pub response_tx: Sender<ServerResponse>,
 }
@@ -26,6 +28,8 @@ pub struct ServerResponse {
     pub status: String,
     pub output: String,
     pub errors: Vec<ServerError>,
+    /// Completions for autocomplete requests
+    pub completions: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +56,7 @@ fn parse_command(line: &str, response_tx: Sender<ServerResponse>) -> Option<Serv
     let mut id: u64 = 0;
     let mut cmd = String::new();
     let mut args = String::new();
+    let mut pos: Option<usize> = None;
 
     // Parse key-value pairs
     for part in inner.split(',') {
@@ -71,6 +76,9 @@ fn parse_command(line: &str, response_tx: Sender<ServerResponse>) -> Option<Serv
                     // Handle escaped strings
                     args = unescape_json_string(value);
                 }
+                "pos" => {
+                    pos = value.parse().ok();
+                }
                 _ => {}
             }
         }
@@ -84,6 +92,7 @@ fn parse_command(line: &str, response_tx: Sender<ServerResponse>) -> Option<Serv
         id,
         cmd,
         args,
+        pos,
         response_tx,
     })
 }
@@ -124,12 +133,17 @@ fn format_response(response: &ServerResponse) -> String {
             escape_json_string(&e.message))
     }).collect();
 
+    let completions_json: Vec<String> = response.completions.iter()
+        .map(|c| format!(r#""{}""#, escape_json_string(c)))
+        .collect();
+
     format!(
-        r#"{{"id":{},"status":"{}","output":"{}","errors":[{}]}}"#,
+        r#"{{"id":{},"status":"{}","output":"{}","errors":[{}],"completions":[{}]}}"#,
         response.id,
         escape_json_string(&response.status),
         escape_json_string(&response.output),
-        errors_json.join(",")
+        errors_json.join(","),
+        completions_json.join(",")
     )
 }
 
@@ -210,6 +224,7 @@ fn handle_client(
                         status: "error".to_string(),
                         output: "Invalid JSON command".to_string(),
                         errors: vec![],
+                        completions: vec![],
                     };
                     let json = format_response(&error_response);
                     let _ = writeln!(writer, "{}", json);

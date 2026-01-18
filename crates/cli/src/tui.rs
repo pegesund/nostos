@@ -1086,6 +1086,7 @@ fn execute_server_command(cmd: &ServerCommand, engine: &Rc<RefCell<ReplEngine>>)
                     status: "ok".to_string(),
                     output: format!("Loaded {}", path),
                     errors: vec![],
+                    completions: vec![],
                 },
                 Err(e) => ServerResponse {
                     id: cmd.id,
@@ -1096,6 +1097,7 @@ fn execute_server_command(cmd: &ServerCommand, engine: &Rc<RefCell<ReplEngine>>)
                         line: 0,
                         message: e,
                     }],
+                    completions: vec![],
                 },
             }
         }
@@ -1106,6 +1108,7 @@ fn execute_server_command(cmd: &ServerCommand, engine: &Rc<RefCell<ReplEngine>>)
                     status: "ok".to_string(),
                     output: format!("Reloaded {} files", count),
                     errors: vec![],
+                    completions: vec![],
                 },
                 Err(e) => ServerResponse {
                     id: cmd.id,
@@ -1116,6 +1119,7 @@ fn execute_server_command(cmd: &ServerCommand, engine: &Rc<RefCell<ReplEngine>>)
                         line: 0,
                         message: e,
                     }],
+                    completions: vec![],
                 },
             }
         }
@@ -1136,6 +1140,7 @@ fn execute_server_command(cmd: &ServerCommand, engine: &Rc<RefCell<ReplEngine>>)
                         status: "ok".to_string(),
                         output,
                         errors: vec![],
+                        completions: vec![],
                     }
                 },
                 Err(e) => ServerResponse {
@@ -1147,6 +1152,7 @@ fn execute_server_command(cmd: &ServerCommand, engine: &Rc<RefCell<ReplEngine>>)
                         line: 0,
                         message: e,
                     }],
+                    completions: vec![],
                 },
             }
         }
@@ -1158,6 +1164,7 @@ fn execute_server_command(cmd: &ServerCommand, engine: &Rc<RefCell<ReplEngine>>)
                     status: "ok".to_string(),
                     output: "Compilation successful".to_string(),
                     errors: vec![],
+                    completions: vec![],
                 },
                 Err(e) => ServerResponse {
                     id: cmd.id,
@@ -1168,6 +1175,7 @@ fn execute_server_command(cmd: &ServerCommand, engine: &Rc<RefCell<ReplEngine>>)
                         line: 0,
                         message: e,
                     }],
+                    completions: vec![],
                 },
             }
         }
@@ -1187,6 +1195,20 @@ fn execute_server_command(cmd: &ServerCommand, engine: &Rc<RefCell<ReplEngine>>)
                 status: if errors.is_empty() { "ok" } else { "error" }.to_string(),
                 output: format!("{} modules loaded, {} with errors", status.len(), errors.len()),
                 errors,
+                completions: vec![],
+            }
+        }
+        "complete" => {
+            let code = &cmd.args;
+            let pos = cmd.pos.unwrap_or(code.len());
+            let completions = get_completions(engine, code, pos);
+
+            ServerResponse {
+                id: cmd.id,
+                status: "ok".to_string(),
+                output: String::new(),
+                errors: vec![],
+                completions,
             }
         }
         _ => ServerResponse {
@@ -1194,8 +1216,132 @@ fn execute_server_command(cmd: &ServerCommand, engine: &Rc<RefCell<ReplEngine>>)
             status: "error".to_string(),
             output: format!("Unknown command: {}", cmd.cmd),
             errors: vec![],
+            completions: vec![],
         },
     }
+}
+
+/// Get completions for the given code at the specified position.
+fn get_completions(engine: &Rc<RefCell<ReplEngine>>, code: &str, pos: usize) -> Vec<String> {
+    let prefix = if pos <= code.len() { &code[..pos] } else { code };
+
+    // Check if we're doing dot completion (method completion on a type)
+    if let Some(dot_pos) = prefix.rfind('.') {
+        let before_dot = prefix[..dot_pos].trim();
+        // Extract the identifier before the dot
+        let identifier = before_dot.split(|c: char| !c.is_alphanumeric() && c != '_')
+            .last()
+            .unwrap_or("");
+
+        if !identifier.is_empty() {
+            return get_dot_completions(engine, identifier);
+        }
+    }
+
+    // Otherwise, do identifier completion
+    let partial = prefix.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .last()
+        .unwrap_or("");
+
+    get_identifier_completions(engine, partial)
+}
+
+/// Get completions for identifiers (functions, types, keywords).
+fn get_identifier_completions(engine: &Rc<RefCell<ReplEngine>>, partial: &str) -> Vec<String> {
+    let mut completions = Vec::new();
+    let partial_lower = partial.to_lowercase();
+
+    // Keywords
+    let keywords = [
+        "if", "then", "else", "match", "with", "end", "type", "trait",
+        "use", "var", "mvar", "while", "for", "true", "false", "and",
+        "or", "not", "in", "do", "return", "break", "continue", "spawn",
+        "receive", "after", "try", "catch", "finally", "pub", "println",
+    ];
+
+    for kw in &keywords {
+        if kw.starts_with(&partial_lower) {
+            completions.push(kw.to_string());
+        }
+    }
+
+    let engine_ref = engine.borrow();
+
+    // Functions
+    for func in engine_ref.get_functions() {
+        // Get just the base name (after last dot)
+        let name = func.split('.').last().unwrap_or(&func);
+        if name.to_lowercase().starts_with(&partial_lower) {
+            completions.push(name.to_string());
+        }
+    }
+
+    // Types
+    for type_name in engine_ref.get_types() {
+        let name = type_name.split('.').last().unwrap_or(&type_name);
+        if name.to_lowercase().starts_with(&partial_lower) {
+            completions.push(name.to_string());
+        }
+    }
+
+    // Deduplicate and sort
+    completions.sort();
+    completions.dedup();
+
+    // Limit to reasonable number
+    completions.truncate(50);
+
+    completions
+}
+
+/// Get completions after a dot (method completions).
+fn get_dot_completions(engine: &Rc<RefCell<ReplEngine>>, identifier: &str) -> Vec<String> {
+    let mut completions = Vec::new();
+    let engine_ref = engine.borrow();
+
+    // Check if identifier is a module name
+    let potential_module = {
+        let mut chars: Vec<char> = identifier.chars().collect();
+        if !chars.is_empty() {
+            chars[0] = chars[0].to_uppercase().next().unwrap_or(chars[0]);
+        }
+        chars.into_iter().collect::<String>()
+    };
+
+    // Get functions and check if this is a module
+    let functions = engine_ref.get_functions();
+    let is_module = functions.iter().any(|f| f.starts_with(&format!("{}.", potential_module)));
+
+    if is_module {
+        // Show module functions
+        let prefix = format!("{}.", potential_module);
+        for func in &functions {
+            if func.starts_with(&prefix) {
+                let name = func.strip_prefix(&prefix).unwrap_or(func);
+                // Get just the first part (in case of nested modules)
+                let name = name.split('.').next().unwrap_or(name);
+                completions.push(name.to_string());
+            }
+        }
+    } else {
+        // Try to infer type and show methods
+        // For now, show common methods based on the identifier pattern
+        let common_methods = [
+            "map", "filter", "fold", "forEach", "length", "isEmpty",
+            "head", "tail", "reverse", "take", "drop", "concat",
+            "toString", "show", "get", "set", "contains", "keys", "values",
+        ];
+
+        for method in &common_methods {
+            completions.push(method.to_string());
+        }
+    }
+
+    // Deduplicate and sort
+    completions.sort();
+    completions.dedup();
+
+    completions
 }
 
 /// Poll for inspect entries and update the inspector panel if open.

@@ -261,7 +261,7 @@ impl Completer for ServerCompleter {
                     // Read response
                     let mut response = String::new();
                     if reader.read_line(&mut response).is_ok() {
-                        return parse_completion_response(&response, pos);
+                        return parse_completion_response(&response, line, pos);
                     }
                 }
             }
@@ -271,10 +271,27 @@ impl Completer for ServerCompleter {
     }
 }
 
-fn parse_completion_response(json: &str, pos: usize) -> Vec<Suggestion> {
+/// Find where the current identifier/word starts
+fn find_word_start(line: &str, pos: usize) -> usize {
+    let prefix = if pos <= line.len() { &line[..pos] } else { line };
+
+    // Check if we're completing after a dot
+    if let Some(dot_pos) = prefix.rfind('.') {
+        return dot_pos + 1; // Start after the dot
+    }
+
+    // Find the start of the current identifier
+    prefix.rfind(|c: char| !c.is_alphanumeric() && c != '_')
+        .map(|i| i + 1)
+        .unwrap_or(0)
+}
+
+fn parse_completion_response(json: &str, line: &str, pos: usize) -> Vec<Suggestion> {
     // Parse completions from server response
     // Expected format: {"id":0,"status":"ok","output":"","completions":["foo","bar"]}
     let mut suggestions = Vec::new();
+
+    let word_start = find_word_start(line, pos);
 
     let completions_pattern = r#""completions":["#;
     if let Some(start) = json.find(completions_pattern) {
@@ -290,7 +307,7 @@ fn parse_completion_response(json: &str, pos: usize) -> Vec<Suggestion> {
                         description: None,
                         style: None,
                         extra: None,
-                        span: Span::new(0, pos),
+                        span: Span::new(word_start, pos),
                         append_whitespace: false,
                     });
                 }
