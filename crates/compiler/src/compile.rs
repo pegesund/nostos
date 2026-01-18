@@ -16307,6 +16307,14 @@ impl Compiler {
                 continue;
             }
 
+            // Skip private functions (unless in prelude or same module context)
+            // For autocomplete, we only want to show functions that are actually callable
+            if let Some(visibility) = self.function_visibility.get(fn_name) {
+                if *visibility == Visibility::Private && !self.prelude_functions.contains(fn_name) {
+                    continue;
+                }
+            }
+
             // Get the first parameter type
             let first_param = &func.param_types[0];
 
