@@ -709,6 +709,31 @@ impl Type {
         }
     }
 
+    /// Check if this type is fully concrete (no type variables or type parameters).
+    /// A concrete type can be used in type annotations.
+    pub fn is_concrete(&self) -> bool {
+        match self {
+            Type::Var(_) | Type::TypeParam(_) => false,
+            Type::Tuple(elems) => elems.iter().all(|t| t.is_concrete()),
+            Type::List(elem) | Type::Array(elem) | Type::Set(elem) | Type::IO(elem) => {
+                elem.is_concrete()
+            }
+            Type::Map(k, v) => k.is_concrete() && v.is_concrete(),
+            Type::Record(rec) => rec.fields.iter().all(|(_, t, _)| t.is_concrete()),
+            Type::Function(f) => {
+                f.params.iter().all(|t| t.is_concrete()) && f.ret.is_concrete()
+            }
+            Type::Named { args, .. } => args.iter().all(|t| t.is_concrete()),
+            Type::Variant(var) => var.constructors.iter().all(|c| match c {
+                Constructor::Unit(_) => true,
+                Constructor::Positional(_, types) => types.iter().all(|t| t.is_concrete()),
+                Constructor::Named(_, fields) => fields.iter().all(|(_, t)| t.is_concrete()),
+            }),
+            // All primitives are concrete
+            _ => true,
+        }
+    }
+
     /// Find the maximum type variable ID in this type, or None if no type variables.
     pub fn max_var_id(&self) -> Option<TypeVarId> {
         match self {

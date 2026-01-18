@@ -1978,9 +1978,10 @@ impl Compiler {
         // This catches errors like bar() = bar2() + "x" where bar2() returns ()
         // With file_id in Span, stdlib type checking now works correctly.
         for (fn_name, fn_ast) in &self.fn_asts {
-            // Skip REPL eval wrappers - these are temporary functions that may contain errors
+            // Skip REPL wrappers - these are temporary functions that may contain errors
             // from previous REPL inputs. We don't want old errors to affect new inputs.
-            if fn_name.starts_with("__repl_eval_") {
+            // Also skip var thunks which have local bindings injected that HM inference doesn't see.
+            if fn_name.starts_with("__repl_eval_") || fn_name.starts_with("__repl_var_") || fn_name.starts_with("__repl_tuple_") {
                 continue;
             }
 
@@ -16252,6 +16253,16 @@ impl Compiler {
     /// Get a function's signature as a displayable string.
     pub fn get_function_signature(&self, name: &str) -> Option<String> {
         self.find_function(name).and_then(|f| f.signature.clone())
+    }
+
+    /// Get a function's return type from HM inference as a Type structure.
+    /// Returns None if the function doesn't exist or wasn't inferred.
+    pub fn get_function_return_type_hm(&self, name: &str) -> Option<nostos_types::Type> {
+        // Check pending_fn_signatures for HM-inferred types
+        if let Some(fn_type) = self.pending_fn_signatures.get(name) {
+            return Some((*fn_type.ret).clone());
+        }
+        None
     }
 
     /// Get function parameter details for signature help.

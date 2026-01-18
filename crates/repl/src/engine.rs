@@ -1490,7 +1490,8 @@ impl ReplEngine {
     /// - Module-qualified types (like "testvec.Vec") - not in scope
     /// - Type parameters (single lowercase letter like "a") - not concrete
     fn is_safe_type_annotation(type_ann: &str) -> bool {
-        // Skip module-qualified types
+        // Skip module-qualified types (e.g., "nalgebra.Vec")
+        // These aren't valid in local binding type annotations
         if type_ann.contains('.') {
             return false;
         }
@@ -1498,13 +1499,29 @@ impl ReplEngine {
         if type_ann.contains("->") {
             return false;
         }
-        // Skip type parameters (single lowercase letter)
-        if type_ann.len() == 1 {
-            if let Some(c) = type_ann.chars().next() {
-                if c.is_ascii_lowercase() {
+        // Skip parameterized types with multiple parameters (e.g., "Map[K, V]")
+        // The comma inside brackets causes parse errors in binding syntax
+        if type_ann.contains('[') && type_ann.contains(',') {
+            return false;
+        }
+        // Skip HM type variables (e.g., "?123")
+        if type_ann.starts_with('?') || type_ann.contains("[?") {
+            return false;
+        }
+        // Skip parameterized types with type variables inside brackets (e.g., "List[a]")
+        // These have lowercase single letters inside brackets which aren't valid Nostos syntax
+        if let Some(bracket_start) = type_ann.find('[') {
+            if let Some(bracket_end) = type_ann.find(']') {
+                let inner = &type_ann[bracket_start + 1..bracket_end];
+                // Check if inner is a single lowercase letter (type variable)
+                if inner.len() == 1 && inner.chars().all(|c| c.is_ascii_lowercase()) {
                     return false;
                 }
             }
+        }
+        // Skip single-letter type parameters (e.g., just "a" or "T")
+        if type_ann.len() == 1 && type_ann.chars().all(|c| c.is_ascii_alphabetic()) {
+            return false;
         }
         true
     }
@@ -3063,8 +3080,24 @@ impl ReplEngine {
         }
     }
 
-    /// Get the type of a variable directly from its thunk signature
+    /// Get the type of a variable directly from its thunk using HM inference.
+    /// Only returns a type string if the type is fully concrete (no type variables).
     fn get_variable_type_from_thunk(&self, thunk_name: &str) -> Option<String> {
+        // First, try to get the HM-inferred type
+        if let Some(hm_type) = self.compiler.get_function_return_type_hm(thunk_name) {
+            // Only use the type if it's fully concrete (no Var or TypeParam)
+            if hm_type.is_concrete() {
+                let type_str = hm_type.display();
+                // Additional check: don't use function types as annotations (can't be parsed)
+                if !type_str.contains("->") {
+                    return Some(type_str);
+                }
+            }
+            // Type has variables, don't use as annotation
+            return None;
+        }
+
+        // Fall back to string-based parsing of the signature
         let sig = self.compiler.get_function_signature(thunk_name)?;
 
         // Thunks are 0-arity functions, so their signature is just the return type
