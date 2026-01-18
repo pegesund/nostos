@@ -1660,7 +1660,12 @@ impl Compiler {
 
             // Transfer inferred expression types from stdlib inference.
             // With file_id in Span, spans are now unique across files.
-            self.inferred_expr_types.extend(ctx.take_expr_types());
+            // Apply substitution to resolve type variables to concrete types.
+            let stdlib_expr_types: HashMap<_, _> = ctx.take_expr_types()
+                .into_iter()
+                .map(|(span, ty)| (span, ctx.apply_full_subst(&ty)))
+                .collect();
+            self.inferred_expr_types.extend(stdlib_expr_types);
 
             // Apply full substitution (including TypeParam resolution) only to stdlib signatures
             for (fn_name, fn_type) in self.pending_fn_signatures.iter_mut() {
@@ -1793,7 +1798,12 @@ impl Compiler {
 
             // Transfer inferred expression types from user inference.
             // With file_id in Span, spans are now unique across files.
-            self.inferred_expr_types.extend(ctx.take_expr_types());
+            // Apply substitution to resolve type variables to concrete types.
+            let user_expr_types: HashMap<_, _> = ctx.take_expr_types()
+                .into_iter()
+                .map(|(span, ty)| (span, ctx.apply_full_subst(&ty)))
+                .collect();
+            self.inferred_expr_types.extend(user_expr_types);
 
             // Apply full substitution (including TypeParam resolution) only to user signatures
             for (fn_name, fn_type) in self.pending_fn_signatures.iter_mut() {
@@ -4922,6 +4932,18 @@ impl Compiler {
                 Some(t) => t,
                 None => continue, // Type not used or not known, skip checking
             };
+
+            // Skip if the type is still a type variable (like ?1234) - this means type inference
+            // couldn't determine the concrete type yet. Trait bounds will be checked at runtime
+            // or during monomorphization when the actual type is known.
+            if concrete_type.starts_with('?') {
+                continue;
+            }
+            // Skip if the type is still a type parameter name (like T, U, etc.) - this happens
+            // when calling a generic function from another generic function
+            if type_params.iter().any(|tp| &tp.name.node == concrete_type) {
+                continue;
+            }
 
             // Check each constraint (trait bound)
             for constraint in &type_param.constraints {
@@ -8432,6 +8454,16 @@ impl Compiler {
                                 span: method.span,
                             });
                         }
+                    } else if (type_name.starts_with('?') || self.is_current_type_param(&type_name))
+                               && self.is_known_trait_method(&method.node) {
+                        // Type is a type variable (from HM inference) or a type parameter,
+                        // and the method is a trait method.
+                        // This needs monomorphization - the type will be replaced with
+                        // a concrete type during instantiation.
+                        return Err(CompileError::UnresolvedTraitMethod {
+                            method: method.node.clone(),
+                            span: method.span,
+                        });
                     }
                 } else {
                     // Type unknown - but we might be inside a monomorphized function with type bindings
@@ -10468,16 +10500,7 @@ impl Compiler {
             // A type is concrete if it's a known type (in self.types) or a primitive
             // Type parameters are single uppercase letters NOT found in self.types
             let all_types_concrete = concrete_arg_types.iter().all(|t| {
-                // If it's a known type, it's concrete
-                if self.types.contains_key(t) {
-                    return true;
-                }
-                // Primitives are concrete
-                if matches!(t.as_str(), "Int" | "Float" | "String" | "Bool" | "Char" | "()" | "List" | "Map" | "Set" | "Tuple") {
-                    return true;
-                }
-                // Single uppercase letters that aren't known types are type parameters
-                !(t.len() == 1 && t.chars().next().unwrap().is_uppercase())
+                self.is_type_concrete(t)
             });
 
             // If polymorphic and all types are known AND concrete, try to create a monomorphized variant
@@ -10706,10 +10729,35 @@ impl Compiler {
     ///
     /// Uses HM-inferred types when available, with pattern-based heuristics as fallback.
     fn expr_type_name(&self, expr: &Expr) -> Option<String> {
+        // For variables, check param_types FIRST before inferred_expr_types.
+        // This is critical for monomorphization: param_types has the concrete type (e.g., "Box")
+        // while inferred_expr_types might have the type parameter (e.g., "T").
+        if let Expr::Var(ident) = expr {
+            if let Some(ty) = self.param_types.get(&ident.node) {
+                // Substitute type parameters from current_type_bindings
+                return Some(self.substitute_type_params_in_string(ty));
+            }
+            // Also check local_types for variables bound in let-expressions
+            if let Some(ty) = self.local_types.get(&ident.node) {
+                return Some(self.substitute_type_params_in_string(ty));
+            }
+        }
+
         // Use HM-inferred type if available (types are resolved after solve())
         // With file_id in Span, multi-file lookups now work correctly.
         if let Some(ty) = self.inferred_expr_types.get(&expr.span()) {
-            return Some(ty.display());
+            let result = ty.display();
+            // Skip type parameters that leaked from function calls.
+            // When calling a generic function like `computeSize[T](b)`, the type param `T`
+            // can incorrectly propagate to the argument's inferred type. In this case,
+            // fall through to pattern-based type inference which will give the correct type.
+            // A type parameter is a single uppercase letter not in the types registry,
+            // OR a parameterized type containing a type parameter (e.g., List[T]).
+            let is_leaked_type_param = !self.is_type_concrete(&result);
+            if !is_leaked_type_param {
+                return Some(result);
+            }
+            // Leaked type parameter - fall through to pattern-based inference
         }
 
         // Fallback: Pattern-based type inference
@@ -12404,6 +12452,44 @@ impl Compiler {
         }
 
         Ok(dst)
+    }
+
+    /// Check if a type string is a concrete type (not a type parameter).
+    /// Handles parameterized types like List[Int] by recursively checking type arguments.
+    fn is_type_concrete(&self, t: &str) -> bool {
+        // If it's a known type, it's concrete
+        if self.types.contains_key(t) {
+            return true;
+        }
+        // Primitives are concrete
+        if matches!(t, "Int" | "Float" | "String" | "Bool" | "Char" | "()" | "List" | "Map" | "Set" | "Tuple") {
+            return true;
+        }
+        // Single uppercase letters that aren't known types are type parameters
+        if t.len() == 1 && t.chars().next().unwrap().is_uppercase() {
+            return false;
+        }
+        // Check parameterized types like List[T] or Map[K, V]
+        if let Some(bracket_start) = t.find('[') {
+            if t.ends_with(']') {
+                let base = &t[..bracket_start];
+                let inner = &t[bracket_start + 1..t.len() - 1];
+                // Base must be concrete (e.g., List, Map)
+                if !self.is_type_concrete(base) {
+                    return false;
+                }
+                // All type arguments must be concrete
+                // Simple split by comma (doesn't handle nested generics perfectly)
+                for arg in inner.split(',').map(|s| s.trim()) {
+                    if !self.is_type_concrete(arg) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
+        // Unknown type format - assume concrete
+        true
     }
 
     /// Convert a TypeExpr to a concrete type name, or None if it's a type parameter.
