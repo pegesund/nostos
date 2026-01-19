@@ -316,6 +316,8 @@ pub struct TypeEnv {
     pub impls: Vec<TraitImpl>,
     /// Function signatures: name -> FunctionType
     pub functions: HashMap<String, FunctionType>,
+    /// Index: base function name -> all function keys with that base (for O(1) lookups)
+    pub functions_by_base: HashMap<String, std::collections::HashSet<String>>,
     /// Current module name
     pub current_module: Option<String>,
     /// Type variable counter for fresh variables
@@ -392,6 +394,17 @@ impl TypeEnv {
         self.type_aliases.insert(short_name, qualified_name);
     }
 
+    /// Insert a function and update the index for O(1) base name lookups.
+    pub fn insert_function(&mut self, name: String, func_type: FunctionType) {
+        // Extract base name (before the /) for indexing
+        let base_name = name.split('/').next().unwrap_or(&name).to_string();
+        self.functions_by_base
+            .entry(base_name)
+            .or_insert_with(std::collections::HashSet::new)
+            .insert(name.clone());
+        self.functions.insert(name, func_type);
+    }
+
     /// Look up a function by name with arity-aware resolution.
     /// First tries arity-qualified name (e.g., `foo/_` for 1 arg), then falls back to exact match.
     /// Also handles optional parameters by trying higher arities.
@@ -428,14 +441,19 @@ impl TypeEnv {
 
             // Try to find ANY typed overload with matching prefix and arity
             // This handles cases like `add/Int,Int` and `add/String,String`
+            // Use O(1) index lookup instead of iterating all functions
             let prefix = format!("{}/", name);
-            for (fn_name, ft) in &self.functions {
-                if fn_name.starts_with(&prefix) && ft.params.len() == arity {
-                    // Check that this isn't a wildcard entry (those were checked above)
-                    // Wildcard entries have "_" in the suffix
-                    let suffix = &fn_name[prefix.len()..];
-                    if !suffix.contains('_') || suffix.split(',').any(|p| p != "_") {
-                        return Some(ft);
+            if let Some(keys) = self.functions_by_base.get(name) {
+                for fn_name in keys {
+                    if let Some(ft) = self.functions.get(fn_name) {
+                        if fn_name.starts_with(&prefix) && ft.params.len() == arity {
+                            // Check that this isn't a wildcard entry (those were checked above)
+                            // Wildcard entries have "_" in the suffix
+                            let suffix = &fn_name[prefix.len()..];
+                            if !suffix.contains('_') || suffix.split(',').any(|p| p != "_") {
+                                return Some(ft);
+                            }
+                        }
                     }
                 }
             }
@@ -476,13 +494,18 @@ impl TypeEnv {
             }
 
             // Collect ALL typed overloads with matching prefix and arity
+            // Use O(1) index lookup instead of iterating all functions
             let prefix = format!("{}/", name);
-            for (fn_name, ft) in &self.functions {
-                if fn_name.starts_with(&prefix) && ft.params.len() == arity {
-                    let suffix = &fn_name[prefix.len()..];
-                    // Only include typed entries (not wildcard entries already checked)
-                    if !suffix.chars().all(|c| c == '_' || c == ',') {
-                        results.push(ft);
+            if let Some(keys) = self.functions_by_base.get(name) {
+                for fn_name in keys {
+                    if let Some(ft) = self.functions.get(fn_name) {
+                        if fn_name.starts_with(&prefix) && ft.params.len() == arity {
+                            let suffix = &fn_name[prefix.len()..];
+                            // Only include typed entries (not wildcard entries already checked)
+                            if !suffix.chars().all(|c| c == '_' || c == ',') {
+                                results.push(ft);
+                            }
+                        }
                     }
                 }
             }
@@ -1094,7 +1117,7 @@ pub fn standard_env() -> TypeEnv {
 
     // Built-in functions with trait constraints
     // println: Show a => a -> ()
-    env.functions.insert(
+    env.insert_function(
         "println".to_string(),
         FunctionType { required_params: None,
             type_params: vec![TypeParam {
@@ -1107,7 +1130,7 @@ pub fn standard_env() -> TypeEnv {
     );
 
     // print: Show a => a -> ()
-    env.functions.insert(
+    env.insert_function(
         "print".to_string(),
         FunctionType { required_params: None,
             type_params: vec![TypeParam {
@@ -1120,7 +1143,7 @@ pub fn standard_env() -> TypeEnv {
     );
 
     // show: Show a => a -> String
-    env.functions.insert(
+    env.insert_function(
         "show".to_string(),
         FunctionType { required_params: None,
             type_params: vec![TypeParam {
@@ -1133,7 +1156,7 @@ pub fn standard_env() -> TypeEnv {
     );
 
     // inspect: a -> String -> () (for TUI debugging - sends value to inspector panel)
-    env.functions.insert(
+    env.insert_function(
         "inspect".to_string(),
         FunctionType { required_params: None,
             type_params: vec![TypeParam {

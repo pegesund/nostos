@@ -2770,7 +2770,7 @@ impl<'a> InferCtx<'a> {
         };
 
         // Register function in environment
-        self.env.functions.insert(name.clone(), func_ty.clone());
+        self.env.insert_function(name.clone(), func_ty.clone());
 
         // Restore previous current function
         self.current_function = saved_current;
@@ -2837,7 +2837,7 @@ impl<'a> InferCtx<'a> {
                     let total_params = param_types.len();
                     let has_defaults = required_count < total_params;
 
-                    self.env.functions.insert(
+                    self.env.insert_function(
                         fd.name.node.clone(),
                         FunctionType {
                             type_params: vec![],
@@ -2953,7 +2953,7 @@ pub fn check_module(env: &mut TypeEnv, module: &Module) -> Result<(), TypeError>
                 .map(|p| ctx.env.apply_subst(p))
                 .collect();
             let resolved_ret = ctx.env.apply_subst(&ft.ret);
-            ctx.env.functions.insert(name, FunctionType {
+            ctx.env.insert_function(name, FunctionType {
                 type_params: ft.type_params,
                 params: resolved_params,
                 ret: Box::new(resolved_ret),
@@ -3335,7 +3335,7 @@ mod tests {
     fn test_infer_function_call() {
         let mut env = TypeEnv::new();
         // Register a function: f : Int -> Bool
-        env.functions.insert(
+        env.insert_function(
             "f".to_string(),
             FunctionType { required_params: None,
                 type_params: vec![],
@@ -3357,7 +3357,7 @@ mod tests {
     fn test_infer_function_call_wrong_arg_type() {
         let mut env = TypeEnv::new();
         // Register a function: f : Int -> Bool
-        env.functions.insert(
+        env.insert_function(
             "f".to_string(),
             FunctionType { required_params: None,
                 type_params: vec![],
@@ -3608,7 +3608,7 @@ mod tests {
     fn test_infer_pipe() {
         let mut env = TypeEnv::new();
         // Register a function: double : Int -> Int
-        env.functions.insert(
+        env.insert_function(
             "double".to_string(),
             FunctionType { required_params: None,
                 type_params: vec![],
@@ -3889,7 +3889,7 @@ mod tests {
     fn test_infer_function_returning_function() {
         let mut env = TypeEnv::new();
         // Register: make_adder : Int -> (Int -> Int)
-        env.functions.insert(
+        env.insert_function(
             "make_adder".to_string(),
             FunctionType { required_params: None,
                 type_params: vec![],
@@ -3921,7 +3921,7 @@ mod tests {
     fn test_infer_chained_pipe() {
         let mut env = TypeEnv::new();
         // Register functions
-        env.functions.insert(
+        env.insert_function(
             "add_one".to_string(),
             FunctionType { required_params: None,
                 type_params: vec![],
@@ -3929,7 +3929,7 @@ mod tests {
                 ret: Box::new(Type::Int),
             },
         );
-        env.functions.insert(
+        env.insert_function(
             "to_string".to_string(),
             FunctionType { required_params: None,
                 type_params: vec![],
@@ -3958,7 +3958,7 @@ mod tests {
         // Test that we can call monomorphic functions
         let mut env = TypeEnv::new();
         // id_int : Int -> Int (monomorphic version)
-        env.functions.insert(
+        env.insert_function(
             "id_int".to_string(),
             FunctionType { required_params: None,
                 type_params: vec![],
@@ -4182,7 +4182,7 @@ mod tests {
     #[test]
     fn test_infer_function_arity_mismatch() {
         let mut env = TypeEnv::new();
-        env.functions.insert(
+        env.insert_function(
             "add".to_string(),
             FunctionType { required_params: None,
                 type_params: vec![],

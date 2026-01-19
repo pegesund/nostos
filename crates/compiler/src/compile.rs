@@ -1152,6 +1152,19 @@ pub struct Compiler {
     /// Inferred expression types from HM inference, keyed by Span.
     /// Used for proper type-based method dispatch instead of string hacks.
     inferred_expr_types: HashMap<nostos_syntax::Span, nostos_types::Type>,
+
+    // === Performance indexes (O(1) lookups instead of O(n) iterations) ===
+    /// Base function name -> all function keys with that base name
+    /// E.g., "map" -> ["map/_", "map/Int,Int", "stdlib.list.map/_,_"]
+    functions_by_base: HashMap<String, HashSet<String>>,
+    /// Base function name -> all monomorphized variants (name$Type1,Type2)
+    /// E.g., "identity" -> ["identity$Int", "identity$String"]
+    function_variants: HashMap<String, HashSet<String>>,
+    /// All module prefixes of registered functions (for O(1) module existence checks)
+    /// E.g., if "stdlib.list.map/_,_" is registered, contains "stdlib.", "stdlib.list."
+    function_prefixes: HashSet<String>,
+    /// Base function name -> all fn_ast keys with that base name (for O(1) lookups)
+    fn_asts_by_base: HashMap<String, HashSet<String>>,
 }
 
 /// Information about a module-level mutable variable (mvar).
@@ -1322,6 +1335,10 @@ impl Compiler {
             native_indices: HashMap::new(),
             extension_indices: HashMap::new(),
             inferred_expr_types: HashMap::new(),
+            functions_by_base: HashMap::new(),
+            function_variants: HashMap::new(),
+            function_prefixes: HashSet::new(),
+            fn_asts_by_base: HashMap::new(),
         };
 
         // Register builtin types for autocomplete
@@ -1614,7 +1631,7 @@ impl Compiler {
                 if fn_val.signature.is_some() {
                     if let Some(sig) = fn_val.signature.as_ref() {
                         if let Some(fn_type) = self.parse_signature_string(sig) {
-                            env.functions.insert(fn_name.clone(), fn_type);
+                            env.insert_function(fn_name.clone(), fn_type);
                         }
                     }
                 }
@@ -1623,7 +1640,7 @@ impl Compiler {
             // Register only stdlib pending function signatures
             for (fn_name, fn_type) in &self.pending_fn_signatures {
                 if stdlib_fn_names.contains(fn_name) {
-                    env.functions.insert(fn_name.clone(), fn_type.clone());
+                    env.insert_function(fn_name.clone(), fn_type.clone());
                 }
             }
 
@@ -1631,7 +1648,7 @@ impl Compiler {
             for builtin in BUILTINS {
                 if !env.functions.contains_key(builtin.name) {
                     if let Some(fn_type) = self.parse_signature_string(builtin.signature) {
-                        env.functions.insert(builtin.name.to_string(), fn_type);
+                        env.insert_function(builtin.name.to_string(), fn_type);
                     }
                 }
             }
@@ -1756,7 +1773,7 @@ impl Compiler {
                 if fn_val.signature.is_some() {
                     if let Some(sig) = fn_val.signature.as_ref() {
                         if let Some(fn_type) = self.parse_signature_string(sig) {
-                            env.functions.insert(fn_name.clone(), fn_type);
+                            env.insert_function(fn_name.clone(), fn_type);
                         }
                     }
                 }
@@ -1764,14 +1781,14 @@ impl Compiler {
 
             // Register ALL pending function signatures (stdlib now resolved, user still has type vars)
             for (fn_name, fn_type) in &self.pending_fn_signatures {
-                env.functions.insert(fn_name.clone(), fn_type.clone());
+                env.insert_function(fn_name.clone(), fn_type.clone());
             }
 
             // Register builtins
             for builtin in BUILTINS {
                 if !env.functions.contains_key(builtin.name) {
                     if let Some(fn_type) = self.parse_signature_string(builtin.signature) {
-                        env.functions.insert(builtin.name.to_string(), fn_type);
+                        env.insert_function(builtin.name.to_string(), fn_type);
                     }
                 }
             }
@@ -1840,7 +1857,13 @@ impl Compiler {
                 let signature = param_types.join(",");
                 let name = format!("{}/{}", base_name, signature);
                 // Insert a placeholder in fn_asts so has_function_with_base can find it
-                self.fn_asts.insert(name, fn_def.clone());
+                self.fn_asts.insert(name.clone(), fn_def.clone());
+                // Update fn_asts_by_base index
+                let fn_base = name.split('/').next().unwrap_or(&name);
+                self.fn_asts_by_base
+                    .entry(fn_base.to_string())
+                    .or_insert_with(HashSet::new)
+                    .insert(name);
             }
         }
 
@@ -1945,34 +1968,37 @@ impl Compiler {
                 if fn_name.starts_with("stdlib.") {
                     continue;
                 }
-                if let Some(fn_val) = self.functions.get(fn_name) {
-                    if let Some(sig) = &fn_val.signature {
-                        // If signature contains ONLY type variables (like 'a' or 'a -> b'), re-infer
-                        // A signature with only type variables won't contain concrete type names
-                        let has_concrete_type = sig.contains("Int") || sig.contains("Float") ||
-                            sig.contains("String") || sig.contains("Bool") || sig.contains("Char") ||
-                            sig.contains("List") || sig.contains("Map") || sig.contains("Set") ||
-                            sig.contains("Option") || sig.contains("Result") || sig.contains("Unit") ||
-                            sig.contains("Bytes") || sig.contains("BigInt") || sig.contains("Decimal");
-                        // Has single-letter type variables like 'a', 'b', etc.
-                        let has_type_var = sig.chars().any(|c| c.is_ascii_lowercase() && c != '-' && c != '>');
+                // Clone just the signature string (cheap) to release borrow early
+                let sig_to_check = self.functions.get(fn_name)
+                    .and_then(|fv| fv.signature.clone());
 
-                        if has_type_var && !has_concrete_type {
-                            // Try HM inference again now that all dependencies are compiled
-                            if let Some(fn_ast) = self.fn_asts.get(fn_name).cloned() {
-                                let result = self.try_hm_inference(&fn_ast);
-                                if let Some(inferred_sig) = result {
-                                    // Check if signature actually changed
-                                    if &inferred_sig != sig {
-                                        // Update the function's signature - need to clone and replace
-                                        // since Arc::get_mut won't work if there are other references
-                                        if let Some(fn_val) = self.functions.get(fn_name) {
-                                            let mut new_fn_val = (**fn_val).clone();
-                                            new_fn_val.signature = Some(inferred_sig);
-                                            self.functions.insert(fn_name.clone(), Arc::new(new_fn_val));
-                                            changed = true;
-                                        }
-                                    }
+                if let Some(sig) = sig_to_check {
+                    // If signature contains ONLY type variables (like 'a' or 'a -> b'), re-infer
+                    // A signature with only type variables won't contain concrete type names
+                    let has_concrete_type = sig.contains("Int") || sig.contains("Float") ||
+                        sig.contains("String") || sig.contains("Bool") || sig.contains("Char") ||
+                        sig.contains("List") || sig.contains("Map") || sig.contains("Set") ||
+                        sig.contains("Option") || sig.contains("Result") || sig.contains("Unit") ||
+                        sig.contains("Bytes") || sig.contains("BigInt") || sig.contains("Decimal");
+                    // Has single-letter type variables like 'a', 'b', etc.
+                    let has_type_var = sig.chars().any(|c| c.is_ascii_lowercase() && c != '-' && c != '>');
+
+                    if has_type_var && !has_concrete_type {
+                        // Try HM inference again now that all dependencies are compiled
+                        // Use reference to fn_ast - no need to clone the entire AST
+                        let inferred = self.fn_asts.get(fn_name)
+                            .and_then(|fn_ast| self.try_hm_inference(fn_ast));
+
+                        if let Some(inferred_sig) = inferred {
+                            // Check if signature actually changed
+                            if inferred_sig != sig {
+                                // Update the function's signature - need to clone and replace
+                                // since Arc::get_mut won't work if there are other references
+                                if let Some(fn_val) = self.functions.get(fn_name) {
+                                    let mut new_fn_val = (**fn_val).clone();
+                                    new_fn_val.signature = Some(inferred_sig);
+                                    self.functions.insert(fn_name.clone(), Arc::new(new_fn_val));
+                                    changed = true;
                                 }
                             }
                         }
@@ -1990,7 +2016,6 @@ impl Compiler {
         // Otherwise, old broken functions (that haven't been recompiled yet) would
         // cause errors even when compiling unrelated functions.
         // Note: pending_fn_names was collected earlier, before the validation loop
-
         for (fn_name, fn_ast) in &self.fn_asts {
             // Only type-check functions that were just compiled in this pass
             // Use base name without signature for comparison
@@ -2215,6 +2240,10 @@ impl Compiler {
             native_indices: HashMap::new(),
             extension_indices: HashMap::new(),
             inferred_expr_types: HashMap::new(),
+            functions_by_base: HashMap::new(),
+            function_variants: HashMap::new(),
+            function_prefixes: HashSet::new(),
+            fn_asts_by_base: HashMap::new(),
         }
     }
 
@@ -2328,16 +2357,16 @@ impl Compiler {
 
     /// Check if there's any function with the given base name (ignoring signature suffix).
     fn has_function_with_base(&self, base_name: &str) -> bool {
-        let prefix = format!("{}/", base_name);
-        // Check compiled functions
-        if self.functions.keys().any(|k| k.starts_with(&prefix)) {
+        // Check compiled functions using O(1) index lookup
+        if self.functions_by_base.contains_key(base_name) {
             return true;
         }
-        // Check pending ASTs
-        if self.fn_asts.keys().any(|k| k.starts_with(&prefix)) {
+        // Check pending ASTs using O(1) index lookup
+        if self.fn_asts_by_base.contains_key(base_name) {
             return true;
         }
         // Check if current function matches (for recursion during compilation)
+        let prefix = format!("{}/", base_name);
         if let Some(current) = &self.current_function_name {
             if current.starts_with(&prefix) {
                 return true;
@@ -4206,6 +4235,24 @@ impl Compiler {
                     required_params: None,
                 };
                 self.functions.insert(full_name.clone(), Arc::new(placeholder));
+
+                // Update functions_by_base index
+                let fn_base = full_name.split('/').next().unwrap_or(&full_name);
+                self.functions_by_base
+                    .entry(fn_base.to_string())
+                    .or_insert_with(HashSet::new)
+                    .insert(full_name.clone());
+
+                // Update function_prefixes index for O(1) module existence checks
+                let parts: Vec<&str> = fn_base.split('.').collect();
+                let mut prefix = String::new();
+                for part in parts.iter().take(parts.len().saturating_sub(1)) {
+                    if !prefix.is_empty() {
+                        prefix.push('.');
+                    }
+                    prefix.push_str(part);
+                    self.function_prefixes.insert(format!("{}.", prefix));
+                }
             }
 
             // Add to function_indices if not already there
@@ -4556,16 +4603,19 @@ impl Compiler {
         let prefix = format!("{}/", base_name);
         let mut arities = std::collections::HashSet::new();
 
-        // Check compiled functions
-        for key in self.functions.keys() {
-            if let Some(suffix) = key.strip_prefix(&prefix) {
-                let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
-                arities.insert(param_count);
+        // Check compiled functions using O(1) index lookup
+        if let Some(keys) = self.functions_by_base.get(base_name) {
+            for key in keys {
+                if let Some(suffix) = key.strip_prefix(&prefix) {
+                    let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
+                    arities.insert(param_count);
+                }
             }
         }
 
         // Check fn_asts (for functions being compiled or not yet compiled)
         // Also add intermediate arities for functions with optional params
+        // Note: fn_asts doesn't have an index, but it's typically small during compilation
         for (key, def) in &self.fn_asts {
             if let Some(suffix) = key.strip_prefix(&prefix) {
                 let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
@@ -4605,17 +4655,20 @@ impl Compiler {
     fn find_function_by_arity(&self, base_name: &str, arity: usize) -> Option<String> {
         let prefix = format!("{}/", base_name);
 
-        // Check compiled functions first (exact match)
-        for key in self.functions.keys() {
-            if let Some(suffix) = key.strip_prefix(&prefix) {
-                let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
-                if param_count == arity {
-                    return Some(key.clone());
+        // Check compiled functions first (exact match) using O(1) index lookup
+        if let Some(keys) = self.functions_by_base.get(base_name) {
+            for key in keys {
+                if let Some(suffix) = key.strip_prefix(&prefix) {
+                    let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
+                    if param_count == arity {
+                        return Some(key.clone());
+                    }
                 }
             }
         }
 
         // Check fn_asts - also consider functions with optional params
+        // Note: fn_asts doesn't have an index, but it's typically small during compilation
         for (key, def) in &self.fn_asts {
             if let Some(suffix) = key.strip_prefix(&prefix) {
                 let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
@@ -4652,17 +4705,20 @@ impl Compiler {
     fn has_user_function(&self, name: &str, arity: usize) -> bool {
         let prefix = format!("{}/", name);
 
-        // Check compiled functions
-        for key in self.functions.keys() {
-            if let Some(suffix) = key.strip_prefix(&prefix) {
-                let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
-                if param_count == arity {
-                    return true;
+        // Check compiled functions using O(1) index lookup
+        if let Some(keys) = self.functions_by_base.get(name) {
+            for key in keys {
+                if let Some(suffix) = key.strip_prefix(&prefix) {
+                    let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                    if param_count == arity {
+                        return true;
+                    }
                 }
             }
         }
 
         // Check fn_asts (for functions being compiled or not yet compiled)
+        // Note: fn_asts doesn't have an index, but it's typically small during compilation
         for key in self.fn_asts.keys() {
             if let Some(suffix) = key.strip_prefix(&prefix) {
                 let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
@@ -5153,6 +5209,12 @@ impl Compiler {
 
         // Store AST for potential monomorphization
         self.fn_asts.insert(name.clone(), def.clone());
+        // Update fn_asts_by_base index
+        let fn_base_for_ast = name.split('/').next().unwrap_or(&name);
+        self.fn_asts_by_base
+            .entry(fn_base_for_ast.to_string())
+            .or_insert_with(HashSet::new)
+            .insert(name.clone());
 
         // Store source info for error reporting
         if let (Some(source_name), Some(source)) = (&self.current_source_name, &self.current_source) {
@@ -5162,11 +5224,12 @@ impl Compiler {
         // Invalidate any existing monomorphized variants of this function
         // We replace them with stale markers so CallDirect indices remain valid.
         // The variants will be recompiled on next use (checked in compile_monomorphized_variant)
-        let prefix = format!("{}$", name);
-        let variants_to_invalidate: Vec<String> = self.functions.keys()
-            .filter(|k| k.starts_with(&prefix))
-            .cloned()
-            .collect();
+        // Use O(1) index lookup instead of O(n) iteration over all function keys
+        let fn_base = name.split('/').next().unwrap_or(&name);
+        let variants_to_invalidate: Vec<String> = self.function_variants
+            .get(fn_base)
+            .map(|set| set.iter().cloned().collect())
+            .unwrap_or_default();
         for variant in &variants_to_invalidate {
             // Mark as invalidated by inserting a placeholder with empty code
             // The actual recompilation happens in compile_monomorphized_variant
@@ -5644,6 +5707,24 @@ impl Compiler {
             self.fn_calls.insert(name.clone(), fn_calls_for_this_fn);
         }
 
+        // Update functions_by_base index for O(1) base name lookups
+        let fn_base = name.split('/').next().unwrap_or(&name);
+        self.functions_by_base
+            .entry(fn_base.to_string())
+            .or_insert_with(HashSet::new)
+            .insert(name.clone());
+
+        // Update function_prefixes index for O(1) module existence checks
+        let parts: Vec<&str> = fn_base.split('.').collect();
+        let mut prefix = String::new();
+        for part in parts.iter().take(parts.len().saturating_sub(1)) {
+            if !prefix.is_empty() {
+                prefix.push('.');
+            }
+            prefix.push_str(part);
+            self.function_prefixes.insert(format!("{}.", prefix));
+        }
+
         self.functions.insert(name, Arc::new(func));
 
         // Restore compiler state
@@ -5969,7 +6050,7 @@ impl Compiler {
                     // Check if it's a function currently being compiled (for self-recursion)
                     // or in fn_asts (for mutual recursion or forward references)
                     let has_fn = self.current_function_name.as_ref().map_or(false, |c| c.starts_with(&prefix))
-                        || self.fn_asts.keys().any(|k| k.starts_with(&prefix));
+                        || self.fn_asts_by_base.contains_key(&resolved);
                     if has_fn {
                         // For recursive calls during compilation, we can't load the function value yet
                         // But this shouldn't happen - recursive calls should go through compile_call
@@ -8529,7 +8610,9 @@ impl Compiler {
                     // Try trait method dispatch using current_type_bindings
                     if !self.current_type_bindings.is_empty() {
                         let method_name = &method.node;
-                        for (_, concrete_type) in &self.current_type_bindings.clone() {
+                        // Collect just the values (not keys) to avoid cloning entire HashMap
+                        let concrete_types: Vec<String> = self.current_type_bindings.values().cloned().collect();
+                        for concrete_type in &concrete_types {
                             // Check if this type implements any trait with this method
                             if let Some(impl_traits) = self.type_traits.get(concrete_type) {
                                 for trait_name in impl_traits {
@@ -10707,7 +10790,7 @@ impl Compiler {
                     // (supports both module.func and Type.Trait.method patterns)
                     let prefix = format!("{}.", base);
                     let is_module_or_type = self.known_modules.contains(&base)
-                        || self.functions.keys().any(|k| k.starts_with(&prefix));
+                        || self.function_prefixes.contains(&prefix);
                     if is_module_or_type {
                         Some(format!("{}.{}", base, field.node))
                     } else {
@@ -11774,6 +11857,12 @@ impl Compiler {
         };
         self.functions.insert(mangled_name.clone(), Arc::new(placeholder));
 
+        // Update function_variants index: fn_base -> set of variants
+        self.function_variants
+            .entry(fn_base.to_string())
+            .or_insert_with(HashSet::new)
+            .insert(mangled_name.clone());
+
         // Assign function index
         if !self.function_indices.contains_key(&mangled_name) {
             let idx = self.function_list.len() as u16;
@@ -12805,9 +12894,10 @@ impl Compiler {
         match expr {
             Expr::Var(ident) => {
                 // Check if the identifier is a known module OR if there are functions/mvars with this prefix
+                // Use O(1) function_prefixes index instead of O(n) iteration
                 let prefix = format!("{}.", ident.node);
                 if self.known_modules.contains(&ident.node)
-                    || self.functions.keys().any(|k| k.starts_with(&prefix))
+                    || self.function_prefixes.contains(&prefix)
                     || self.mvars.keys().any(|k| k.starts_with(&prefix)) {
                     Some(ident.node.clone())
                 } else {
@@ -12821,7 +12911,7 @@ impl Compiler {
                 // Check if it's a known module OR if there are functions with this prefix
                 let prefix = format!("{}.", type_name.node);
                 if self.known_modules.contains(&type_name.node)
-                    || self.functions.keys().any(|k| k.starts_with(&prefix)) {
+                    || self.function_prefixes.contains(&prefix) {
                     Some(type_name.node.clone())
                 } else {
                     None
@@ -12835,7 +12925,7 @@ impl Compiler {
                     // Check if the combined path is a known module OR if there are functions/mvars with this prefix
                     let prefix = format!("{}.", combined);
                     if self.known_modules.contains(&combined)
-                        || self.functions.keys().any(|k| k.starts_with(&prefix))
+                        || self.function_prefixes.contains(&prefix)
                         || self.mvars.keys().any(|k| k.starts_with(&prefix)) {
                         Some(combined)
                     } else {
@@ -12852,7 +12942,7 @@ impl Compiler {
                     // Check if the combined path is a known module OR if there are functions with this prefix
                     let prefix = format!("{}.", combined);
                     if self.known_modules.contains(&combined)
-                        || self.functions.keys().any(|k| k.starts_with(&prefix)) {
+                        || self.function_prefixes.contains(&prefix) {
                         Some(combined)
                     } else {
                         None
@@ -15650,6 +15740,24 @@ impl Compiler {
         // Add to functions map
         self.functions.insert(name.to_string(), func);
 
+        // Update functions_by_base index
+        let fn_base = name.split('/').next().unwrap_or(name);
+        self.functions_by_base
+            .entry(fn_base.to_string())
+            .or_insert_with(HashSet::new)
+            .insert(name.to_string());
+
+        // Update function_prefixes index for O(1) module existence checks
+        let parts: Vec<&str> = fn_base.split('.').collect();
+        let mut prefix = String::new();
+        for part in parts.iter().take(parts.len().saturating_sub(1)) {
+            if !prefix.is_empty() {
+                prefix.push('.');
+            }
+            prefix.push_str(part);
+            self.function_prefixes.insert(format!("{}.", prefix));
+        }
+
         // Allocate an index for indexed calls
         let idx = self.function_list.len() as u16;
         self.function_indices.insert(name.to_string(), idx);
@@ -15762,6 +15870,24 @@ impl Compiler {
         // Copy all functions and extract module names
         for (name, func) in functions {
             self.functions.insert(name.clone(), func.clone());
+
+            // Update functions_by_base index
+            let fn_base = name.split('/').next().unwrap_or(name);
+            self.functions_by_base
+                .entry(fn_base.to_string())
+                .or_insert_with(HashSet::new)
+                .insert(name.clone());
+
+            // Update function_prefixes index for O(1) module existence checks
+            let parts: Vec<&str> = fn_base.split('.').collect();
+            let mut prefix_str = String::new();
+            for part in parts.iter().take(parts.len().saturating_sub(1)) {
+                if !prefix_str.is_empty() {
+                    prefix_str.push('.');
+                }
+                prefix_str.push_str(part);
+                self.function_prefixes.insert(format!("{}.", prefix_str));
+            }
 
             // Extract module prefix from qualified names like "module.submodule.func/"
             // and register each level as a known module
@@ -17003,6 +17129,13 @@ impl Compiler {
     /// This function attempts full HM inference and falls back to AST-based constraint analysis
     /// if inference fails.
     pub fn infer_signature(&self, def: &FnDef) -> String {
+        // Skip expensive HM inference for stdlib functions - they have explicit type annotations
+        let is_stdlib = self.module_path.first().map_or(false, |m| m == "stdlib")
+            || self.current_source_name.as_ref().map(|s| s.contains("stdlib/") || s.starts_with("stdlib")).unwrap_or(false);
+        if is_stdlib {
+            return def.signature();
+        }
+
         // Try full Hindley-Milner inference first
         if let Some(sig) = self.try_hm_inference(def) {
             return sig;
@@ -17155,11 +17288,11 @@ impl Compiler {
                 let qualified_name = format!("{}/{}", builtin.name, type_suffix);
 
                 // Always register with type suffix (allows multiple overloads)
-                env.functions.insert(qualified_name, fn_type.clone());
+                env.insert_function(qualified_name, fn_type.clone());
 
                 // Also register under bare name if not already present
                 if !env.functions.contains_key(builtin.name) {
-                    env.functions.insert(builtin.name.to_string(), fn_type);
+                    env.insert_function(builtin.name.to_string(), fn_type);
                 }
             }
         }
@@ -17169,14 +17302,14 @@ impl Compiler {
         // Sort function names to ensure deterministic processing order - this matters for overloaded
         // functions with different arities. When sorted, "foo/" comes before "foo/_", so the
         // 0-arity version gets registered as the base name "foo" first.
-        let mut fn_names: Vec<_> = self.functions.keys().cloned().collect();
+        let mut fn_names: Vec<&String> = self.functions.keys().collect();
         fn_names.sort();
         for fn_name in fn_names {
-            let fn_val = match self.functions.get(&fn_name) {
+            let fn_val = match self.functions.get(fn_name) {
                 Some(v) => v,
                 None => continue,
             };
-            if env.functions.contains_key(&fn_name) {
+            if env.functions.contains_key(fn_name) {
                 // Skip - don't overwrite built-in functions with proper type params/constraints
                 continue;
             }
@@ -17220,7 +17353,7 @@ impl Compiler {
             };
 
             // Insert with full name (e.g., "stdlib.list.optMap/_,_")
-            env.functions.insert(fn_name.clone(), func_type.clone());
+            env.insert_function(fn_name.clone(), func_type.clone());
 
             // Also insert with short names for lookup_all_functions_with_arity
             if let Some(slash_pos) = fn_name.find('/') {
@@ -17233,10 +17366,10 @@ impl Compiler {
                     let short_name = &base_name[dot_pos + 1..];
                     let short_qualified = format!("{}{}", short_name, arity_suffix);
                     // Always insert with arity suffix for overload resolution
-                    env.functions.insert(short_qualified, func_type.clone());
+                    env.insert_function(short_qualified, func_type.clone());
                     // Also insert bare name for simple lookups (first wins)
                     if !env.functions.contains_key(short_name) {
-                        env.functions.insert(short_name.to_string(), func_type);
+                        env.insert_function(short_name.to_string(), func_type);
                     }
                 }
             }
@@ -17258,7 +17391,7 @@ impl Compiler {
             }
 
             if !env.functions.contains_key(fn_name) {
-                env.functions.insert(fn_name.clone(), fn_type.clone());
+                env.insert_function(fn_name.clone(), fn_type.clone());
             }
             if let Some(slash_pos) = fn_name.find('/') {
                 let base_name = &fn_name[..slash_pos];
@@ -17268,11 +17401,11 @@ impl Compiler {
                     let short_qualified = format!("{}{}", short_name, arity_suffix);
                     // Register with arity suffix for overload resolution
                     if !env.functions.contains_key(&short_qualified) {
-                        env.functions.insert(short_qualified, fn_type.clone());
+                        env.insert_function(short_qualified, fn_type.clone());
                     }
                     // Also register bare name for simple lookups
                     if !env.functions.contains_key(short_name) {
-                        env.functions.insert(short_name.to_string(), fn_type.clone());
+                        env.insert_function(short_name.to_string(), fn_type.clone());
                     }
                 }
             }
@@ -17307,7 +17440,7 @@ impl Compiler {
                 None
             };
 
-            env.functions.insert(
+            env.insert_function(
                 fn_name.clone(),
                 nostos_types::FunctionType { required_params,
                     type_params: vec![],
@@ -17563,11 +17696,11 @@ impl Compiler {
                 let qualified_name = format!("{}/{}", builtin.name, type_suffix);
 
                 // Always register with type suffix (allows multiple overloads)
-                env.functions.insert(qualified_name, fn_type.clone());
+                env.insert_function(qualified_name, fn_type.clone());
 
                 // Also register under bare name if not already present
                 if !env.functions.contains_key(builtin.name) {
-                    env.functions.insert(builtin.name.to_string(), fn_type.clone());
+                    env.insert_function(builtin.name.to_string(), fn_type.clone());
                 }
 
                 // Also register single-param list methods with "List." prefix for UFCS type inference
@@ -17582,7 +17715,7 @@ impl Compiler {
                     if has_single_type_param {
                         let qualified_name = format!("List.{}", builtin.name);
                         if !env.functions.contains_key(&qualified_name) {
-                            env.functions.insert(qualified_name, fn_type);
+                            env.insert_function(qualified_name, fn_type);
                         }
                     }
                 }
@@ -17594,10 +17727,10 @@ impl Compiler {
         // Sort function names to ensure deterministic processing order - this matters for overloaded
         // functions with different arities. When sorted, "foo/" comes before "foo/_", so the
         // 0-arity version gets registered as the base name "foo" first.
-        let mut fn_names_sorted: Vec<_> = self.functions.keys().cloned().collect();
+        let mut fn_names_sorted: Vec<&String> = self.functions.keys().collect();
         fn_names_sorted.sort();
         for fn_name in fn_names_sorted {
-            let fn_val = match self.functions.get(&fn_name) {
+            let fn_val = match self.functions.get(fn_name) {
                 Some(v) => v,
                 None => continue,
             };
@@ -17645,8 +17778,8 @@ impl Compiler {
             };
 
             // Register with full key (e.g., "bar2/")
-            if !env.functions.contains_key(&fn_name) {
-                env.functions.insert(fn_name, fn_type.clone());
+            if !env.functions.contains_key(fn_name) {
+                env.insert_function(fn_name.clone(), fn_type.clone());
             }
         }
 
@@ -17669,12 +17802,12 @@ impl Compiler {
                         .map(|fv| fv.signature.is_some())
                         .unwrap_or(false);
                     if !has_inferred_sig {
-                        env.functions.insert(fn_name.clone(), fn_type.clone());
+                        env.insert_function(fn_name.clone(), fn_type.clone());
                     }
                 }
             } else {
                 // Fully typed function - always register/overwrite for mutual recursion
-                env.functions.insert(fn_name.clone(), fn_type.clone());
+                env.insert_function(fn_name.clone(), fn_type.clone());
             }
         }
 
@@ -17704,7 +17837,7 @@ impl Compiler {
                 let local_name = base_name.rsplit('.').next().unwrap_or(base_name);
                 if !env.functions.contains_key(local_name) {
                     if let Some(fn_type) = env.functions.get(fn_name).cloned() {
-                        env.functions.insert(local_name.to_string(), fn_type);
+                        env.insert_function(local_name.to_string(), fn_type);
                     }
                 }
             }
@@ -17720,7 +17853,7 @@ impl Compiler {
                     let local_name = &base_name[dot_pos + 1..];
                     if !env.functions.contains_key(local_name) {
                         if let Some(fn_type) = env.functions.get(fn_name).cloned() {
-                            env.functions.insert(local_name.to_string(), fn_type);
+                            env.insert_function(local_name.to_string(), fn_type);
                         }
                     }
                 }
@@ -17740,7 +17873,7 @@ impl Compiler {
             if in_current_module {
                 let local_name = base_name.rsplit('.').next().unwrap_or(base_name);
                 if let Some(fn_type) = env.functions.get(fn_name).cloned() {
-                    env.functions.insert(local_name.to_string(), fn_type);
+                    env.insert_function(local_name.to_string(), fn_type);
                 }
             }
         }
@@ -17754,7 +17887,7 @@ impl Compiler {
                 if let Some(dot_pos) = base_name.rfind('.') {
                     let local_name = &base_name[dot_pos + 1..];
                     if let Some(fn_type) = env.functions.get(fn_name).cloned() {
-                        env.functions.insert(local_name.to_string(), fn_type);
+                        env.insert_function(local_name.to_string(), fn_type);
                     }
                 }
             }
@@ -17804,7 +17937,7 @@ impl Compiler {
                 None
             };
 
-            env.functions.insert(
+            env.insert_function(
                 fn_name.clone(),
                 nostos_types::FunctionType { required_params,
                     type_params: vec![],
@@ -19785,6 +19918,24 @@ impl Compiler {
                     required_params: None, // Will be set when fully compiled
                 };
                 self.functions.insert(full_name.clone(), Arc::new(placeholder));
+
+                // Update functions_by_base index
+                let fn_base = full_name.split('/').next().unwrap_or(&full_name);
+                self.functions_by_base
+                    .entry(fn_base.to_string())
+                    .or_insert_with(HashSet::new)
+                    .insert(full_name.clone());
+
+                // Update function_prefixes index for O(1) module existence checks
+                let parts: Vec<&str> = fn_base.split('.').collect();
+                let mut prefix_str = String::new();
+                for part in parts.iter().take(parts.len().saturating_sub(1)) {
+                    if !prefix_str.is_empty() {
+                        prefix_str.push('.');
+                    }
+                    prefix_str.push_str(part);
+                    self.function_prefixes.insert(format!("{}.", prefix_str));
+                }
             }
 
             // Assign function index for direct calls (no HashMap lookup at runtime!)
