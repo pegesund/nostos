@@ -403,6 +403,17 @@ impl<'a> InferCtx<'a> {
                 params: ft.params.iter().map(|p| self.freshen_type(p, var_subst, param_subst)).collect(),
                 ret: Box::new(self.freshen_type(&ft.ret, var_subst, param_subst)),
             }),
+            Type::Named { name, args } => Type::Named {
+                name: name.clone(),
+                args: args.iter().map(|a| self.freshen_type(a, var_subst, param_subst)).collect(),
+            },
+            Type::IO(inner) => Type::IO(Box::new(self.freshen_type(inner, var_subst, param_subst))),
+            Type::Record(rec) => Type::Record(RecordType {
+                name: rec.name.clone(),
+                fields: rec.fields.iter()
+                    .map(|(n, t, m)| (n.clone(), self.freshen_type(t, var_subst, param_subst), *m))
+                    .collect(),
+            }),
             _ => ty.clone(),
         }
     }
@@ -1984,21 +1995,30 @@ impl<'a> InferCtx<'a> {
             }
 
             // Try/catch
+            // Note: The catch block can return a different type than the try block
+            // because exceptions are dynamic. We return a fresh type variable that
+            // is NOT unified with either branch, allowing the type to be inferred
+            // from usage context (e.g., assignment target or function argument).
             Expr::Try(body, catch_arms, finally, _) => {
-                let body_ty = self.infer_expr(body)?;
-                let result_ty = self.fresh();
-                self.unify(body_ty.clone(), result_ty.clone());
+                // Infer try body type but don't unify with result
+                let _body_ty = self.infer_expr(body)?;
 
-                let err_ty = self.fresh();
+                // Exception type is always String (thrown messages)
+                let err_ty = Type::String;
+
+                // Infer catch arms but don't unify with result
                 for arm in catch_arms {
-                    self.infer_match_arm(arm, &err_ty, &result_ty)?;
+                    let catch_result_ty = self.fresh();
+                    self.infer_match_arm(arm, &err_ty, &catch_result_ty)?;
                 }
 
                 if let Some(finally_expr) = finally {
                     let _ = self.infer_expr(finally_expr)?;
                 }
 
-                Ok(result_ty)
+                // Return a fresh type - the actual type depends on which branch executes
+                // at runtime. The type checker can't determine this statically.
+                Ok(self.fresh())
             }
 
             // Quote/Splice - macro-related
