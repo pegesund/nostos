@@ -1666,10 +1666,17 @@ impl Compiler {
                 }
             }
 
-            // Infer only stdlib functions
+            // Infer only stdlib functions that don't have complete type annotations
             let mut ctx = InferCtx::new(&mut env);
             for (_, (fn_def, _, _, _, _, _)) in &stdlib_fns {
-                let _ = ctx.infer_function(fn_def);
+                // Skip HM inference for stdlib functions with complete type annotations
+                // This is a major performance optimization since HM inference is expensive
+                let has_all_type_annotations = fn_def.clauses.first().map_or(false, |clause| {
+                    clause.params.iter().all(|p| p.ty.is_some())
+                });
+                if !has_all_type_annotations {
+                    let _ = ctx.infer_function(fn_def);
+                }
             }
 
             // Solve stdlib constraints
@@ -1804,10 +1811,16 @@ impl Compiler {
                 }
             }
 
-            // Infer only user functions
+            // Infer only user functions that don't have complete type annotations
             let mut ctx = InferCtx::new(&mut env);
             for (_, (fn_def, _, _, _, _, _)) in &user_fns {
-                let _ = ctx.infer_function(fn_def);
+                // Skip HM inference for functions with complete type annotations
+                let has_all_type_annotations = fn_def.clauses.first().map_or(false, |clause| {
+                    clause.params.iter().all(|p| p.ty.is_some())
+                });
+                if !has_all_type_annotations {
+                    let _ = ctx.infer_function(fn_def);
+                }
             }
 
             // Solve user constraints

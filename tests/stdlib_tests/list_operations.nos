@@ -43,7 +43,7 @@ testSlice() = {
     list = [1, 2, 3, 4, 5]
     t1 = take(list, 3) == [1, 2, 3]
     t2 = drop(list, 3) == [4, 5]
-    t3 = list.slice(1, 4) == [2, 3]  # slice is exclusive of end index
+    t3 = list.slice(1, 4) == [2, 3, 4]  # slice(start, stop) returns elements at indices start to stop-1
     t1 && t2 && t3
 }
 
