@@ -1941,6 +1941,10 @@ impl Compiler {
         for _iteration in 0..max_iterations {
             let mut changed = false;
             for fn_name in &fn_names {
+                // Skip stdlib functions - they have proper type annotations
+                if fn_name.starts_with("stdlib.") {
+                    continue;
+                }
                 if let Some(fn_val) = self.functions.get(fn_name) {
                     if let Some(sig) = &fn_val.signature {
                         // If signature contains ONLY type variables (like 'a' or 'a -> b'), re-infer
@@ -1987,7 +1991,7 @@ impl Compiler {
         // cause errors even when compiling unrelated functions.
         // Note: pending_fn_names was collected earlier, before the validation loop
 
-                for (fn_name, fn_ast) in &self.fn_asts {
+        for (fn_name, fn_ast) in &self.fn_asts {
             // Only type-check functions that were just compiled in this pass
             // Use base name without signature for comparison
             let base_name = fn_name.split('/').next().unwrap_or(fn_name);
@@ -5059,8 +5063,11 @@ impl Compiler {
         // so we only treat it as an error if we have sufficient type information.
         // In the future, this should be a two-pass system.
         //
-        // Run type checking on all functions
-        if let Err(e) = self.type_check_fn(def, &def.name.node) {
+        // Skip type checking for stdlib functions - they're tested separately and
+        // type checking them is expensive (creates HM inference environment)
+        if is_stdlib {
+            // Skip to bytecode compilation for stdlib
+        } else if let Err(e) = self.type_check_fn(def, &def.name.node) {
             // Report type errors - only filter truly spurious ones from inference limitations
             let should_report = match &e {
                 CompileError::TypeError { message, .. } => {
@@ -17237,13 +17244,16 @@ impl Compiler {
 
         // Register pending function signatures for functions not yet compiled
         // This enables correct type inference for mutual recursion across compilation order
+        // Pre-compute set of base names that have compiled signatures (O(n) instead of O(n²))
+        let compiled_base_names: std::collections::HashSet<&str> = self.functions.iter()
+            .filter(|(_, fv)| fv.signature.is_some())
+            .map(|(k, _)| k.split('/').next().unwrap_or(k))
+            .collect();
+
         for (fn_name, fn_type) in &self.pending_fn_signatures {
             // Get the base name to check if any overload is compiled
             let base_name = fn_name.split('/').next().unwrap_or(fn_name);
-            let already_compiled = self.functions.keys()
-                .filter(|k| k.split('/').next().unwrap_or(k) == base_name)
-                .any(|k| self.functions.get(k).map(|fv| fv.signature.is_some()).unwrap_or(false));
-            if already_compiled {
+            if compiled_base_names.contains(base_name) {
                 continue;
             }
 
