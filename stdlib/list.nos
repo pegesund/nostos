@@ -13,351 +13,468 @@ pub type Result[T, E] = Ok(T) | Err(E)
 # Result helpers - prefixed with 'res' to avoid conflicts with other methods
 
 # Transform the success value, keep error unchanged
-resMap(Ok(x), f) = Ok(f(x))
-resMap(Err(e), _) = Err(e)
+resMap[T, U, E](result: Result[T, E], f: (T) -> U) -> Result[U, E] = match result {
+    Ok(x) -> Ok(f(x))
+    Err(e) -> Err(e)
+}
 
 # Transform the error value, keep success unchanged
-resMapErr(Ok(x), _) = Ok(x)
-resMapErr(Err(e), f) = Err(f(e))
+resMapErr[T, E, F](result: Result[T, E], f: (E) -> F) -> Result[T, F] = match result {
+    Ok(x) -> Ok(x)
+    Err(e) -> Err(f(e))
+}
 
 # Chain operations that return Result
-resFlatMap(Ok(x), f) = f(x)
-resFlatMap(Err(e), _) = Err(e)
+resFlatMap[T, U, E](result: Result[T, E], f: (T) -> Result[U, E]) -> Result[U, E] = match result {
+    Ok(x) -> f(x)
+    Err(e) -> Err(e)
+}
 
 # Get value or throw error message
-resUnwrap(Ok(x)) = x
-resUnwrap(Err(e)) = throw("resUnwrap called on Err: " ++ show(e))
+resUnwrap[T, E](result: Result[T, E]) -> T = match result {
+    Ok(x) -> x
+    Err(e) -> throw("resUnwrap called on Err: " ++ show(e))
+}
 
 # Get value or return default
-resUnwrapOr(Ok(x), _) = x
-resUnwrapOr(Err(_), default) = default
+resUnwrapOr[T, E](result: Result[T, E], default: T) -> T = match result {
+    Ok(x) -> x
+    Err(_) -> default
+}
 
 # Check if Result is Ok
-resIsOk(Ok(_)) = true
-resIsOk(Err(_)) = false
+resIsOk[T, E](result: Result[T, E]) -> Bool = match result {
+    Ok(_) -> true
+    Err(_) -> false
+}
 
 # Check if Result is Err
-resIsErr(Ok(_)) = false
-resIsErr(Err(_)) = true
+resIsErr[T, E](result: Result[T, E]) -> Bool = match result {
+    Ok(_) -> false
+    Err(_) -> true
+}
 
 # Convert Result to Option (discards error)
-resToOption(Ok(x)) = Some(x)
-resToOption(Err(_)) = None()
+resToOption[T, E](result: Result[T, E]) -> Option[T] = match result {
+    Ok(x) -> Some(x)
+    Err(_) -> None()
+}
 
 # Option helpers - prefixed with 'opt' to avoid conflicts with List methods
 
 # Transform the value inside Some, or return None
-optMap(Some(x), f) = Some(f(x))
-optMap(None(), _) = None()
+optMap[T, U](opt: Option[T], f: (T) -> U) -> Option[U] = match opt {
+    Some(x) -> Some(f(x))
+    None() -> None()
+}
 
 # Map and flatten (when f returns an Option)
-optFlatMap(Some(x), f) = f(x)
-optFlatMap(None(), _) = None()
+optFlatMap[T, U](opt: Option[T], f: (T) -> Option[U]) -> Option[U] = match opt {
+    Some(x) -> f(x)
+    None() -> None()
+}
 
 # Get the value or throw error if None
-optUnwrap(Some(x)) = x
-optUnwrap(None()) = throw("optUnwrap called on None")
+optUnwrap[T](opt: Option[T]) -> T = match opt {
+    Some(x) -> x
+    None() -> throw("optUnwrap called on None")
+}
 
 # Get the value or return default
-optUnwrapOr(Some(x), _) = x
-optUnwrapOr(None(), default) = default
+optUnwrapOr[T](opt: Option[T], default: T) -> T = match opt {
+    Some(x) -> x
+    None() -> default
+}
 
 # Check if Option is Some
-optIsSome(Some(_)) = true
-optIsSome(None()) = false
+optIsSome[T](opt: Option[T]) -> Bool = match opt {
+    Some(_) -> true
+    None() -> false
+}
 
 # Check if Option is None
-optIsNone(Some(_)) = false
-optIsNone(None()) = true
+optIsNone[T](opt: Option[T]) -> Bool = match opt {
+    Some(_) -> false
+    None() -> true
+}
 
 # Get last element of a list
-last([x]) = x
-last([_ | rest]) = last(rest)
+last[T](list: List[T]) -> T = match list {
+    [x] -> x
+    [_ | rest] -> last(rest)
+}
 
 # Get all elements except the last
-init([_]) = []
-init([x | rest]) = [x | init(rest)]
+init[T](list: List[T]) -> List[T] = match list {
+    [_] -> []
+    [x | rest] -> [x | init(rest)]
+}
 
 # Get element at index (0-based)
-nth(list, 0) = head(list)
-nth(list, n) = nth(tail(list), n - 1)
+nth[T](list: List[T], idx: Int) -> T = if idx == 0 then head(list) else nth(tail(list), idx - 1)
 
 # Alias for nth
-get(list, idx) = nth(list, idx)
+get[T](list: List[T], idx: Int) -> T = nth(list, idx)
 
 # Set element at index, returns new list
-set([], _, _) = []
-set([_ | rest], 0, val) = [val | rest]
-set([x | rest], idx, val) = [x | set(rest, idx - 1, val)]
+set[T](list: List[T], idx: Int, val: T) -> List[T] = match list {
+    [] -> []
+    [_ | rest] -> if idx == 0 then [val | rest] else match list { [x | rest2] -> [x | set(rest2, idx - 1, val)] }
+}
 
 # Append element to end of list
-push([], x) = [x]
-push([h | t], x) = [h | push(t, x)]
+push[T](list: List[T], x: T) -> List[T] = match list {
+    [] -> [x]
+    [h | t] -> [h | push(t, x)]
+}
 
 # Remove and return last element as (list, element) tuple
-pop([x]) = ([], x)
-pop([h | t]) = {
-    (rest, last) = pop(t)
-    ([h | rest], last)
+pop[T](list: List[T]) -> (List[T], T) = match list {
+    [x] -> ([], x)
+    [h | t] -> {
+        (rest, lst) = pop(t)
+        ([h | rest], lst)
+    }
 }
 
 # Get sublist from start to stop index (exclusive)
-slice(list, start, stop) = take(list, stop - start).drop(start)
+slice[T](list: List[T], start: Int, stop: Int) -> List[T] = take(drop(list, start), stop - start)
 
 # Concatenate two lists
-concat([], ys) = ys
-concat([x | xs], ys) = [x | concat(xs, ys)]
+concat[T](xs: List[T], ys: List[T]) -> List[T] = match xs {
+    [] -> ys
+    [x | rest] -> [x | concat(rest, ys)]
+}
 
 # Reverse a list
-reverse(list) = reverseAcc(list, [])
-reverseAcc([], acc) = acc
-reverseAcc([x | xs], acc) = reverseAcc(xs, [x | acc])
+reverse[T](list: List[T]) -> List[T] = reverseAcc(list, [])
+reverseAcc[T](list: List[T], acc: List[T]) -> List[T] = match list {
+    [] -> acc
+    [x | xs] -> reverseAcc(xs, [x | acc])
+}
 
 # Sort a list (quicksort)
-sort([]) = []
-sort([pivot | rest]) = {
-    lesser = rest.filter(x => x < pivot)
-    greater = rest.filter(x => x >= pivot)
-    concat(sort(lesser), [pivot | sort(greater)])
+sort[T](list: List[T]) -> List[T] = match list {
+    [] -> []
+    [pivot | rest] -> {
+        lesser = filter(rest, x => x < pivot)
+        greater = filter(rest, x => x >= pivot)
+        concat(sort(lesser), [pivot | sort(greater)])
+    }
 }
 
 # Apply function to each element, return new list
-map([], _) = []
-map([x | xs], f) = [f(x) | map(xs, f)]
+map[T, U](list: List[T], f: (T) -> U) -> List[U] = match list {
+    [] -> []
+    [x | xs] -> [f(x) | map(xs, f)]
+}
 
 # Apply function to each element for side effects only, returns unit
-each([], _) = ()
-each([x | xs], f) = { f(x); each(xs, f) }
+each[T](list: List[T], f: (T) -> Unit) -> Unit = match list {
+    [] -> ()
+    [x | xs] -> { f(x); each(xs, f) }
+}
 
 # Keep elements that satisfy predicate
-filter([], _) = []
-filter([x | xs], pred) = if pred(x) then [x | filter(xs, pred)] else filter(xs, pred)
+filter[T](list: List[T], pred: (T) -> Bool) -> List[T] = match list {
+    [] -> []
+    [x | xs] -> if pred(x) then [x | filter(xs, pred)] else filter(xs, pred)
+}
 
 # Reduce list to single value (left fold)
-fold([], acc, _) = acc
-fold([x | xs], acc, f) = fold(xs, f(acc, x), f)
+fold[T, U](list: List[T], acc: U, f: (U, T) -> U) -> U = match list {
+    [] -> acc
+    [x | xs] -> fold(xs, f(acc, x), f)
+}
 
 # Right fold
-foldr([], acc, _) = acc
-foldr([x | xs], acc, f) = f(x, foldr(xs, acc, f))
+foldr[T, U](list: List[T], acc: U, f: (T, U) -> U) -> U = match list {
+    [] -> acc
+    [x | xs] -> f(x, foldr(xs, acc, f))
+}
 
 # True if any element satisfies predicate
-any([], _) = false
-any([x | xs], pred) = if pred(x) then true else any(xs, pred)
+any[T](list: List[T], pred: (T) -> Bool) -> Bool = match list {
+    [] -> false
+    [x | xs] -> if pred(x) then true else any(xs, pred)
+}
 
 # True if all elements satisfy predicate
-all([], _) = true
-all([x | xs], pred) = if pred(x) then all(xs, pred) else false
+all[T](list: List[T], pred: (T) -> Bool) -> Bool = match list {
+    [] -> true
+    [x | xs] -> if pred(x) then all(xs, pred) else false
+}
 
 # Find first element satisfying predicate
-find([], _) = None
-find([x | xs], pred) = if pred(x) then Some(x) else find(xs, pred)
+find[T](list: List[T], pred: (T) -> Bool) -> Option[T] = match list {
+    [] -> None()
+    [x | xs] -> if pred(x) then Some(x) else find(xs, pred)
+}
 
 # Find index of first match
-position([], _) = None
-position(list, pred) = positionAcc(list, pred, 0)
-positionAcc([], _, _) = None
-positionAcc([x | xs], pred, idx) = if pred(x) then Some(idx) else positionAcc(xs, pred, idx + 1)
+position[T](list: List[T], pred: (T) -> Bool) -> Option[Int] = positionAcc(list, pred, 0)
+positionAcc[T](list: List[T], pred: (T) -> Bool, idx: Int) -> Option[Int] = match list {
+    [] -> None()
+    [x | xs] -> if pred(x) then Some(idx) else positionAcc(xs, pred, idx + 1)
+}
 
 # Remove duplicate elements (keeps first occurrence)
-unique([]) = []
-unique([x | xs]) = [x | unique(xs.filter(y => y != x))]
+unique[T](list: List[T]) -> List[T] = match list {
+    [] -> []
+    [x | xs] -> [x | unique(filter(xs, y => y != x))]
+}
 
 # Flatten nested list one level
-flatten([]) = []
-flatten([x | xs]) = concat(x, flatten(xs))
+flatten[T](list: List[List[T]]) -> List[T] = match list {
+    [] -> []
+    [x | xs] -> concat(x, flatten(xs))
+}
 
 # Map and flatten in one step (monadic bind for lists)
-flatMap(list, f) = flatten(map(list, f))
+flatMap[T, U](list: List[T], f: (T) -> List[U]) -> List[U] = flatten(map(list, f))
 
 # Pair up elements from two lists
-zip([], _) = []
-zip(_, []) = []
-zip([x | xs], [y | ys]) = [(x, y) | zip(xs, ys)]
+zip[T, U](xs: List[T], ys: List[U]) -> List[(T, U)] = match xs {
+    [] -> []
+    [x | xrest] -> match ys {
+        [] -> []
+        [y | yrest] -> [(x, y) | zip(xrest, yrest)]
+    }
+}
 
 # Split list of pairs into two lists
-unzip([]) = ([], [])
-unzip([(a, b) | rest]) = {
-    (as, bs) = unzip(rest)
-    ([a | as], [b | bs])
+unzip[T, U](list: List[(T, U)]) -> (List[T], List[U]) = match list {
+    [] -> ([], [])
+    [(a, b) | rest] -> {
+        (as, bs) = unzip(rest)
+        ([a | as], [b | bs])
+    }
 }
 
 # Take first n elements
-take([], _) = []
-take(_, 0) = []
-take([x | xs], n) = [x | take(xs, n - 1)]
+take[T](list: List[T], n: Int) -> List[T] = match list {
+    [] -> []
+    [x | xs] -> if n == 0 then [] else [x | take(xs, n - 1)]
+}
 
 # Drop first n elements
-drop(list, 0) = list
-drop([], _) = []
-drop([_ | xs], n) = drop(xs, n - 1)
+drop[T](list: List[T], n: Int) -> List[T] = match list {
+    [] -> []
+    [_ | xs] -> if n == 0 then list else drop(xs, n - 1)
+}
 
 # Create list of n copies of a value
-replicate(n, x) = replicateAcc(n, x, [])
-replicateAcc(0, _, acc) = acc
-replicateAcc(n, x, acc) = replicateAcc(n - 1, x, [x | acc])
+replicate[T](n: Int, x: T) -> List[T] = replicateAcc(n, x, [])
+replicateAcc[T](n: Int, x: T, acc: List[T]) -> List[T] = if n == 0 then acc else replicateAcc(n - 1, x, [x | acc])
 
 # Check if element is in list
-contains([], _) = false
-contains([y | ys], x) = if x == y then true else contains(ys, x)
+contains[T](list: List[T], x: T) -> Bool = match list {
+    [] -> false
+    [y | ys] -> if x == y then true else contains(ys, x)
+}
 
 # Alias for backwards compatibility
-elem(x, list) = contains(list, x)
+elem[T](x: T, list: List[T]) -> Bool = contains(list, x)
 
 # Remove first occurrence of element
-remove([], _) = []
-remove([y | ys], x) = if x == y then ys else [y | remove(ys, x)]
+remove[T](list: List[T], x: T) -> List[T] = match list {
+    [] -> []
+    [y | ys] -> if x == y then ys else [y | remove(ys, x)]
+}
 
 # Remove element at index
-removeAt([], _) = []
-removeAt([_ | xs], 0) = xs
-removeAt([x | xs], idx) = [x | removeAt(xs, idx - 1)]
+removeAt[T](list: List[T], idx: Int) -> List[T] = match list {
+    [] -> []
+    [_ | xs] -> if idx == 0 then xs else match list { [x | xs2] -> [x | removeAt(xs2, idx - 1)] }
+}
 
 # Insert element at index
-insertAt(list, 0, x) = [x | list]
-insertAt([], _, x) = [x]
-insertAt([h | t], idx, x) = [h | insertAt(t, idx - 1, x)]
+insertAt[T](list: List[T], idx: Int, x: T) -> List[T] = match list {
+    [] -> [x]
+    [h | t] -> if idx == 0 then [x | list] else [h | insertAt(t, idx - 1, x)]
+}
 
 # Partition list by predicate into (matching, non-matching)
-partition([], _) = ([], [])
-partition([x | xs], pred) = {
-    (yes, no) = partition(xs, pred)
-    if pred(x) then ([x | yes], no) else (yes, [x | no])
+partition[T](list: List[T], pred: (T) -> Bool) -> (List[T], List[T]) = match list {
+    [] -> ([], [])
+    [x | xs] -> {
+        (yes, no) = partition(xs, pred)
+        if pred(x) then ([x | yes], no) else (yes, [x | no])
+    }
 }
 
 # Take elements while predicate is true
-takeWhile([], _) = []
-takeWhile([x | xs], pred) = if pred(x) then [x | takeWhile(xs, pred)] else []
+takeWhile[T](list: List[T], pred: (T) -> Bool) -> List[T] = match list {
+    [] -> []
+    [x | xs] -> if pred(x) then [x | takeWhile(xs, pred)] else []
+}
 
 # Drop elements while predicate is true
-dropWhile([], _) = []
-dropWhile([x | xs], pred) = if pred(x) then dropWhile(xs, pred) else [x | xs]
+dropWhile[T](list: List[T], pred: (T) -> Bool) -> List[T] = match list {
+    [] -> []
+    [x | xs] -> if pred(x) then dropWhile(xs, pred) else list
+}
 
 # Split list at index
-splitAt(list, 0) = ([], list)
-splitAt([], _) = ([], [])
-splitAt([x | xs], n) = {
-    (left, right) = splitAt(xs, n - 1)
-    ([x | left], right)
+splitAt[T](list: List[T], n: Int) -> (List[T], List[T]) = match list {
+    [] -> ([], [])
+    [x | xs] -> if n == 0 then ([], list) else {
+        (left, right) = splitAt(xs, n - 1)
+        ([x | left], right)
+    }
 }
 
 # Interleave two lists
-interleave([], ys) = ys
-interleave(xs, []) = xs
-interleave([x | xs], ys) = [x | interleave(ys, xs)]
+interleave[T](xs: List[T], ys: List[T]) -> List[T] = match xs {
+    [] -> ys
+    [x | xrest] -> match ys {
+        [] -> xs
+        _ -> [x | interleave(ys, xrest)]
+    }
+}
 
 # Group consecutive equal elements
-group([]) = []
-group([x | xs]) = groupAcc(xs, x, [x], [])
-groupAcc([], _, current, acc) = reverse([reverse(current) | acc])
-groupAcc([x | xs], prev, current, acc) =
-    if x == prev
-    then groupAcc(xs, x, [x | current], acc)
-    else groupAcc(xs, x, [x], [reverse(current) | acc])
+group[T](list: List[T]) -> List[List[T]] = match list {
+    [] -> []
+    [x | xs] -> groupAcc(xs, x, [x], [])
+}
+groupAcc[T](list: List[T], prev: T, current: List[T], acc: List[List[T]]) -> List[List[T]] = match list {
+    [] -> reverse([reverse(current) | acc])
+    [x | xs] -> if x == prev
+        then groupAcc(xs, x, [x | current], acc)
+        else groupAcc(xs, x, [x], [reverse(current) | acc])
+}
 
 # Scan (like fold but returns all intermediate values)
-scanl([], acc, _) = [acc]
-scanl([x | xs], acc, f) = [acc | scanl(xs, f(acc, x), f)]
+scanl[T, U](list: List[T], acc: U, f: (U, T) -> U) -> List[U] = match list {
+    [] -> [acc]
+    [x | xs] -> [acc | scanl(xs, f(acc, x), f)]
+}
 
 # Zip with custom function
-zipWith([], _, _) = []
-zipWith(_, [], _) = []
-zipWith([x | xs], [y | ys], f) = [f(x, y) | zipWith(xs, ys, f)]
+zipWith[T, U, V](xs: List[T], ys: List[U], f: (T, U) -> V) -> List[V] = match xs {
+    [] -> []
+    [x | xrest] -> match ys {
+        [] -> []
+        [y | yrest] -> [f(x, y) | zipWith(xrest, yrest, f)]
+    }
+}
 
 # Get indices where predicate is true
-findIndices(list, pred) = findIndicesAcc(list, pred, 0)
-findIndicesAcc([], _, _) = []
-findIndicesAcc([x | xs], pred, idx) =
-    if pred(x)
-    then [idx | findIndicesAcc(xs, pred, idx + 1)]
-    else findIndicesAcc(xs, pred, idx + 1)
+findIndices[T](list: List[T], pred: (T) -> Bool) -> List[Int] = findIndicesAcc(list, pred, 0)
+findIndicesAcc[T](list: List[T], pred: (T) -> Bool, idx: Int) -> List[Int] = match list {
+    [] -> []
+    [x | xs] -> if pred(x)
+        then [idx | findIndicesAcc(xs, pred, idx + 1)]
+        else findIndicesAcc(xs, pred, idx + 1)
+}
 
 # Count elements satisfying predicate
-count(list, pred) = list.fold(0, (acc, x) => if pred(x) then acc + 1 else acc)
+count[T](list: List[T], pred: (T) -> Bool) -> Int = fold(list, 0, (acc, x) => if pred(x) then acc + 1 else acc)
 
 # Maximum element (requires non-empty list)
-maximum([x]) = x
-maximum([x | xs]) = {
-    m = maximum(xs)
-    if x > m then x else m
+maximum[T](list: List[T]) -> T = match list {
+    [x] -> x
+    [x | xs] -> {
+        m = maximum(xs)
+        if x > m then x else m
+    }
 }
 
 # Minimum element (requires non-empty list)
-minimum([x]) = x
-minimum([x | xs]) = {
-    m = minimum(xs)
-    if x < m then x else m
+minimum[T](list: List[T]) -> T = match list {
+    [x] -> x
+    [x | xs] -> {
+        m = minimum(xs)
+        if x < m then x else m
+    }
 }
 
 # Sum all elements (requires numeric list)
-sum(list) = list.fold(0, (acc, x) => acc + x)
+sum(list: List[Int]) -> Int = fold(list, 0, (acc, x) => acc + x)
 
 # Product of all elements (requires numeric list)
-product(list) = list.fold(1, (acc, x) => acc * x)
+product(list: List[Int]) -> Int = fold(list, 1, (acc, x) => acc * x)
 
 # Find index of first element equal to target
-indexOf([], _) = None
-indexOf(list, target) = indexOfAcc(list, target, 0)
-indexOfAcc([], _, _) = None
-indexOfAcc([x | xs], target, idx) = if x == target then Some(idx) else indexOfAcc(xs, target, idx + 1)
+indexOf[T](list: List[T], target: T) -> Option[Int] = indexOfAcc(list, target, 0)
+indexOfAcc[T](list: List[T], target: T, idx: Int) -> Option[Int] = match list {
+    [] -> None()
+    [x | xs] -> if x == target then Some(idx) else indexOfAcc(xs, target, idx + 1)
+}
 
 # Sort with custom comparator (comparator returns -1, 0, or 1)
-sortBy([], _) = []
-sortBy([pivot | rest], cmp) = {
-    lesser = rest.filter(x => cmp(x, pivot) < 0)
-    greater = rest.filter(x => cmp(x, pivot) >= 0)
-    concat(sortBy(lesser, cmp), [pivot | sortBy(greater, cmp)])
+sortBy[T](list: List[T], cmp: (T, T) -> Int) -> List[T] = match list {
+    [] -> []
+    [pivot | rest] -> {
+        lesser = filter(rest, x => cmp(x, pivot) < 0)
+        greater = filter(rest, x => cmp(x, pivot) >= 0)
+        concat(sortBy(lesser, cmp), [pivot | sortBy(greater, cmp)])
+    }
 }
 
 # Insert element between all elements
-intersperse([], _) = []
-intersperse([x], _) = [x]
-intersperse([x | xs], sep) = [x, sep | intersperse(xs, sep)]
+intersperse[T](list: List[T], sep: T) -> List[T] = match list {
+    [] -> []
+    [x] -> [x]
+    [x | xs] -> [x, sep | intersperse(xs, sep)]
+}
 
 # Split list at first element not satisfying predicate
 # Returns (takeWhile(pred), dropWhile(pred))
 # Named spanList to avoid conflict with Html.span
-spanList([], _) = ([], [])
-spanList([x | xs], pred) = if pred(x) then {
-    (ys, zs) = spanList(xs, pred)
-    ([x | ys], zs)
-} else ([], [x | xs])
-
-# Group consecutive elements by key function
-groupBy([], _) = []
-groupBy([x | xs], keyFn) = groupByAcc(xs, keyFn, keyFn(x), [x], [])
-groupByAcc([], _, _, current, acc) = reverse([reverse(current) | acc])
-groupByAcc([x | xs], keyFn, prevKey, current, acc) = {
-    key = keyFn(x)
-    if key == prevKey
-    then groupByAcc(xs, keyFn, key, [x | current], acc)
-    else groupByAcc(xs, keyFn, key, [x], [reverse(current) | acc])
+spanList[T](list: List[T], pred: (T) -> Bool) -> (List[T], List[T]) = match list {
+    [] -> ([], [])
+    [x | xs] -> if pred(x) then {
+        (ys, zs) = spanList(xs, pred)
+        ([x | ys], zs)
+    } else ([], [x | xs])
 }
 
-# Transpose a list of lists (rows become columns)
-transpose([]) = []
-transpose(rows) = {
-    # Check if first row is empty (base case for inner recursion)
-    if isEmpty(head(rows))
-    then []
-    else {
-        heads = rows.map(r => head(r))
-        tails = rows.map(r => tail(r))
-        [heads | transpose(tails)]
+# Group consecutive elements by key function
+groupBy[T, K](list: List[T], keyFn: (T) -> K) -> List[List[T]] = match list {
+    [] -> []
+    [x | xs] -> groupByAcc(xs, keyFn, keyFn(x), [x], [])
+}
+groupByAcc[T, K](list: List[T], keyFn: (T) -> K, prevKey: K, current: List[T], acc: List[List[T]]) -> List[List[T]] = match list {
+    [] -> reverse([reverse(current) | acc])
+    [x | xs] -> {
+        key = keyFn(x)
+        if key == prevKey
+        then groupByAcc(xs, keyFn, key, [x | current], acc)
+        else groupByAcc(xs, keyFn, key, [x], [reverse(current) | acc])
     }
 }
 
+# Transpose a list of lists (rows become columns)
+transpose[T](rows: List[List[T]]) -> List[List[T]] = match rows {
+    [] -> []
+    _ -> if isEmpty(head(rows))
+        then []
+        else {
+            heads = map(rows, r => head(r))
+            tails = map(rows, r => tail(r))
+            [heads | transpose(tails)]
+        }
+}
+
 # Apply function to pairs of adjacent elements
-pairwise([], _) = []
-pairwise([_], _) = []
-pairwise([x, y | rest], f) = [f(x, y) | pairwise([y | rest], f)]
+pairwise[T, U](list: List[T], f: (T, T) -> U) -> List[U] = match list {
+    [] -> []
+    [_] -> []
+    [x, y | rest] -> [f(x, y) | pairwise([y | rest], f)]
+}
 
 # Check if list is sorted
-isSorted([]) = true
-isSorted([_]) = true
-isSorted([x, y | rest]) = x <= y && isSorted([y | rest])
+isSorted[T](list: List[T]) -> Bool = match list {
+    [] -> true
+    [_] -> true
+    [x, y | rest] -> x <= y && isSorted([y | rest])
+}
 
 # Check if list is sorted by comparator
-isSortedBy([], _) = true
-isSortedBy([_], _) = true
-isSortedBy([x, y | rest], cmp) = cmp(x, y) <= 0 && isSortedBy([y | rest], cmp)
+isSortedBy[T](list: List[T], cmp: (T, T) -> Int) -> Bool = match list {
+    [] -> true
+    [_] -> true
+    [x, y | rest] -> cmp(x, y) <= 0 && isSortedBy([y | rest], cmp)
+}

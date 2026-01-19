@@ -848,7 +848,11 @@ impl TypeExpr {
                         .join(", ");
                     format!("({})", ps)
                 };
-                format!("{} -> {}", params_str, ret.to_string_pretty())
+                // Wrap the entire function type in parentheses so it can be used
+                // as a parameter in another function's signature without ambiguity.
+                // E.g., (T -> Bool) instead of T -> Bool, so that
+                // List[T] -> (T -> Bool) -> List[T] isn't parsed as 3 params.
+                format!("({} -> {})", params_str, ret.to_string_pretty())
             }
             TypeExpr::Record(fields) => {
                 let fields_str = fields.iter()
