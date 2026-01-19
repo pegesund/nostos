@@ -2350,13 +2350,12 @@ impl ReplEngine {
             bindings.join("\n    ") + "\n    "
         };
 
-        // Wrap expression in show() for pretty-printing
-        // This uses trait dispatch: types with Show trait get their custom show,
-        // otherwise falls back to native show for primitives
+        // Evaluate the expression directly (no show() wrapping)
+        // We'll use display() on the result to format it properly
         let wrapper = if bindings_preamble.is_empty() {
-            format!("{}() = show({})", eval_name, input)
+            format!("{}() = {}", eval_name, input)
         } else {
-            format!("{}() = {{\n    {}show({})\n}}", eval_name, bindings_preamble, input)
+            format!("{}() = {{\n    {}{}\n}}", eval_name, bindings_preamble, input)
         };
 
         let (wrapper_module_opt, errors) = parse(&wrapper);
@@ -2392,20 +2391,13 @@ impl ReplEngine {
             Ok(result) => {
                 let mut output = String::new();
 
-                // Since we wrapped in show(), result should be a String
-                // Extract it directly to avoid double-quoting
+                // Use display() which properly formats all values including strings with quotes
                 match result {
-                    SendableValue::String(s) => {
-                        output.push_str(&s);
-                    }
                     SendableValue::Unit => {
-                        // show() of () returns "()", but we don't want to display that
+                        // Don't display unit
                     }
                     _ => {
-                        // Fallback for unexpected result types
-                        if !result.is_unit() {
-                            output.push_str(&result.display());
-                        }
+                        output.push_str(&result.display());
                     }
                 }
 
@@ -8245,13 +8237,12 @@ impl ReplEngine {
             bindings.join("\n    ") + "\n    "
         };
 
-        // Wrap expression in show() for pretty-printing
-        // This uses trait dispatch: types with Show trait get their custom show,
-        // otherwise falls back to native show for primitives
+        // Evaluate the expression directly (no show() wrapping)
+        // We'll use display() on the result to format it properly
         let wrapper = if bindings_preamble.is_empty() {
-            format!("{}() = show({})", eval_name, input)
+            format!("{}() = {}", eval_name, input)
         } else {
-            format!("{}() = {{\n    {}show({})\n}}", eval_name, bindings_preamble, input)
+            format!("{}() = {{\n    {}{}\n}}", eval_name, bindings_preamble, input)
         };
 
         let (wrapper_module_opt, errors) = parse(&wrapper);
@@ -8338,13 +8329,12 @@ impl ReplEngine {
             bindings.join("\n    ") + "\n    "
         };
 
-        // Wrap expression in show() for pretty-printing
-        // This uses trait dispatch: types with Show trait get their custom show,
-        // otherwise falls back to native show for primitives
+        // Evaluate the expression directly (no show() wrapping)
+        // We'll use display() on the result to format it properly
         let wrapper = if bindings_preamble.is_empty() {
-            format!("{}() = show({})", eval_name, input)
+            format!("{}() = {}", eval_name, input)
         } else {
-            format!("{}() = {{\n    {}show({})\n}}", eval_name, bindings_preamble, input)
+            format!("{}() = {{\n    {}{}\n}}", eval_name, bindings_preamble, input)
         };
 
         let (wrapper_module_opt, errors) = parse(&wrapper);
@@ -15210,15 +15200,16 @@ main() = {
     fn test_http_response_has_fields_for_autocomplete() {
         // HttpResponse should be registered as a builtin type with fields
         // so that autocomplete can suggest status, headers, body
+        // Note: get_type_fields returns "name: type" format
         use nostos_compiler::Compiler;
 
         let compiler = Compiler::new_empty();
         let fields = compiler.get_type_fields("HttpResponse");
 
         println!("HttpResponse fields: {:?}", fields);
-        assert!(fields.contains(&"status".to_string()), "HttpResponse should have 'status' field");
-        assert!(fields.contains(&"headers".to_string()), "HttpResponse should have 'headers' field");
-        assert!(fields.contains(&"body".to_string()), "HttpResponse should have 'body' field");
+        assert!(fields.iter().any(|f| f.starts_with("status:")), "HttpResponse should have 'status' field");
+        assert!(fields.iter().any(|f| f.starts_with("headers:")), "HttpResponse should have 'headers' field");
+        assert!(fields.iter().any(|f| f.starts_with("body:")), "HttpResponse should have 'body' field");
     }
 
     #[test]
@@ -15249,27 +15240,28 @@ main() = {
         let compiler = Compiler::new_empty();
 
         // HttpRequest (from Server.accept)
+        // Note: get_type_fields returns "name: type" format
         let fields = compiler.get_type_fields("HttpRequest");
         println!("HttpRequest fields: {:?}", fields);
-        assert!(fields.contains(&"id".to_string()), "HttpRequest should have 'id' field");
-        assert!(fields.contains(&"method".to_string()), "HttpRequest should have 'method' field");
-        assert!(fields.contains(&"path".to_string()), "HttpRequest should have 'path' field");
-        assert!(fields.contains(&"headers".to_string()), "HttpRequest should have 'headers' field");
-        assert!(fields.contains(&"body".to_string()), "HttpRequest should have 'body' field");
+        assert!(fields.iter().any(|f| f.starts_with("id:")), "HttpRequest should have 'id' field");
+        assert!(fields.iter().any(|f| f.starts_with("method:")), "HttpRequest should have 'method' field");
+        assert!(fields.iter().any(|f| f.starts_with("path:")), "HttpRequest should have 'path' field");
+        assert!(fields.iter().any(|f| f.starts_with("headers:")), "HttpRequest should have 'headers' field");
+        assert!(fields.iter().any(|f| f.starts_with("body:")), "HttpRequest should have 'body' field");
 
         // ProcessInfo (from Process.info)
         let fields = compiler.get_type_fields("ProcessInfo");
         println!("ProcessInfo fields: {:?}", fields);
-        assert!(fields.contains(&"status".to_string()), "ProcessInfo should have 'status' field");
-        assert!(fields.contains(&"mailbox".to_string()), "ProcessInfo should have 'mailbox' field");
-        assert!(fields.contains(&"uptime".to_string()), "ProcessInfo should have 'uptime' field");
+        assert!(fields.iter().any(|f| f.starts_with("status:")), "ProcessInfo should have 'status' field");
+        assert!(fields.iter().any(|f| f.starts_with("mailbox:")), "ProcessInfo should have 'mailbox' field");
+        assert!(fields.iter().any(|f| f.starts_with("uptime:")), "ProcessInfo should have 'uptime' field");
 
         // ExecResult (from Exec.run)
         let fields = compiler.get_type_fields("ExecResult");
         println!("ExecResult fields: {:?}", fields);
-        assert!(fields.contains(&"exitCode".to_string()), "ExecResult should have 'exitCode' field");
-        assert!(fields.contains(&"stdout".to_string()), "ExecResult should have 'stdout' field");
-        assert!(fields.contains(&"stderr".to_string()), "ExecResult should have 'stderr' field");
+        assert!(fields.iter().any(|f| f.starts_with("exitCode:")), "ExecResult should have 'exitCode' field");
+        assert!(fields.iter().any(|f| f.starts_with("stdout:")), "ExecResult should have 'stdout' field");
+        assert!(fields.iter().any(|f| f.starts_with("stderr:")), "ExecResult should have 'stderr' field");
     }
 
     #[test]
@@ -15336,12 +15328,12 @@ main() = {
 
     #[test]
     fn test_user_defined_function_returns_list_chain() {
-        // User function returns List, then .map() should work
+        // User function returns List[Int], then .map() should work
         let mut engine = ReplEngine::new(ReplConfig::default());
         engine.load_stdlib().expect("Failed to load stdlib");
 
         let code = r#"
-getNumbers() -> List = [1, 2, 3]
+getNumbers() -> List[Int] = [1, 2, 3]
 
 main() = {
     getNumbers().map(x => x * 2).filter(x => x > 2)
@@ -15349,7 +15341,7 @@ main() = {
 "#;
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
-        assert!(result.is_ok(), "User function returning List should chain with List methods: {:?}", result);
+        assert!(result.is_ok(), "User function returning List[Int] should chain with List methods: {:?}", result);
     }
 
     #[test]
@@ -15711,7 +15703,7 @@ mod repl_state_tests {
         // Load a simple extension module (simulating what TUI does)
         let ext_code = r#"
 # Simple test extension
-type Vec = { data: List }
+type Vec = { data: List[Int] }
 
 pub vec(data) -> Vec = Vec(data)
 pub vecAdd(a: Vec, b: Vec) -> Vec = Vec([])
@@ -15742,7 +15734,7 @@ main() = {
         // Load a simple extension module
         let ext_code = r#"
 # Simple test extension
-type Vec = { data: List }
+type Vec = { data: List[Int] }
 
 pub vec(data) -> Vec = Vec(data)
 pub vecAdd(a: Vec, b: Vec) -> Vec = Vec([])
@@ -15899,7 +15891,7 @@ main() = {
 
         // Load a simple extension module
         let ext_code = r#"
-type Vec = { data: List }
+type Vec = { data: List[Int] }
 pub vec(data) -> Vec = Vec(data)
 "#;
         let _ = engine.load_extension_module("testmath", ext_code, "<test>");
@@ -15928,7 +15920,7 @@ main() = {
 
         // Define a simple type with Num trait implementation
         let type_def = r#"
-type Vec = { data: List }
+type Vec = { data: List[Int] }
 
 trait Num
     add(self, other: Self) -> Self
@@ -15979,7 +15971,7 @@ pub vec(data) -> Vec = Vec(data)
 
         // Define a simple type with Num trait implementation
         let type_def = r#"
-type Vec = { data: List }
+type Vec = { data: List[Int] }
 
 trait Num
     add(self, other: Self) -> Self
@@ -16626,7 +16618,7 @@ trait NumTrait
     add(self, other: Self) -> Self
 end
 
-type Vec = { data: List }
+type Vec = { data: List[Int] }
 
 Vec: NumTrait
     add(self, other: Vec) -> Vec = Vec(self.data)
@@ -17351,13 +17343,13 @@ main() = {
         // Simulate loading an extension module (like nalgebra.nos but simpler)
         let ext_source = r#"
 # Simple vector-like type
-pub type Vec = { data: List }
+pub type Vec = { data: List[Int] }
 
 # Constructor
-pub vec(data: List) -> Vec = Vec(data)
+pub vec(data: List[Int]) -> Vec = Vec(data)
 
 # Get data back
-pub vecData(v: Vec) -> List = v.data
+pub vecData(v: Vec) -> List[Int] = v.data
 "#;
 
         println!("\n=== Loading test extension ===");
@@ -17452,7 +17444,7 @@ pub vecData(v: Vec) -> List = v.data
         // Load a simple extension with scalar functions
         let ext_source = r#"
 # Simple vector type with scalar operations
-pub type Vec = { data: List }
+pub type Vec = { data: List[Int] }
 
 trait Num
     add(self, other: Self) -> Self
@@ -17476,8 +17468,8 @@ pub vecMulScalar(v: Vec, s: Float) -> Vec = Vec(v.data.map(x => x * s))
 pub vecDivScalar(v: Vec, s: Float) -> Vec = Vec(v.data.map(x => x / s))
 
 # Constructor and accessor
-pub vec(data: List) -> Vec = Vec(data)
-pub vecData(v: Vec) -> List = v.data
+pub vec(data: List[Int]) -> Vec = Vec(data)
+pub vecData(v: Vec) -> List[Int] = v.data
 pub vecSum(v: Vec) -> Float = v.data.fold(0.0, (acc, x) => acc + x)
 "#;
 
@@ -17613,14 +17605,14 @@ pub vecSum(v: Vec) -> Float = v.data.fold(0.0, (acc, x) => acc + x)
         // Load extension with Show trait
         let ext_source = r#"
 # Simple vector type with Show trait
-pub type Vec = { data: List }
+pub type Vec = { data: List[Int] }
 
 trait Show
     show(self) -> String
 end
 
 # Constructor
-pub vec(data: List) -> Vec = Vec(data)
+pub vec(data: List[Int]) -> Vec = Vec(data)
 
 # Show implementation
 Vec: Show

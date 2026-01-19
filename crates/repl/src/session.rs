@@ -484,7 +484,19 @@ fn extract_dependencies_from_expr(expr: &Expr, deps: &mut HashSet<String>) {
                 let expr = match arg {
                     CallArg::Positional(e) | CallArg::Named(_, e) => e,
                 };
-                extract_dependencies_from_expr(expr, deps);
+                // Special case: if the argument is a simple Var, it might be a function
+                // being passed as a value (higher-order function). Capture it if it doesn't
+                // look like a typical local variable (single-letter lowercase).
+                if let Expr::Var(ident) = expr {
+                    let name = &ident.node;
+                    let is_likely_local = name.len() == 1
+                        && name.chars().next().map(|c| c.is_lowercase()).unwrap_or(false);
+                    if !is_likely_local {
+                        deps.insert(name.clone());
+                    }
+                } else {
+                    extract_dependencies_from_expr(expr, deps);
+                }
             }
         }
         Expr::BinOp(left, _, right, _) => {
@@ -579,7 +591,17 @@ fn extract_dependencies_from_expr(expr: &Expr, deps: &mut HashSet<String>) {
                 let expr = match arg {
                     CallArg::Positional(e) | CallArg::Named(_, e) => e,
                 };
-                extract_dependencies_from_expr(expr, deps);
+                // Special case for function references passed as arguments
+                if let Expr::Var(ident) = expr {
+                    let name = &ident.node;
+                    let is_likely_local = name.len() == 1
+                        && name.chars().next().map(|c| c.is_lowercase()).unwrap_or(false);
+                    if !is_likely_local {
+                        deps.insert(name.clone());
+                    }
+                } else {
+                    extract_dependencies_from_expr(expr, deps);
+                }
             }
         }
         Expr::Map(pairs, _) => {
