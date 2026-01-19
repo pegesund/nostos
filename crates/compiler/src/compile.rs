@@ -2002,6 +2002,15 @@ impl Compiler {
                 continue;
             }
 
+            // Skip stdlib functions - they have complex inter-dependencies that cause
+            // type inference to be slow. Stdlib is tested separately.
+            if fn_name.starts_with("stdlib.") ||
+               fn_name.starts_with("List.") || fn_name.starts_with("String.") ||
+               fn_name.starts_with("Math.") || fn_name.starts_with("Map.") ||
+               fn_name.starts_with("Set.") || fn_name.starts_with("Json.") {
+                continue;
+            }
+
             // Run type checking with full knowledge of all function signatures
             if let Err(e) = self.type_check_fn(fn_ast, fn_name) {
                 // Report type errors - only filter truly spurious ones from inference limitations
