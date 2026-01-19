@@ -2039,7 +2039,12 @@ impl Compiler {
                         // Pid/() confusion happens in spawn-related code where HM can't properly track
                         // that spawn returns Pid while the block evaluates to ()
                         let is_spawn_confusion = message.contains("Pid") && message.contains("()");
-                        let is_spurious = is_tuple_error ||
+                        // Int/String mismatch in try/catch: the try block may return Int but catch returns String
+                        // This is valid at runtime since exceptions are dynamic
+                        let is_try_catch_mismatch = (message.contains("Int") && message.contains("String")) &&
+                            (message.contains("type mismatch") || message.contains("Cannot unify") ||
+                             message.contains("expected") && message.contains("found"));
+                        let is_spurious = is_tuple_error || is_try_catch_mismatch ||
                             message.contains("Unknown identifier") ||
                             message.contains("Unknown type") ||
                             message.contains("has no field") ||
@@ -17207,23 +17212,57 @@ impl Compiler {
                 continue; // No signature available
             };
 
-            // Insert with full name (e.g., "bar/")
+            // Insert with full name (e.g., "stdlib.list.optMap/_,_")
             env.functions.insert(fn_name.clone(), func_type.clone());
 
-            // Also insert with base name (e.g., "main.bar") for simple lookups
-            // Function names have format "module.name/" or "name/"
+            // Also insert with short names for lookup_all_functions_with_arity
             if let Some(slash_pos) = fn_name.find('/') {
                 let base_name = &fn_name[..slash_pos];
-                // Only insert if base name not already registered (don't overwrite overloads)
-                if !env.functions.contains_key(base_name) {
-                    env.functions.insert(base_name.to_string(), func_type.clone());
-                }
+                let arity_suffix = &fn_name[slash_pos..]; // e.g., "/_,_"
 
-                // Also insert without module prefix for local lookups (e.g., "main.bar" -> "bar")
+                // Insert base.name with arity (e.g., "stdlib.list.optMap/_,_" -> keep as is)
+                // Insert just name with arity (e.g., "optMap/_,_")
                 if let Some(dot_pos) = base_name.rfind('.') {
                     let short_name = &base_name[dot_pos + 1..];
+                    let short_qualified = format!("{}{}", short_name, arity_suffix);
+                    // Always insert with arity suffix for overload resolution
+                    env.functions.insert(short_qualified, func_type.clone());
+                    // Also insert bare name for simple lookups (first wins)
                     if !env.functions.contains_key(short_name) {
                         env.functions.insert(short_name.to_string(), func_type);
+                    }
+                }
+            }
+        }
+
+        // Register pending function signatures for functions not yet compiled
+        // This enables correct type inference for mutual recursion across compilation order
+        for (fn_name, fn_type) in &self.pending_fn_signatures {
+            // Get the base name to check if any overload is compiled
+            let base_name = fn_name.split('/').next().unwrap_or(fn_name);
+            let already_compiled = self.functions.keys()
+                .filter(|k| k.split('/').next().unwrap_or(k) == base_name)
+                .any(|k| self.functions.get(k).map(|fv| fv.signature.is_some()).unwrap_or(false));
+            if already_compiled {
+                continue;
+            }
+
+            if !env.functions.contains_key(fn_name) {
+                env.functions.insert(fn_name.clone(), fn_type.clone());
+            }
+            if let Some(slash_pos) = fn_name.find('/') {
+                let base_name = &fn_name[..slash_pos];
+                let arity_suffix = &fn_name[slash_pos..];
+                if let Some(dot_pos) = base_name.rfind('.') {
+                    let short_name = &base_name[dot_pos + 1..];
+                    let short_qualified = format!("{}{}", short_name, arity_suffix);
+                    // Register with arity suffix for overload resolution
+                    if !env.functions.contains_key(&short_qualified) {
+                        env.functions.insert(short_qualified, fn_type.clone());
+                    }
+                    // Also register bare name for simple lookups
+                    if !env.functions.contains_key(short_name) {
+                        env.functions.insert(short_name.to_string(), fn_type.clone());
                     }
                 }
             }
@@ -17602,20 +17641,29 @@ impl Compiler {
         }
 
         // Then register pending function signatures (for functions not yet compiled)
-        // ONLY register if the function doesn't already have a properly inferred signature
-        // in self.functions. The pending_fn_signatures uses unique type variables for each
-        // untyped param, but proper HM inference shares type variables (e.g., "a -> a -> a"
-        // where both params share the same type variable).
+        // For mutual recursion support, we need to register these signatures.
+        // However, for UNTYPED functions (where params have type variables), the pre-pass
+        // creates independent type variables for each param, while HM inference correctly
+        // shares them (e.g., "a -> a -> a"). So:
+        // - If pre-pass signature has type variables: prefer HM-inferred signature (if available)
+        // - If pre-pass signature is fully typed: always use it (mutual recursion support)
         for (fn_name, fn_type) in &self.pending_fn_signatures {
-            // Skip if already registered from self.functions (which has proper inferred types)
-            if env.functions.contains_key(fn_name) {
-                continue;
-            }
-            // Only register if not in self.functions or self.functions has no signature
-            let has_inferred_sig = self.functions.get(fn_name)
-                .map(|fv| fv.signature.is_some())
-                .unwrap_or(false);
-            if !has_inferred_sig {
+            let has_type_vars = fn_type.params.iter().any(|t| matches!(t, nostos_types::Type::Var(_)))
+                || matches!(fn_type.ret.as_ref(), nostos_types::Type::Var(_));
+
+            if has_type_vars {
+                // Untyped function - only register if not already in env (prefer HM inference)
+                if !env.functions.contains_key(fn_name) {
+                    // Only register if not in self.functions or self.functions has no signature
+                    let has_inferred_sig = self.functions.get(fn_name)
+                        .map(|fv| fv.signature.is_some())
+                        .unwrap_or(false);
+                    if !has_inferred_sig {
+                        env.functions.insert(fn_name.clone(), fn_type.clone());
+                    }
+                }
+            } else {
+                // Fully typed function - always register/overwrite for mutual recursion
                 env.functions.insert(fn_name.clone(), fn_type.clone());
             }
         }

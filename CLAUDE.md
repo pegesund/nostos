@@ -1,3 +1,28 @@
+## ⛔ STOP! DO NOT RUN FULL TEST SUITE! ⛔
+
+**THIS IS THE #1 RULE. READ THIS FIRST BEFORE DOING ANYTHING.**
+
+**NEVER run `cd tests && ./runall.sh` unless:**
+1. The user EXPLICITLY asks you to run the full test suite
+2. You are about to make a final commit and need to verify everything
+
+**Why this matters:**
+- Full test suite takes 3-5 minutes
+- You waste enormous amounts of time running it repeatedly
+- The user has complained about this MULTIPLE TIMES
+- Focus on the SPECIFIC bug you're fixing, not on running all tests
+
+**What to do instead:**
+- Create a MINIMAL test file that reproduces the specific bug
+- Run ONLY that test file: `./target/release/nostos /tmp/mytest.nos`
+- Fix the bug
+- Verify with the minimal test
+- Only run full suite when DONE and ready to commit
+
+**If you catch yourself typing `./runall.sh` - STOP and ask yourself: "Did the user ask me to run all tests?"**
+
+---
+
 - do not make new vms yourself, work with the exising ones. the parallell one is the main target, so prefer fixing this first. Single threaded is for experimentation and validation.
 - remember we only work with/benchmark the paralell vm. The single threaded is only kept for experiments.
 - build release, not debug

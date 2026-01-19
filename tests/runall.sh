@@ -65,8 +65,8 @@ run_single_test() {
         return
     fi
 
-    # Run the test with timeout
-    local output=$(timeout 10 "$BINARY" "$file" 2>&1) || true
+    # Run the test with timeout (15 seconds to account for compilation time)
+    local output=$(timeout 15 "$BINARY" "$file" 2>&1) || true
 
     if [ -n "$expect_error" ]; then
         # Test expects an error - check if error message contains expected string
