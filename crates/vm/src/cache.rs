@@ -90,6 +90,39 @@ pub struct FunctionSignature {
 }
 
 // ============================================================================
+// Cached Mvar
+// ============================================================================
+
+/// Cached mvar (module-level mutable variable) definition
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CachedMvar {
+    pub name: String,
+    pub type_name: String,
+    pub initial_value: CachedMvarValue,
+}
+
+/// Serializable mvar initial value
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum CachedMvarValue {
+    Unit,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    String(String),
+    Char(char),
+    EmptyList,
+    IntList(Vec<i64>),
+    StringList(Vec<String>),
+    FloatList(Vec<f64>),
+    BoolList(Vec<bool>),
+    Tuple(Vec<CachedMvarValue>),
+    List(Vec<CachedMvarValue>),
+    Record(String, Vec<(String, CachedMvarValue)>),
+    EmptyMap,
+    Map(Vec<(CachedMvarValue, CachedMvarValue)>),
+}
+
+// ============================================================================
 // Module Cache
 // ============================================================================
 
@@ -105,6 +138,9 @@ pub struct CachedModule {
     pub prelude_imports: Vec<(String, String)>,
     /// Type definitions from this module
     pub types: Vec<TypeValue>,
+    /// Module-level mutable variables (mvars)
+    #[serde(default)]
+    pub mvars: Vec<CachedMvar>,
 }
 
 use crate::value::TypeValue;
@@ -257,10 +293,33 @@ impl CachedValue {
                 }
             }
             CachedValue::InlineFunction(cached_fn) => {
-                // Inline functions (lambdas) - convert without resolver
-                // Lambdas shouldn't have function references in their constants
-                // (they use captures for external values)
-                let func = cached_to_function(cached_fn);
+                // Inline functions (lambdas) - convert WITH resolver using boxed trait object
+                // to avoid recursive type expansion
+                let boxed_resolver: Box<dyn Fn(&str) -> Option<Value> + '_> = Box::new(|name| resolver(name));
+                let func = cached_to_function_with_boxed_resolver(cached_fn, &boxed_resolver);
+                Value::Function(Arc::new(func))
+            }
+            // For non-function values, use the regular conversion
+            _ => self.to_value(),
+        }
+    }
+
+    /// Convert to Value with boxed function reference resolution
+    /// This avoids recursive type expansion when inline functions contain other inline functions
+    pub fn to_value_with_boxed_resolver(&self, resolver: &Box<dyn Fn(&str) -> Option<Value> + '_>) -> Value {
+        match self {
+            CachedValue::FunctionRef(name) => {
+                // Try to resolve the function reference
+                if let Some(func) = resolver(name) {
+                    func
+                } else {
+                    // Function not found - return Unit (will cause runtime error)
+                    Value::Unit
+                }
+            }
+            CachedValue::InlineFunction(cached_fn) => {
+                // Inline functions (lambdas) - convert WITH resolver
+                let func = cached_to_function_with_boxed_resolver(cached_fn, resolver);
                 Value::Function(Arc::new(func))
             }
             // For non-function values, use the regular conversion
@@ -358,6 +417,18 @@ impl CachedChunk {
         Chunk {
             code: self.code.clone(),
             constants: self.constants.iter().map(|v| v.to_value_with_resolver(&resolver)).collect(),
+            lines: self.lines.clone(),
+            locals: self.locals.clone(),
+            register_count: self.register_count,
+        }
+    }
+
+    /// Convert CachedChunk back to Chunk with boxed function reference resolution
+    /// This avoids recursive type expansion when inline functions contain other inline functions
+    pub fn to_chunk_with_boxed_resolver(&self, resolver: &Box<dyn Fn(&str) -> Option<Value> + '_>) -> Chunk {
+        Chunk {
+            code: self.code.clone(),
+            constants: self.constants.iter().map(|v| v.to_value_with_boxed_resolver(resolver)).collect(),
             lines: self.lines.clone(),
             locals: self.locals.clone(),
             register_count: self.register_count,
@@ -728,6 +799,41 @@ where
     }
 }
 
+/// Helper to convert a CachedFunction back to FunctionValue with a boxed resolver
+/// This avoids recursive type expansion when inline functions contain other inline functions
+pub fn cached_to_function_with_boxed_resolver(
+    cached: &CachedFunction,
+    resolver: &Box<dyn Fn(&str) -> Option<Value> + '_>,
+) -> FunctionValue {
+    // Convert debug symbols back
+    let debug_symbols: Vec<LocalVarSymbol> = cached.debug_symbols
+        .iter()
+        .map(|(name, register, _, _)| LocalVarSymbol {
+            name: name.clone(),
+            register: *register,
+        })
+        .collect();
+
+    FunctionValue {
+        name: cached.name.clone(),
+        arity: cached.arity,
+        param_names: cached.param_names.clone(),
+        code: Arc::new(cached.code.to_chunk_with_boxed_resolver(resolver)),
+        module: cached.module.clone(),
+        source_span: cached.source_span,
+        jit_code: None,
+        call_count: std::sync::atomic::AtomicU32::new(0),
+        debug_symbols,
+        source_code: None, // Source code not cached
+        source_file: cached.source_file.clone(),
+        doc: cached.doc.clone(),
+        signature: cached.signature.clone(),
+        param_types: cached.param_types.clone(),
+        return_type: cached.return_type.clone(),
+        required_params: cached.required_params,
+    }
+}
+
 
 // ============================================================================
 // Tests
@@ -804,6 +910,9 @@ mod tests {
             functions: vec![],
             function_signatures: HashMap::new(),
             exports: vec!["map".to_string(), "filter".to_string()],
+            prelude_imports: vec![],
+            types: vec![],
+            mvars: vec![],
         };
 
         let bytes = bincode::serialize(&module).expect("Failed to serialize module");

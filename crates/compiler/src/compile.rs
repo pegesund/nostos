@@ -15930,6 +15930,40 @@ impl Compiler {
         }
     }
 
+    /// Register an external function's AST for parameter info (names, defaults).
+    /// This is used when loading from cache - we have the bytecode but need
+    /// parameter metadata for compiling calls with default arguments.
+    pub fn register_external_fn_ast(&mut self, module_prefix: &str, fn_def: &nostos_syntax::ast::FnDef) {
+        // Build the full qualified name for each clause
+        let base_name = format!("{}.{}", module_prefix, fn_def.name.node);
+
+        // For each clause, compute the signature and store the AST
+        for (clause_idx, clause) in fn_def.clauses.iter().enumerate() {
+            // Build parameter type signature
+            let param_types: Vec<String> = clause.params.iter()
+                .map(|p| p.ty.as_ref()
+                    .map(|t| self.type_expr_to_string(t))
+                    .unwrap_or_else(|| "Any".to_string()))
+                .collect();
+
+            let fn_name = if fn_def.clauses.len() > 1 || clause_idx > 0 {
+                format!("{}/{}", base_name, param_types.join(","))
+            } else {
+                format!("{}/{}", base_name, param_types.join(","))
+            };
+
+            // Insert into fn_asts so get_function_param_defaults can find it
+            self.fn_asts.insert(fn_name.clone(), fn_def.clone());
+
+            // Update fn_asts_by_base index
+            let fn_base = base_name.clone();
+            self.fn_asts_by_base
+                .entry(fn_base)
+                .or_insert_with(HashSet::new)
+                .insert(fn_name);
+        }
+    }
+
     /// Register an externally defined type (e.g., from a previous eval).
     pub fn register_external_type(&mut self, name: &str, type_val: &Arc<TypeValue>) {
         if self.types.contains_key(name) {
@@ -15986,6 +16020,15 @@ impl Compiler {
                 initial_value: MvarInitValue::Unit,
             });
         }
+    }
+
+    /// Register an mvar with full info (for cache loading).
+    /// This allows loading mvars from the bytecode cache.
+    pub fn register_mvar_with_info(&mut self, name: &str, type_name: String, initial_value: MvarInitValue) {
+        self.mvars.insert(name.to_string(), MvarInfo {
+            type_name,
+            initial_value,
+        });
     }
 
     /// Register a known module prefix.
@@ -17564,6 +17607,18 @@ impl Compiler {
             }
         }
 
+        // CRITICAL: Update next_var to avoid collisions with type variables in registered functions
+        // Signature strings use 'a'->Var(1), 'b'->Var(2), etc. Fresh variables must not collide with these.
+        let max_var_in_functions = env.functions.values()
+            .filter_map(|ft| ft.max_var_id())
+            .filter(|&id| id != u32::MAX) // Sentinel for unknown types
+            .max();
+        if let Some(max_id) = max_var_in_functions {
+            if env.next_var <= max_id {
+                env.next_var = max_id.saturating_add(1);
+            }
+        }
+
         // Pre-register the function being inferred with fresh type variables for recursion support
         // This allows the function to call itself during type inference
         // Always register (overwrite builtins if needed) so user functions can shadow builtins
@@ -17610,16 +17665,12 @@ impl Compiler {
         let func_ty = match ctx.infer_function(def) {
             Ok(ft) => ft,
             Err(_e) => {
-                // Debug: uncomment to see inference errors
-                // eprintln!("DEBUG: infer_function failed for {}: {:?}", def.name.node, _e);
                 return None;
             }
         };
 
         // Solve constraints (this can hang on unresolved type vars with HasField)
-        if let Err(_e) = ctx.solve() {
-            // Debug: uncomment to see solve errors
-            // eprintln!("DEBUG: solve failed for {}: {:?}", def.name.node, _e);
+        if ctx.solve().is_err() {
             return None;
         }
 
@@ -17629,9 +17680,6 @@ impl Compiler {
             .map(|ty| ctx.env.apply_subst(ty))
             .collect();
         let resolved_ret = ctx.env.apply_subst(&func_ty.ret);
-
-        // Debug: uncomment to see resolved types
-        // eprintln!("DEBUG HM: {} params={:?} ret={:?}", def.name.node, resolved_params, resolved_ret);
 
         // Collect all type variable IDs in order of first appearance
         let mut var_order: Vec<u32> = Vec::new();

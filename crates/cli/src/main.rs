@@ -23,7 +23,7 @@ use nostos_compiler::compile::{Compiler, MvarInitValue};
 use nostos_jit::{JitCompiler, JitConfig};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::async_vm::{AsyncVM, AsyncConfig};
-use nostos_vm::cache::{BytecodeCache, CachedModule, function_to_cached_with_fn_list, compute_file_hash};
+use nostos_vm::cache::{BytecodeCache, CachedModule, CachedMvar, CachedMvarValue, function_to_cached_with_fn_list, compute_file_hash};
 use nostos_vm::process::ThreadSafeValue;
 use nostos_vm::value::RuntimeError;
 use std::env;
@@ -171,12 +171,14 @@ fn try_load_stdlib_from_cache(
     let mut all_cached_functions: Vec<CachedFunction> = Vec::new();
     let mut all_prelude_imports: Vec<(String, String)> = Vec::new();
     let mut all_types: Vec<nostos_vm::value::TypeValue> = Vec::new();
+    let mut all_mvars: Vec<CachedMvar> = Vec::new();
     for (module_name, _file_path) in &modules_to_load {
         match cache.load_module(module_name) {
             Ok(cached_module) => {
                 all_cached_functions.extend(cached_module.functions);
                 all_prelude_imports.extend(cached_module.prelude_imports);
                 all_types.extend(cached_module.types);
+                all_mvars.extend(cached_module.mvars);
             }
             Err(_) => {
                 // Cache file couldn't be loaded - invalidate
@@ -214,6 +216,35 @@ fn try_load_stdlib_from_cache(
     // Register types
     for type_val in &all_types {
         compiler.register_external_type(&type_val.name, &std::sync::Arc::new(type_val.clone()));
+    }
+
+    // Register mvars from cache
+    for cached_mvar in &all_mvars {
+        let initial_value = cached_to_mvar_init(&cached_mvar.initial_value);
+        compiler.register_mvar_with_info(
+            &cached_mvar.name,
+            cached_mvar.type_name.clone(),
+            initial_value,
+        );
+    }
+
+    // Also parse stdlib files to get function parameter info (names and defaults)
+    // This is much faster than full compilation but provides necessary metadata
+    for (module_name, file_path) in &modules_to_load {
+        if let Ok(source) = fs::read_to_string(file_path) {
+            let (module_opt, _) = parse(&source);
+            if let Some(module) = module_opt {
+                // Extract module prefix for qualified names
+                let module_prefix = module_name.clone();
+
+                // Register function ASTs for parameter info (defaults, names)
+                for item in &module.items {
+                    if let nostos_syntax::ast::Item::FnDef(fn_def) = item {
+                        compiler.register_external_fn_ast(&module_prefix, fn_def);
+                    }
+                }
+            }
+        }
     }
 
     if loaded_count > 0 {
@@ -363,6 +394,9 @@ fn build_stdlib_cache() -> ExitCode {
     // Get all types from compiler
     let all_types = compiler.get_all_types();
 
+    // Get all mvars from compiler
+    let all_mvars = compiler.get_mvars();
+
     // Group functions by module and save
     let mut saved_count = 0;
     for (module_name, source_hash, path, prelude_imports) in &modules {
@@ -385,6 +419,16 @@ fn build_stdlib_cache() -> ExitCode {
             .map(|(_, type_val)| (**type_val).clone())
             .collect();
 
+        // Collect mvars for this module
+        let module_mvars: Vec<CachedMvar> = all_mvars.iter()
+            .filter(|(mvar_name, _)| mvar_name.starts_with(&module_prefix))
+            .map(|(name, info)| CachedMvar {
+                name: name.clone(),
+                type_name: info.type_name.clone(),
+                initial_value: mvar_init_to_cached(&info.initial_value),
+            })
+            .collect();
+
         let cached_module = CachedModule {
             module_path: module_name.split('.').map(|s| s.to_string()).collect(),
             source_hash: source_hash.clone(),
@@ -393,6 +437,7 @@ fn build_stdlib_cache() -> ExitCode {
             exports: Vec::new(),
             prelude_imports: prelude_imports.clone(),
             types: module_types,
+            mvars: module_mvars,
         };
 
         // Save even modules with no functions (for types/traits-only modules)
@@ -723,6 +768,68 @@ fn mvar_init_to_shared_value(init: &MvarInitValue) -> nostos_vm::SharedMapValue 
             }
             SharedMapValue::Map(std::sync::Arc::new(map))
         }
+    }
+}
+
+/// Convert MvarInitValue to CachedMvarValue for cache storage.
+fn mvar_init_to_cached(init: &MvarInitValue) -> CachedMvarValue {
+    match init {
+        MvarInitValue::Unit => CachedMvarValue::Unit,
+        MvarInitValue::Bool(b) => CachedMvarValue::Bool(*b),
+        MvarInitValue::Int(n) => CachedMvarValue::Int(*n),
+        MvarInitValue::Float(f) => CachedMvarValue::Float(*f),
+        MvarInitValue::String(s) => CachedMvarValue::String(s.clone()),
+        MvarInitValue::Char(c) => CachedMvarValue::Char(*c),
+        MvarInitValue::EmptyList => CachedMvarValue::EmptyList,
+        MvarInitValue::IntList(ints) => CachedMvarValue::IntList(ints.clone()),
+        MvarInitValue::StringList(strings) => CachedMvarValue::StringList(strings.clone()),
+        MvarInitValue::FloatList(floats) => CachedMvarValue::FloatList(floats.clone()),
+        MvarInitValue::BoolList(bools) => CachedMvarValue::BoolList(bools.clone()),
+        MvarInitValue::Tuple(items) => CachedMvarValue::Tuple(
+            items.iter().map(mvar_init_to_cached).collect()
+        ),
+        MvarInitValue::List(items) => CachedMvarValue::List(
+            items.iter().map(mvar_init_to_cached).collect()
+        ),
+        MvarInitValue::Record(type_name, fields) => CachedMvarValue::Record(
+            type_name.clone(),
+            fields.iter().map(|(name, val)| (name.clone(), mvar_init_to_cached(val))).collect()
+        ),
+        MvarInitValue::EmptyMap => CachedMvarValue::EmptyMap,
+        MvarInitValue::Map(entries) => CachedMvarValue::Map(
+            entries.iter().map(|(k, v)| (mvar_init_to_cached(k), mvar_init_to_cached(v))).collect()
+        ),
+    }
+}
+
+/// Convert CachedMvarValue back to MvarInitValue for cache loading.
+fn cached_to_mvar_init(cached: &CachedMvarValue) -> MvarInitValue {
+    match cached {
+        CachedMvarValue::Unit => MvarInitValue::Unit,
+        CachedMvarValue::Bool(b) => MvarInitValue::Bool(*b),
+        CachedMvarValue::Int(n) => MvarInitValue::Int(*n),
+        CachedMvarValue::Float(f) => MvarInitValue::Float(*f),
+        CachedMvarValue::String(s) => MvarInitValue::String(s.clone()),
+        CachedMvarValue::Char(c) => MvarInitValue::Char(*c),
+        CachedMvarValue::EmptyList => MvarInitValue::EmptyList,
+        CachedMvarValue::IntList(ints) => MvarInitValue::IntList(ints.clone()),
+        CachedMvarValue::StringList(strings) => MvarInitValue::StringList(strings.clone()),
+        CachedMvarValue::FloatList(floats) => MvarInitValue::FloatList(floats.clone()),
+        CachedMvarValue::BoolList(bools) => MvarInitValue::BoolList(bools.clone()),
+        CachedMvarValue::Tuple(items) => MvarInitValue::Tuple(
+            items.iter().map(cached_to_mvar_init).collect()
+        ),
+        CachedMvarValue::List(items) => MvarInitValue::List(
+            items.iter().map(cached_to_mvar_init).collect()
+        ),
+        CachedMvarValue::Record(type_name, fields) => MvarInitValue::Record(
+            type_name.clone(),
+            fields.iter().map(|(name, val)| (name.clone(), cached_to_mvar_init(val))).collect()
+        ),
+        CachedMvarValue::EmptyMap => MvarInitValue::EmptyMap,
+        CachedMvarValue::Map(entries) => MvarInitValue::Map(
+            entries.iter().map(|(k, v)| (cached_to_mvar_init(k), cached_to_mvar_init(v))).collect()
+        ),
     }
 }
 
@@ -1762,6 +1869,7 @@ fn main() -> ExitCode {
                 compiler.add_prelude_import(local_name, qualified_name);
             }
         } else {
+            // No cache - parse all stdlib files
             // No cache - parse all stdlib files
             let mut stdlib_functions: Vec<(String, String)> = Vec::new();
 
