@@ -15,13 +15,88 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 
 use nostos_extension::GcNativeHandle;
+use serde::{Serialize, Deserialize};
 use num_bigint::BigInt;
 use rust_decimal::Decimal;
 
 /// Shared register list - makes instruction cloning O(1) instead of O(n).
 /// Used for function arguments, list/tuple construction, etc.
 /// Uses Arc for thread-safety with ParallelVM.
-pub type RegList = Arc<[Reg]>;
+/// The newtype wrapper implements Serialize/Deserialize for bytecode caching.
+#[derive(Clone, Debug)]
+pub struct RegList(pub Arc<[Reg]>);
+
+impl std::ops::Deref for RegList {
+    type Target = [Reg];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<Vec<Reg>> for RegList {
+    fn from(v: Vec<Reg>) -> Self {
+        RegList(v.into())
+    }
+}
+
+impl From<Arc<[Reg]>> for RegList {
+    fn from(a: Arc<[Reg]>) -> Self {
+        RegList(a)
+    }
+}
+
+impl Serialize for RegList {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where S: serde::Serializer {
+        self.0.as_ref().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for RegList {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where D: serde::Deserializer<'de> {
+        let vec = Vec::<Reg>::deserialize(deserializer)?;
+        Ok(RegList(vec.into()))
+    }
+}
+
+/// Shared register pairs for map construction.
+#[derive(Clone, Debug)]
+pub struct RegPairs(pub Arc<[(Reg, Reg)]>);
+
+impl std::ops::Deref for RegPairs {
+    type Target = [(Reg, Reg)];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<Vec<(Reg, Reg)>> for RegPairs {
+    fn from(v: Vec<(Reg, Reg)>) -> Self {
+        RegPairs(v.into())
+    }
+}
+
+impl From<Arc<[(Reg, Reg)]>> for RegPairs {
+    fn from(a: Arc<[(Reg, Reg)]>) -> Self {
+        RegPairs(a)
+    }
+}
+
+impl Serialize for RegPairs {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where S: serde::Serializer {
+        self.0.as_ref().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for RegPairs {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where D: serde::Deserializer<'de> {
+        let vec = Vec::<(Reg, Reg)>::deserialize(deserializer)?;
+        Ok(RegPairs(vec.into()))
+    }
+}
 
 /// A runtime value in Nostos.
 #[derive(Clone)]
@@ -884,7 +959,7 @@ pub type JumpOffset = i16;
 ///
 /// Register-based design for efficient JIT compilation to Cranelift SSA.
 /// Explicit tail call instruction for proper TCO.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Instruction {
     // === Constants and moves ===
     /// Load constant: dst = constants[idx]
@@ -952,7 +1027,7 @@ pub enum Instruction {
     /// Create tuple: dst = (regs...)
     MakeTuple(Reg, RegList),
     /// Create map: dst = %{keys: values}
-    MakeMap(Reg, Arc<[(Reg, Reg)]>),
+    MakeMap(Reg, RegPairs),
     /// Create set: dst = #{regs...}
     MakeSet(Reg, RegList),
     /// Check if map contains key: dst = map.contains_key(key)

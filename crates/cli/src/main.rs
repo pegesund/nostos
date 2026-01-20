@@ -19,16 +19,17 @@ mod packages;
 mod server;
 mod connect;
 
-use nostos_compiler::compile::{compile_module, Compiler, MvarInitValue};
+use nostos_compiler::compile::{Compiler, MvarInitValue};
 use nostos_jit::{JitCompiler, JitConfig};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::async_vm::{AsyncVM, AsyncConfig};
+use nostos_vm::cache::{BytecodeCache, CachedModule, CachedFunction, function_to_cached, cached_to_function, compute_file_hash};
 use nostos_vm::process::ThreadSafeValue;
 use nostos_vm::value::RuntimeError;
 use std::env;
 use std::fs;
+use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::atomic::Ordering;
 
 /// Recursively visit directories and find .nos files
 fn visit_dirs(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
@@ -54,6 +55,246 @@ fn visit_dirs(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) -> std
         }
     }
     Ok(())
+}
+
+/// Get the path to the bytecode cache directory
+fn get_cache_dir() -> PathBuf {
+    if let Some(home) = dirs::home_dir() {
+        home.join(".nostos").join("cache")
+    } else {
+        PathBuf::from(".nostos-cache")
+    }
+}
+
+/// Find the stdlib directory
+fn find_stdlib_path() -> Option<PathBuf> {
+    let candidates = vec![
+        PathBuf::from("stdlib"),
+        PathBuf::from("../stdlib"),
+    ];
+
+    for path in candidates {
+        if path.is_dir() {
+            return Some(path);
+        }
+    }
+
+    // Try relative to executable
+    if let Ok(mut p) = std::env::current_exe() {
+        p.pop(); // remove binary name
+        p.pop(); // remove release/debug
+        p.pop(); // remove target
+        p.push("stdlib");
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+
+    // Try home directory locations
+    if let Some(home) = dirs::home_dir() {
+        let home_stdlib = home.join(".nostos").join("stdlib");
+        if home_stdlib.is_dir() {
+            return Some(home_stdlib);
+        }
+    }
+
+    None
+}
+
+/// Build and save the stdlib bytecode cache
+fn build_stdlib_cache() -> ExitCode {
+    println!("Building stdlib bytecode cache...");
+
+    let stdlib_path = match find_stdlib_path() {
+        Some(p) => p,
+        None => {
+            eprintln!("Error: Could not find stdlib directory");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    println!("Found stdlib at: {}", stdlib_path.display());
+
+    // Collect all stdlib files
+    let mut stdlib_files = Vec::new();
+    if let Err(e) = visit_dirs(&stdlib_path, &mut stdlib_files) {
+        eprintln!("Error scanning stdlib: {}", e);
+        return ExitCode::FAILURE;
+    }
+
+    println!("Found {} stdlib files", stdlib_files.len());
+
+    // Initialize compiler
+    let mut compiler = Compiler::new_empty();
+
+    // Track module info for cache
+    let mut modules: Vec<(String, String, PathBuf)> = Vec::new(); // (module_name, source_hash, path)
+
+    // Track function names for prelude imports (same as main execution path)
+    let mut stdlib_functions: Vec<(String, String)> = Vec::new();
+
+    // Parse and add all stdlib modules
+    for file_path in &stdlib_files {
+        let source = match fs::read_to_string(file_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Error reading {}: {}", file_path.display(), e);
+                return ExitCode::FAILURE;
+            }
+        };
+
+        let (module_opt, errors) = parse(&source);
+        if !errors.is_empty() {
+            eprintln!("Parse errors in {}", file_path.display());
+            return ExitCode::FAILURE;
+        }
+
+        let module = match module_opt {
+            Some(m) => m,
+            None => continue,
+        };
+
+        // Build module path
+        let relative = file_path.strip_prefix(&stdlib_path).unwrap();
+        let mut components: Vec<String> = vec!["stdlib".to_string()];
+        for component in relative.components() {
+            let s = component.as_os_str().to_string_lossy().to_string();
+            if s.ends_with(".nos") {
+                components.push(s.trim_end_matches(".nos").to_string());
+            } else {
+                components.push(s);
+            }
+        }
+        let module_name = components.join(".");
+
+        // Compute source hash
+        let source_hash = match compute_file_hash(file_path) {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("Error hashing {}: {}", file_path.display(), e);
+                return ExitCode::FAILURE;
+            }
+        };
+
+        // Collect function and type names for prelude imports (same as main execution path)
+        for item in &module.items {
+            match item {
+                nostos_syntax::ast::Item::FnDef(fn_def) => {
+                    let local_name = fn_def.name.node.clone();
+                    let qualified_name = format!("{}.{}", module_name, local_name);
+                    stdlib_functions.push((local_name, qualified_name));
+                }
+                nostos_syntax::ast::Item::TypeDef(type_def) => {
+                    if matches!(type_def.visibility, nostos_syntax::ast::Visibility::Public) {
+                        let local_name = type_def.name.node.clone();
+                        let qualified_name = format!("{}.{}", module_name, local_name);
+                        stdlib_functions.push((local_name, qualified_name));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        modules.push((module_name, source_hash, file_path.clone()));
+
+        if let Err(e) = compiler.add_module(&module, components, std::sync::Arc::new(source), file_path.to_str().unwrap().to_string()) {
+            eprintln!("Error adding module {}: {}", file_path.display(), e);
+            return ExitCode::FAILURE;
+        }
+    }
+
+    // Register prelude imports so stdlib functions can reference each other
+    for (local_name, qualified_name) in stdlib_functions {
+        compiler.add_prelude_import(local_name, qualified_name);
+    }
+
+    // Compile all functions
+    println!("Compiling stdlib functions...");
+    if let Err((e, filename, source)) = compiler.compile_all() {
+        let source_error = e.to_source_error();
+        source_error.eprint(&filename, &source);
+        return ExitCode::FAILURE;
+    }
+
+    // Get all compiled functions
+    let functions = compiler.get_all_functions();
+    println!("Compiled {} functions", functions.len());
+
+    // Create cache directory
+    let cache_dir = get_cache_dir();
+    if let Err(e) = fs::create_dir_all(&cache_dir) {
+        eprintln!("Error creating cache directory: {}", e);
+        return ExitCode::FAILURE;
+    }
+
+    // Initialize cache manager
+    let mut cache = BytecodeCache::new(cache_dir.clone(), env!("CARGO_PKG_VERSION"));
+
+    // Group functions by module and save
+    let mut saved_count = 0;
+    for (module_name, source_hash, path) in &modules {
+        let module_prefix = format!("{}.", module_name);
+
+        // Collect functions for this module
+        let mut cached_functions = Vec::new();
+        for (func_name, func) in functions {
+            if func_name.starts_with(&module_prefix) || func.module.as_deref() == Some(module_name.as_str()) {
+                if let Some(cached) = function_to_cached(func) {
+                    cached_functions.push(cached);
+                }
+            }
+        }
+
+        if cached_functions.is_empty() {
+            continue;
+        }
+
+        let cached_module = CachedModule {
+            module_path: module_name.split('.').map(|s| s.to_string()).collect(),
+            source_hash: source_hash.clone(),
+            functions: cached_functions,
+            function_signatures: std::collections::HashMap::new(),
+            exports: Vec::new(),
+        };
+
+        if let Err(e) = cache.save_module(module_name, path.to_str().unwrap(), &cached_module) {
+            eprintln!("Error saving cache for {}: {}", module_name, e);
+        } else {
+            saved_count += 1;
+        }
+    }
+
+    // Save manifest
+    if let Err(e) = cache.save_manifest() {
+        eprintln!("Error saving cache manifest: {}", e);
+        return ExitCode::FAILURE;
+    }
+
+    println!("Saved {} module caches to {}", saved_count, cache_dir.display());
+    println!("Cache built successfully!");
+
+    ExitCode::SUCCESS
+}
+
+/// Clear the bytecode cache
+fn clear_bytecode_cache() -> ExitCode {
+    let cache_dir = get_cache_dir();
+
+    if !cache_dir.exists() {
+        println!("Cache directory does not exist: {}", cache_dir.display());
+        return ExitCode::SUCCESS;
+    }
+
+    match fs::remove_dir_all(&cache_dir) {
+        Ok(_) => {
+            println!("Cleared bytecode cache at {}", cache_dir.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("Error clearing cache: {}", e);
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Format a runtime error as JSON for debugger integration.
@@ -1063,6 +1304,8 @@ fn main() -> ExitCode {
                 println!();
                 println!("MORE INFO:");
                 println!("    --help            Show this help");
+                println!("    --build-cache     Build stdlib bytecode cache");
+                println!("    --clear-cache     Clear the bytecode cache");
                 println!("    --version         Show version");
                 println!();
                 println!("Documentation: https://pegesund.github.io/nostos/tutorial/24_command_line.html");
@@ -1076,6 +1319,14 @@ fn main() -> ExitCode {
                 enable_jit = false;
                 i += 1;
                 continue;
+            }
+            if arg == "--build-cache" {
+                // Build and save stdlib bytecode cache
+                return build_stdlib_cache();
+            }
+            if arg == "--clear-cache" {
+                // Clear the bytecode cache
+                return clear_bytecode_cache();
             }
             if arg == "--debug" {
                 debug_mode = true;

@@ -61,6 +61,8 @@ deadpool-postgres = { version = "0.14", features = ["serde"] }
 postgres-native-tls = "0.5"
 native-tls = "0.2"
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+bincode = "1.3"
 futures = "0.3"
 
 # Thread pools

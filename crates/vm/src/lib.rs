@@ -9,6 +9,7 @@
 //! - Multi-CPU parallel execution
 
 pub mod async_vm;
+pub mod cache;
 pub mod extensions;
 pub mod gc;
 pub mod inspect;
@@ -30,3 +31,5 @@ pub use value::*;
 pub use extensions::ExtensionManager;
 pub use async_vm::{ThreadedEvalHandle, DebugSession};
 pub use async_vm::{enable_output_capture, disable_output_capture, is_output_capture_enabled};
+pub use cache::{BytecodeCache, CachedModule, CachedFunction, CachedChunk, CachedValue, CacheManifest};
+pub use cache::{function_to_cached, cached_to_function, compute_file_hash};
