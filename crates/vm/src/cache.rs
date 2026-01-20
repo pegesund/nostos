@@ -74,6 +74,10 @@ pub struct CachedFunction {
     pub param_types: Vec<String>,
     pub return_type: Option<String>,
     pub required_params: Option<usize>,
+    /// Cached default parameter values (for params after required_params).
+    /// None means no default or complex default that requires AST parsing.
+    #[serde(default)]
+    pub default_values: Vec<Option<CachedValue>>,
 }
 
 // ============================================================================
@@ -700,6 +704,7 @@ pub fn function_to_cached(func: &FunctionValue) -> Option<CachedFunction> {
         param_types: func.param_types.clone(),
         return_type: func.return_type.clone(),
         required_params: func.required_params,
+        default_values: vec![],  // Populated separately from AST if available
     })
 }
 
@@ -729,6 +734,7 @@ pub fn function_to_cached_with_fn_list(func: &FunctionValue, function_list: &[St
         param_types: func.param_types.clone(),
         return_type: func.return_type.clone(),
         required_params: func.required_params,
+        default_values: vec![],  // Populated separately from AST if available
     })
 }
 

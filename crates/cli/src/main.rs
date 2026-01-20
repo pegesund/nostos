@@ -228,20 +228,31 @@ fn try_load_stdlib_from_cache(
         );
     }
 
-    // Also parse stdlib files to get function parameter info (names and defaults)
-    // This is much faster than full compilation but provides necessary metadata
-    for (module_name, file_path) in &modules_to_load {
-        if let Ok(source) = fs::read_to_string(file_path) {
-            let (module_opt, _) = parse(&source);
-            if let Some(module) = module_opt {
-                // Extract module prefix for qualified names
-                let module_prefix = module_name.clone();
+    // Parse stdlib files that have default parameters in parallel using threads
+    let modules_with_defaults = ["stdlib.html", "stdlib.rhtml", "stdlib.rweb", "stdlib.server", "stdlib.html_parser"];
+    let modules_to_parse: Vec<_> = modules_to_load.iter()
+        .filter(|(name, _)| modules_with_defaults.iter().any(|m| name.starts_with(m)))
+        .map(|(name, path)| (name.clone(), path.clone()))
+        .collect();
 
-                // Register function ASTs for parameter info (defaults, names)
-                for item in &module.items {
-                    if let nostos_syntax::ast::Item::FnDef(fn_def) = item {
-                        compiler.register_external_fn_ast(&module_prefix, fn_def);
-                    }
+    // Parse files in parallel using threads
+    let handles: Vec<_> = modules_to_parse.into_iter()
+        .map(|(module_name, file_path)| {
+            std::thread::spawn(move || {
+                fs::read_to_string(&file_path).ok().and_then(|source| {
+                    let (module_opt, _) = parse(&source);
+                    module_opt.map(|m| (module_name, m))
+                })
+            })
+        })
+        .collect();
+
+    // Collect results and register ASTs
+    for handle in handles {
+        if let Ok(Some((module_name, module))) = handle.join() {
+            for item in &module.items {
+                if let nostos_syntax::ast::Item::FnDef(fn_def) = item {
+                    compiler.register_external_fn_ast(&module_name, fn_def);
                 }
             }
         }
