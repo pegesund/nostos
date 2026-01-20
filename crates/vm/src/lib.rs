@@ -32,4 +32,4 @@ pub use extensions::ExtensionManager;
 pub use async_vm::{ThreadedEvalHandle, DebugSession};
 pub use async_vm::{enable_output_capture, disable_output_capture, is_output_capture_enabled};
 pub use cache::{BytecodeCache, CachedModule, CachedFunction, CachedChunk, CachedValue, CacheManifest};
-pub use cache::{function_to_cached, cached_to_function, cached_to_function_with_resolver, compute_file_hash};
+pub use cache::{function_to_cached, function_to_cached_with_fn_list, cached_to_function, cached_to_function_with_resolver, compute_file_hash};

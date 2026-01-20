@@ -252,7 +252,8 @@ impl CachedValue {
             }
             CachedValue::InlineFunction(cached_fn) => {
                 // Inline functions (lambdas) - convert without resolver
-                // Lambdas don't have nested function references (they use captures)
+                // Lambdas shouldn't have function references in their constants
+                // (they use captures for external values)
                 let func = cached_to_function(cached_fn);
                 Value::Function(Arc::new(func))
             }
@@ -278,6 +279,54 @@ impl CachedChunk {
         Some(CachedChunk {
             code: chunk.code.clone(),
             constants: constants?,
+            lines: chunk.lines.clone(),
+            locals: chunk.locals.clone(),
+            register_count: chunk.register_count,
+        })
+    }
+
+    /// Convert a Chunk to CachedChunk, converting CallDirect/TailCallDirect to CallByName/TailCallByName.
+    /// This is needed because CallDirect uses function indices that are assigned at compile time,
+    /// but when loading from cache, functions get different indices.
+    pub fn from_chunk_with_function_list(chunk: &Chunk, function_list: &[String]) -> Option<Self> {
+        let mut constants: Vec<CachedValue> = chunk.constants.iter()
+            .map(CachedValue::from_value)
+            .collect::<Option<Vec<_>>>()?;
+
+        // Convert instructions, replacing CallDirect with CallByName
+        let code: Vec<Instruction> = chunk.code.iter().map(|instr| {
+            match instr {
+                Instruction::CallDirect(dst, func_idx, args) => {
+                    // Look up function name from index
+                    if let Some(func_name) = function_list.get(*func_idx as usize) {
+                        // Add function name to constants
+                        let name_const_idx = constants.len() as u16;
+                        constants.push(CachedValue::String(func_name.clone()));
+                        Instruction::CallByName(*dst, name_const_idx, args.clone())
+                    } else {
+                        // Function index not found - keep original (will fail at runtime anyway)
+                        instr.clone()
+                    }
+                }
+                Instruction::TailCallDirect(func_idx, args) => {
+                    // Look up function name from index
+                    if let Some(func_name) = function_list.get(*func_idx as usize) {
+                        // Add function name to constants
+                        let name_const_idx = constants.len() as u16;
+                        constants.push(CachedValue::String(func_name.clone()));
+                        Instruction::TailCallByName(name_const_idx, args.clone())
+                    } else {
+                        // Function index not found - keep original
+                        instr.clone()
+                    }
+                }
+                _ => instr.clone(),
+            }
+        }).collect();
+
+        Some(CachedChunk {
+            code,
+            constants,
             lines: chunk.lines.clone(),
             locals: chunk.locals.clone(),
             register_count: chunk.register_count,
@@ -577,6 +626,35 @@ pub fn function_to_cached(func: &FunctionValue) -> Option<CachedFunction> {
     })
 }
 
+/// Helper to convert a FunctionValue to CachedFunction with CallDirect→CallByName conversion.
+/// This should be used when caching functions that may contain CallDirect instructions,
+/// as their function indices are not stable across cache load/save.
+pub fn function_to_cached_with_fn_list(func: &FunctionValue, function_list: &[String]) -> Option<CachedFunction> {
+    let code = CachedChunk::from_chunk_with_function_list(&func.code, function_list)?;
+
+    // Convert debug symbols to serializable form
+    let debug_symbols: Vec<(String, u8, Option<usize>, Option<usize>)> = func.debug_symbols
+        .iter()
+        .map(|s| (s.name.clone(), s.register, None, None))
+        .collect();
+
+    Some(CachedFunction {
+        name: func.name.clone(),
+        arity: func.arity,
+        param_names: func.param_names.clone(),
+        code,
+        module: func.module.clone(),
+        source_span: func.source_span,
+        debug_symbols,
+        source_file: func.source_file.clone(),
+        doc: func.doc.clone(),
+        signature: func.signature.clone(),
+        param_types: func.param_types.clone(),
+        return_type: func.return_type.clone(),
+        required_params: func.required_params,
+    })
+}
+
 use crate::value::LocalVarSymbol;
 
 /// Helper to convert a CachedFunction back to FunctionValue
@@ -643,6 +721,7 @@ where
         required_params: cached.required_params,
     }
 }
+
 
 // ============================================================================
 // Tests

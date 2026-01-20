@@ -8849,6 +8849,115 @@ impl AsyncProcess {
                 self.reactive_context.renderers.insert(name, func);
             }
 
+            // === Call by name (name-based lookup, no JIT) ===
+            CallByName(dst, name_idx, ref args) => {
+                // Get function name from constants
+                let func_name = match get_const!(name_idx) {
+                    Value::String(s) => s.to_string(),
+                    _ => return Err(RuntimeError::Panic(format!("CallByName: expected string constant at index {}", name_idx))),
+                };
+
+                // Look up function by name
+                let function = {
+                    self.shared.functions.read().unwrap().get(&func_name)
+                        .ok_or_else(|| RuntimeError::Panic(format!("Unknown function: {}", func_name)))?
+                        .clone()
+                };
+
+                // Get registers from pool or allocate new
+                let mut registers = self.alloc_registers(function.code.register_count as usize);
+                for (i, r) in args.iter().enumerate() {
+                    if i < registers.len() {
+                        registers[i] = reg!(*r);
+                    }
+                }
+
+                // Record function entry for profiling
+                self.profile_enter(&function.name);
+
+                self.frames.push(CallFrame {
+                    function,
+                    ip: 0,
+                    registers,
+                    captures: Vec::new(),
+                    return_reg: Some(*dst),
+                });
+                // Must return to recompute cur_frame (frame was pushed)
+                return Ok(StepResult::Continue);
+            }
+
+            // === Tail call by name (name-based lookup, no JIT) ===
+            TailCallByName(name_idx, ref args) => {
+                // Get function name from constants
+                let func_name = match get_const!(name_idx) {
+                    Value::String(s) => s.to_string(),
+                    _ => return Err(RuntimeError::Panic(format!("TailCallByName: expected string constant at index {}", name_idx))),
+                };
+
+                // Look up function by name
+                let function = {
+                    self.shared.functions.read().unwrap().get(&func_name)
+                        .ok_or_else(|| RuntimeError::Panic(format!("Unknown function: {}", func_name)))?
+                        .clone()
+                };
+
+                // OPTIMIZATION: If calling same function, reuse registers (no heap allocation!)
+                let current_func = &self.frames.last().unwrap().function;
+                if std::sync::Arc::ptr_eq(&function, current_func) && args.len() <= 8 {
+                    // Same function - reuse registers, no allocation!
+                    let mut saved_args: [std::mem::MaybeUninit<GcValue>; 8] =
+                        unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+
+                    // Save args to stack (take ownership, leave Unit behind)
+                    for (i, &r) in args.iter().enumerate() {
+                        saved_args[i] = std::mem::MaybeUninit::new(
+                            std::mem::take(&mut self.frames.last_mut().unwrap().registers[r as usize])
+                        );
+                    }
+
+                    let frame = self.frames.last_mut().unwrap();
+
+                    // Clear all registers to Unit (in-place, no allocation)
+                    for reg in frame.registers.iter_mut() {
+                        *reg = GcValue::Unit;
+                    }
+
+                    // Write back saved args to parameter positions
+                    for (i, _) in args.iter().enumerate() {
+                        frame.registers[i] = unsafe { saved_args[i].assume_init_read() };
+                    }
+
+                    frame.ip = 0;
+                    frame.captures.clear();
+                } else {
+                    // Different function or >8 args - need to set up new frame
+                    let function = function.clone();
+                    let arg_values: Vec<GcValue> = args.iter().map(|r| reg!(*r)).collect();
+                    let mut registers = vec![GcValue::Unit; function.code.register_count as usize];
+                    for (i, arg) in arg_values.into_iter().enumerate() {
+                        if i < registers.len() {
+                            registers[i] = arg;
+                        }
+                    }
+
+                    // Record function entry for profiling
+                    self.profile_enter(&function.name);
+
+                    // Pop current frame and push new one (tail call)
+                    let return_reg = self.frames.last().unwrap().return_reg;
+                    self.frames.pop();
+                    self.frames.push(CallFrame {
+                        function,
+                        ip: 0,
+                        registers,
+                        captures: Vec::new(),
+                        return_reg,
+                    });
+                }
+                // Must return to recompute cur_frame
+                return Ok(StepResult::Continue);
+            }
+
             // Unimplemented instructions - add as needed
             _ => {
                 eprintln!("[AsyncVM] Unimplemented instruction: {:?}", instruction);

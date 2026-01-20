@@ -23,7 +23,7 @@ use nostos_compiler::compile::{Compiler, MvarInitValue};
 use nostos_jit::{JitCompiler, JitConfig};
 use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
 use nostos_vm::async_vm::{AsyncVM, AsyncConfig};
-use nostos_vm::cache::{BytecodeCache, CachedModule, function_to_cached, compute_file_hash};
+use nostos_vm::cache::{BytecodeCache, CachedModule, function_to_cached_with_fn_list, compute_file_hash};
 use nostos_vm::process::ThreadSafeValue;
 use nostos_vm::value::RuntimeError;
 use std::env;
@@ -102,19 +102,109 @@ fn find_stdlib_path() -> Option<PathBuf> {
 }
 
 /// Try to load stdlib from cache. Returns true if cache was valid and loaded.
-///
-/// NOTE: Cache loading is currently disabled due to bugs with function reference resolution.
-/// The infrastructure is in place but there are issues with:
-/// 1. Inline lambda constant ordering during deserialization
-/// 2. Recursive function references
-/// Re-enable when these issues are resolved.
-#[allow(unused_variables)]
 fn try_load_stdlib_from_cache(
     compiler: &mut Compiler,
     stdlib_path: &std::path::Path,
 ) -> bool {
-    // Disabled - see function doc comment
-    false
+    use nostos_vm::cache::{CachedFunction, cached_to_function, cached_to_function_with_resolver};
+    use nostos_vm::value::Value;
+
+    let cache_dir = get_cache_dir();
+
+    // Check if cache exists
+    if !cache_dir.exists() {
+        return false;
+    }
+
+    // Load cache manager
+    let cache = BytecodeCache::new(cache_dir.clone(), env!("CARGO_PKG_VERSION"));
+
+    if !cache.has_cache() {
+        return false;
+    }
+
+    // Collect stdlib files to check cache validity
+    let mut stdlib_files = Vec::new();
+    if visit_dirs(stdlib_path, &mut stdlib_files).is_err() {
+        return false;
+    }
+
+    // Check if all modules have valid cache
+    let mut all_valid = true;
+    let mut modules_to_load: Vec<(String, PathBuf)> = Vec::new();
+
+    for file_path in &stdlib_files {
+        let relative = match file_path.strip_prefix(stdlib_path) {
+            Ok(r) => r,
+            Err(_) => return false,
+        };
+
+        let mut components: Vec<String> = vec!["stdlib".to_string()];
+        for component in relative.components() {
+            let s = component.as_os_str().to_string_lossy().to_string();
+            if s.ends_with(".nos") {
+                components.push(s.trim_end_matches(".nos").to_string());
+            } else {
+                components.push(s);
+            }
+        }
+        let module_name = components.join(".");
+
+        if !cache.is_module_valid(&module_name, file_path) {
+            all_valid = false;
+            break;
+        }
+
+        modules_to_load.push((module_name, file_path.clone()));
+    }
+
+    if !all_valid {
+        return false;
+    }
+
+    // All modules have valid cache - load them
+    // First pass: Load all cached modules into memory
+    let mut all_cached_functions: Vec<CachedFunction> = Vec::new();
+    for (module_name, _file_path) in &modules_to_load {
+        match cache.load_module(module_name) {
+            Ok(cached_module) => {
+                all_cached_functions.extend(cached_module.functions);
+            }
+            Err(_) => {
+                // Cache file couldn't be loaded - invalidate
+                return false;
+            }
+        }
+    }
+
+    // Build a map of function names to their cached data for resolution
+    let cached_fn_map: std::collections::HashMap<String, &CachedFunction> = all_cached_functions
+        .iter()
+        .map(|f| (f.name.clone(), f))
+        .collect();
+
+    // Second pass: Convert functions with resolver and register them
+    let mut loaded_count = 0;
+    for cached_fn in &all_cached_functions {
+        let func = cached_to_function_with_resolver(cached_fn, |name| {
+            // First check if already registered
+            if let Some(existing) = compiler.get_function(name) {
+                return Some(Value::Function(existing));
+            }
+            // Otherwise, look up in cached functions and convert (without resolver - base case)
+            if let Some(cached) = cached_fn_map.get(name) {
+                let converted = cached_to_function(cached);
+                Some(Value::Function(std::sync::Arc::new(converted)))
+            } else {
+                eprintln!("[cache] Unresolved function ref: {}", name);
+                None
+            }
+        });
+        compiler.register_external_function(&cached_fn.name, std::sync::Arc::new(func));
+        loaded_count += 1;
+    }
+
+    loaded_count > 0
 }
 
 /// Build and save the stdlib bytecode cache
@@ -246,6 +336,9 @@ fn build_stdlib_cache() -> ExitCode {
     // Initialize cache manager
     let mut cache = BytecodeCache::new(cache_dir.clone(), env!("CARGO_PKG_VERSION"));
 
+    // Get the function list for CallDirect → CallByName conversion
+    let function_list = compiler.get_function_list_names();
+
     // Group functions by module and save
     let mut saved_count = 0;
     for (module_name, source_hash, path) in &modules {
@@ -255,7 +348,8 @@ fn build_stdlib_cache() -> ExitCode {
         let mut cached_functions = Vec::new();
         for (func_name, func) in functions {
             if func_name.starts_with(&module_prefix) || func.module.as_deref() == Some(module_name.as_str()) {
-                if let Some(cached) = function_to_cached(func) {
+                // Use function_to_cached_with_fn_list to convert CallDirect to CallByName
+                if let Some(cached) = function_to_cached_with_fn_list(func, function_list) {
                     cached_functions.push(cached);
                 }
             }
