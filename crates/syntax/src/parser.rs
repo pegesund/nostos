@@ -1595,6 +1595,27 @@ fn mvar_def() -> impl Parser<Token, MvarDef, Error = Simple<Token>> + Clone {
         })
 }
 
+/// Parser for constant definition.
+/// Syntax: `const NAME = literal` or `pub const NAME = literal`
+/// Constants can use any identifier (lowercase or UPPERCASE).
+fn const_def() -> impl Parser<Token, ConstDef, Error = Simple<Token>> + Clone {
+    let visibility = just(Token::Pub).or_not().map(|v| {
+        if v.is_some() { Visibility::Public } else { Visibility::Private }
+    });
+
+    visibility
+        .then_ignore(just(Token::Const))
+        .then(any_ident())  // Allow both lowercase and UPPERCASE names
+        .then_ignore(just(Token::Eq))
+        .then(expr())  // We accept any expr but will validate it's a literal at compile time
+        .map_with_span(|((vis, name), value), span| ConstDef {
+            visibility: vis,
+            name,
+            value,
+            span: to_span(span),
+        })
+}
+
 /// Parser for method/operator names (identifiers or operators like ==, !=, <, etc.)
 fn method_name() -> impl Parser<Token, Ident, Error = Simple<Token>> + Clone {
     choice((
@@ -1845,12 +1866,13 @@ fn item() -> impl Parser<Token, Item, Error = Simple<Token>> + Clone {
             module_def,  // Must be first to handle nested modules
             type_def().map(Item::TypeDef),
             trait_def().map(Item::TraitDef),
-            trait_impl().map(Item::TraitImpl),
+            mvar_def().map(Item::MvarDef),  // Must be before trait_impl to parse 'mvar x = ...'
+            const_def().map(Item::ConstDef),  // Must be before trait_impl to parse 'const x = ...'
+            trait_impl().map(Item::TraitImpl),  // Must be after const_def since uppercase names can match
             test_def().map(Item::Test),
             extern_decl().map(Item::Extern),
             use_stmt().map(Item::Use),
             fn_def().map(Item::FnDef),
-            mvar_def().map(Item::MvarDef),  // Must be before binding() to parse 'mvar x = ...'
             binding().map(Item::Binding),
         ))
     })

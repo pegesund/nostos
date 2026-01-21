@@ -26,6 +26,8 @@ pub enum Token {
     Var,
     #[token("mvar")]
     Mvar,
+    #[token("const")]
+    Const,
     #[token("if")]
     If,
     #[token("then")]
@@ -437,6 +439,7 @@ impl fmt::Display for Token {
             Token::Reactive => write!(f, "reactive"),
             Token::Var => write!(f, "var"),
             Token::Mvar => write!(f, "mvar"),
+            Token::Const => write!(f, "const"),
             Token::If => write!(f, "if"),
             Token::Then => write!(f, "then"),
             Token::Else => write!(f, "else"),
@@ -554,9 +557,9 @@ mod tests {
 
     #[test]
     fn test_keywords() {
-        let tokens: Vec<_> = lex("type var mvar if then else match when").map(|(t, _)| t).collect();
+        let tokens: Vec<_> = lex("type var mvar const if then else match when").map(|(t, _)| t).collect();
         assert_eq!(tokens, vec![
-            Token::Type, Token::Var, Token::Mvar, Token::If, Token::Then,
+            Token::Type, Token::Var, Token::Mvar, Token::Const, Token::If, Token::Then,
             Token::Else, Token::Match, Token::When,
         ]);
     }

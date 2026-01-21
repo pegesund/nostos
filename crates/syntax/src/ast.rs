@@ -108,6 +108,8 @@ pub enum Item {
     Binding(Binding),
     /// Module-level mutable variable (thread-safe with RwLock)
     MvarDef(MvarDef),
+    /// Constant definition (compile-time constant)
+    ConstDef(ConstDef),
     /// Test definition
     Test(TestDef),
     /// Extern declaration (FFI)
@@ -126,6 +128,7 @@ impl Item {
             Item::Use(stmt) => stmt.span,
             Item::Binding(binding) => binding.span,
             Item::MvarDef(def) => def.span,
+            Item::ConstDef(def) => def.span,
             Item::Test(test) => test.span,
             Item::Extern(ext) => ext.span,
         }
@@ -703,6 +706,15 @@ pub struct MvarDef {
     pub span: Span,
 }
 
+/// Constant definition - compile-time constant with literal value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstDef {
+    pub visibility: Visibility,
+    pub name: Ident,
+    pub value: Expr,  // Must be a literal (validated at compile time)
+    pub span: Span,
+}
+
 /// Target of an assignment.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AssignTarget {
@@ -1231,6 +1243,7 @@ impl Item {
             Item::Use(stmt) => stmt.set_file_id(file_id),
             Item::Binding(binding) => binding.set_file_id(file_id),
             Item::MvarDef(def) => def.set_file_id(file_id),
+            Item::ConstDef(def) => def.set_file_id(file_id),
             Item::Test(test) => test.set_file_id(file_id),
             Item::Extern(ext) => ext.set_file_id(file_id),
         }
@@ -1820,6 +1833,14 @@ impl MvarDef {
         self.span.file_id = file_id;
         self.name.span.file_id = file_id;
         self.ty.set_file_id(file_id);
+        self.value.set_file_id(file_id);
+    }
+}
+
+impl ConstDef {
+    fn set_file_id(&mut self, file_id: u32) {
+        self.span.file_id = file_id;
+        self.name.span.file_id = file_id;
         self.value.set_file_id(file_id);
     }
 }

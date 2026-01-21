@@ -1,0 +1,14 @@
+# expect: 200
+# Test constants in modules
+
+module Config
+    pub const MAX_RETRIES = 100
+    const INTERNAL_VALUE = 50  # Private constant
+end
+
+use Config.*
+
+main() = {
+    # Can access public constant
+    MAX_RETRIES * 2
+}

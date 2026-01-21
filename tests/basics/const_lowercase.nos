@@ -1,0 +1,6 @@
+# expect: 42
+# Test lowercase constant names (snake_case)
+
+const max_value = 21
+
+main() = max_value * 2

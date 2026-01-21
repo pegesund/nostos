@@ -1124,6 +1124,9 @@ pub struct Compiler {
     /// Module-level mutable variables (mvars): qualified name -> MvarInfo
     /// These are thread-safe shared state with automatic RwLock
     mvars: HashMap<String, MvarInfo>,
+    /// Compile-time constants: qualified name -> ConstInfo
+    /// These are inlined at usage sites
+    constants: HashMap<String, ConstInfo>,
 
     // === Mvar deadlock detection ===
     /// Function mvar access: function name -> (reads, writes)
@@ -1172,6 +1175,13 @@ pub struct Compiler {
 pub struct MvarInfo {
     pub type_name: String,
     pub initial_value: MvarInitValue,
+}
+
+/// Information about a compile-time constant.
+#[derive(Clone, Debug)]
+pub struct ConstInfo {
+    pub value: MvarInitValue,
+    pub visibility: Visibility,
 }
 
 /// Initial value for an mvar (must be a compile-time constant).
@@ -1325,6 +1335,7 @@ impl Compiler {
             repl_mode: false,
             prelude_functions: HashSet::new(),
             mvars: HashMap::new(),
+            constants: HashMap::new(),
             fn_mvar_access: HashMap::new(),
             fn_calls: HashMap::new(),
             current_fn_mvar_reads: HashSet::new(),
@@ -2376,6 +2387,7 @@ impl Compiler {
             repl_mode: false,
             prelude_functions: HashSet::new(),
             mvars: HashMap::new(),
+            constants: HashMap::new(),
             fn_mvar_access: HashMap::new(),
             fn_calls: HashMap::new(),
             current_fn_mvar_reads: HashSet::new(),
@@ -3323,6 +3335,9 @@ impl Compiler {
             Item::MvarDef(mvar_def) => {
                 self.compile_mvar_def(mvar_def)?;
             }
+            Item::ConstDef(const_def) => {
+                self.compile_const_def(const_def)?;
+            }
             _ => {
                 return Err(CompileError::NotImplemented {
                     feature: format!("item: {:?}", item),
@@ -3677,6 +3692,27 @@ impl Compiler {
         self.mvars.insert(qualified_name.clone(), MvarInfo {
             type_name,
             initial_value,
+        });
+
+        Ok(())
+    }
+
+    /// Compile a constant definition.
+    /// Constants are evaluated at compile time and inlined at usage sites.
+    fn compile_const_def(&mut self, def: &ConstDef) -> Result<(), CompileError> {
+        let qualified_name = self.qualify_name(&def.name.node);
+
+        // Evaluate the value (must be a compile-time constant literal)
+        let value = self.eval_const_expr(&def.value)
+            .ok_or_else(|| CompileError::NotImplemented {
+                feature: format!("const value must be a literal (Int, Float, String, Bool, Char), got: {:?}", def.value),
+                span: def.span,
+            })?;
+
+        // Register the constant
+        self.constants.insert(qualified_name, ConstInfo {
+            value,
+            visibility: def.visibility,
         });
 
         Ok(())
@@ -6266,6 +6302,12 @@ impl Compiler {
                         // If we reach here, it's a first-class reference to a function not yet compiled
                         // Return an error for now - this case needs special handling
                     }
+                    // Check if it's a compile-time constant
+                    let const_name = self.resolve_name(name);
+                    if let Some(const_info) = self.constants.get(&const_name).cloned() {
+                        return self.emit_const_value(&const_info.value, line);
+                    }
+
                     // Check if it's a module-level mutable variable (mvar)
                     let mvar_name = self.resolve_name(name);
                     if self.mvars.contains_key(&mvar_name) {
@@ -6505,6 +6547,15 @@ impl Compiler {
                         self.chunk.emit(Instruction::MakeRecord(dst, type_idx, vec![tree_reg, deps_reg, components_reg, renderers_reg, changed_ids_reg].into()), line);
 
                         return Ok(dst);
+                    }
+                }
+
+                // First, check if this might be a constant reference (uppercase name, no fields)
+                // Constants like PI, MAX_SIZE are parsed as Expr::Record due to uppercase identifiers
+                if fields.is_empty() {
+                    let const_name = self.resolve_name(&type_name.node);
+                    if let Some(const_info) = self.constants.get(&const_name).cloned() {
+                        return self.emit_const_value(&const_info.value, self.span_line(*span));
                     }
                 }
 
@@ -16378,6 +16429,96 @@ impl Compiler {
         }
     }
 
+    /// Emit code to load a compile-time constant value.
+    /// This inlines the constant at the usage site.
+    fn emit_const_value(&mut self, value: &MvarInitValue, line: usize) -> Result<Reg, CompileError> {
+        let dst = self.alloc_reg();
+        match value {
+            MvarInitValue::Unit => {
+                self.chunk.emit(Instruction::LoadUnit(dst), line);
+            }
+            MvarInitValue::Bool(b) => {
+                if *b {
+                    self.chunk.emit(Instruction::LoadTrue(dst), line);
+                } else {
+                    self.chunk.emit(Instruction::LoadFalse(dst), line);
+                }
+            }
+            MvarInitValue::Int(n) => {
+                let idx = self.chunk.add_constant(Value::Int64(*n));
+                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
+            }
+            MvarInitValue::Float(f) => {
+                let idx = self.chunk.add_constant(Value::Float64(*f));
+                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
+            }
+            MvarInitValue::String(s) => {
+                let idx = self.chunk.add_constant(Value::String(Arc::new(s.clone())));
+                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
+            }
+            MvarInitValue::Char(c) => {
+                let idx = self.chunk.add_constant(Value::Char(*c));
+                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
+            }
+            MvarInitValue::EmptyList => {
+                self.chunk.emit(Instruction::MakeList(dst, vec![].into()), line);
+            }
+            MvarInitValue::IntList(ints) => {
+                // Create list of integers
+                let mut regs = Vec::new();
+                for n in ints {
+                    let r = self.alloc_reg();
+                    let idx = self.chunk.add_constant(Value::Int64(*n));
+                    self.chunk.emit(Instruction::LoadConst(r, idx), line);
+                    regs.push(r);
+                }
+                self.chunk.emit(Instruction::MakeList(dst, regs.into()), line);
+            }
+            MvarInitValue::FloatList(floats) => {
+                let mut regs = Vec::new();
+                for f in floats {
+                    let r = self.alloc_reg();
+                    let idx = self.chunk.add_constant(Value::Float64(*f));
+                    self.chunk.emit(Instruction::LoadConst(r, idx), line);
+                    regs.push(r);
+                }
+                self.chunk.emit(Instruction::MakeList(dst, regs.into()), line);
+            }
+            MvarInitValue::StringList(strings) => {
+                let mut regs = Vec::new();
+                for s in strings {
+                    let r = self.alloc_reg();
+                    let idx = self.chunk.add_constant(Value::String(Arc::new(s.clone())));
+                    self.chunk.emit(Instruction::LoadConst(r, idx), line);
+                    regs.push(r);
+                }
+                self.chunk.emit(Instruction::MakeList(dst, regs.into()), line);
+            }
+            MvarInitValue::BoolList(bools) => {
+                let mut regs = Vec::new();
+                for b in bools {
+                    let r = self.alloc_reg();
+                    if *b {
+                        self.chunk.emit(Instruction::LoadTrue(r), line);
+                    } else {
+                        self.chunk.emit(Instruction::LoadFalse(r), line);
+                    }
+                    regs.push(r);
+                }
+                self.chunk.emit(Instruction::MakeList(dst, regs.into()), line);
+            }
+            _ => {
+                // For complex types (Tuple, List, Record), fall back to returning an error
+                // These could be supported but would require more complex code generation
+                return Err(CompileError::NotImplemented {
+                    feature: format!("constant value type: {:?}", value),
+                    span: Span::default(),
+                });
+            }
+        }
+        Ok(dst)
+    }
+
     /// Get all function names in the compiler.
     /// Returns the full names including type signatures (e.g., "greet/String").
     pub fn get_function_names(&self) -> Vec<&str> {
@@ -20209,7 +20350,14 @@ impl Compiler {
             self.compile_use_stmt(use_stmt)?;
         }
 
-        // Sixth pass: process mvar definitions (before functions so they're available)
+        // Sixth pass: process const definitions (before functions so they're available)
+        for item in items {
+            if let Item::ConstDef(const_def) = item {
+                self.compile_const_def(const_def)?;
+            }
+        }
+
+        // Seventh pass: process mvar definitions (before functions so they're available)
         for item in items {
             if let Item::MvarDef(mvar_def) = item {
                 self.compile_mvar_def(mvar_def)?;
@@ -20367,6 +20515,20 @@ impl Compiler {
                         .unwrap_or(&qualified_type)
                         .to_string();
                     self.imports.insert(local_name, qualified_type);
+                }
+
+                // Also import public constants from the module
+                let public_constants: Vec<String> = self.constants.iter()
+                    .filter(|(name, info)| {
+                        name.starts_with(&prefix) && info.visibility == Visibility::Public
+                    })
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                for qualified_const in public_constants {
+                    let local_name = qualified_const.strip_prefix(&prefix)
+                        .unwrap_or(&qualified_const)
+                        .to_string();
+                    self.imports.insert(local_name, qualified_const);
                 }
             }
             UseImports::Named(items) => {

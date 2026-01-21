@@ -1,0 +1,5 @@
+# expect: 314
+# Test simple constant definition and usage
+const PI = 314
+
+main() = PI

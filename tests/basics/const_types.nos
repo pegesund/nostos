@@ -1,0 +1,19 @@
+# expect: true
+# Test various constant types
+
+const MAX_SIZE = 100
+const PI = 3.14
+const APP_NAME = "TestApp"
+const DEBUG = true
+const SEPARATOR = ':'
+
+main() = {
+    # Test each constant type
+    size_ok = MAX_SIZE == 100
+    pi_ok = PI > 3.0 && PI < 4.0
+    name_ok = APP_NAME == "TestApp"
+    debug_ok = DEBUG == true
+    sep_ok = SEPARATOR == ':'
+
+    size_ok && pi_ok && name_ok && debug_ok && sep_ok
+}

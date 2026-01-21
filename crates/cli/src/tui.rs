@@ -6389,7 +6389,7 @@ fn style_input(text: &str) -> StyledString {
         }
 
         let color = match token {
-            Token::Type | Token::Reactive | Token::Var | Token::Mvar | Token::If | Token::Then | Token::Else |
+            Token::Type | Token::Reactive | Token::Var | Token::Mvar | Token::Const | Token::If | Token::Then | Token::Else |
             Token::Match | Token::When | Token::Trait | Token::Module | Token::End |
             Token::Use | Token::Import | Token::Private | Token::Pub | Token::SelfKw | Token::SelfType |
             Token::Try | Token::Catch | Token::Finally | Token::Do |
