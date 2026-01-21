@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::io::Write;
 
 use dashmap::DashMap;
 use tower_lsp::jsonrpc::Result;
@@ -7,6 +9,18 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
 use nostos_repl::{ReplEngine, ReplConfig};
+
+fn log(msg: &str) {
+    eprintln!("{}", msg);
+    std::io::stderr().flush().ok();
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/nostos_lsp.log")
+    {
+        let _ = writeln!(f, "{}", msg);
+    }
+}
 
 pub struct NostosLanguageServer {
     client: Client,
@@ -17,6 +31,8 @@ pub struct NostosLanguageServer {
     file_errors: DashMap<Url, Vec<Diagnostic>>,
     /// Root path of the workspace
     root_path: Mutex<Option<PathBuf>>,
+    /// Flag to prevent double initialization
+    initializing: AtomicBool,
 }
 
 impl NostosLanguageServer {
@@ -27,6 +43,7 @@ impl NostosLanguageServer {
             documents: DashMap::new(),
             file_errors: DashMap::new(),
             root_path: Mutex::new(None),
+            initializing: AtomicBool::new(false),
         }
     }
 
@@ -52,20 +69,6 @@ impl NostosLanguageServer {
 
         // Enable per-project disk caching for faster subsequent loads
         engine.enable_project_cache(root_path.clone());
-
-        // Debug: log how many types are registered after initialization
-        {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-                let types = engine.get_types();
-                let user_types: Vec<_> = types.iter().filter(|t| !t.starts_with("stdlib.")).collect();
-                let _ = writeln!(f, "");
-                let _ = writeln!(f, "=== LSP Engine Initialized ===");
-                let _ = writeln!(f, "Root path: {:?}", root_path);
-                let _ = writeln!(f, "Total types: {}", types.len());
-                let _ = writeln!(f, "User types (non-stdlib): {:?}", user_types);
-            }
-        }
 
         *self.engine.lock().unwrap() = Some(engine);
         *self.root_path.lock().unwrap() = Some(root_path.clone());
@@ -153,6 +156,7 @@ impl NostosLanguageServer {
         let result = {
             let engine_guard = self.engine.lock().unwrap();
             let Some(engine) = engine_guard.as_ref() else {
+                eprintln!("check_file: engine not ready yet, skipping check");
                 return;
             };
 
@@ -617,36 +621,26 @@ const LSP_BUILD_ID: &str = "2026-01-13-show-inferred-type";
 #[tower_lsp::async_trait]
 impl LanguageServer for NostosLanguageServer {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-        eprintln!("Nostos LSP v{} (build: {})", LSP_VERSION, LSP_BUILD_ID);
-        eprintln!("Initializing Nostos LSP...");
+        log(&format!("Nostos LSP v{} (build: {})", LSP_VERSION, LSP_BUILD_ID));
+        log("initialize() called - fast path");
 
-        // Get workspace root
-        let mut engine_initialized = false;
+        // Store workspace root for lazy initialization - do NOT block here
+        // Heavy init will happen on first file open or in initialized() notification
         if let Some(root_uri) = params.root_uri {
             if let Ok(path) = root_uri.to_file_path() {
                 eprintln!("Workspace root: {:?}", path);
-                self.init_engine(&path);
-                engine_initialized = true;
+                *self.root_path.lock().unwrap() = Some(path);
             }
         } else if let Some(folders) = params.workspace_folders {
             if let Some(folder) = folders.first() {
                 if let Ok(path) = folder.uri.to_file_path() {
                     eprintln!("Workspace folder: {:?}", path);
-                    self.init_engine(&path);
-                    engine_initialized = true;
+                    *self.root_path.lock().unwrap() = Some(path);
                 }
             }
         }
 
-        // If no workspace provided, we'll do lazy initialization when a file is opened
-        if !engine_initialized {
-            eprintln!("Note: No workspace root provided, will initialize lazily on first file open");
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-                let _ = writeln!(f, "");
-                let _ = writeln!(f, "=== LSP: No workspace, will init lazily ===");
-            }
-        }
+        log("initialize() returning response (engine will init lazily)");
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -673,16 +667,11 @@ impl LanguageServer for NostosLanguageServer {
                 document_symbol_provider: Some(OneOf::Left(true)),
                 // Find references
                 references_provider: Some(OneOf::Left(true)),
-                // Custom commands (build cache, clear cache, commit)
-                execute_command_provider: Some(ExecuteCommandOptions {
-                    commands: vec![
-                        "nostos.buildCache".to_string(),
-                        "nostos.clearCache".to_string(),
-                        "nostos.commit".to_string(),
-                        "nostos.commitAll".to_string(),
-                    ],
-                    ..Default::default()
-                }),
+                // Don't advertise commands here - the extension registers them
+                // and forwards via workspace/executeCommand. Advertising them
+                // causes vscode-languageclient to also try registering them,
+                // leading to "command already exists" errors.
+                execute_command_provider: None,
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -693,15 +682,63 @@ impl LanguageServer for NostosLanguageServer {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        eprintln!("Nostos LSP initialized!");
+        log("initialized() notification received");
 
-        // Don't publish diagnostics here - each file gets proper diagnostics
-        // when opened via did_open. Publishing here would push stale line numbers
-        // from compile_status before files are opened.
+        // Get path before any await - must not hold MutexGuard across await
+        let path_opt = self.root_path.lock().unwrap().clone();
+
+        // Do the heavy engine initialization in a blocking thread pool
+        // This prevents blocking the async message loop
+        if let Some(path) = path_opt {
+            // Set initializing flag to prevent double init from did_open
+            if self.initializing.swap(true, Ordering::SeqCst) {
+                eprintln!("Engine initialization already in progress, skipping");
+                return;
+            }
+
+            eprintln!("Starting engine initialization for {:?}...", path);
+            let start = std::time::Instant::now();
+
+            // Use spawn_blocking to run in a separate thread pool, returning the engine
+            let init_result = tokio::task::spawn_blocking(move || {
+                let config = ReplConfig {
+                    enable_jit: false,
+                    num_threads: 1,
+                };
+                let mut engine = ReplEngine::new(config);
+
+                // Load stdlib
+                if let Err(e) = engine.load_stdlib() {
+                    eprintln!("Warning: Failed to load stdlib: {}", e);
+                }
+
+                // Load the project directory
+                if let Err(e) = engine.load_directory(path.to_str().unwrap_or(".")) {
+                    eprintln!("Warning: Failed to load directory: {}", e);
+                }
+
+                engine
+            }).await;
+
+            match init_result {
+                Ok(engine) => {
+                    *self.engine.lock().unwrap() = Some(engine);
+                    eprintln!("Engine initialized in {:?}", start.elapsed());
+                }
+                Err(e) => {
+                    eprintln!("Engine initialization failed: {}", e);
+                }
+            }
+
+            self.initializing.store(false, Ordering::SeqCst);
+        }
+
+        eprintln!("Nostos LSP fully initialized!");
+        eprintln!("Server is now ready and waiting for requests...");
     }
 
     async fn shutdown(&self) -> Result<()> {
-        eprintln!("Shutting down Nostos LSP...");
+        log("!!! SHUTDOWN REQUEST RECEIVED !!!");
 
         // Persist module cache on shutdown
         if let Some(ref mut engine) = *self.engine.lock().unwrap() {
@@ -807,27 +844,31 @@ impl LanguageServer for NostosLanguageServer {
         let uri = params.text_document.uri;
         let content = params.text_document.text;
 
-        // If engine is not initialized, try to use this file's directory as the project root
+        // If engine is not initialized and no init is in progress, try lazy init
         // This handles the case where a single file is opened without opening a folder
         {
             let engine_guard = self.engine.lock().unwrap();
             let needs_init = engine_guard.is_none();
             drop(engine_guard);
 
-            if needs_init {
+            // Check if initialization is already in progress (from initialized() handler)
+            let init_in_progress = self.initializing.load(Ordering::SeqCst);
+
+            if needs_init && !init_in_progress {
                 if let Ok(file_path) = uri.to_file_path() {
                     if let Some(parent) = file_path.parent() {
-                        eprintln!("Lazy init: using file's parent as root: {:?}", parent);
-                        use std::io::Write;
-                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-                            let _ = writeln!(f, "");
-                            let _ = writeln!(f, "=== LSP Lazy Init from did_open ===");
-                            let _ = writeln!(f, "File: {:?}", file_path);
-                            let _ = writeln!(f, "Parent: {:?}", parent);
+                        // Try to set the initializing flag
+                        if !self.initializing.swap(true, Ordering::SeqCst) {
+                            eprintln!("Lazy init: using file's parent as root: {:?}", parent);
+                            self.init_engine(&parent.to_path_buf());
+                            self.initializing.store(false, Ordering::SeqCst);
+                        } else {
+                            eprintln!("Skipping lazy init - initialization already in progress");
                         }
-                        self.init_engine(&parent.to_path_buf());
                     }
                 }
+            } else if needs_init && init_in_progress {
+                eprintln!("Waiting for background initialization to complete...");
             }
         }
 

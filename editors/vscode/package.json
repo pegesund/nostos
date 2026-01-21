@@ -2,7 +2,7 @@
   "name": "nostos",
   "displayName": "Nostos",
   "description": "Syntax highlighting and language support for Nostos",
-  "version": "0.1.0",
+  "version": "0.4.7",
   "publisher": "pegesund",
   "repository": {
     "type": "git",
@@ -20,7 +20,12 @@
     "programming language"
   ],
   "activationEvents": [
-    "onLanguage:nostos"
+    "onLanguage:nostos",
+    "onCommand:nostos.commit",
+    "onCommand:nostos.commitAll",
+    "onCommand:nostos.buildCache",
+    "onCommand:nostos.clearCache",
+    "onCommand:nostos.restartServer"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -76,10 +81,17 @@
     ]
   },
   "scripts": {
+    "compile": "tsc -p ./",
     "package": "vsce package",
     "publish": "vsce publish"
   },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
   "devDependencies": {
-    "@vscode/vsce": "^2.22.0"
+    "@types/node": "^25.0.9",
+    "@types/vscode": "^1.75.0",
+    "@vscode/vsce": "^2.22.0",
+    "typescript": "^5.0.0"
   }
 }

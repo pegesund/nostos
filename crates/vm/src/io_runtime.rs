@@ -686,8 +686,8 @@ struct OpenFile {
 
 /// The IO runtime - runs on a separate tokio runtime
 pub struct IoRuntime {
-    /// Tokio runtime handle
-    runtime: Runtime,
+    /// Tokio runtime handle (Option to allow safe drop from async context)
+    runtime: Option<Runtime>,
     /// Channel to send requests to the runtime
     request_tx: mpsc::UnboundedSender<IoRequest>,
     /// Next file handle ID
@@ -708,20 +708,18 @@ impl IoRuntime {
             .build()
             .expect("Failed to create HTTP client");
 
-        let io_runtime = IoRuntime {
-            runtime,
-            request_tx,
-            next_handle: AtomicU64::new(1),
-            http_client: http_client.clone(),
-        };
-
         // Spawn the request handler
-        let client = http_client;
-        io_runtime.runtime.spawn(async move {
+        let client = http_client.clone();
+        runtime.spawn(async move {
             Self::run_handler(request_rx, client).await;
         });
 
-        io_runtime
+        IoRuntime {
+            runtime: Some(runtime),
+            request_tx,
+            next_handle: AtomicU64::new(1),
+            http_client,
+        }
     }
 
     /// Get sender for IO requests (clone for each worker thread)
@@ -733,7 +731,7 @@ impl IoRuntime {
     /// This is used for long-lived spawned processes that need to outlive
     /// individual eval calls.
     pub fn runtime_handle(&self) -> tokio::runtime::Handle {
-        self.runtime.handle().clone()
+        self.runtime.as_ref().expect("IoRuntime already shut down").handle().clone()
     }
 
     /// Generate a new unique file handle
@@ -3456,6 +3454,14 @@ impl Default for IoRuntime {
 impl Drop for IoRuntime {
     fn drop(&mut self) {
         self.shutdown();
+        // Take the runtime out and drop it in a separate thread to avoid
+        // "Cannot drop a runtime in a context where blocking is not allowed"
+        // panic when the IoRuntime is dropped from within an async context (e.g., LSP server)
+        if let Some(rt) = self.runtime.take() {
+            std::thread::spawn(move || {
+                drop(rt);
+            });
+        }
     }
 }
 
@@ -3482,7 +3488,7 @@ mod tests {
         }).unwrap();
 
         // Block on response (for testing only)
-        let result = io.runtime.block_on(async {
+        let result = io.runtime.as_ref().unwrap().block_on(async {
             resp_rx.await.unwrap()
         });
 
@@ -3508,7 +3514,7 @@ mod tests {
             response: resp_tx,
         }).unwrap();
 
-        let result = io.runtime.block_on(async {
+        let result = io.runtime.as_ref().unwrap().block_on(async {
             resp_rx.await.unwrap()
         });
 

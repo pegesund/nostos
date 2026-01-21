@@ -235,6 +235,20 @@ pub struct ReplEngine {
     module_cache: ModuleCache,
 }
 
+impl Drop for ReplEngine {
+    fn drop(&mut self) {
+        // If we have an extension runtime, we need to drop it carefully.
+        // Dropping a Tokio runtime from within an async context (like the LSP server)
+        // will panic. To avoid this, we spawn a blocking thread to do the drop.
+        if let Some(rt) = self.extension_runtime.take() {
+            // Try to drop in a separate thread to avoid panicking in async context
+            std::thread::spawn(move || {
+                drop(rt);
+            });
+        }
+    }
+}
+
 impl ReplEngine {
     /// Create a new REPL instance
     pub fn new(config: ReplConfig) -> Self {
@@ -4516,11 +4530,6 @@ impl ReplEngine {
 
     /// Load a project directory with SourceManager
     pub fn load_directory(&mut self, path: &str) -> Result<(), String> {
-        eprintln!("LSP DEBUG: load_directory called with path: {}", path);
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-            use std::io::Write;
-            let _ = writeln!(f, "load_directory START: path={}", path);
-        }
         let path_buf = PathBuf::from(path);
 
         if !path_buf.is_dir() {
@@ -4709,12 +4718,8 @@ impl ReplEngine {
         }
 
         // Compile all bodies, collecting errors
-        eprintln!("LSP DEBUG load_directory: ABOUT TO compile_all_collecting_errors");
+        // Compile all bodies, collecting errors
         let errors = self.compiler.compile_all_collecting_errors();
-        eprintln!("LSP DEBUG load_directory: compile_all_collecting_errors returned {} errors", errors.len());
-        for (fn_name, err, _, _) in &errors {
-            eprintln!("LSP DEBUG load_directory: error in {}: {}", fn_name, err);
-        }
 
         // Collect set of error function names for quick lookup
         let error_fn_names: HashSet<String> = errors.iter().map(|(n, _, _, _)| n.clone()).collect();
