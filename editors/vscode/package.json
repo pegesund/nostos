@@ -36,6 +36,22 @@
       {
         "command": "nostos.restartServer",
         "title": "Nostos: Restart Language Server"
+      },
+      {
+        "command": "nostos.commit",
+        "title": "Nostos: Commit Current File to Live System"
+      },
+      {
+        "command": "nostos.commitAll",
+        "title": "Nostos: Commit All Open Files to Live System"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "nostos.commit",
+        "key": "ctrl+shift+o",
+        "mac": "cmd+shift+o",
+        "when": "editorLangId == nostos"
       }
     ],
     "languages": [

@@ -62,6 +62,57 @@ export function activate(context: ExtensionContext) {
             }
         })
     );
+
+    // Register commit current file command (Ctrl+Shift+O)
+    // This commits the current file to the live compiler
+    context.subscriptions.push(
+        commands.registerCommand('nostos.commit', async () => {
+            if (client) {
+                const editor = window.activeTextEditor;
+                if (!editor) {
+                    window.showWarningMessage('No active editor');
+                    return;
+                }
+
+                // Only commit .nos files
+                if (!editor.document.fileName.endsWith('.nos')) {
+                    window.showWarningMessage('Not a Nostos file');
+                    return;
+                }
+
+                try {
+                    const uri = editor.document.uri.toString();
+                    await client.sendRequest('workspace/executeCommand', {
+                        command: 'nostos.commit',
+                        arguments: [uri]
+                    });
+                    window.showInformationMessage('Committed to live system');
+                } catch (e) {
+                    window.showErrorMessage(`Failed to commit: ${e}`);
+                }
+            } else {
+                window.showWarningMessage('Language server not running');
+            }
+        })
+    );
+
+    // Register commit all files command
+    context.subscriptions.push(
+        commands.registerCommand('nostos.commitAll', async () => {
+            if (client) {
+                try {
+                    await client.sendRequest('workspace/executeCommand', {
+                        command: 'nostos.commitAll',
+                        arguments: []
+                    });
+                } catch (e) {
+                    window.showErrorMessage(`Failed to commit all: ${e}`);
+                }
+            } else {
+                window.showWarningMessage('Language server not running');
+            }
+        })
+    );
 }
 
 function startLanguageServer(context: ExtensionContext) {

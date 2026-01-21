@@ -130,7 +130,62 @@ impl NostosLanguageServer {
         self.client.publish_diagnostics(uri.clone(), diagnostics, None).await;
     }
 
-    /// Recompile a file and publish updated diagnostics
+    /// Check a file for errors without modifying the live compiler state.
+    /// Used for real-time analysis while the user is typing.
+    async fn check_file(&self, uri: &Url, content: &str) {
+        let file_path = match uri.to_file_path() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        let file_path_str = file_path.to_string_lossy().to_string();
+        eprintln!("Checking file (analysis only): {}", file_path_str);
+
+        // Extract module name from file path
+        let module_name = file_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("main")
+            .to_string();
+
+        // Use check_module_compiles which does NOT modify the engine state
+        // This is a read-only analysis for real-time feedback
+        let result = {
+            let engine_guard = self.engine.lock().unwrap();
+            let Some(engine) = engine_guard.as_ref() else {
+                return;
+            };
+
+            engine.check_module_compiles(&module_name, content)
+        };
+
+        eprintln!("Check result for {}: {:?}", module_name, result);
+
+        // Build diagnostics from the check result
+        let error_diagnostics = if let Err(e) = &result {
+            let (line, message) = Self::parse_error_location(e, Some(content));
+            vec![Diagnostic {
+                range: Range {
+                    start: Position { line, character: 0 },
+                    end: Position { line, character: 100 },
+                },
+                severity: Some(DiagnosticSeverity::ERROR),
+                message,
+                source: Some("nostos".to_string()),
+                ..Default::default()
+            }]
+        } else {
+            vec![]
+        };
+
+        // Store error diagnostics for this file
+        self.file_errors.insert(uri.clone(), error_diagnostics.clone());
+
+        self.client.publish_diagnostics(uri.clone(), error_diagnostics, None).await;
+    }
+
+    /// Recompile a file and publish updated diagnostics.
+    /// This modifies the live compiler state - use for commits.
     async fn recompile_file(&self, uri: &Url, content: &str) {
         let file_path = match uri.to_file_path() {
             Ok(p) => p,
@@ -138,7 +193,7 @@ impl NostosLanguageServer {
         };
 
         let file_path_str = file_path.to_string_lossy().to_string();
-        eprintln!("Recompiling file: {}", file_path_str);
+        eprintln!("Committing file to live system: {}", file_path_str);
 
         // Extract module name from file path
         let module_name = file_path
@@ -618,11 +673,13 @@ impl LanguageServer for NostosLanguageServer {
                 document_symbol_provider: Some(OneOf::Left(true)),
                 // Find references
                 references_provider: Some(OneOf::Left(true)),
-                // Custom commands (build cache, clear cache)
+                // Custom commands (build cache, clear cache, commit)
                 execute_command_provider: Some(ExecuteCommandOptions {
                     commands: vec![
                         "nostos.buildCache".to_string(),
                         "nostos.clearCache".to_string(),
+                        "nostos.commit".to_string(),
+                        "nostos.commitAll".to_string(),
                     ],
                     ..Default::default()
                 }),
@@ -688,6 +745,55 @@ impl LanguageServer for NostosLanguageServer {
                 self.client.show_message(MessageType::INFO, &result).await;
                 Ok(Some(serde_json::json!({ "message": result })))
             }
+            "nostos.commit" => {
+                // Commit a specific file to the live system
+                // Expects argument: file URI
+                let uri_str = params.arguments.first()
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                if uri_str.is_empty() {
+                    self.client.show_message(MessageType::WARNING, "No file specified for commit").await;
+                    return Ok(Some(serde_json::json!({ "error": "No file specified" })));
+                }
+
+                let uri = match Url::parse(uri_str) {
+                    Ok(u) => u,
+                    Err(e) => {
+                        let msg = format!("Invalid URI: {}", e);
+                        self.client.show_message(MessageType::ERROR, &msg).await;
+                        return Ok(Some(serde_json::json!({ "error": msg })));
+                    }
+                };
+
+                // Get content from our document cache
+                if let Some(content) = self.documents.get(&uri) {
+                    self.recompile_file(&uri, &content.clone()).await;
+                    let msg = format!("Committed: {}", uri);
+                    eprintln!("{}", msg);
+                    Ok(Some(serde_json::json!({ "message": msg })))
+                } else {
+                    let msg = "File not open in editor";
+                    self.client.show_message(MessageType::WARNING, msg).await;
+                    Ok(Some(serde_json::json!({ "error": msg })))
+                }
+            }
+            "nostos.commitAll" => {
+                // Commit all open files to the live system
+                let open_docs: Vec<(Url, String)> = self.documents.iter()
+                    .map(|entry| (entry.key().clone(), entry.value().clone()))
+                    .collect();
+
+                let count = open_docs.len();
+                for (uri, content) in open_docs {
+                    self.recompile_file(&uri, &content).await;
+                }
+
+                let msg = format!("Committed {} file(s) to live system", count);
+                self.client.show_message(MessageType::INFO, &msg).await;
+                eprintln!("{}", msg);
+                Ok(Some(serde_json::json!({ "message": msg, "count": count })))
+            }
             _ => {
                 eprintln!("Unknown command: {}", params.command);
                 Ok(None)
@@ -728,8 +834,9 @@ impl LanguageServer for NostosLanguageServer {
         // Store document content
         self.documents.insert(uri.clone(), content.clone());
 
-        // Compile and publish diagnostics
-        self.recompile_file(&uri, &content).await;
+        // Check for errors (analysis only)
+        // The file was already loaded via load_directory, so we just need to show current state
+        self.check_file(&uri, &content).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -742,16 +849,21 @@ impl LanguageServer for NostosLanguageServer {
             // Update stored content
             self.documents.insert(uri.clone(), content.clone());
 
-            // Recompile and publish diagnostics
-            self.recompile_file(&uri, &content).await;
+            // Check for errors (analysis only, no state change)
+            // Real-time feedback while typing
+            self.check_file(&uri, &content).await;
         }
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
-        eprintln!("Saved: {}", params.text_document.uri);
+        let uri = params.text_document.uri;
+        eprintln!("Saved (committing to live): {}", uri);
 
-        // On save, we might want to do a full recompile
-        // For now, the did_change handler keeps things up to date
+        // On save, commit the file to the live compiler
+        // This updates function definitions, types, etc.
+        if let Some(content) = self.documents.get(&uri) {
+            self.recompile_file(&uri, &content.clone()).await;
+        }
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
