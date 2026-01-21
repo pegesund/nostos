@@ -49,8 +49,8 @@
     "keybindings": [
       {
         "command": "nostos.commit",
-        "key": "ctrl+shift+o",
-        "mac": "cmd+shift+o",
+        "key": "ctrl+alt+c",
+        "mac": "cmd+alt+c",
         "when": "editorLangId == nostos"
       }
     ],

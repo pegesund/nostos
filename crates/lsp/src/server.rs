@@ -856,14 +856,11 @@ impl LanguageServer for NostosLanguageServer {
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
-        let uri = params.text_document.uri;
-        eprintln!("Saved (committing to live): {}", uri);
+        eprintln!("Saved: {} (use Ctrl+Alt+C to commit to live)", params.text_document.uri);
 
-        // On save, commit the file to the live compiler
-        // This updates function definitions, types, etc.
-        if let Some(content) = self.documents.get(&uri) {
-            self.recompile_file(&uri, &content.clone()).await;
-        }
+        // Save does NOT commit to live system
+        // User must explicitly use nostos.commit command (Ctrl+Alt+C)
+        // This allows saving work-in-progress without affecting the running system
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
