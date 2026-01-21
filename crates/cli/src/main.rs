@@ -274,6 +274,225 @@ fn save_extension_to_cache(
     Ok(())
 }
 
+/// Get the cache directory for source package modules
+fn get_package_cache_dir(pkg_name: &str) -> PathBuf {
+    if let Some(home) = dirs::home_dir() {
+        home.join(".nostos").join("cache").join("packages").join(pkg_name)
+    } else {
+        PathBuf::from(".nostos-cache").join("packages").join(pkg_name)
+    }
+}
+
+/// Result of package cache loading
+struct PackageCacheLoadResult {
+    modules_loaded: usize,
+    functions_loaded: usize,
+}
+
+/// Try to load a source package from cache.
+/// Returns Some if cache is valid for all modules and was loaded successfully.
+fn try_load_package_from_cache(
+    compiler: &mut Compiler,
+    pkg_name: &str,
+    package_path: &std::path::Path,
+) -> Option<PackageCacheLoadResult> {
+    use nostos_vm::cache::{CachedFunction, cached_to_function, cached_to_function_with_resolver};
+    use nostos_vm::value::Value;
+
+    let cache_dir = get_package_cache_dir(pkg_name);
+
+    // Check if cache exists
+    if !cache_dir.exists() {
+        return None;
+    }
+
+    // Load cache manager
+    let cache = BytecodeCache::new(cache_dir.clone(), env!("CARGO_PKG_VERSION"));
+
+    if !cache.has_cache() {
+        return None;
+    }
+
+    // List package files
+    let files = match nostos_packages::PackageManager::list_package_files(package_path) {
+        Ok(f) => f,
+        Err(_) => return None,
+    };
+
+    if files.is_empty() {
+        return None;
+    }
+
+    // Check if all modules have valid cache
+    let mut modules_to_load: Vec<(String, PathBuf)> = Vec::new();
+
+    for file_path in &files {
+        let file_stem = file_path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
+        let module_name = format!("{}.{}", pkg_name, file_stem);
+
+        if !cache.is_module_valid(&module_name, file_path) {
+            return None;
+        }
+
+        modules_to_load.push((module_name, file_path.clone()));
+    }
+
+    // All modules have valid cache - load them
+    let mut all_cached_functions: Vec<CachedFunction> = Vec::new();
+    let mut all_types: Vec<nostos_vm::value::TypeValue> = Vec::new();
+    let mut all_mvars: Vec<CachedMvar> = Vec::new();
+    let mut modules_loaded = 0;
+
+    for (module_name, _file_path) in &modules_to_load {
+        match cache.load_module(module_name) {
+            Ok(cached_module) => {
+                all_cached_functions.extend(cached_module.functions);
+                all_types.extend(cached_module.types);
+                all_mvars.extend(cached_module.mvars);
+                modules_loaded += 1;
+            }
+            Err(_) => {
+                return None;
+            }
+        }
+    }
+
+    // Register the package and all module names so imports work
+    compiler.register_known_module(pkg_name);
+    for (module_name, _) in &modules_to_load {
+        compiler.register_known_module(module_name);
+    }
+
+    // Build a map of function names to their cached data for resolution
+    let cached_fn_map: std::collections::HashMap<String, &CachedFunction> = all_cached_functions
+        .iter()
+        .map(|f| (f.name.clone(), f))
+        .collect();
+
+    // Convert functions with resolver and register them
+    let mut functions_loaded = 0;
+    for cached_fn in &all_cached_functions {
+        let func = cached_to_function_with_resolver(cached_fn, |name| {
+            // First check if already registered
+            if let Some(existing) = compiler.get_function(name) {
+                return Some(Value::Function(existing));
+            }
+            // Otherwise, look up in cached functions and convert (without resolver - base case)
+            if let Some(cached) = cached_fn_map.get(name) {
+                let converted = cached_to_function(cached);
+                Some(Value::Function(std::sync::Arc::new(converted)))
+            } else {
+                None
+            }
+        });
+        compiler.register_external_function(&cached_fn.name, std::sync::Arc::new(func));
+        // Also register visibility so `use pkg.*` works
+        compiler.register_function_visibility(&cached_fn.name, nostos_syntax::ast::Visibility::Public);
+        functions_loaded += 1;
+    }
+
+    // Register types
+    for type_val in &all_types {
+        compiler.register_external_type(&type_val.name, &std::sync::Arc::new(type_val.clone()));
+    }
+
+    // Register mvars from cache
+    for cached_mvar in &all_mvars {
+        let initial_value = cached_to_mvar_init(&cached_mvar.initial_value);
+        compiler.register_mvar_with_info(
+            &cached_mvar.name,
+            cached_mvar.type_name.clone(),
+            initial_value,
+        );
+    }
+
+    if functions_loaded > 0 || modules_loaded > 0 {
+        Some(PackageCacheLoadResult {
+            modules_loaded,
+            functions_loaded,
+        })
+    } else {
+        None
+    }
+}
+
+/// Save a source package to cache after compiling.
+/// Saves each module in the package separately.
+fn save_package_to_cache(
+    compiler: &Compiler,
+    pkg_name: &str,
+    module_infos: &[(String, PathBuf, String)], // (module_name, source_path, source_hash)
+) -> Result<(), String> {
+    let cache_dir = get_package_cache_dir(pkg_name);
+
+    // Create cache directory
+    fs::create_dir_all(&cache_dir)
+        .map_err(|e| format!("Failed to create package cache directory: {}", e))?;
+
+    // Initialize cache manager
+    let mut cache = BytecodeCache::new(cache_dir, env!("CARGO_PKG_VERSION"));
+
+    // Get the function list for CallDirect → CallByName conversion
+    let function_list = compiler.get_function_list_names();
+
+    // Get all functions, types, and mvars from compiler
+    let functions = compiler.get_all_functions();
+    let all_types = compiler.get_all_types();
+    let all_mvars = compiler.get_mvars();
+
+    // Save each module separately
+    for (module_name, source_path, source_hash) in module_infos {
+        let module_prefix = format!("{}.", module_name);
+
+        // Collect functions for this module
+        let mut cached_functions = Vec::new();
+        for (func_name, func) in functions {
+            if func_name.starts_with(&module_prefix) || func.module.as_deref() == Some(module_name.as_str()) {
+                if let Some(cached) = function_to_cached_with_fn_list(func, function_list) {
+                    cached_functions.push(cached);
+                }
+            }
+        }
+
+        // Collect types for this module
+        let module_types: Vec<nostos_vm::value::TypeValue> = all_types.iter()
+            .filter(|(type_name, _)| type_name.starts_with(&module_prefix))
+            .map(|(_, type_val)| (**type_val).clone())
+            .collect();
+
+        // Collect mvars for this module
+        let module_mvars: Vec<CachedMvar> = all_mvars.iter()
+            .filter(|(mvar_name, _)| mvar_name.starts_with(&module_prefix))
+            .map(|(name, info)| CachedMvar {
+                name: name.clone(),
+                type_name: info.type_name.clone(),
+                initial_value: mvar_init_to_cached(&info.initial_value),
+            })
+            .collect();
+
+        let cached_module = CachedModule {
+            module_path: module_name.split('.').map(|s| s.to_string()).collect(),
+            source_hash: source_hash.clone(),
+            functions: cached_functions,
+            function_signatures: std::collections::HashMap::new(),
+            exports: Vec::new(),
+            prelude_imports: Vec::new(),
+            types: module_types,
+            mvars: module_mvars,
+        };
+
+        // Save the module
+        cache.save_module(module_name, source_path.to_str().unwrap_or("unknown"), &cached_module)?;
+    }
+
+    // Save manifest
+    cache.save_manifest()?;
+
+    Ok(())
+}
+
 /// Find the stdlib directory
 fn find_stdlib_path() -> Option<PathBuf> {
     let candidates = vec![
@@ -2214,6 +2433,9 @@ fn main() -> ExitCode {
     }
 
     // Load package dependencies from nostos.toml (source packages only - extensions already loaded)
+    // Track packages that need caching after compilation
+    let mut packages_to_cache: Vec<(String, Vec<(String, PathBuf, String)>)> = Vec::new(); // (pkg_name, module_infos)
+
     if let Ok(manifest) = nostos_packages::PackageManager::load_manifest(project_root) {
         // Filter to only source packages (extensions already loaded earlier)
         let source_pkgs: Vec<_> = manifest.dependencies.iter()
@@ -2227,9 +2449,21 @@ fn main() -> ExitCode {
             for (name, dep) in source_pkgs {
                 match pkg_manager.ensure_dependency(name, dep) {
                     Ok(package_path) => {
-                        // Load all .nos files from the package
+                        // Try to load from cache first
+                        if let Some(cache_result) = try_load_package_from_cache(&mut compiler, name, &package_path) {
+                            eprintln!("  Loaded package '{}' from cache ({} modules, {} functions)",
+                                name, cache_result.modules_loaded, cache_result.functions_loaded);
+                            continue;
+                        }
+
+                        // Cache miss - parse and compile all files
+                        let mut module_infos: Vec<(String, PathBuf, String)> = Vec::new();
+
                         if let Ok(files) = nostos_packages::PackageManager::list_package_files(&package_path) {
                             for file_path in files {
+                                // Compute hash for cache
+                                let source_hash = compute_file_hash(&file_path).unwrap_or_default();
+
                                 if let Ok(source) = fs::read_to_string(&file_path) {
                                     let (module_opt, errors) = parse(&source);
                                     if !errors.is_empty() {
@@ -2259,10 +2493,18 @@ fn main() -> ExitCode {
                                             continue;
                                         }
 
+                                        // Track for caching
+                                        module_infos.push((module_name.clone(), file_path.clone(), source_hash));
+
                                         eprintln!("  Loaded: {}", module_name);
                                     }
                                 }
                             }
+                        }
+
+                        // Mark package for caching after compile_all
+                        if !module_infos.is_empty() {
+                            packages_to_cache.push((name.clone(), module_infos));
                         }
                     }
                     Err(e) => {
@@ -2336,6 +2578,13 @@ fn main() -> ExitCode {
     for (ext_name, source_path, source_hash) in &extensions_to_cache {
         if let Err(e) = save_extension_to_cache(&compiler, ext_name, source_path, source_hash) {
             eprintln!("Warning: Failed to cache extension '{}': {}", ext_name, e);
+        }
+    }
+
+    // Save source package modules to cache (after successful compile_all)
+    for (pkg_name, module_infos) in &packages_to_cache {
+        if let Err(e) = save_package_to_cache(&compiler, pkg_name, module_infos) {
+            eprintln!("Warning: Failed to cache package '{}': {}", pkg_name, e);
         }
     }
 
