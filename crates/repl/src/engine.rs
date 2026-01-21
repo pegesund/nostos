@@ -6839,6 +6839,14 @@ impl ReplEngine {
         // Register external types from the main compiler
         for (name, type_val) in self.compiler.get_all_types() {
             check_compiler.register_external_type(&name, &type_val);
+            // Also add import alias for unqualified name so Person can be used instead of test_types.Person
+            if let Some(dot_pos) = name.rfind('.') {
+                let short_name = &name[dot_pos + 1..];
+                // Don't override stdlib types like Option, Result
+                if !name.starts_with("stdlib.") {
+                    check_compiler.add_import_alias(short_name, &name);
+                }
+            }
         }
 
         // Register trait implementations from the main compiler
@@ -19424,6 +19432,192 @@ mod lsp_integration_tests {
         println!("b.doubled final: {:?}", b_final);
         assert!(matches!(b_final, Some(CompileStatus::CompileError(_))),
                 "b.doubled should have type error, got: {:?}", b_final);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 22: Undefined variable should report correct line number, not line 1
+    /// Regression test for: when committing a file with error, wrong error on wrong line
+    #[test]
+    fn test_undefined_variable_correct_line_number() {
+        let temp_dir = create_temp_dir("undef_var_line");
+
+        // Create good.nos with helper functions
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a, b) = a + b").unwrap();
+            writeln!(f, "pub multiply(a, b) = a * b").unwrap();
+        }
+
+        // Create main.nos with Person type and an undefined variable 'asdf' on later line
+        // Using raw string to avoid escaping issues
+        let main_content = r#"type Person = { name: String, age: Int }
+type MyResult = Success(Int) | Failure(String)
+
+main() = {
+    x = good.addff(3, 2)
+    y = good.multiply(2,3)
+    yy = [1,2,3]
+    y1 = 33
+    gg = [[0,1]]
+    g2 = [["a", "b"]]
+    x2 = g2[0][0]
+    y3 = "ffff"
+    p = Person(name: "petter", age: 11)
+    a = p.age
+    r = Failure("hupp")
+    asdf
+}
+"#;
+        // asdf is on line 16
+        std::fs::write(temp_dir.join("main.nos"), main_content).unwrap();
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok(); // Load stdlib for show() etc
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // Test 1: check_module_compiles should report error on correct line (16), not line 1
+        let main_content = std::fs::read_to_string(temp_dir.join("main.nos")).unwrap();
+        let check_result = engine.check_module_compiles("main", &main_content);
+        println!("check_module_compiles result: {:?}", check_result);
+
+        assert!(check_result.is_err(), "Should have error for undefined 'asdf'");
+        let err_msg = check_result.unwrap_err();
+        println!("Error message: {}", err_msg);
+
+        // The error should mention 'asdf' and NOT be on line 1
+        assert!(err_msg.contains("asdf"), "Error should mention 'asdf': {}", err_msg);
+        assert!(!err_msg.starts_with("line 1:"),
+                "Error should NOT be on line 1 (Person type), got: {}", err_msg);
+        // Line 16 is where 'asdf' is
+        assert!(err_msg.contains("line 16") || err_msg.contains("line 15") || err_msg.contains("line 17"),
+                "Error should be around line 16, got: {}", err_msg);
+
+        // Test 2: recompile_module_with_content should also report correct line
+        let recompile_result = engine.recompile_module_with_content("main", &main_content);
+        println!("recompile_module_with_content result: {:?}", recompile_result);
+
+        // Get compile status which should have the error
+        let status = engine.get_compile_status("main.main");
+        println!("Compile status: {:?}", status);
+
+        if let Some(CompileStatus::CompileError(compile_err)) = &status {
+            println!("CompileError: {}", compile_err);
+            assert!(compile_err.contains("asdf") || compile_err.to_lowercase().contains("unknown"),
+                    "Error should mention undefined variable: {}", compile_err);
+            assert!(!compile_err.starts_with("line 1:"),
+                    "Compile error should NOT be on line 1: {}", compile_err);
+        }
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 23: Cross-module type references should work in check_module_compiles
+    /// Regression test for: wrong error "unknown type Person" when type is in another module
+    #[test]
+    fn test_cross_module_type_reference() {
+        let temp_dir = create_temp_dir("cross_mod_type");
+
+        // Create test_types.nos with type definitions (like the real project)
+        {
+            let mut f = std::fs::File::create(temp_dir.join("test_types.nos")).unwrap();
+            writeln!(f, "# Variant type for testing").unwrap();
+            writeln!(f, "type MyResult = Success(Int) | Failure(String)").unwrap();
+            writeln!(f, "").unwrap();
+            writeln!(f, "# Record type for testing").unwrap();
+            writeln!(f, "pub type Person = {{ name: String, age: Int }}").unwrap();
+        }
+
+        // Create good.nos with helper functions
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a, b) = a + b").unwrap();
+            writeln!(f, "pub multiply(x, y) = x * y").unwrap();
+        }
+
+        // Create main.nos that uses types from test_types but has an undefined variable error
+        let main_content = r#"main() = {
+    x = good.addff(3, 2)
+    y = good.multiply(2,3)
+    p = Person(name: "petter", age: 11)
+    a = p.age
+    r = Failure("hupp")
+    undefined_var_error
+}
+"#;
+        // The error is `undefined_var_error` on line 7
+        std::fs::write(temp_dir.join("main.nos"), main_content).unwrap();
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // Test: check_module_compiles should NOT report "unknown type Person"
+        // It should report "unknown variable `undefined_var_error`" on the correct line
+        let check_result = engine.check_module_compiles("main", main_content);
+        println!("check_module_compiles result: {:?}", check_result);
+
+        assert!(check_result.is_err(), "Should have error for undefined variable");
+        let err_msg = check_result.unwrap_err();
+        println!("Error message: {}", err_msg);
+
+        // The error should be about undefined_var_error, NOT about unknown type Person
+        assert!(!err_msg.contains("unknown type") && !err_msg.contains("Unknown type"),
+                "Should NOT report 'unknown type' - types from other modules should be visible. Got: {}", err_msg);
+        assert!(err_msg.contains("undefined_var_error") || err_msg.contains("unknown variable"),
+                "Should report undefined variable error. Got: {}", err_msg);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 24: Errors while typing should be detected by check_module_compiles
+    #[test]
+    fn test_realtime_error_detection() {
+        let temp_dir = create_temp_dir("realtime_err");
+
+        // Create good.nos
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a: Int, b: Int) -> Int = a + b").unwrap();
+        }
+
+        // Create main.nos without errors initially
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = good.addff(1, 2)").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // Initially should compile fine
+        let initial_check = engine.check_module_compiles("main", "main() = good.addff(1, 2)");
+        println!("Initial check: {:?}", initial_check);
+        assert!(initial_check.is_ok(), "Initial code should compile");
+
+        // Simulate typing - add an error (undefined variable)
+        let typing_with_error = "main() = good.addff(1, 2) + undefined_var";
+        let check_result = engine.check_module_compiles("main", typing_with_error);
+        println!("Check with error: {:?}", check_result);
+        assert!(check_result.is_err(), "Should detect undefined variable error");
+        let err = check_result.unwrap_err();
+        assert!(err.contains("undefined_var"), "Error should mention undefined_var: {}", err);
+
+        // Simulate typing - fix the error
+        let typing_fixed = "main() = good.addff(1, 2) + 10";
+        let fixed_check = engine.check_module_compiles("main", typing_fixed);
+        println!("Check after fix: {:?}", fixed_check);
+        assert!(fixed_check.is_ok(), "Fixed code should compile");
+
+        // Simulate typing - add type error
+        let typing_type_error = "main() = good.addff(1, \"bad\")";
+        let type_check = engine.check_module_compiles("main", typing_type_error);
+        println!("Check with type error: {:?}", type_check);
+        assert!(type_check.is_err(), "Should detect type error");
 
         cleanup(&temp_dir);
     }
