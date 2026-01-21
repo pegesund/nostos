@@ -1809,6 +1809,329 @@ fn run_extension_command(args: &[String]) -> ExitCode {
     }
 }
 
+/// Run the cache subcommand (clear, build, info)
+fn run_cache_command(args: &[String]) -> ExitCode {
+    if args.is_empty() {
+        eprintln!("Usage: nostos cache <command>");
+        eprintln!();
+        eprintln!("Commands:");
+        eprintln!("    clear [target]    Clear cached bytecode");
+        eprintln!("    build             Build cache for current project");
+        eprintln!("    info              Show cache information");
+        eprintln!();
+        eprintln!("Clear targets:");
+        eprintln!("    all               Clear all caches (default)");
+        eprintln!("    stdlib            Clear stdlib cache");
+        eprintln!("    extensions        Clear all extension caches");
+        eprintln!("    packages          Clear all package caches");
+        eprintln!("    project           Clear current project cache");
+        return ExitCode::FAILURE;
+    }
+
+    match args[0].as_str() {
+        "clear" => {
+            let target = args.get(1).map(|s| s.as_str()).unwrap_or("all");
+            cache_clear(target)
+        }
+        "build" => cache_build(),
+        "info" => cache_info(),
+        _ => {
+            eprintln!("Unknown cache command: {}", args[0]);
+            eprintln!("Use 'nostos cache' for help");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Clear cache based on target
+fn cache_clear(target: &str) -> ExitCode {
+    match target {
+        "all" => {
+            let cache_dir = get_cache_dir();
+            let project_cache = std::path::PathBuf::from(".nostos-cache");
+
+            let mut cleared_any = false;
+
+            // Clear global cache (~/.nostos/cache/)
+            if cache_dir.exists() {
+                match fs::remove_dir_all(&cache_dir) {
+                    Ok(_) => {
+                        println!("Cleared global cache: {}", cache_dir.display());
+                        cleared_any = true;
+                    }
+                    Err(e) => eprintln!("Error clearing global cache: {}", e),
+                }
+            }
+
+            // Clear project cache (.nostos-cache/)
+            if project_cache.exists() {
+                match fs::remove_dir_all(&project_cache) {
+                    Ok(_) => {
+                        println!("Cleared project cache: {}", project_cache.display());
+                        cleared_any = true;
+                    }
+                    Err(e) => eprintln!("Error clearing project cache: {}", e),
+                }
+            }
+
+            if !cleared_any {
+                println!("No caches to clear");
+            }
+            ExitCode::SUCCESS
+        }
+        "stdlib" => {
+            let cache_dir = get_cache_dir();
+            // Only clear stdlib files, not extensions/packages subdirs
+            let manifest = cache_dir.join("manifest.bin");
+            let mut cleared = false;
+
+            if manifest.exists() {
+                if let Err(e) = fs::remove_file(&manifest) {
+                    eprintln!("Error removing manifest: {}", e);
+                }
+            }
+
+            // Remove .cache files but keep extensions/ and packages/ dirs
+            if cache_dir.exists() {
+                if let Ok(entries) = fs::read_dir(&cache_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_file() && path.extension().map(|e| e == "cache").unwrap_or(false) {
+                            if let Err(e) = fs::remove_file(&path) {
+                                eprintln!("Error removing {}: {}", path.display(), e);
+                            } else {
+                                cleared = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if cleared || manifest.exists() {
+                println!("Cleared stdlib cache");
+            } else {
+                println!("Stdlib cache already empty");
+            }
+            ExitCode::SUCCESS
+        }
+        "extensions" => {
+            let ext_cache_dir = get_cache_dir().join("extensions");
+            if ext_cache_dir.exists() {
+                match fs::remove_dir_all(&ext_cache_dir) {
+                    Ok(_) => println!("Cleared extension caches: {}", ext_cache_dir.display()),
+                    Err(e) => {
+                        eprintln!("Error clearing extension caches: {}", e);
+                        return ExitCode::FAILURE;
+                    }
+                }
+            } else {
+                println!("No extension caches to clear");
+            }
+            ExitCode::SUCCESS
+        }
+        "packages" => {
+            let pkg_cache_dir = get_cache_dir().join("packages");
+            if pkg_cache_dir.exists() {
+                match fs::remove_dir_all(&pkg_cache_dir) {
+                    Ok(_) => println!("Cleared package caches: {}", pkg_cache_dir.display()),
+                    Err(e) => {
+                        eprintln!("Error clearing package caches: {}", e);
+                        return ExitCode::FAILURE;
+                    }
+                }
+            } else {
+                println!("No package caches to clear");
+            }
+            ExitCode::SUCCESS
+        }
+        "project" => {
+            let project_cache = std::path::PathBuf::from(".nostos-cache");
+            if project_cache.exists() {
+                match fs::remove_dir_all(&project_cache) {
+                    Ok(_) => println!("Cleared project cache: {}", project_cache.display()),
+                    Err(e) => {
+                        eprintln!("Error clearing project cache: {}", e);
+                        return ExitCode::FAILURE;
+                    }
+                }
+            } else {
+                println!("No project cache to clear (not in a project directory)");
+            }
+            ExitCode::SUCCESS
+        }
+        _ => {
+            eprintln!("Unknown clear target: {}", target);
+            eprintln!("Valid targets: all, stdlib, extensions, packages, project");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Build/warm cache for current project
+fn cache_build() -> ExitCode {
+    // Check if we're in a project directory
+    let current_dir = std::env::current_dir().unwrap_or_default();
+
+    // Look for nostos.toml or main.nos
+    let has_toml = current_dir.join("nostos.toml").exists();
+    let has_main = current_dir.join("main.nos").exists();
+
+    if !has_toml && !has_main {
+        eprintln!("Not in a Nostos project directory");
+        eprintln!("(no nostos.toml or main.nos found)");
+        return ExitCode::FAILURE;
+    }
+
+    println!("Building cache for project: {}", current_dir.display());
+    println!("Run 'nostos .' to build the cache");
+    println!("(the cache is built automatically on first run)");
+    ExitCode::SUCCESS
+}
+
+/// Show cache information
+fn cache_info() -> ExitCode {
+    use nostos_vm::cache::BytecodeCache;
+
+    let cache_dir = get_cache_dir();
+    let project_cache = std::path::PathBuf::from(".nostos-cache");
+
+    println!("Cache locations:");
+    println!();
+
+    // Stdlib cache
+    println!("Stdlib cache: {}", cache_dir.display());
+    if cache_dir.exists() {
+        let manifest_path = cache_dir.join("manifest.bin");
+        if manifest_path.exists() {
+            let cache = BytecodeCache::new(cache_dir.clone(), env!("CARGO_PKG_VERSION"));
+            let module_count = cache.manifest().modules.len();
+            if module_count > 0 {
+                println!("  Status: {} modules cached", module_count);
+                let total_size = calculate_dir_size(&cache_dir);
+                println!("  Size: {}", format_size(total_size));
+            } else {
+                println!("  Status: empty");
+            }
+        } else {
+            println!("  Status: empty");
+        }
+    } else {
+        println!("  Status: not created");
+    }
+    println!();
+
+    // Extension caches
+    let ext_cache_dir = cache_dir.join("extensions");
+    println!("Extension caches: {}", ext_cache_dir.display());
+    if ext_cache_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&ext_cache_dir) {
+            let mut count = 0;
+            for entry in entries.flatten() {
+                if entry.path().is_dir() {
+                    let ext_name = entry.file_name().to_string_lossy().to_string();
+                    let ext_dir = entry.path();
+                    let manifest_path = ext_dir.join("manifest.bin");
+                    if manifest_path.exists() {
+                        let cache = BytecodeCache::new(ext_dir.clone(), env!("CARGO_PKG_VERSION"));
+                        let module_count = cache.manifest().modules.len();
+                        if module_count > 0 {
+                            let size = calculate_dir_size(&ext_dir);
+                            println!("  {}: {} modules ({})", ext_name, module_count, format_size(size));
+                            count += 1;
+                        }
+                    }
+                }
+            }
+            if count == 0 {
+                println!("  (empty)");
+            }
+        }
+    } else {
+        println!("  (not created)");
+    }
+    println!();
+
+    // Package caches
+    let pkg_cache_dir = cache_dir.join("packages");
+    println!("Package caches: {}", pkg_cache_dir.display());
+    if pkg_cache_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&pkg_cache_dir) {
+            let mut count = 0;
+            for entry in entries.flatten() {
+                if entry.path().is_dir() {
+                    let pkg_name = entry.file_name().to_string_lossy().to_string();
+                    let pkg_dir = entry.path();
+                    let manifest_path = pkg_dir.join("manifest.bin");
+                    if manifest_path.exists() {
+                        let cache = BytecodeCache::new(pkg_dir.clone(), env!("CARGO_PKG_VERSION"));
+                        let module_count = cache.manifest().modules.len();
+                        if module_count > 0 {
+                            let size = calculate_dir_size(&pkg_dir);
+                            println!("  {}: {} modules ({})", pkg_name, module_count, format_size(size));
+                            count += 1;
+                        }
+                    }
+                }
+            }
+            if count == 0 {
+                println!("  (empty)");
+            }
+        }
+    } else {
+        println!("  (not created)");
+    }
+    println!();
+
+    // Project cache
+    println!("Project cache: {}", project_cache.display());
+    if project_cache.exists() {
+        let manifest_path = project_cache.join("manifest.bin");
+        if manifest_path.exists() {
+            let cache = BytecodeCache::new(project_cache.clone(), env!("CARGO_PKG_VERSION"));
+            let module_count = cache.manifest().modules.len();
+            if module_count > 0 {
+                let size = calculate_dir_size(&project_cache);
+                println!("  Status: {} modules cached ({})", module_count, format_size(size));
+            } else {
+                println!("  Status: empty");
+            }
+        } else {
+            println!("  Status: empty");
+        }
+    } else {
+        println!("  Status: not in a cached project");
+    }
+
+    ExitCode::SUCCESS
+}
+
+/// Calculate total size of a directory
+fn calculate_dir_size(path: &std::path::Path) -> u64 {
+    let mut size = 0;
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                size += fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            } else if path.is_dir() {
+                size += calculate_dir_size(&path);
+            }
+        }
+    }
+    size
+}
+
+/// Format size in human-readable form
+fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
 /// Install an extension from a git URL
 fn extension_install(git_url: &str) -> ExitCode {
     // Extract repo name from URL
@@ -2170,6 +2493,9 @@ fn main() -> ExitCode {
         }
         if args[1] == "extension" {
             return run_extension_command(&args[2..]);
+        }
+        if args[1] == "cache" {
+            return run_cache_command(&args[2..]);
         }
         if args[1] == "connect" {
             return connect::run_connect(&args[2..]);
