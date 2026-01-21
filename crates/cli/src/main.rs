@@ -493,6 +493,266 @@ fn save_package_to_cache(
     Ok(())
 }
 
+/// Get the project-local cache directory
+fn get_project_cache_dir(project_root: &std::path::Path) -> PathBuf {
+    project_root.join(".nostos-cache")
+}
+
+/// Result of project cache loading
+struct ProjectCacheLoadResult {
+    modules_loaded: usize,
+    functions_loaded: usize,
+}
+
+/// Try to load all project modules from cache.
+/// Returns Some only if ALL modules have valid cache (conservative approach).
+/// This avoids complex dependency tracking between project modules.
+fn try_load_project_from_cache(
+    compiler: &mut Compiler,
+    project_root: &std::path::Path,
+    source_files: &[PathBuf],
+) -> Option<ProjectCacheLoadResult> {
+    use nostos_vm::cache::{CachedFunction, cached_to_function, cached_to_function_with_resolver};
+    use nostos_vm::value::Value;
+
+    // Only cache for directory projects, not single files
+    if source_files.len() <= 1 {
+        return None;
+    }
+
+    let cache_dir = get_project_cache_dir(project_root);
+
+    // Check if cache exists
+    if !cache_dir.exists() {
+        return None;
+    }
+
+    // Load cache manager
+    let cache = BytecodeCache::new(cache_dir.clone(), env!("CARGO_PKG_VERSION"));
+
+    if !cache.has_cache() {
+        return None;
+    }
+
+    // Check if ALL modules have valid cache
+    let mut modules_to_load: Vec<(String, PathBuf)> = Vec::new();
+
+    for file_path in source_files {
+        let relative = match file_path.strip_prefix(project_root) {
+            Ok(r) => r,
+            Err(_) => return None,
+        };
+
+        let mut components: Vec<String> = relative.components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect();
+
+        // Remove .nos extension from last component
+        if let Some(last) = components.last_mut() {
+            if last.ends_with(".nos") {
+                *last = last.trim_end_matches(".nos").to_string();
+            }
+        }
+
+        let module_name = components.join(".");
+
+        // If any module is invalid, don't use cache at all
+        if !cache.is_module_valid(&module_name, file_path) {
+            return None;
+        }
+
+        modules_to_load.push((module_name, file_path.clone()));
+    }
+
+    // All modules have valid cache - load them
+    let mut all_cached_functions: Vec<CachedFunction> = Vec::new();
+    let mut all_types: Vec<nostos_vm::value::TypeValue> = Vec::new();
+    let mut all_mvars: Vec<CachedMvar> = Vec::new();
+    let mut modules_loaded = 0;
+
+    for (module_name, _file_path) in &modules_to_load {
+        match cache.load_module(module_name) {
+            Ok(cached_module) => {
+                all_cached_functions.extend(cached_module.functions);
+                all_types.extend(cached_module.types);
+                all_mvars.extend(cached_module.mvars);
+                modules_loaded += 1;
+            }
+            Err(_) => {
+                return None;
+            }
+        }
+    }
+
+    // Register all module names
+    for (module_name, _) in &modules_to_load {
+        if !module_name.is_empty() {
+            compiler.register_known_module(module_name);
+        }
+    }
+
+    // Build a map of function names to their cached data for resolution
+    let cached_fn_map: std::collections::HashMap<String, &CachedFunction> = all_cached_functions
+        .iter()
+        .map(|f| (f.name.clone(), f))
+        .collect();
+
+    // Convert functions with resolver and register them
+    let mut functions_loaded = 0;
+    for cached_fn in &all_cached_functions {
+        let func = cached_to_function_with_resolver(cached_fn, |name| {
+            // First check if already registered
+            if let Some(existing) = compiler.get_function(name) {
+                return Some(Value::Function(existing));
+            }
+            // Otherwise, look up in cached functions and convert (without resolver - base case)
+            if let Some(cached) = cached_fn_map.get(name) {
+                let converted = cached_to_function(cached);
+                Some(Value::Function(std::sync::Arc::new(converted)))
+            } else {
+                None
+            }
+        });
+        compiler.register_external_function(&cached_fn.name, std::sync::Arc::new(func));
+        // Register visibility for project functions (they're implicitly public within the project)
+        compiler.register_function_visibility(&cached_fn.name, nostos_syntax::ast::Visibility::Public);
+        functions_loaded += 1;
+    }
+
+    // Register types
+    for type_val in &all_types {
+        compiler.register_external_type(&type_val.name, &std::sync::Arc::new(type_val.clone()));
+    }
+
+    // Register mvars from cache
+    for cached_mvar in &all_mvars {
+        let initial_value = cached_to_mvar_init(&cached_mvar.initial_value);
+        compiler.register_mvar_with_info(
+            &cached_mvar.name,
+            cached_mvar.type_name.clone(),
+            initial_value,
+        );
+    }
+
+    if functions_loaded > 0 || modules_loaded > 0 {
+        Some(ProjectCacheLoadResult {
+            modules_loaded,
+            functions_loaded,
+        })
+    } else {
+        None
+    }
+}
+
+/// Save all project modules to cache after compiling.
+fn save_project_to_cache(
+    compiler: &Compiler,
+    project_root: &std::path::Path,
+    module_infos: &[(String, PathBuf, String)], // (module_name, source_path, source_hash)
+) -> Result<(), String> {
+    let cache_dir = get_project_cache_dir(project_root);
+
+    // Create cache directory
+    fs::create_dir_all(&cache_dir)
+        .map_err(|e| format!("Failed to create project cache directory: {}", e))?;
+
+    // Initialize cache manager
+    let mut cache = BytecodeCache::new(cache_dir, env!("CARGO_PKG_VERSION"));
+
+    // Get the function list for CallDirect → CallByName conversion
+    let function_list = compiler.get_function_list_names();
+
+    // Get all functions, types, and mvars from compiler
+    let functions = compiler.get_all_functions();
+    let all_types = compiler.get_all_types();
+    let all_mvars = compiler.get_mvars();
+
+    // Save each module separately
+    for (module_name, source_path, source_hash) in module_infos {
+        // For top-level module (empty name), use special handling
+        let module_prefix = if module_name.is_empty() {
+            String::new()
+        } else {
+            format!("{}.", module_name)
+        };
+
+        // Collect functions for this module
+        let mut cached_functions = Vec::new();
+        for (func_name, func) in functions {
+            let belongs_to_module = if module_name.is_empty() {
+                // Top-level functions don't have a module prefix
+                !func_name.contains('.') || func.module.is_none()
+            } else {
+                func_name.starts_with(&module_prefix) || func.module.as_deref() == Some(module_name.as_str())
+            };
+
+            if belongs_to_module {
+                if let Some(cached) = function_to_cached_with_fn_list(func, function_list) {
+                    cached_functions.push(cached);
+                }
+            }
+        }
+
+        // Collect types for this module
+        let module_types: Vec<nostos_vm::value::TypeValue> = all_types.iter()
+            .filter(|(type_name, _)| {
+                if module_name.is_empty() {
+                    !type_name.contains('.')
+                } else {
+                    type_name.starts_with(&module_prefix)
+                }
+            })
+            .map(|(_, type_val)| (**type_val).clone())
+            .collect();
+
+        // Collect mvars for this module
+        let module_mvars: Vec<CachedMvar> = all_mvars.iter()
+            .filter(|(mvar_name, _)| {
+                if module_name.is_empty() {
+                    !mvar_name.contains('.')
+                } else {
+                    mvar_name.starts_with(&module_prefix)
+                }
+            })
+            .map(|(name, info)| CachedMvar {
+                name: name.clone(),
+                type_name: info.type_name.clone(),
+                initial_value: mvar_init_to_cached(&info.initial_value),
+            })
+            .collect();
+
+        // Use a special name for top-level module
+        let cache_module_name = if module_name.is_empty() {
+            "__main__".to_string()
+        } else {
+            module_name.clone()
+        };
+
+        let cached_module = CachedModule {
+            module_path: if module_name.is_empty() {
+                vec![]
+            } else {
+                module_name.split('.').map(|s| s.to_string()).collect()
+            },
+            source_hash: source_hash.clone(),
+            functions: cached_functions,
+            function_signatures: std::collections::HashMap::new(),
+            exports: Vec::new(),
+            prelude_imports: Vec::new(),
+            types: module_types,
+            mvars: module_mvars,
+        };
+
+        // Save the module
+        cache.save_module(&cache_module_name, source_path.to_str().unwrap_or("unknown"), &cached_module)?;
+    }
+
+    // Save manifest
+    cache.save_manifest()?;
+
+    Ok(())
+}
+
 /// Find the stdlib directory
 fn find_stdlib_path() -> Option<PathBuf> {
     let candidates = vec![
@@ -2515,63 +2775,90 @@ fn main() -> ExitCode {
         }
     }
 
-    // Process each file
-    for path in &source_files {
-        let source = match fs::read_to_string(path) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Error reading file '{}': {}", path.display(), e);
-                return ExitCode::FAILURE;
-            }
-        };
-
-        let (module_opt, errors) = parse(&source);
-        if !errors.is_empty() {
-            let source_errors = parse_errors_to_source_errors(&errors);
-            eprint_errors(&source_errors, path.to_str().unwrap_or("unknown"), &source);
-            return ExitCode::FAILURE;
-        }
-
-        let module = match module_opt {
-            Some(m) => m,
-            None => {
-                eprintln!("Failed to parse '{}'", path.display());
-                return ExitCode::FAILURE;
-            }
-        };
-
-        // Determine module path based on file location relative to project root
-        // For single file, module path is empty (top-level)
-        let module_path = if input_path.is_dir() {
-            let relative = path.strip_prefix(project_root).unwrap();
-            let mut components: Vec<String> = relative.components()
-                .map(|c| c.as_os_str().to_string_lossy().to_string())
-                .collect();
-
-            // Remove .nos extension from last component
-            if let Some(last) = components.last_mut() {
-                if last.ends_with(".nos") {
-                    *last = last.trim_end_matches(".nos").to_string();
-                }
-            }
-            components
+    // Try to load project modules from cache (only for directory projects with multiple files)
+    let mut project_modules_to_cache: Vec<(String, PathBuf, String)> = Vec::new();
+    let project_cache_used = if input_path.is_dir() && source_files.len() > 1 {
+        if let Some(cache_result) = try_load_project_from_cache(&mut compiler, project_root, &source_files) {
+            eprintln!("Loaded project from cache ({} modules, {} functions)",
+                cache_result.modules_loaded, cache_result.functions_loaded);
+            true
         } else {
-            vec![]
-        };
+            false
+        }
+    } else {
+        false
+    };
 
-        // Add to compiler with source tracking
-        if let Err(e) = compiler.add_module(&module, module_path, std::sync::Arc::new(source.clone()), path.to_str().unwrap_or("unknown").to_string()) {
-            let source_error = e.to_source_error();
-            source_error.eprint(path.to_str().unwrap_or("unknown"), &source);
-            return ExitCode::FAILURE;
+    // Process each file (skip if loaded from cache)
+    if !project_cache_used {
+        for path in &source_files {
+            let source = match fs::read_to_string(path) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Error reading file '{}': {}", path.display(), e);
+                    return ExitCode::FAILURE;
+                }
+            };
+
+            // Compute hash for caching
+            let source_hash = compute_file_hash(path).unwrap_or_default();
+
+            let (module_opt, errors) = parse(&source);
+            if !errors.is_empty() {
+                let source_errors = parse_errors_to_source_errors(&errors);
+                eprint_errors(&source_errors, path.to_str().unwrap_or("unknown"), &source);
+                return ExitCode::FAILURE;
+            }
+
+            let module = match module_opt {
+                Some(m) => m,
+                None => {
+                    eprintln!("Failed to parse '{}'", path.display());
+                    return ExitCode::FAILURE;
+                }
+            };
+
+            // Determine module path based on file location relative to project root
+            // For single file, module path is empty (top-level)
+            let module_path = if input_path.is_dir() {
+                let relative = path.strip_prefix(project_root).unwrap();
+                let mut components: Vec<String> = relative.components()
+                    .map(|c| c.as_os_str().to_string_lossy().to_string())
+                    .collect();
+
+                // Remove .nos extension from last component
+                if let Some(last) = components.last_mut() {
+                    if last.ends_with(".nos") {
+                        *last = last.trim_end_matches(".nos").to_string();
+                    }
+                }
+                components
+            } else {
+                vec![]
+            };
+
+            // Track for caching (for directory projects)
+            if input_path.is_dir() {
+                let module_name = module_path.join(".");
+                project_modules_to_cache.push((module_name, path.clone(), source_hash));
+            }
+
+            // Add to compiler with source tracking
+            if let Err(e) = compiler.add_module(&module, module_path, std::sync::Arc::new(source.clone()), path.to_str().unwrap_or("unknown").to_string()) {
+                let source_error = e.to_source_error();
+                source_error.eprint(path.to_str().unwrap_or("unknown"), &source);
+                return ExitCode::FAILURE;
+            }
         }
     }
 
-    // Compile all bodies (includes mvar safety check)
-    if let Err((e, filename, source)) = compiler.compile_all() {
-        let source_error = e.to_source_error();
-        source_error.eprint(&filename, &source);
-        return ExitCode::FAILURE;
+    // Compile all bodies (includes mvar safety check) - skip if loaded from cache
+    if !project_cache_used {
+        if let Err((e, filename, source)) = compiler.compile_all() {
+            let source_error = e.to_source_error();
+            source_error.eprint(&filename, &source);
+            return ExitCode::FAILURE;
+        }
     }
 
     // Save extension modules to cache (after successful compile_all)
@@ -2585,6 +2872,13 @@ fn main() -> ExitCode {
     for (pkg_name, module_infos) in &packages_to_cache {
         if let Err(e) = save_package_to_cache(&compiler, pkg_name, module_infos) {
             eprintln!("Warning: Failed to cache package '{}': {}", pkg_name, e);
+        }
+    }
+
+    // Save project modules to cache (after successful compile_all)
+    if !project_cache_used && !project_modules_to_cache.is_empty() {
+        if let Err(e) = save_project_to_cache(&compiler, project_root, &project_modules_to_cache) {
+            eprintln!("Warning: Failed to cache project: {}", e);
         }
     }
 
