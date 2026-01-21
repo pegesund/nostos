@@ -26,6 +26,42 @@ export function activate(context: ExtensionContext) {
             window.showInformationMessage('Nostos language server restarted');
         })
     );
+
+    // Register build cache command
+    context.subscriptions.push(
+        commands.registerCommand('nostos.buildCache', async () => {
+            if (client) {
+                try {
+                    await client.sendRequest('workspace/executeCommand', {
+                        command: 'nostos.buildCache',
+                        arguments: []
+                    });
+                } catch (e) {
+                    window.showErrorMessage(`Failed to build cache: ${e}`);
+                }
+            } else {
+                window.showWarningMessage('Language server not running');
+            }
+        })
+    );
+
+    // Register clear cache command
+    context.subscriptions.push(
+        commands.registerCommand('nostos.clearCache', async () => {
+            if (client) {
+                try {
+                    await client.sendRequest('workspace/executeCommand', {
+                        command: 'nostos.clearCache',
+                        arguments: []
+                    });
+                } catch (e) {
+                    window.showErrorMessage(`Failed to clear cache: ${e}`);
+                }
+            } else {
+                window.showWarningMessage('Language server not running');
+            }
+        })
+    );
 }
 
 function startLanguageServer(context: ExtensionContext) {

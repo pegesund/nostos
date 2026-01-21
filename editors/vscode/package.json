@@ -19,7 +19,25 @@
     "functional",
     "programming language"
   ],
+  "activationEvents": [
+    "onLanguage:nostos"
+  ],
+  "main": "./out/extension.js",
   "contributes": {
+    "commands": [
+      {
+        "command": "nostos.buildCache",
+        "title": "Nostos: Build Module Cache"
+      },
+      {
+        "command": "nostos.clearCache",
+        "title": "Nostos: Clear Module Cache"
+      },
+      {
+        "command": "nostos.restartServer",
+        "title": "Nostos: Restart Language Server"
+      }
+    ],
     "languages": [
       {
         "id": "nostos",

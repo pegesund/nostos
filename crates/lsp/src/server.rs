@@ -50,6 +50,9 @@ impl NostosLanguageServer {
             eprintln!("Warning: Failed to load directory: {}", e);
         }
 
+        // Enable per-project disk caching for faster subsequent loads
+        engine.enable_project_cache(root_path.clone());
+
         // Debug: log how many types are registered after initialization
         {
             use std::io::Write;
@@ -615,6 +618,14 @@ impl LanguageServer for NostosLanguageServer {
                 document_symbol_provider: Some(OneOf::Left(true)),
                 // Find references
                 references_provider: Some(OneOf::Left(true)),
+                // Custom commands (build cache, clear cache)
+                execute_command_provider: Some(ExecuteCommandOptions {
+                    commands: vec![
+                        "nostos.buildCache".to_string(),
+                        "nostos.clearCache".to_string(),
+                    ],
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -634,7 +645,54 @@ impl LanguageServer for NostosLanguageServer {
 
     async fn shutdown(&self) -> Result<()> {
         eprintln!("Shutting down Nostos LSP...");
+
+        // Persist module cache on shutdown
+        if let Some(ref mut engine) = *self.engine.lock().unwrap() {
+            match engine.persist_module_cache() {
+                Ok(0) => {} // No modules to persist
+                Ok(n) => eprintln!("Persisted {} module(s) to cache", n),
+                Err(e) => eprintln!("Warning: Failed to persist module cache: {}", e),
+            }
+        }
+
         Ok(())
+    }
+
+    async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<serde_json::Value>> {
+        eprintln!("Execute command: {}", params.command);
+
+        match params.command.as_str() {
+            "nostos.buildCache" => {
+                let result = if let Some(ref mut engine) = *self.engine.lock().unwrap() {
+                    match engine.persist_module_cache() {
+                        Ok(n) => format!("Built cache: {} module(s) persisted", n),
+                        Err(e) => format!("Failed to build cache: {}", e),
+                    }
+                } else {
+                    "No project loaded".to_string()
+                };
+
+                self.client.show_message(MessageType::INFO, &result).await;
+                Ok(Some(serde_json::json!({ "message": result })))
+            }
+            "nostos.clearCache" => {
+                let result = if let Some(ref mut engine) = *self.engine.lock().unwrap() {
+                    match engine.clear_all_caches() {
+                        Ok(()) => "Cache cleared successfully".to_string(),
+                        Err(e) => format!("Failed to clear cache: {}", e),
+                    }
+                } else {
+                    "No project loaded".to_string()
+                };
+
+                self.client.show_message(MessageType::INFO, &result).await;
+                Ok(Some(serde_json::json!({ "message": result })))
+            }
+            _ => {
+                eprintln!("Unknown command: {}", params.command);
+                Ok(None)
+            }
+        }
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
