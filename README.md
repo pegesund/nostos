@@ -1,183 +1,337 @@
 # Nostos
 
-> *Nostos (νόστος): Greek for "homecoming" — the return journey. The language you keep coming back to.*
+> *In Greek, Nostos (νόστος) means a hero's homecoming or return from a long journey.*
 
-**Nostos** is a minimal, fast, type-safe programming language designed for high-concurrency applications and live development. It combines the fault-tolerant actor model of Erlang with the expressiveness and type safety of modern functional languages, all powered by a high-performance register-based VM written in Rust.
+After wandering through callback hell, fighting with async/await, and battling race conditions—Nostos welcomes you home to a place where concurrent code is simple, readable, and just works.
 
-## Key Features
+---
 
-*   **⚡ Lightweight Concurrency**: Spawns hundreds of thousands of isolated processes (actors) with minimal overhead (~2KB each). Uses message passing for safe communication without locks.
-*   **🌐 Fully Async I/O**: All I/O operations (File, Network, HTTP) are non-blocking and integrated with the scheduler. A process performing I/O automatically yields, allowing other processes to run on the same thread.
-*   **🧩 Pattern Matching**: Expressive pattern matching in function definitions, `match` expressions, and message reception.
-*   **🛡️ Type Safety**: Strong, static structural typing with type inference. No nulls (uses `Option`), no exceptions (uses `Result` or supervision trees).
-*   **🎭 Traits**: Flexible polymorphism through traits, allowing you to define shared behavior for different types.
-*   **🚀 High Performance**: 
-    *   Register-based VM with typed bytecode.
-    *   **JIT Compilation** using [Cranelift](https://cranelift.readthedocs.io/) for hot paths.
-    *   **Typed Arrays** (`Int64Array`, `Float64Array`) for efficient numeric computation.
-*   **🔍 Introspection & Live Dev**: Full runtime introspection of types and functions. Hot code reloading and image saving (Smalltalk-style) planned.
+## What Makes Nostos Different
 
-## Examples
-
-### 1. Pattern Matching & Recursion
-
-Nostos supports multiple function clauses and efficient tail recursion.
+### Code That Reads Like Poetry
 
 ```nos
-# Naive recursive fibonacci
-fib(0) = 0
-fib(1) = 1
-fib(n) = fib(n - 1) + fib(n - 2)
+# Pattern matching flows naturally
+fibonacci(0) = 0
+fibonacci(1) = 1
+fibonacci(n) = fibonacci(n - 1) + fibonacci(n - 2)
 
-# Tail-recursive with pattern matching
-fib_fast(n) = fib_helper(n, 0, 1)
+# Lists destructure elegantly
+sum([]) = 0
+sum([head | tail]) = head + sum(tail)
 
-fib_helper(0, a, _) = a
-fib_helper(n, a, b) = fib_helper(n - 1, b, a + b)
+# Pipes chain beautifully
+result = users
+    .filter(u => u.active)
+    .map(u => u.name)
+    .join(", ")
 ```
 
-### 2. Massive Concurrency
+### Non-Blocking by Default
 
-Spawn lightweight processes and communicate via messages.
+Every I/O operation yields automatically. No `async`, no `await`, no colored functions. Your code looks synchronous but runs concurrently.
 
 ```nos
-# Worker: receives a value and the parent pid, echoes it back
-worker(parent, secret) = {
-    parent <- secret
-    ()
+# These HTTP requests run in parallel—no special syntax needed
+fetchAll(urls) = urls.map(url => Http.get(url))
+
+# Spawn 100,000 processes without breaking a sweat
+main() = {
+    pids = range(1, 100001).map(i => spawn(() => worker(i)))
+    println("Spawned " ++ show(pids.length()) ++ " processes")
 }
+```
+
+### Reactive Records
+
+State changes propagate automatically. Build reactive UIs without the ceremony.
+
+```nos
+reactive Counter = { value: Int }
 
 main() = {
-    me = self()
-    n = 100000
-    
-    # Spawn 100,000 processes
-    for i = 0 to n {
-        spawn { worker(me, 42) }
-    }
+    counter = Counter(0)
 
-    # Collect responses
-    correct = 0
-    for i = 0 to n {
-        correct = receive
-            42 -> correct + 1
-            _  -> correct
-        end
-    }
-    
-    println("Received " ++ show(correct) ++ " responses!")
+    # Changes trigger re-renders automatically
+    counter.value = counter.value + 1
 }
 ```
 
-### 3. Fully Async I/O
+### Living Development Environment
 
-Perform parallel I/O operations easily. The runtime handles the non-blocking logic, so your code looks synchronous but runs in parallel.
+The REPL isn't just for experiments—it's your development cockpit:
+
+- **Live reload**: Change code, see results instantly
+- **Autocomplete**: Context-aware suggestions as you type
+- **Inline errors**: Know what's wrong before you run
+- **State inspection**: Peek inside running processes
+
+```bash
+$ nostos
+Nostos REPL v0.1.0
+>>> users = [{ name: "Alice", age: 30 }, { name: "Bob", age: 25 }]
+>>> users.filter(u => u.age > 28).map(u => u.name)
+["Alice"]
+```
+
+### VS Code That Understands Your Code
+
+Not just syntax highlighting—true understanding:
+
+- **Real-time error checking** as you type
+- **Go to definition** across modules
+- **Smart autocomplete** with type inference
+- **Integrated REPL** in your editor
+- **File status badges** showing compile state at a glance
+
+---
+
+## Batteries Included
+
+### PostgreSQL
+
+Query your database with minimal friction:
 
 ```nos
-# 5 parallel HTTP requests
-# Each request takes 1s on the server, but total time is ~1s because they run in parallel.
-
-worker(parent, id) = {
-    # This call yields the process, it doesn't block the thread
-    Http.get("https://httpbin.org/delay/1")
-    parent <- id
-}
+import postgres
 
 main() = {
-    me = self()
-    # Spawn 5 concurrent workers
-    for i = 1 to 5 {
-        spawn { worker(me, i) }
-    }
-    
-    # Wait for all to finish
-    for i = 1 to 5 {
-        receive id -> println("Request " ++ show(id) ++ " done")
-    }
+    db = postgres.connect("localhost", "mydb", "user", "pass")
+
+    users = db.query("SELECT * FROM users WHERE active = $1", [true])
+
+    users.forEach(u => println(u.name))
 }
 ```
 
-### 4. Concurrent HTTP Server
+### Reactive Web (RWeb)
 
-A multi-worker HTTP server that can handle thousands of concurrent connections.
+Full-stack reactive web apps with server-side rendering and automatic DOM diffing:
 
 ```nos
-handle(req) = {
-    Server.respond(req.id, 200, [], "Hello World")
+use stdlib.rweb.*
+
+reactive Todo = { text: String, done: Bool }
+reactive State = { todos: List[Todo] }
+
+sessionSetup(writerId) = {
+    state = State([])
+
+    renderPage = () => RHtml(div([
+        h1("Todo App"),
+        component("list", () => RHtml(
+            ul(state.todos.map(t => li(t.text)))
+        )),
+        input(type: "text", dataAction: "add")
+    ]))
+
+    onAction = (action, params) => match action {
+        "add" -> { state.todos = state.todos ++ [Todo(params.text, false)] }
+        _ -> ()
+    }
+
+    (renderPage, onAction)
 }
 
-worker(server) = {
-    # Accepts a connection (yields if none waiting)
-    (status, req) = Server.accept(server)
-    if status == "ok" then handle(req)
-    worker(server)
+main() = startRWeb(8080, "Todos", sessionSetup)
+```
+
+### HTTP Server & Client
+
+Production-ready networking:
+
+```nos
+# Server
+handle(req) = match req.path {
+    "/api/users" -> jsonResponse(getUsers()),
+    "/health" -> textResponse("OK"),
+    _ -> notFound()
 }
+
+main() = Server.start(8080, handle, workers: 8)
+
+# Client
+response = Http.get("https://api.example.com/data")
+data = json.parse(response.body)
+```
+
+### TCP Sockets
+
+Low-level when you need it:
+
+```nos
+server = Tcp.listen(9000)
+client = Tcp.accept(server)
+Tcp.send(client, "Hello!")
+message = Tcp.receive(client)
+```
+
+### JSON
+
+Parse, generate, and transform:
+
+```nos
+data = json.parse('{"name": "Alice", "scores": [95, 87, 92]}')
+name = data.get("name")  # "Alice"
+
+output = json.stringify(#{ "status": "ok", "count": 42 })
+```
+
+### HTML Templating
+
+Type-safe templates that compose:
+
+```nos
+page(title, content) = html([
+    head([ title(title) ]),
+    body([
+        header([ h1(title) ]),
+        main(content),
+        footer([ p("© 2024") ])
+    ])
+])
+```
+
+### Logging
+
+Structured logging with levels:
+
+```nos
+import logging
+
+log.info("Server started", port: 8080)
+log.error("Connection failed", error: err, retry: 3)
+```
+
+---
+
+## FFI: Extend With Native Code
+
+When you need raw performance or existing libraries, Nostos extensions bridge to native code seamlessly:
+
+```nos
+# Load a native extension
+import glam  # Linear algebra via Rust's glam crate
 
 main() = {
-    (ok, server) = Server.bind(8080)
-    
-    # Spawn 8 parallel acceptors sharing the same port
-    for i = 1 to 8 {
-        spawn { worker(server) }
-    }
-    
-    # Keep main alive
-    receive _ -> () 
+    v1 = glam.vec3(1.0, 2.0, 3.0)
+    v2 = glam.vec3(4.0, 5.0, 6.0)
+
+    dot = v1.dot(v2)
+    cross = v1.cross(v2)
+    normalized = v1.normalize()
 }
 ```
 
-### 5. Typed Arrays & Traits
+Extensions are Rust crates that expose functions to Nostos. The type system ensures safe interop:
 
-Use specialized arrays for raw performance, combined with high-level traits.
+```toml
+# nostos.toml
+[extensions]
+glam = { version = "0.1.0" }
+nalgebra = { git = "https://github.com/user/nalgebra-nos" }
+```
+
+---
+
+## The Type System Stays Out of Your Way
+
+Strong static typing with inference that actually works:
 
 ```nos
-trait Shape
-    area(self) -> Float
+# Types are inferred...
+numbers = [1, 2, 3]           # List[Int]
+doubled = numbers.map(x => x * 2)  # List[Int]
+
+# ...but you can be explicit when it helps
+parseConfig(path: String) -> Result[Config, String] = {
+    content = readFile(path)
+    json.parse(content).mapErr(e => "Parse error: " ++ e)
+}
+```
+
+### Traits for Polymorphism
+
+```nos
+trait Drawable
+    draw(self) -> String
 end
 
 type Circle = { radius: Float }
-Circle: Shape
-    area(self) = 3.14159 * self.radius * self.radius
+type Square = { side: Float }
+
+Circle: Drawable
+    draw(self) = "●"
 end
 
-main() = {
-    # High-performance unboxed array of 64-bit floats
-    floats = newFloat64Array(1000)
-    
-    for i = 0 to length(floats) {
-        floats[i] = i * 1.5
-    }
-    
-    println(floats[10]) # 15.0
-}
+Square: Drawable
+    draw(self) = "■"
+end
+
+# Works with any Drawable
+render[T: Drawable](shapes: List[T]) = shapes.map(s => s.draw()).join(" ")
 ```
 
-## Architecture
+### Supertraits Build Hierarchies
 
-Nostos is built in **Rust** and organized as a workspace of crates:
+```nos
+trait Printable
+    toString(self) -> String
+end
 
-*   `crates/compiler`: Lexer, parser, and AST lowering.
-*   `crates/vm`: The register-based interpreter and runtime.
-*   `crates/jit`: JIT compiler backend using Cranelift.
-*   `crates/scheduler`: Process scheduler and concurrency primitives.
-*   `crates/types`: Type checker and inference engine.
+trait Serializable: Printable  # Requires Printable
+    toJson(self) -> String
+end
+```
+
+---
 
 ## Getting Started
 
-To build and run Nostos, you need a standard Rust toolchain.
-
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/nostos.git
+# Clone and build
+git clone https://github.com/pegesund/nostos.git
 cd nostos
-
-# Run an example
-cargo run --release -- examples/fibonacci.nos
+cargo build --release
 
 # Run the REPL
-cargo run --release
+./target/release/nostos
+
+# Run a program
+./target/release/nostos examples/hello_server.nos
+
+# Install VS Code extension
+cd editors/vscode && npm install && npm run package
+code --install-extension nostos-*.vsix
 ```
 
-## Status
+---
 
-Nostos is currently in **active development**. Syntax and features are subject to change.
+## Architecture
+
+Built in Rust for reliability and performance:
+
+| Crate | Purpose |
+|-------|---------|
+| `compiler` | Lexer, parser, type inference |
+| `vm` | Register-based bytecode interpreter |
+| `jit` | Cranelift-powered JIT compilation |
+| `scheduler` | Lightweight process runtime |
+| `repl` | Interactive environment & LSP |
+| `lsp` | Language server for editors |
+
+---
+
+## Philosophy
+
+Nostos believes that:
+
+- **Concurrency should be simple.** Message passing between lightweight processes beats shared memory and locks.
+- **I/O should never block.** Every operation yields, letting thousands of processes share a thread pool.
+- **Types should help, not hinder.** Inference handles the common case; annotations clarify intent.
+- **Development should be interactive.** The REPL and live reload keep you in flow.
+- **Batteries should be included.** HTTP, PostgreSQL, JSON, WebSockets—ready when you are.
+
+---
+
+*Welcome home.*
