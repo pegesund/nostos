@@ -2442,6 +2442,11 @@ impl Compiler {
         self.imports.insert(local_name, qualified_name);
     }
 
+    /// Add a type import (local_name -> qualified_name) for `use module.*` support.
+    pub fn add_type_import(&mut self, local_name: String, qualified_name: String) {
+        self.imports.insert(local_name, qualified_name);
+    }
+
     /// Get all prelude imports (local name -> qualified name mappings)
     pub fn get_prelude_imports(&self) -> &HashMap<String, String> {
         &self.imports
@@ -16809,6 +16814,23 @@ impl Compiler {
     pub fn get_module_public_functions(&self, module_path: &str) -> Vec<(String, String)> {
         let prefix = format!("{}.", module_path);
         self.function_visibility.iter()
+            .filter(|(name, vis)| {
+                name.starts_with(&prefix) && **vis == Visibility::Public
+            })
+            .map(|(name, _)| {
+                let local_name = name.strip_prefix(&prefix)
+                    .unwrap_or(name)
+                    .to_string();
+                (local_name, name.clone())
+            })
+            .collect()
+    }
+
+    /// Get all public types from a module (for `use module.*`).
+    /// Returns Vec of (local_name, qualified_name) pairs.
+    pub fn get_module_public_types(&self, module_path: &str) -> Vec<(String, String)> {
+        let prefix = format!("{}.", module_path);
+        self.type_visibility.iter()
             .filter(|(name, vis)| {
                 name.starts_with(&prefix) && **vis == Visibility::Public
             })

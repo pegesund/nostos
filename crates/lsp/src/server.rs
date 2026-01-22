@@ -3399,6 +3399,8 @@ impl NostosLanguageServer {
             }
 
             // Add functions (limit to avoid overwhelming UI)
+            // Use a set to avoid duplicate display names
+            let mut seen_functions = std::collections::HashSet::new();
             let mut count = 0;
             for fn_name in engine.get_functions() {
                 if count >= 50 {
@@ -3406,6 +3408,11 @@ impl NostosLanguageServer {
                 }
                 let display_name = fn_name.rsplit('.').next().unwrap_or(&fn_name);
                 let display_name = display_name.split('/').next().unwrap_or(display_name);
+
+                // Skip if we've already added this display name
+                if !seen_functions.insert(display_name.to_string()) {
+                    continue;
+                }
 
                 if partial.is_empty() || display_name.to_lowercase().starts_with(&partial_lower) {
                     let signature = engine.get_function_signature(&fn_name);
@@ -3422,9 +3429,16 @@ impl NostosLanguageServer {
                 }
             }
 
-            // Add types
+            // Add types (avoid duplicates)
+            let mut seen_types = std::collections::HashSet::new();
             for type_name in engine.get_types() {
                 let display_name = type_name.rsplit('.').next().unwrap_or(&type_name);
+
+                // Skip if we've already added this display name
+                if !seen_types.insert(display_name.to_string()) {
+                    continue;
+                }
+
                 if partial.is_empty() || display_name.to_lowercase().starts_with(&partial_lower) {
                     let fields = engine.get_type_fields(&type_name);
                     let insert_text = Self::generate_type_insert_text(display_name, &fields);

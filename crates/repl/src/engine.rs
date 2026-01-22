@@ -7887,13 +7887,18 @@ impl ReplEngine {
 
                 match &use_stmt.imports {
                     UseImports::All => {
-                        // Import all public functions from the module
+                        // Import all public functions and types from the module
                         let public_funcs = self.compiler.get_module_public_functions(&module_path);
-                        if public_funcs.is_empty() {
-                            return Err(format!("No public functions found in module '{}'", module_path));
+                        let public_types = self.compiler.get_module_public_types(&module_path);
+
+                        if public_funcs.is_empty() && public_types.is_empty() {
+                            return Err(format!("No public functions or types found in module '{}'", module_path));
                         }
+
                         // Update REPL imports for eval callback
                         let mut repl_imports = self.repl_imports.write().expect("repl_imports lock");
+
+                        // Import functions
                         for (local_name_with_sig, qualified_name_with_sig) in public_funcs {
                             // Strip signature suffix for local name lookup (e.g., "vec/_" -> "vec")
                             let local_name = local_name_with_sig.split('/').next()
@@ -7911,6 +7916,16 @@ impl ReplEngine {
                                 imported_names.push(local_name);
                             }
                         }
+
+                        // Import types
+                        for (local_name, qualified_name) in public_types {
+                            // Add type import to compiler
+                            self.compiler.add_type_import(local_name.clone(), qualified_name.clone());
+                            if !imported_names.contains(&local_name) {
+                                imported_names.push(local_name);
+                            }
+                        }
+
                         drop(repl_imports);
                         // Update VM's prelude imports
                         self.vm.set_prelude_imports(
