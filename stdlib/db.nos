@@ -2,12 +2,15 @@
 #
 # Provides typed database result mapping using introspection.
 #
-# Usage:
+# Usage (string-based):
 #   type User = { name: String, age: Int }
-#
 #   rows = Pg.query(conn, "SELECT name, age FROM users", [])
-#   users = rowsToRecords("User", rows)
-#   users.forEach(u => println(u.name))
+#   users: List[User] = rowsToRecords("User", rows)
+#   users.map(u => println(u.name))
+#
+# Usage (type-based with typeNameOf):
+#   # For zero-argument generic functions, you can use typeNameOf[T]()
+#   getTypeName[T]() = typeNameOf[T]()  # Returns "User" when called as getTypeName[User]()
 #
 # NOTE: Column order in SELECT must match field order in the type definition.
 

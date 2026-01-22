@@ -443,6 +443,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "makeRecordByName", signature: "String -> Map[String, Json] -> a", doc: "Construct record by type name string: makeRecordByName(\"Person\", fields)" },
     BuiltinInfo { name: "makeVariantByName", signature: "String -> String -> Map[String, Json] -> a", doc: "Construct variant by type name: makeVariantByName(\"Result\", \"Ok\", fields)" },
     BuiltinInfo { name: "jsonToTypeByName", signature: "String -> Json -> a", doc: "Convert Json to typed value by type name: jsonToTypeByName(\"Person\", json)" },
+    BuiltinInfo { name: "typeNameOf", signature: "[T] -> String", doc: "Get string name of type parameter: typeNameOf[Int]() returns \"Int\"" },
     BuiltinInfo { name: "requestToType", signature: "HttpRequest -> String -> Result[a, String]", doc: "Parse HTTP request params to typed record: requestToType(req, \"UserParams\")" },
 
     // === Runtime Stats ===
@@ -4622,6 +4623,51 @@ impl Compiler {
             TypeExpr::Record(fields) => {
                 let fields_str: Vec<String> = fields.iter()
                     .map(|(name, ty)| format!("{}: {}", name.node, self.type_expr_to_string(ty)))
+                    .collect();
+                format!("{{{}}}", fields_str.join(", "))
+            }
+            TypeExpr::Unit => "()".to_string(),
+        }
+    }
+
+    /// Convert a type expression to a string, substituting type parameters from current_type_bindings.
+    fn type_expr_to_string_with_bindings(&self, ty: &TypeExpr) -> String {
+        match ty {
+            TypeExpr::Name(name) => {
+                // Check if this is a type parameter that should be substituted
+                if let Some(concrete) = self.current_type_bindings.get(&name.node) {
+                    concrete.clone()
+                } else {
+                    name.node.clone()
+                }
+            }
+            TypeExpr::Generic(name, params) => {
+                // First check if the generic name itself is a type parameter
+                let base_name = if let Some(concrete) = self.current_type_bindings.get(&name.node) {
+                    concrete.clone()
+                } else {
+                    name.node.clone()
+                };
+                let params_str: Vec<String> = params.iter()
+                    .map(|p| self.type_expr_to_string_with_bindings(p))
+                    .collect();
+                format!("{}[{}]", base_name, params_str.join(", "))
+            }
+            TypeExpr::Tuple(elems) => {
+                let elems_str: Vec<String> = elems.iter()
+                    .map(|e| self.type_expr_to_string_with_bindings(e))
+                    .collect();
+                format!("({})", elems_str.join(", "))
+            }
+            TypeExpr::Function(params, ret) => {
+                let params_str: Vec<String> = params.iter()
+                    .map(|p| self.type_expr_to_string_with_bindings(p))
+                    .collect();
+                format!("({}) -> {}", params_str.join(", "), self.type_expr_to_string_with_bindings(ret))
+            }
+            TypeExpr::Record(fields) => {
+                let fields_str: Vec<String> = fields.iter()
+                    .map(|(name, ty)| format!("{}: {}", name.node, self.type_expr_to_string_with_bindings(ty)))
                     .collect();
                 format!("{{{}}}", fields_str.join(", "))
             }
@@ -10649,6 +10695,15 @@ impl Compiler {
                         self.chunk.emit(Instruction::MakeRecordDyn(dst, type_reg, arg_regs[0]), line);
                         return Ok(dst);
                     }
+                    "typeNameOf" if arg_regs.is_empty() && !type_args.is_empty() => {
+                        // typeNameOf[T]() - returns the string name of type T
+                        // Substitute type parameters from current_type_bindings
+                        let type_name = self.type_expr_to_string_with_bindings(&type_args[0]);
+                        let dst = self.alloc_reg();
+                        let const_idx = self.chunk.add_constant(Value::String(Arc::new(type_name)));
+                        self.chunk.emit(Instruction::LoadConst(dst, const_idx as u16), line);
+                        return Ok(dst);
+                    }
                     "makeVariant" if arg_regs.len() == 2 && !type_args.is_empty() => {
                         // makeVariant[T](ctor_name, fields_map)
                         let type_name = self.type_expr_to_string(&type_args[0]);
@@ -11132,6 +11187,58 @@ impl Compiler {
                     match self.compile_monomorphized_variant(&call_name, &concrete_arg_types, &param_names) {
                         Ok(mangled_name) => mangled_name,
                         Err(_) => call_name.clone(), // Fall back to original if monomorphization fails
+                    }
+                } else {
+                    call_name.clone()
+                }
+            } else if !type_args.is_empty() {
+                // Function called with explicit type arguments (e.g., getTypeName[Int]())
+                // Check if it's a function with type parameters that needs monomorphization
+                // Try to find the function def - might be stored with different signature
+                let base_name = call_name.split('/').next().unwrap_or(&call_name);
+                let fn_ast_lookup = self.fn_asts.get(&call_name).map(|v| (call_name.clone(), v.clone()))
+                    .or_else(|| {
+                        // Try looking up by base name (without signature)
+                        // Find any fn_ast entry that starts with base_name
+                        self.fn_asts.iter()
+                            .find(|(k, _)| k.starts_with(&format!("{}/", base_name)))
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                    });
+                if let Some((fn_ast_key, fn_def)) = fn_ast_lookup {
+                    // Only proceed if the function actually has type parameters
+                    if fn_def.type_params.is_empty() {
+                        call_name.clone()
+                    } else {
+                        // Convert explicit type args to type names
+                        let explicit_type_names: Vec<String> = type_args.iter()
+                            .map(|t| self.type_expr_to_string_with_bindings(t))
+                            .collect();
+
+                        // Check all explicit types are concrete
+                        let all_explicit_concrete = explicit_type_names.iter().all(|t| self.is_type_concrete(t));
+
+                        if all_explicit_concrete && explicit_type_names.len() == fn_def.type_params.len() {
+                            // Get parameter names (may be empty for zero-arg functions)
+                            let param_names: Vec<String> = fn_def.clauses[0].params.iter()
+                                .filter_map(|p| self.pattern_binding_name(&p.pattern))
+                                .collect();
+
+                            // Build type bindings from explicit type args
+                            // These will be used during monomorphization
+                            // Pass the actual fn_ast key (not call_name) for AST lookup
+                            match self.compile_monomorphized_variant_with_type_args(
+                                &fn_ast_key,
+                                &explicit_type_names,
+                                &param_names,
+                                &fn_def.type_params,
+                                &concrete_arg_types,
+                            ) {
+                                Ok(mangled_name) => mangled_name,
+                                Err(_) => call_name.clone(),
+                            }
+                        } else {
+                            call_name.clone()
+                        }
                     }
                 } else {
                     call_name.clone()
@@ -12356,6 +12463,143 @@ impl Compiler {
         // Compile the specialized function in the original module context
         if let Err(e) = self.compile_fn_def(&specialized_def) {
             // Remove the placeholder to avoid runtime crash on empty code
+            self.functions.remove(&mangled_name);
+            self.function_indices.remove(&mangled_name);
+            if let Some(pos) = self.function_list.iter().position(|n| n == &mangled_name) {
+                self.function_list.remove(pos);
+            }
+            return Err(e);
+        }
+
+        // Restore context
+        self.param_types = saved_param_types;
+        self.module_path = saved_module_path;
+        self.imports = saved_imports;
+        self.current_type_bindings = saved_type_bindings;
+
+        Ok(mangled_name)
+    }
+
+    /// Compile a monomorphized variant of a polymorphic function using explicit type arguments.
+    /// Used for functions like `getTypeName[Int]()` where type is specified explicitly.
+    fn compile_monomorphized_variant_with_type_args(
+        &mut self,
+        base_name: &str,
+        type_arg_names: &[String],
+        param_names: &[String],
+        declared_type_params: &[TypeParam],
+        arg_type_names: &[String],
+    ) -> Result<String, CompileError> {
+        // Extract base function name (without signature)
+        let fn_base = base_name.split('/').next().unwrap_or(base_name);
+
+        // Generate mangled name using type args: fnbase$Type1_Type2/sig
+        let type_suffix = type_arg_names.join("_");
+        // Use actual argument types for signature (not type arg names)
+        let mangled_name = if arg_type_names.is_empty() {
+            format!("{}${}/", fn_base, type_suffix)
+        } else {
+            format!("{}${}/{}", fn_base, type_suffix, arg_type_names.join(","))
+        };
+
+        // Check if variant exists and is NOT stale
+        if let Some(existing) = self.functions.get(&mangled_name) {
+            if !existing.name.starts_with("__stale__") {
+                return Ok(mangled_name);
+            }
+        }
+
+        // Get the original function's AST
+        let fn_def = match self.fn_asts.get(base_name) {
+            Some(def) => def.clone(),
+            None => {
+                let fn_names: Vec<&str> = self.functions.keys().map(|s| s.as_str()).collect();
+                let suggestions = find_similar_names(base_name, &fn_names, 3);
+                return Err(CompileError::UnknownFunction {
+                    name: base_name.to_string(),
+                    suggestions,
+                    span: Span::default(),
+                });
+            }
+        };
+
+        // Extract the module path from the base_name
+        let original_module_path: Vec<String> = if base_name.contains('.') {
+            let parts: Vec<&str> = base_name.rsplitn(2, '.').collect();
+            if parts.len() == 2 {
+                parts[1].split('.').map(|s| s.to_string()).collect()
+            } else {
+                vec![]
+            }
+        } else {
+            vec![]
+        };
+
+        // Create specialized definition
+        let mut specialized_def = fn_def.clone();
+        let name_without_sig = mangled_name.split('/').next().unwrap_or(&mangled_name);
+        let local_name = if name_without_sig.contains('.') {
+            name_without_sig.rsplitn(2, '.').next().unwrap_or(name_without_sig).to_string()
+        } else {
+            name_without_sig.to_string()
+        };
+        specialized_def.name = Spanned::new(local_name, fn_def.name.span);
+        specialized_def.type_params.clear(); // No longer polymorphic
+
+        // Save current context
+        let saved_param_types = std::mem::take(&mut self.param_types);
+        let saved_module_path = std::mem::replace(&mut self.module_path, original_module_path.clone());
+        let saved_imports = self.imports.clone();
+        let saved_type_bindings = std::mem::take(&mut self.current_type_bindings);
+
+        // Build type parameter bindings from declared type params and explicit type args
+        // This is the key difference from compile_monomorphized_variant
+        for (i, type_param) in declared_type_params.iter().enumerate() {
+            if i < type_arg_names.len() {
+                self.current_type_bindings.insert(
+                    type_param.name.node.clone(),
+                    type_arg_names[i].clone()
+                );
+            }
+        }
+
+        // Forward declare the function
+        let arity = fn_def.clauses[0].params.len();
+        let placeholder = FunctionValue {
+            name: mangled_name.clone(),
+            arity,
+            param_names: param_names.to_vec(),
+            code: Arc::new(Chunk::new()),
+            module: if original_module_path.is_empty() { None } else { Some(original_module_path.join(".")) },
+            source_span: None,
+            jit_code: None,
+            call_count: AtomicU32::new(0),
+            debug_symbols: vec![],
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None,
+            required_params: None,
+        };
+        self.functions.insert(mangled_name.clone(), Arc::new(placeholder));
+
+        // Update function_variants index
+        self.function_variants
+            .entry(fn_base.to_string())
+            .or_insert_with(HashSet::new)
+            .insert(mangled_name.clone());
+
+        // Assign function index
+        if !self.function_indices.contains_key(&mangled_name) {
+            let idx = self.function_list.len() as u16;
+            self.function_indices.insert(mangled_name.clone(), idx);
+            self.function_list.push(mangled_name.clone());
+        }
+
+        // Compile the specialized function
+        if let Err(e) = self.compile_fn_def(&specialized_def) {
             self.functions.remove(&mangled_name);
             self.function_indices.remove(&mangled_name);
             if let Some(pos) = self.function_list.iter().position(|n| n == &mangled_name) {
