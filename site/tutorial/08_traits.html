@@ -304,6 +304,251 @@ MyType: Child childMethod(self) = self.x * 2 end
                     </ul>
                 </div>
 
+                <!-- Heterogeneous Collections -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Heterogeneous Collections with Sum Types</h2>
+                <p class="text-slate-400 mb-4">
+                    A common challenge is creating a list of different types that all share common behavior.
+                    For example, you might want a list of shapes where each element could be a Circle, Square, or Triangle.
+                    In Nostos, you can achieve this using <strong>sum types combined with traits</strong>.
+                </p>
+
+                <h3 class="text-xl font-semibold text-white mb-3">The Problem</h3>
+                <p class="text-slate-400 mb-4">
+                    Generic functions with trait bounds require all elements to be the <em>same</em> concrete type:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># This function requires ALL elements to be the same type T
+drawAll[T: Drawable](items: List[T]) -> List[String] =
+    items.map(x => x.draw())
+
+# Works - all elements are Circle
+drawAll([Circle(1.0), Circle(2.0)])  # OK
+
+# Doesn't work - mixed types!
+drawAll([Circle(1.0), Square(2.0)])  # ERROR: type mismatch
+</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">The Solution: Sum Type Wrapper</h3>
+                <p class="text-slate-400 mb-4">
+                    Create a sum type that wraps all the concrete types, then implement the trait on the sum type
+                    by delegating to each wrapped type:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># 1. Define the trait
+trait Drawable
+    draw(self) -> String
+end
+
+# 2. Define concrete types
+type Circle = { radius: Float }
+type Square = { side: Float }
+type Triangle = { base: Float, height: Float }
+
+# 3. Implement trait for each concrete type
+Circle: Drawable
+    draw(self) = "Circle(r=" ++ show(self.radius) ++ ")"
+end
+
+Square: Drawable
+    draw(self) = "Square(s=" ++ show(self.side) ++ ")"
+end
+
+Triangle: Drawable
+    draw(self) = "Triangle(b=" ++ show(self.base) ++ ")"
+end
+
+# 4. Create sum type wrapping all variants
+type Shape = C(Circle) | S(Square) | T(Triangle)
+
+# 5. Implement trait on sum type via delegation
+Shape: Drawable
+    draw(self) = match self {
+        C(c) -> c.draw(),
+        S(s) -> s.draw(),
+        T(t) -> t.draw()
+    }
+end
+
+# 6. Now you can have heterogeneous collections!
+main() = {
+    shapes: List[Shape] = [
+        C(Circle(1.0)),
+        S(Square(2.0)),
+        T(Triangle(3.0, 4.0))
+    ]
+
+    # Map over mixed types using the trait method
+    drawings = shapes.map(s => s.draw())
+    # ["Circle(r=1)", "Square(s=2)", "Triangle(b=3)"]
+
+    println(show(drawings))
+}
+</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Using Higher-Order Functions</h3>
+                <p class="text-slate-400 mb-4">
+                    The sum type works seamlessly with <code>map</code>, <code>filter</code>, and other list operations:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Add an area method to our trait
+trait Drawable
+    draw(self) -> String
+    area(self) -> Float
+end
+
+Circle: Drawable
+    draw(self) = "Circle"
+    area(self) = 3.14159 * self.radius * self.radius
+end
+
+Square: Drawable
+    draw(self) = "Square"
+    area(self) = self.side * self.side
+end
+
+type Shape = C(Circle) | S(Square)
+
+Shape: Drawable
+    draw(self) = match self { C(c) -> c.draw(), S(s) -> s.draw() }
+    area(self) = match self { C(c) -> c.area(), S(s) -> s.area() }
+end
+
+main() = {
+    shapes: List[Shape] = [
+        C(Circle(2.0)),      # area = 12.56
+        S(Square(3.0)),      # area = 9.0
+        C(Circle(1.0)),      # area = 3.14
+        S(Square(5.0))       # area = 25.0
+    ]
+
+    # Map: get all drawings
+    names = shapes.map(s => s.draw())
+    # ["Circle", "Square", "Circle", "Square"]
+
+    # Filter: only shapes with area > 10
+    bigShapes = shapes.filter(s => s.area() > 10.0)
+    # [C(Circle(2.0)), S(Square(5.0))]
+
+    # Fold: sum all areas
+    totalArea = shapes.foldl(0.0, (acc, s) => acc + s.area())
+    # 49.7
+
+    # Pattern match to recover concrete type
+    circles = shapes.filter(s => match s { C(_) -> true, _ -> false })
+}
+</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">With Multiple Traits</h3>
+                <p class="text-slate-400 mb-4">
+                    Sum types can implement multiple traits, including those with supertraits:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos">trait Printable
+    toString(self) -> String
+end
+
+trait Serializable: Printable
+    serialize(self) -> String
+end
+
+type Dog = { name: String }
+type Cat = { name: String }
+
+# Implement both traits for concrete types
+Dog: Printable
+    toString(self) = "Dog:" ++ self.name
+end
+
+Dog: Serializable
+    serialize(self) = "{\"type\":\"dog\",\"name\":\"" ++ self.name ++ "\"}"
+end
+
+Cat: Printable
+    toString(self) = "Cat:" ++ self.name
+end
+
+Cat: Serializable
+    serialize(self) = "{\"type\":\"cat\",\"name\":\"" ++ self.name ++ "\"}"
+end
+
+# Sum type implements both (must implement Printable first due to supertrait)
+type Pet = D(Dog) | C(Cat)
+
+Pet: Printable
+    toString(self) = match self { D(d) -> d.toString(), C(c) -> c.toString() }
+end
+
+Pet: Serializable
+    serialize(self) = match self { D(d) -> d.serialize(), C(c) -> c.serialize() }
+end
+
+main() = {
+    pets: List[Pet] = [D(Dog("Rex")), C(Cat("Whiskers")), D(Dog("Max"))]
+
+    # Use Printable methods
+    names = pets.map(p => p.toString())
+    # ["Dog:Rex", "Cat:Whiskers", "Dog:Max"]
+
+    # Use Serializable methods
+    json = "[" ++ pets.map(p => p.serialize()).join(",") ++ "]"
+}
+</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Generic Functions with Sum Types</h3>
+                <p class="text-slate-400 mb-4">
+                    Since the sum type implements the trait, it works with generic trait-bounded functions:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre><code class="language-nostos"># Generic function accepting any Drawable
+drawAll[T: Drawable](items: List[T]) -> List[String] =
+    items.map(x => x.draw())
+
+# Works with homogeneous lists
+circles = [Circle(1.0), Circle(2.0)]
+drawAll(circles)  # OK - List[Circle]
+
+# Works with heterogeneous lists via sum type!
+shapes: List[Shape] = [C(Circle(1.0)), S(Square(2.0))]
+drawAll(shapes)   # OK - List[Shape] where Shape: Drawable
+</code></pre>
+                </div>
+
+                <div class="bg-gradient-to-r from-blue-900/20 to-emerald-900/20 rounded-lg p-6 mb-8 border border-blue-800/30">
+                    <h3 class="text-lg font-semibold text-white mb-3">Sum Type Pattern: Trade-offs</h3>
+                    <div class="grid md:grid-cols-2 gap-6">
+                        <div>
+                            <h4 class="text-emerald-400 font-medium mb-2">Advantages</h4>
+                            <ul class="list-disc list-inside text-slate-400 space-y-1 text-sm">
+                                <li>No runtime overhead (no vtables or boxing)</li>
+                                <li>Type-safe with exhaustive pattern matching</li>
+                                <li>Can recover concrete type when needed</li>
+                                <li>Works with all existing language features</li>
+                            </ul>
+                        </div>
+                        <div>
+                            <h4 class="text-amber-400 font-medium mb-2">Trade-offs</h4>
+                            <ul class="list-disc list-inside text-slate-400 space-y-1 text-sm">
+                                <li>Must wrap values: <code>C(Circle(...))</code></li>
+                                <li>Closed world: adding types requires modifying sum type</li>
+                                <li>Boilerplate: must delegate each trait method</li>
+                                <li>All variants must be known at compile time</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mb-8">
+                    <p class="text-blue-300 text-sm">
+                        <strong>Tip:</strong> This pattern is ideal when you have a known, fixed set of types that share behavior.
+                        For truly open-ended polymorphism where new types can be added without modifying existing code,
+                        you would need trait objects (dynamic dispatch), which is a more advanced feature.
+                    </p>
+                </div>
+
                 <!-- Generic Traits -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Generic Traits and Implementations</h2>
                 <p class="text-slate-400 mb-4">Traits can be generic, and you can implement them for generic types, often with constraints on the type parameters.</p>
