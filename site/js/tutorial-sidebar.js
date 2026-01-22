@@ -31,6 +31,7 @@ const tutorialChapters = [
     { num: 27, file: "27_logging.html", title: "Logging" },
     { num: 28, file: "28_selenium.html", title: "Selenium WebDriver" },
     { num: 29, file: "29_tcp_sockets.html", title: "TCP Sockets" },
+    { num: 30, file: "30_vscode.html", title: "VS Code Integration" },
 ];
 
 function generateTutorialSidebar() {
