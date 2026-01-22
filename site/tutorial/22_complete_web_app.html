@@ -157,7 +157,7 @@ transaction(conn => {
 
 # Use withConn for read-only operations that need a dedicated connection
 withConn(conn => {
-    rows = Pg.query(conn, "SELECT * FROM large_table WHERE status = $1", ["active"])
+    rows = Pg.query(conn, "SELECT * FROM large_table WHERE status = $1", "active")
     # Process rows...
 })</code></pre>
                 </div>
@@ -165,20 +165,20 @@ withConn(conn => {
                 <!-- Query Parameters -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Query Parameters</h2>
                 <p class="text-slate-400 mb-4">
-                    Use <strong>lists</strong> for 0-1 parameters and <strong>tuples</strong> for 2+ parameters.
-                    Note: <code>(x)</code> is just parentheses, not a tuple. Tuples require 2+ elements like <code>(x, y)</code>.
+                    Query params auto-normalize: use <code>()</code> for none, bare values for one param,
+                    lists/tuples for multiple. Tuples support mixed types.
                 </p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre><code class="language-nostos"># No parameters - empty list
-query("SELECT * FROM users", [])
+<pre><code class="language-nostos"># No parameters - unit ()
+query("SELECT * FROM users", ())
 
-# Single parameter - use list (since (x) is not a tuple)
-query("SELECT * FROM users WHERE id = $1", [userId])
+# Single parameter - bare value auto-wraps
+query("SELECT * FROM users WHERE id = $1", userId)
 
-# Multiple parameters - use tuple (supports mixed types)
+# Multiple parameters - tuple supports mixed types
 execute("INSERT INTO users (name, email) VALUES ($1, $2)", ("Alice", "alice@example.com"))
 
-# Mixed types in tuple
+# Lists also work
 execute("INSERT INTO data (id, name, score) VALUES ($1, $2, $3)", (1, "Bob", 95.5))</code></pre>
                 </div>
 

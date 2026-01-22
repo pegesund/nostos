@@ -529,25 +529,25 @@ conn = Pg.connect("postgresql://user:pass@db.xxx.supabase.co:5432/postgres?sslmo
 conn = Pg.connect("postgresql://user:pass@ep-xxx.neon.tech/neondb?sslmode=require")
 
 # Query returns list of tuples - access fields with .0, .1, etc.
-rows = Pg.query(conn, "SELECT id, name FROM users WHERE age > $1", [18])
+rows = Pg.query(conn, "SELECT id, name FROM users WHERE age > $1", 18)
 # rows is: [(1, "Alice"), (2, "Bob")]
 # Access: head(rows).0 => 1, head(rows).1 => "Alice"
 
-# Use lists for 0-1 parameters (note: (x) is NOT a tuple, just parentheses)
-Pg.execute(conn, "INSERT INTO users (name) VALUES ($1)", ["Charlie"])
+# Params auto-normalize: () for none, bare value for one, tuple/list for multiple
+Pg.execute(conn, "INSERT INTO users (name) VALUES ($1)", "Charlie")
 
-# Use tuples for 2+ parameters (supports mixed types)
+# Tuples support mixed types
 Pg.execute(conn, "INSERT INTO users (id, name, score) VALUES ($1, $2, $3)", (1, "Alice", 95.5))
 
-# Iterate over query results
-rows = Pg.query(conn, "SELECT id, name, email FROM users", [])
+# No parameters - use unit ()
+rows = Pg.query(conn, "SELECT id, name, email FROM users", ())
 rows.each(row => {
     println("User " ++ show(row.0) ++ ": " ++ row.1 ++ " <" ++ row.2 ++ ">")
 })
 
 # Transactions
 Pg.begin(conn)
-Pg.execute(conn, "UPDATE accounts SET balance = balance - 100 WHERE id = $1", [1])
+Pg.execute(conn, "UPDATE accounts SET balance = balance - 100 WHERE id = $1", 1)
 Pg.commit(conn)  # or Pg.rollback(conn)
 
 # JSON support (for JSONB columns)
@@ -558,7 +558,7 @@ embedding = Float32Array.fromList([0.1, 0.2, 0.3])
 Pg.execute(conn, "INSERT INTO items (embedding) VALUES ($1)", [embedding])
 
 # Query vectors - returned as Float32Array, access via tuple field
-rows = Pg.query(conn, "SELECT embedding FROM items WHERE id = $1", [1])
+rows = Pg.query(conn, "SELECT embedding FROM items WHERE id = $1", 1)
 vec = head(rows).0  # Float32Array (first field of first row)
 values = Float32Array.toList(vec)  # Convert to list
 

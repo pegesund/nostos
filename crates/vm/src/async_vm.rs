@@ -7221,10 +7221,15 @@ impl AsyncProcess {
                         }
                         pg_params
                     }
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "List or Tuple".to_string(),
-                        found: "non-list/tuple".to_string(),
-                    }),
+                    GcValue::Unit => {
+                        // () means no parameters
+                        vec![]
+                    }
+                    other => {
+                        // Single scalar value - wrap as single-element params
+                        // This allows Pg.query(conn, sql, (x)) where (x) is just x
+                        vec![self.gc_value_to_pg_param(&other)?]
+                    }
                 };
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 if let Some(sender) = &self.shared.io_sender {
@@ -7291,10 +7296,15 @@ impl AsyncProcess {
                         }
                         pg_params
                     }
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "List or Tuple".to_string(),
-                        found: "non-list/tuple".to_string(),
-                    }),
+                    GcValue::Unit => {
+                        // () means no parameters
+                        vec![]
+                    }
+                    other => {
+                        // Single scalar value - wrap as single-element params
+                        // This allows Pg.query(conn, sql, (x)) where (x) is just x
+                        vec![self.gc_value_to_pg_param(&other)?]
+                    }
                 };
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 if let Some(sender) = &self.shared.io_sender {
@@ -7524,10 +7534,15 @@ impl AsyncProcess {
                         }
                         pg_params
                     }
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "List or Tuple".to_string(),
-                        found: "non-list/tuple".to_string(),
-                    }),
+                    GcValue::Unit => {
+                        // () means no parameters
+                        vec![]
+                    }
+                    other => {
+                        // Single scalar value - wrap as single-element params
+                        // This allows Pg.query(conn, sql, (x)) where (x) is just x
+                        vec![self.gc_value_to_pg_param(&other)?]
+                    }
                 };
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 if let Some(sender) = &self.shared.io_sender {
@@ -7593,10 +7608,15 @@ impl AsyncProcess {
                         }
                         pg_params
                     }
-                    _ => return Err(RuntimeError::TypeError {
-                        expected: "List or Tuple".to_string(),
-                        found: "non-list/tuple".to_string(),
-                    }),
+                    GcValue::Unit => {
+                        // () means no parameters
+                        vec![]
+                    }
+                    other => {
+                        // Single scalar value - wrap as single-element params
+                        // This allows Pg.query(conn, sql, (x)) where (x) is just x
+                        vec![self.gc_value_to_pg_param(&other)?]
+                    }
                 };
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 if let Some(sender) = &self.shared.io_sender {
