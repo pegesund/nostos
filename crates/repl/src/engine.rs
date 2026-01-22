@@ -5290,6 +5290,11 @@ impl ReplEngine {
         self.compiler.get_prelude_imports().len()
     }
 
+    /// Get set of imported local names (for autocomplete to know which functions are imported)
+    pub fn get_imported_names(&self) -> std::collections::HashSet<String> {
+        self.compiler.get_prelude_imports().keys().cloned().collect()
+    }
+
     /// Get known modules (for debugging)
     pub fn get_known_modules(&self) -> Vec<String> {
         self.compiler.get_known_modules().map(|s| s.to_string()).collect()

@@ -3402,21 +3402,41 @@ impl NostosLanguageServer {
             // Use a set to avoid duplicate display names
             let mut seen_functions = std::collections::HashSet::new();
             let mut count = 0;
+
+            // Get imported names to know which functions can be used without module prefix
+            let imported_names = engine.get_imported_names();
+
             for fn_name in engine.get_functions() {
                 if count >= 50 {
                     break;
                 }
-                let display_name = fn_name.rsplit('.').next().unwrap_or(&fn_name);
-                let display_name = display_name.split('/').next().unwrap_or(display_name);
+
+                // Get local name (without module prefix) and strip arity suffix
+                let local_name = fn_name.rsplit('.').next().unwrap_or(&fn_name);
+                let local_name = local_name.split('/').next().unwrap_or(local_name);
+
+                // Get qualified name (with module prefix) without arity suffix
+                let qualified_name = fn_name.split('/').next().unwrap_or(&fn_name);
+
+                // Check if this function is imported (can be used without module prefix)
+                let is_imported = imported_names.contains(local_name);
+
+                // Use qualified name for display/insert if not imported, otherwise local name
+                let (display_name, insert_name) = if is_imported {
+                    (local_name.to_string(), local_name.to_string())
+                } else {
+                    (qualified_name.to_string(), qualified_name.to_string())
+                };
 
                 // Skip if we've already added this display name
-                if !seen_functions.insert(display_name.to_string()) {
+                if !seen_functions.insert(display_name.clone()) {
                     continue;
                 }
 
-                if partial.is_empty() || display_name.to_lowercase().starts_with(&partial_lower) {
+                if partial.is_empty() || local_name.to_lowercase().starts_with(&partial_lower)
+                    || qualified_name.to_lowercase().starts_with(&partial_lower) {
                     let signature = engine.get_function_signature(&fn_name);
-                    let insert_text = Self::generate_function_insert_text(display_name, signature.as_deref());
+                    let insert_text = Self::generate_function_insert_text(&insert_name, signature.as_deref());
                     items.push(serde_json::json!({
                         "label": display_name,
                         "kind": "function",
@@ -3432,16 +3452,27 @@ impl NostosLanguageServer {
             // Add types (avoid duplicates)
             let mut seen_types = std::collections::HashSet::new();
             for type_name in engine.get_types() {
-                let display_name = type_name.rsplit('.').next().unwrap_or(&type_name);
+                let local_name = type_name.rsplit('.').next().unwrap_or(&type_name);
+
+                // Check if this type is imported (can be used without module prefix)
+                let is_imported = imported_names.contains(local_name);
+
+                // Use qualified name for display/insert if not imported, otherwise local name
+                let (display_name, insert_name) = if is_imported {
+                    (local_name.to_string(), local_name.to_string())
+                } else {
+                    (type_name.clone(), type_name.clone())
+                };
 
                 // Skip if we've already added this display name
-                if !seen_types.insert(display_name.to_string()) {
+                if !seen_types.insert(display_name.clone()) {
                     continue;
                 }
 
-                if partial.is_empty() || display_name.to_lowercase().starts_with(&partial_lower) {
+                if partial.is_empty() || local_name.to_lowercase().starts_with(&partial_lower)
+                    || type_name.to_lowercase().starts_with(&partial_lower) {
                     let fields = engine.get_type_fields(&type_name);
-                    let insert_text = Self::generate_type_insert_text(display_name, &fields);
+                    let insert_text = Self::generate_type_insert_text(&insert_name, &fields);
                     items.push(serde_json::json!({
                         "label": display_name,
                         "kind": "type",
