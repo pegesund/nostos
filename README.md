@@ -354,6 +354,21 @@ Built in Rust for reliability and performance:
 
 - **Tracing garbage collector** — Automatic memory management with a concurrent GC that minimizes pause times.
 
+- **Built-in profiler** — Measure execution time with `:profile expr` in the REPL. Compare implementations, find bottlenecks, and watch JIT warmup effects in real time.
+
+- **Interactive debugger** — Set breakpoints with `:debug fn`, step through calls, inspect arguments. Debug without leaving your REPL flow.
+
+```bash
+nostos> :profile fib(35)
+Result: 9227465
+Time: 42.3ms
+
+nostos> :debug factorial
+nostos> factorial(5)
+[BREAK] factorial(5)
+  Press Enter to continue, 'c' to skip remaining...
+```
+
 ---
 
 ## Philosophy
