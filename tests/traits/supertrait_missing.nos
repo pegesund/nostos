@@ -1,0 +1,17 @@
+# expect_error: must implement supertrait
+# Error case: implementing a trait without implementing its supertrait first
+
+trait Base
+    getValue(self) -> Int
+end
+
+trait Child: Base
+    getDouble(self) -> Int
+end
+
+type MyType = { value: Int }
+
+# Error: MyType must implement Base before implementing Child
+MyType: Child getDouble(self) = self.value * 2 end
+
+main() = 0

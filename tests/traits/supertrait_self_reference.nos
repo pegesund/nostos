@@ -1,0 +1,8 @@
+# expect_error: unknown trait
+# Self-referential trait: A requires itself (prevented by definition order)
+
+trait A: A
+    getA(self) -> Int
+end
+
+main() = 0

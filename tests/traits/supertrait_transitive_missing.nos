@@ -1,0 +1,22 @@
+# expect_error: must implement supertrait
+# Transitive supertrait missing: A -> B -> C, only A is implemented, trying to implement C
+
+trait A
+    getA(self) -> Int
+end
+
+trait B: A
+    getB(self) -> Int
+end
+
+trait C: B
+    getC(self) -> Int
+end
+
+type MyType = { value: Int }
+
+MyType: A getA(self) = self.value end
+# Missing: MyType: B
+MyType: C getC(self) = self.value * 3 end  # Error: B not implemented
+
+main() = 0

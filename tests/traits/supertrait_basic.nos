@@ -1,0 +1,20 @@
+# expect: true
+# Basic supertrait: implementing a trait that requires a supertrait
+
+trait Base
+    getValue(self) -> Int
+end
+
+trait Child: Base
+    getDouble(self) -> Int
+end
+
+type MyType = { value: Int }
+
+MyType: Base getValue(self) = self.value end
+MyType: Child getDouble(self) = self.value * 2 end
+
+main() = {
+    x = MyType(10)
+    x.getValue() == 10 && x.getDouble() == 20
+}

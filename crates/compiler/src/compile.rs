@@ -614,6 +614,12 @@ pub enum CompileError {
 
     #[error("definition error: {message}")]
     DefinitionError { message: String, span: Span },
+
+    #[error("type `{type_name}` must implement supertrait `{supertrait}` before implementing `{trait_name}`")]
+    MissingSupertraitImpl { type_name: String, trait_name: String, supertrait: String, span: Span },
+
+    #[error("trait cycle detected: {cycle}")]
+    TraitCycle { cycle: String, span: Span },
 }
 
 /// Compute Levenshtein edit distance between two strings.
@@ -747,6 +753,8 @@ impl CompileError {
             CompileError::ModuleNotImported { span, .. } => *span,
             CompileError::AmbiguousName { span, .. } => *span,
             CompileError::DefinitionError { span, .. } => *span,
+            CompileError::MissingSupertraitImpl { span, .. } => *span,
+            CompileError::TraitCycle { span, .. } => *span,
         }
     }
 
@@ -1007,6 +1015,18 @@ impl CompileError {
             CompileError::DefinitionError { message, .. } => {
                 SourceError::compile(message.clone(), span)
                     .with_hint("choose a different name that doesn't conflict with built-in functions")
+            }
+            CompileError::MissingSupertraitImpl { type_name, trait_name, supertrait, .. } => {
+                SourceError::compile(
+                    format!("type `{}` must implement supertrait `{}` before implementing `{}`", type_name, supertrait, trait_name),
+                    span
+                ).with_hint(format!("add `impl {} for {}` before implementing `{}`", supertrait, type_name, trait_name))
+            }
+            CompileError::TraitCycle { cycle, .. } => {
+                SourceError::compile(
+                    format!("trait cycle detected: {}", cycle),
+                    span
+                ).with_hint("supertraits cannot form a cycle")
             }
         }
     }
@@ -4308,6 +4328,45 @@ impl Compiler {
             .map(|t| t.node.clone())
             .collect();
 
+        // Validate supertraits exist and check for cycles
+        for (i, supertrait_ident) in def.super_traits.iter().enumerate() {
+            let supertrait_name = &super_traits[i];
+            // Try to resolve the supertrait name (qualified, imported, or builtin)
+            let qualified_supertrait = self.qualify_name(supertrait_name);
+            let imported_supertrait = self.imports.get(supertrait_name).cloned();
+            let supertrait_exists = self.trait_defs.contains_key(&qualified_supertrait)
+                || self.trait_defs.contains_key(supertrait_name)
+                || imported_supertrait.as_ref().map(|n| self.trait_defs.contains_key(n)).unwrap_or(false)
+                || self.is_builtin_derivable_trait(supertrait_name);
+
+            if !supertrait_exists {
+                return Err(CompileError::UnknownTrait {
+                    name: supertrait_name.clone(),
+                    span: supertrait_ident.span,
+                });
+            }
+
+            // Check for cycles: follow the supertrait chain and see if we reach back to this trait
+            let resolved_supertrait = if self.trait_defs.contains_key(&qualified_supertrait) {
+                qualified_supertrait.clone()
+            } else if let Some(ref imported) = imported_supertrait {
+                if self.trait_defs.contains_key(imported) {
+                    imported.clone()
+                } else {
+                    supertrait_name.clone()
+                }
+            } else {
+                supertrait_name.clone()
+            };
+
+            if let Some(cycle) = self.detect_trait_cycle(&name, &resolved_supertrait, &mut vec![name.clone()]) {
+                return Err(CompileError::TraitCycle {
+                    cycle,
+                    span: supertrait_ident.span,
+                });
+            }
+        }
+
         let methods: Vec<TraitMethodInfo> = def.methods
             .iter()
             .map(|m| TraitMethodInfo {
@@ -4392,6 +4451,22 @@ impl Compiler {
         } else {
             unqualified_trait_name
         };
+
+        // Check that all supertraits are already implemented for this type
+        if let Some(trait_info) = self.trait_defs.get(&trait_name) {
+            let super_traits = trait_info.super_traits.clone();
+            for supertrait in &super_traits {
+                // Check all supertraits (including transitive ones)
+                if !self.type_implements_trait_recursive(&qualified_type_name, supertrait) {
+                    return Err(CompileError::MissingSupertraitImpl {
+                        type_name: unqualified_type_name.clone(),
+                        trait_name: trait_name.clone(),
+                        supertrait: supertrait.clone(),
+                        span: impl_def.trait_name.span,
+                    });
+                }
+            }
+        }
 
         // Register the trait implementation FIRST so recursive trait method calls work
         // Track which traits this type implements (use qualified type name)
@@ -5188,9 +5263,131 @@ impl Compiler {
         )
     }
 
+    /// Detect if adding a supertrait would create a cycle.
+    /// Returns Some(cycle_description) if a cycle is detected, None otherwise.
+    fn detect_trait_cycle(&self, target_trait: &str, current_trait: &str, visited: &mut Vec<String>) -> Option<String> {
+        // If we've reached back to the target trait, we have a cycle
+        if current_trait == target_trait {
+            visited.push(current_trait.to_string());
+            return Some(visited.join(" -> "));
+        }
+
+        // If the current trait doesn't exist in our definitions, it can't cause a cycle
+        // (it might be a builtin trait like Hash, Show, etc.)
+        let trait_info = match self.trait_defs.get(current_trait) {
+            Some(info) => info,
+            None => return None,
+        };
+
+        // Recursively check all supertraits
+        for supertrait in &trait_info.super_traits {
+            // Resolve the supertrait name
+            let qualified_supertrait = self.qualify_name(supertrait);
+            let resolved = if self.trait_defs.contains_key(&qualified_supertrait) {
+                qualified_supertrait
+            } else if let Some(imported) = self.imports.get(supertrait) {
+                imported.clone()
+            } else {
+                supertrait.clone()
+            };
+
+            // Check if we've already visited this trait (to avoid infinite loops)
+            if visited.contains(&resolved) {
+                continue;
+            }
+
+            visited.push(resolved.clone());
+            if let Some(cycle) = self.detect_trait_cycle(target_trait, &resolved, visited) {
+                return Some(cycle);
+            }
+            visited.pop();
+        }
+
+        None
+    }
+
     /// Check if a type implements a specific trait.
     fn type_implements_trait(&self, _type_name: &str, trait_name: &str) -> bool {
         self.find_implemented_trait(_type_name, trait_name).is_some()
+    }
+
+    /// Check if a type implements a trait, considering supertrait relationships.
+    /// A type is considered to implement a supertrait if it implements ANY trait
+    /// that has that supertrait in its hierarchy.
+    fn type_implements_trait_recursive(&self, type_name: &str, trait_name: &str) -> bool {
+        // First check direct implementation
+        if self.type_implements_trait(type_name, trait_name) {
+            return true;
+        }
+
+        // Try to resolve trait name
+        let qualified_trait = self.qualify_name(trait_name);
+        let resolved_trait = if self.trait_defs.contains_key(&qualified_trait) {
+            qualified_trait
+        } else if let Some(imported) = self.imports.get(trait_name) {
+            imported.clone()
+        } else {
+            trait_name.to_string()
+        };
+
+        // Check if this type implements the resolved trait name
+        if self.type_implements_trait(type_name, &resolved_trait) {
+            return true;
+        }
+
+        // Check if the type implements any trait that has this as a supertrait
+        // (This handles transitive relationships)
+        if let Some(traits) = self.type_traits.get(type_name) {
+            for implemented_trait in traits {
+                // Get the trait info for this implemented trait
+                if let Some(info) = self.trait_defs.get(implemented_trait) {
+                    // Check if our target trait is in this trait's supertrait chain
+                    for supertrait in &info.super_traits {
+                        if supertrait == trait_name || supertrait == &resolved_trait {
+                            return true;
+                        }
+                        // Recursively check transitively (the supertrait may have supertraits)
+                        if self.trait_is_supertrait_of(&resolved_trait, supertrait) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Check if target_trait is a supertrait of source_trait (at any level).
+    fn trait_is_supertrait_of(&self, target_trait: &str, source_trait: &str) -> bool {
+        // Resolve source trait name
+        let qualified_source = self.qualify_name(source_trait);
+        let resolved_source = if self.trait_defs.contains_key(&qualified_source) {
+            qualified_source
+        } else if let Some(imported) = self.imports.get(source_trait) {
+            imported.clone()
+        } else {
+            source_trait.to_string()
+        };
+
+        // Get the trait info
+        let info = match self.trait_defs.get(&resolved_source) {
+            Some(info) => info,
+            None => return false,
+        };
+
+        // Check direct supertraits
+        for supertrait in &info.super_traits {
+            if supertrait == target_trait {
+                return true;
+            }
+            // Recursively check
+            if self.trait_is_supertrait_of(target_trait, supertrait) {
+                return true;
+            }
+        }
+
+        false
     }
 
     /// Find the actual registered trait name if a type implements a trait.

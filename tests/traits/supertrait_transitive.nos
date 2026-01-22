@@ -1,0 +1,25 @@
+# expect: true
+# Transitive supertraits: A -> B -> C (C requires B, B requires A)
+
+trait A
+    getA(self) -> Int
+end
+
+trait B: A
+    getB(self) -> Int
+end
+
+trait C: B
+    getC(self) -> Int
+end
+
+type MyType = { value: Int }
+
+MyType: A getA(self) = self.value end
+MyType: B getB(self) = self.value * 2 end
+MyType: C getC(self) = self.value * 3 end
+
+main() = {
+    x = MyType(10)
+    x.getA() == 10 && x.getB() == 20 && x.getC() == 30
+}

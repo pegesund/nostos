@@ -1,0 +1,12 @@
+# expect_error: unknown trait
+# Trait cycle prevented by definition order: A requires B which doesn't exist yet
+
+trait A: B
+    getA(self) -> Int
+end
+
+trait B
+    getB(self) -> Int
+end
+
+main() = 0

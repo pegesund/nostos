@@ -1,0 +1,25 @@
+# expect: 60
+# Multiple supertraits: implementing a trait that requires multiple supertraits
+
+trait Base1
+    getValue1(self) -> Int
+end
+
+trait Base2
+    getValue2(self) -> Int
+end
+
+trait Child: Base1, Base2
+    getCombined(self) -> Int
+end
+
+type MyType = { v1: Int, v2: Int }
+
+MyType: Base1 getValue1(self) = self.v1 end
+MyType: Base2 getValue2(self) = self.v2 end
+MyType: Child getCombined(self) = self.v1 + self.v2 end
+
+main() = {
+    x = MyType(10, 50)
+    x.getCombined()
+}
