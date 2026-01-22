@@ -344,7 +344,10 @@ function openReplPanel(context: ExtensionContext) {
                 const text = message.text;
                 const cursorPos = message.cursorPos;
 
+                console.log(`REPL complete request: text="${text}" cursor=${cursorPos}`);
+
                 if (!client) {
+                    console.log('REPL complete: client not available');
                     replPanel?.webview.postMessage({
                         type: 'completions',
                         completions: []
@@ -358,11 +361,17 @@ function openReplPanel(context: ExtensionContext) {
                         arguments: [text, cursorPos]
                     });
 
+                    console.log(`REPL complete result: ${result?.completions?.length ?? 0} items`);
+                    if (result?.completions?.length > 0) {
+                        console.log('First completion:', JSON.stringify(result.completions[0]));
+                    }
+
                     replPanel?.webview.postMessage({
                         type: 'completions',
                         completions: result?.completions ?? []
                     });
                 } catch (e: any) {
+                    console.log(`REPL complete error: ${e.message}`);
                     replPanel?.webview.postMessage({
                         type: 'completions',
                         completions: []
@@ -486,15 +495,33 @@ function getReplHtml(): string {
             position: absolute;
             bottom: 100%;
             left: 30px;
-            max-height: 200px;
-            overflow-y: auto;
+            z-index: 1000;
             background: var(--vscode-editorSuggestWidget-background, #252526);
             border: 1px solid var(--vscode-editorSuggestWidget-border, #454545);
             border-radius: 3px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-            z-index: 1000;
             min-width: 200px;
             max-width: 400px;
+        }
+        .completion-doc-panel {
+            background: var(--vscode-editorSuggestWidget-background, #1e1e1e);
+            border-bottom: 1px solid var(--vscode-editorSuggestWidget-border, #454545);
+            padding: 6px 10px;
+            font-size: 0.9em;
+            line-height: 1.3;
+        }
+        .completion-items {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .completion-doc-panel .doc-signature {
+            color: var(--vscode-symbolIcon-functionForeground, #b180d7);
+            font-weight: bold;
+            margin-bottom: 2px;
+            font-family: var(--vscode-editor-font-family, monospace);
+        }
+        .completion-doc-panel .doc-text {
+            color: var(--vscode-descriptionForeground, #aaa);
         }
         .completion-item {
             padding: 4px 8px;
@@ -595,7 +622,10 @@ function getReplHtml(): string {
                 return;
             }
 
-            completionsEl.innerHTML = items.map((item, i) => {
+            // Build HTML: doc panel at top (fixed), then scrollable items
+            let html = '<div class="completion-doc-panel" id="doc-panel"></div>';
+            html += '<div class="completion-items">';
+            html += items.map((item, i) => {
                 const iconLetter = item.kind === 'function' ? 'f' :
                                    item.kind === 'method' ? 'm' :
                                    item.kind === 'field' ? 'F' :
@@ -607,14 +637,39 @@ function getReplHtml(): string {
                     (item.detail ? '<span class="completion-detail">' + escapeHtml(item.detail) + '</span>' : '') +
                     '</div>';
             }).join('');
+            html += '</div>';
 
+            completionsEl.innerHTML = html;
             completionsEl.style.display = 'block';
+
+            updateDocumentation(items[0]);
         }
 
         function hideCompletions() {
             completionsEl.style.display = 'none';
             completions = [];
             selectedCompletion = 0;
+        }
+
+        function updateDocumentation(item) {
+            const docPanel = document.getElementById('doc-panel');
+            if (!docPanel) return;
+
+            if (!item) {
+                docPanel.innerHTML = '';
+                return;
+            }
+
+            let html = '';
+            if (item.detail) {
+                html += '<div class="doc-signature">' + escapeHtml(item.label + ': ' + item.detail) + '</div>';
+            }
+
+            if (item.documentation) {
+                html += '<div class="doc-text">' + escapeHtml(item.documentation) + '</div>';
+            }
+
+            docPanel.innerHTML = html;
         }
 
         function applyCompletion(item) {
@@ -646,6 +701,9 @@ function getReplHtml(): string {
 
             // Scroll into view
             items[selectedCompletion]?.scrollIntoView({ block: 'nearest' });
+
+            // Update documentation panel
+            updateDocumentation(completions[selectedCompletion]);
         }
 
         function requestCompletions() {

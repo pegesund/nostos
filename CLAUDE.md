@@ -362,6 +362,22 @@ After LSP changes:
 cargo build --release -p nostos-lsp && cp ./target/release/nostos-lsp ~/.local/bin/nostos-lsp
 ```
 
+### VS Code Extension Update
+After changes to `editors/vscode/src/extension.ts`:
+```bash
+cd editors/vscode
+npm run compile
+cp out/extension.js ~/.vscode/extensions/pegesund.nostos-*/out/extension.js
+```
+Then reload VS Code window (Ctrl+Shift+P → "Developer: Reload Window")
+
+If the extension folder doesn't exist, do a full install first:
+```bash
+pkill -9 code; sleep 2
+npm run package
+code --install-extension nostos-*.vsix --force
+```
+
 ## BUILTINS Array Notes
 
 - Float64Array, Int64Array, Float32Array methods are in BUILTINS for type inference

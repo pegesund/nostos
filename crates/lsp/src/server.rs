@@ -2554,14 +2554,27 @@ impl NostosLanguageServer {
             };
             eprintln!("Expression to infer: '{}'", expr_to_infer);
 
+            // Extract the full receiver expression (handles literals like [1,2,3], "hello", etc.)
+            let receiver_expr = Self::extract_receiver_expression(expr_to_infer);
+            eprintln!("Receiver expression: '{}'", receiver_expr);
+
+            // First check for literal types (string, list, etc.)
+            let literal_type = Self::detect_literal_type(receiver_expr);
+            if let Some(lt) = literal_type {
+                eprintln!("Detected literal type: {}", lt);
+            }
+
             // IMPORTANT: First check if the last identifier (extracted earlier) is a simple
             // variable in local_vars. This handles cases like "self.name ++ self." where
             // the expression is complex but we just need the type of "self".
             if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
                 use std::io::Write;
-                let _ = writeln!(f, "About to check identifier '{}' in local_vars", identifier);
+                let _ = writeln!(f, "About to check identifier '{}' in local_vars, receiver_expr='{}', literal_type={:?}", identifier, receiver_expr, literal_type);
             }
-            let inferred_type = if let Some(ty) = local_vars.get(identifier) {
+            let inferred_type = if let Some(lt) = literal_type {
+                // Use literal type directly
+                Some(lt.to_string())
+            } else if let Some(ty) = local_vars.get(identifier) {
                 eprintln!("Found identifier '{}' directly in local_vars with type: {}", identifier, ty);
                 if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
                     use std::io::Write;
@@ -2900,12 +2913,37 @@ impl NostosLanguageServer {
         let chars: Vec<char> = text.chars().collect();
         let mut i = chars.len();
         let mut depth = 0;
+        let mut in_string = false;
+        let mut string_char = '"';
 
         while i > 0 {
             i -= 1;
             let c = chars[i];
 
+            // Handle string literals (scan backwards through them)
+            if in_string {
+                if c == string_char {
+                    // Check for escape
+                    let mut escapes = 0;
+                    let mut j = i;
+                    while j > 0 && chars[j - 1] == '\\' {
+                        escapes += 1;
+                        j -= 1;
+                    }
+                    if escapes % 2 == 0 {
+                        // This is the opening quote - include it in the expression
+                        in_string = false;
+                    }
+                }
+                continue;
+            }
+
             match c {
+                '"' | '\'' => {
+                    // Start of string (we're going backwards, so this is the closing quote)
+                    in_string = true;
+                    string_char = c;
+                }
                 ')' | ']' | '}' => depth += 1,
                 '(' | '[' | '{' => {
                     if depth > 0 {
@@ -2944,10 +2982,25 @@ impl NostosLanguageServer {
             let partial_after = &text_to_cursor[dot_pos + 1..];
 
             eprintln!("REPL dot completion: before='{}', partial='{}'", before_dot, partial_after);
+            {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_repl_complete.log") {
+                    let _ = writeln!(f, "=== REPL DOT COMPLETION ===");
+                    let _ = writeln!(f, "text_to_cursor: '{}'", text_to_cursor);
+                    let _ = writeln!(f, "before_dot: '{}'", before_dot);
+                    let _ = writeln!(f, "partial_after: '{}'", partial_after);
+                }
+            }
 
             // Extract the full receiver expression (handles [1,2,3], "hello", etc.)
             let expr = Self::extract_receiver_expression(before_dot);
             eprintln!("REPL receiver expr: '{}'", expr);
+            {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_repl_complete.log") {
+                    let _ = writeln!(f, "expr (after extract_receiver_expression): '{}'", expr);
+                }
+            }
 
             // Check if it's a module name (uppercase identifier)
             let known_modules = engine.get_known_modules();
@@ -3005,6 +3058,13 @@ impl NostosLanguageServer {
                 // 2. Check for literal types ([1,2], "hello", etc.)
                 // 3. Use engine's expression type inference
                 let is_simple_ident = expr.chars().all(|c| c.is_alphanumeric() || c == '_');
+                {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_repl_complete.log") {
+                        let _ = writeln!(f, "is_simple_ident: {}", is_simple_ident);
+                        let _ = writeln!(f, "lambda_type: {:?}", lambda_type);
+                    }
+                }
 
                 let type_name = lambda_type.or_else(|| {
                     if is_simple_ident {
@@ -3020,7 +3080,14 @@ impl NostosLanguageServer {
                     }
                 }).or_else(|| {
                     // Check for literal types
-                    Self::detect_literal_type(expr).map(|s| {
+                    let literal_type = Self::detect_literal_type(expr);
+                    {
+                        use std::io::Write;
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_repl_complete.log") {
+                            let _ = writeln!(f, "detect_literal_type('{}') = {:?}", expr, literal_type);
+                        }
+                    }
+                    literal_type.map(|s| {
                         eprintln!("REPL detected literal type: {}", s);
                         s.to_string()
                     })
@@ -3029,8 +3096,22 @@ impl NostosLanguageServer {
                     engine.infer_expression_type(expr, &local_vars)
                 });
 
-                if let Some(type_name) = type_name {
+                if let Some(ref type_name) = type_name {
                     eprintln!("REPL inferred type: {}", type_name);
+                    {
+                        use std::io::Write;
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_repl_complete.log") {
+                            let _ = writeln!(f, "FINAL type_name: {}", type_name);
+                            let methods = nostos_repl::ReplEngine::get_builtin_methods_for_type(type_name);
+                            let _ = writeln!(f, "get_builtin_methods_for_type returned {} methods", methods.len());
+                            for (m, s, d) in methods.iter().take(3) {
+                                let _ = writeln!(f, "  - {} : {} -> {}", m, s, d);
+                            }
+                        }
+                    }
+                }
+
+                if let Some(type_name) = type_name {
 
                     let partial_lower = partial_after.to_lowercase();
                     let mut seen = std::collections::HashSet::new();
@@ -3178,6 +3259,17 @@ impl NostosLanguageServer {
         // Limit results
         if items.len() > 100 {
             items.truncate(100);
+        }
+
+        {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_repl_complete.log") {
+                let _ = writeln!(f, "RETURNING {} completion items", items.len());
+                if !items.is_empty() {
+                    let _ = writeln!(f, "First item: {}", serde_json::to_string(&items[0]).unwrap_or_default());
+                }
+                let _ = writeln!(f, "=== END ===\n");
+            }
         }
 
         items
