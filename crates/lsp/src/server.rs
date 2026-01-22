@@ -9,6 +9,15 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
 use nostos_repl::{ReplEngine, ReplConfig};
+use tower_lsp::lsp_types::notification::Notification;
+
+/// Custom notification for file status updates (for VS Code file decorations)
+pub struct FileStatusNotification;
+
+impl Notification for FileStatusNotification {
+    type Params = serde_json::Value;
+    const METHOD: &'static str = "nostos/fileStatus";
+}
 
 fn log(msg: &str) {
     eprintln!("{}", msg);
@@ -33,6 +42,8 @@ pub struct NostosLanguageServer {
     root_path: Mutex<Option<PathBuf>>,
     /// Flag to prevent double initialization
     initializing: AtomicBool,
+    /// Files that have been modified but not yet compiled (dirty)
+    dirty_files: DashMap<String, bool>,
 }
 
 impl NostosLanguageServer {
@@ -44,6 +55,7 @@ impl NostosLanguageServer {
             file_errors: DashMap::new(),
             root_path: Mutex::new(None),
             initializing: AtomicBool::new(false),
+            dirty_files: DashMap::new(),
         }
     }
 
@@ -72,6 +84,78 @@ impl NostosLanguageServer {
 
         *self.engine.lock().unwrap() = Some(engine);
         *self.root_path.lock().unwrap() = Some(root_path.clone());
+    }
+
+    /// Send file status notification to VS Code for file decorations
+    /// Status: "ok" (green), "error" (red), "stale" (blue), "dirty" (yellow)
+    async fn send_file_status_notification(&self) {
+        // Collect all data synchronously first, then send notification
+        let params = {
+            let root_path = self.root_path.lock().unwrap().clone();
+            let Some(root) = root_path else { return };
+
+            let mut file_statuses: Vec<serde_json::Value> = Vec::new();
+
+            // Get compile status for all modules
+            let engine_guard = self.engine.lock().unwrap();
+            if let Some(engine) = engine_guard.as_ref() {
+                // Collect all .nos files in the project
+                if let Ok(entries) = std::fs::read_dir(&root) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.extension().map(|e| e == "nos").unwrap_or(false) {
+                            let file_path = path.to_string_lossy().to_string();
+                            let module_name = path.file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("unknown");
+
+                            // Check if file is dirty (modified but not compiled)
+                            let is_dirty = self.dirty_files.contains_key(&file_path);
+
+                            // Get compile status
+                            let status = if is_dirty {
+                                "dirty"
+                            } else {
+                                // Check compile status from engine
+                                let mut has_error = false;
+                                let mut is_stale = false;
+
+                                for (fn_name, compile_status) in engine.get_all_compile_status_detailed() {
+                                    if fn_name.starts_with(&format!("{}.", module_name)) || fn_name == module_name {
+                                        match compile_status {
+                                            nostos_repl::CompileStatus::CompileError(_) => has_error = true,
+                                            nostos_repl::CompileStatus::Stale { .. } => is_stale = true,
+                                            _ => {}
+                                        }
+                                    }
+                                }
+
+                                if has_error {
+                                    "error"
+                                } else if is_stale {
+                                    "stale"
+                                } else {
+                                    "ok"
+                                }
+                            };
+
+                            file_statuses.push(serde_json::json!({
+                                "path": file_path,
+                                "status": status
+                            }));
+                        }
+                    }
+                }
+            }
+            // engine_guard dropped here
+
+            serde_json::json!({
+                "files": file_statuses
+            })
+        };
+
+        // Send custom notification (after all locks are released)
+        self.client.send_notification::<FileStatusNotification>(params).await;
     }
 
     /// Publish diagnostics for a specific file (currently unused, kept for future use)
@@ -768,6 +852,9 @@ impl LanguageServer for NostosLanguageServer {
             }
 
             self.initializing.store(false, Ordering::SeqCst);
+
+            // Send initial file status notification
+            self.send_file_status_notification().await;
         }
 
         eprintln!("Nostos LSP fully initialized!");
@@ -844,6 +931,13 @@ impl LanguageServer for NostosLanguageServer {
                 if let Some(content) = self.documents.get(&uri) {
                     match self.recompile_file(&uri, &content.clone()).await {
                         Ok(()) => {
+                            // Clear dirty flag on successful commit
+                            if let Ok(file_path) = uri.to_file_path() {
+                                self.dirty_files.remove(&file_path.to_string_lossy().to_string());
+                            }
+                            // Send updated file status notification
+                            self.send_file_status_notification().await;
+
                             let msg = format!("Committed to live system: {}", uri.path());
                             self.client.show_message(MessageType::INFO, &msg).await;
                             eprintln!("{}", msg);
@@ -874,13 +968,22 @@ impl LanguageServer for NostosLanguageServer {
 
                 for (uri, content) in &open_docs {
                     match self.recompile_file(uri, content).await {
-                        Ok(()) => success_count += 1,
+                        Ok(()) => {
+                            success_count += 1;
+                            // Clear dirty flag on successful commit
+                            if let Ok(file_path) = uri.to_file_path() {
+                                self.dirty_files.remove(&file_path.to_string_lossy().to_string());
+                            }
+                        }
                         Err(e) => {
                             error_count += 1;
                             errors.push(format!("{}: {}", uri.path(), e));
                         }
                     }
                 }
+
+                // Send updated file status notification
+                self.send_file_status_notification().await;
 
                 if error_count == 0 {
                     let msg = format!("Committed {} file(s) to live system", success_count);
@@ -1068,6 +1171,13 @@ impl LanguageServer for NostosLanguageServer {
 
             // Update stored content
             self.documents.insert(uri.clone(), content.clone());
+
+            // Mark file as dirty (modified but not compiled)
+            if let Ok(file_path) = uri.to_file_path() {
+                self.dirty_files.insert(file_path.to_string_lossy().to_string(), true);
+                // Send file status notification
+                self.send_file_status_notification().await;
+            }
 
             // Check for errors (analysis only, no state change)
             // Real-time feedback while typing

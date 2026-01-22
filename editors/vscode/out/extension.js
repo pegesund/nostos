@@ -41,6 +41,59 @@ const vscode_1 = require("vscode");
 const node_1 = require("vscode-languageclient/node");
 // REPL webview panel (singleton)
 let replPanel;
+// File decoration provider for showing compile status
+class NostosFileDecorationProvider {
+    constructor() {
+        this._onDidChangeFileDecorations = new vscode_1.EventEmitter();
+        this.onDidChangeFileDecorations = this._onDidChangeFileDecorations.event;
+        // Map from file path to status: "ok", "error", "stale", "dirty"
+        this.fileStatuses = new Map();
+    }
+    updateFileStatuses(files) {
+        this.fileStatuses.clear();
+        for (const file of files) {
+            this.fileStatuses.set(file.path, file.status);
+        }
+        // Trigger refresh of all decorations
+        this._onDidChangeFileDecorations.fire(undefined);
+    }
+    provideFileDecoration(uri) {
+        const status = this.fileStatuses.get(uri.fsPath);
+        if (!status) {
+            return undefined;
+        }
+        switch (status) {
+            case 'error':
+                return {
+                    badge: '✗',
+                    color: new vscode_1.ThemeColor('errorForeground'),
+                    tooltip: 'Compile error'
+                };
+            case 'stale':
+                return {
+                    badge: '◌',
+                    color: new vscode_1.ThemeColor('editorInfo.foreground'),
+                    tooltip: 'Stale - depends on changed file'
+                };
+            case 'dirty':
+                return {
+                    badge: '●',
+                    color: new vscode_1.ThemeColor('editorWarning.foreground'),
+                    tooltip: 'Modified - not compiled'
+                };
+            case 'ok':
+                return {
+                    badge: '✓',
+                    color: new vscode_1.ThemeColor('testing.iconPassed'),
+                    tooltip: 'Compiled successfully'
+                };
+            default:
+                return undefined;
+        }
+    }
+}
+// Global decoration provider instance
+let decorationProvider;
 function extLog(msg) {
     const line = `${new Date().toISOString()} ${msg}\n`;
     fs.appendFileSync('/tmp/nostos_ext.log', line);
@@ -168,6 +221,10 @@ function activate(context) {
     safeRegisterCommand(context, 'nostos.openRepl', () => {
         openReplPanel(context);
     });
+    // Register file decoration provider for compile status
+    decorationProvider = new NostosFileDecorationProvider();
+    context.subscriptions.push(vscode_1.window.registerFileDecorationProvider(decorationProvider));
+    extLog('Registered file decoration provider');
     // Start the language server AFTER registering commands
     startLanguageServer(context);
 }
@@ -245,6 +302,13 @@ function startLanguageServer(context) {
     client.start().then(() => {
         extLog('client.start() resolved - CONNECTED');
         console.log('Nostos language server started successfully');
+        // Register notification handler for file status updates
+        if (client && decorationProvider) {
+            client.onNotification('nostos/fileStatus', (params) => {
+                extLog(`Received file status update: ${params.files.length} files`);
+                decorationProvider?.updateFileStatuses(params.files);
+            });
+        }
     }).catch((error) => {
         extLog(`client.start() FAILED: ${error.message || error}`);
         console.error('Failed to start Nostos language server:', error);

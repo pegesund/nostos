@@ -1,6 +1,6 @@
 import * as path from 'path';
 import * as fs from 'fs';
-import { workspace, ExtensionContext, window, commands, WebviewPanel, ViewColumn, Uri } from 'vscode';
+import { workspace, ExtensionContext, window, commands, WebviewPanel, ViewColumn, Uri, FileDecoration, FileDecorationProvider, EventEmitter, Event, ThemeColor } from 'vscode';
 import {
     LanguageClient,
     LanguageClientOptions,
@@ -10,6 +10,63 @@ import {
 
 // REPL webview panel (singleton)
 let replPanel: WebviewPanel | undefined;
+
+// File decoration provider for showing compile status
+class NostosFileDecorationProvider implements FileDecorationProvider {
+    private _onDidChangeFileDecorations = new EventEmitter<Uri | Uri[] | undefined>();
+    readonly onDidChangeFileDecorations: Event<Uri | Uri[] | undefined> = this._onDidChangeFileDecorations.event;
+
+    // Map from file path to status: "ok", "error", "stale", "dirty"
+    private fileStatuses: Map<string, string> = new Map();
+
+    updateFileStatuses(files: Array<{ path: string; status: string }>) {
+        this.fileStatuses.clear();
+        for (const file of files) {
+            this.fileStatuses.set(file.path, file.status);
+        }
+        // Trigger refresh of all decorations
+        this._onDidChangeFileDecorations.fire(undefined);
+    }
+
+    provideFileDecoration(uri: Uri): FileDecoration | undefined {
+        const status = this.fileStatuses.get(uri.fsPath);
+        if (!status) {
+            return undefined;
+        }
+
+        switch (status) {
+            case 'error':
+                return {
+                    badge: '✗',
+                    color: new ThemeColor('errorForeground'),
+                    tooltip: 'Compile error'
+                };
+            case 'stale':
+                return {
+                    badge: '◌',
+                    color: new ThemeColor('editorInfo.foreground'),
+                    tooltip: 'Stale - depends on changed file'
+                };
+            case 'dirty':
+                return {
+                    badge: '●',
+                    color: new ThemeColor('editorWarning.foreground'),
+                    tooltip: 'Modified - not compiled'
+                };
+            case 'ok':
+                return {
+                    badge: '✓',
+                    color: new ThemeColor('testing.iconPassed'),
+                    tooltip: 'Compiled successfully'
+                };
+            default:
+                return undefined;
+        }
+    }
+}
+
+// Global decoration provider instance
+let decorationProvider: NostosFileDecorationProvider | undefined;
 
 function extLog(msg: string) {
     const line = `${new Date().toISOString()} ${msg}\n`;
@@ -142,6 +199,11 @@ export function activate(context: ExtensionContext) {
         openReplPanel(context);
     });
 
+    // Register file decoration provider for compile status
+    decorationProvider = new NostosFileDecorationProvider();
+    context.subscriptions.push(window.registerFileDecorationProvider(decorationProvider));
+    extLog('Registered file decoration provider');
+
     // Start the language server AFTER registering commands
     startLanguageServer(context);
 }
@@ -241,6 +303,14 @@ function startLanguageServer(context: ExtensionContext) {
     client.start().then(() => {
         extLog('client.start() resolved - CONNECTED');
         console.log('Nostos language server started successfully');
+
+        // Register notification handler for file status updates
+        if (client && decorationProvider) {
+            client.onNotification('nostos/fileStatus', (params: { files: Array<{ path: string; status: string }> }) => {
+                extLog(`Received file status update: ${params.files.length} files`);
+                decorationProvider?.updateFileStatuses(params.files);
+            });
+        }
     }).catch((error: any) => {
         extLog(`client.start() FAILED: ${error.message || error}`);
         console.error('Failed to start Nostos language server:', error);
