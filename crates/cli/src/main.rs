@@ -915,8 +915,9 @@ fn try_load_stdlib_from_cache(
         );
     }
 
-    // Parse stdlib files that have default parameters in parallel using threads
-    let modules_with_defaults = ["stdlib.html", "stdlib.rhtml", "stdlib.rweb", "stdlib.server", "stdlib.html_parser"];
+    // Parse stdlib files that have default parameters or generic functions in parallel using threads
+    // Generic functions need ASTs for monomorphization at call sites
+    let modules_with_defaults = ["stdlib.html", "stdlib.rhtml", "stdlib.rweb", "stdlib.server", "stdlib.html_parser", "stdlib.db"];
     let modules_to_parse: Vec<_> = modules_to_load.iter()
         .filter(|(name, _)| modules_with_defaults.iter().any(|m| name.starts_with(m)))
         .map(|(name, path)| (name.clone(), path.clone()))

@@ -533,11 +533,11 @@ rows = Pg.query(conn, "SELECT id, name FROM users WHERE age > $1", [18])
 # rows is: [(1, "Alice"), (2, "Bob")]
 # Access: head(rows).0 => 1, head(rows).1 => "Alice"
 
-# Parameters can be tuples (ideal for mixed types)
-Pg.execute(conn, "INSERT INTO users (id, name, score) VALUES ($1, $2, $3)", (1, "Alice", 95.5))
-
-# Or lists for single-type parameters
+# Use lists for 0-1 parameters (note: (x) is NOT a tuple, just parentheses)
 Pg.execute(conn, "INSERT INTO users (name) VALUES ($1)", ["Charlie"])
+
+# Use tuples for 2+ parameters (supports mixed types)
+Pg.execute(conn, "INSERT INTO users (id, name, score) VALUES ($1, $2, $3)", (1, "Alice", 95.5))
 
 # Iterate over query results
 rows = Pg.query(conn, "SELECT id, name, email FROM users", [])

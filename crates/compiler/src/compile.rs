@@ -12496,11 +12496,13 @@ impl Compiler {
         // Generate mangled name using type args: fnbase$Type1_Type2/sig
         let type_suffix = type_arg_names.join("_");
         // Use actual argument types for signature (not type arg names)
-        let mangled_name = if arg_type_names.is_empty() {
-            format!("{}${}/", fn_base, type_suffix)
+        // If arg_type_names is empty but we have parameters, use "_" for each (to match compile_fn_def)
+        let signature_types = if arg_type_names.is_empty() {
+            vec!["_".to_string(); param_names.len()]
         } else {
-            format!("{}${}/{}", fn_base, type_suffix, arg_type_names.join(","))
+            arg_type_names.to_vec()
         };
+        let mangled_name = format!("{}${}/{}", fn_base, type_suffix, signature_types.join(","));
 
         // Check if variant exists and is NOT stale
         if let Some(existing) = self.functions.get(&mangled_name) {
@@ -16546,6 +16548,11 @@ impl Compiler {
 
             // Insert into fn_asts so get_function_param_defaults can find it
             self.fn_asts.insert(fn_name.clone(), fn_def.clone());
+
+            // Register type parameters for generic functions (needed for monomorphization)
+            if !fn_def.type_params.is_empty() {
+                self.fn_type_params.insert(fn_name.clone(), fn_def.type_params.clone());
+            }
 
             // Update fn_asts_by_base index
             let fn_base = base_name.clone();

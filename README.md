@@ -97,7 +97,8 @@ main() = {
     conn = Pg.connect("host=localhost dbname=mydb user=postgres password=secret")
 
     # Parameterized queries prevent SQL injection
-    rows = Pg.query(conn, "SELECT name, email FROM users WHERE active = $1", (true,))
+    # Use lists for 0-1 params, tuples for 2+ params (mixed types supported)
+    rows = Pg.query(conn, "SELECT name, email FROM users WHERE age > $1 AND active = $2", (18, true))
 
     rows.map(row => println(row.0 ++ ": " ++ row.1))
 
@@ -118,7 +119,7 @@ main() = {
     conn = Pg.connect("host=localhost dbname=mydb user=postgres password=secret")
 
     # Column order in SELECT must match field order in type
-    users: List[User] = query[User](conn, "SELECT name, email FROM users", ())
+    users: List[User] = query[User](conn, "SELECT name, email FROM users", [])
 
     # Now use field names instead of positional access!
     users.map(u => println(u.name ++ ": " ++ u.email))
