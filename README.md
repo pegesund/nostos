@@ -105,7 +105,9 @@ main() = {
 }
 ```
 
-**Typed Results** — Map query results to typed records using introspection:
+No slow, complex, or scary ORM. Just plain queries and safe types, powered by introspection.
+
+**Typed Results** — Map query results to typed records:
 
 ```nos
 use stdlib.db.{query}
