@@ -1929,13 +1929,14 @@ impl ReplEngine {
                 _ => self.current_module.clone(),
             };
 
-            // Prepend type definitions from the module to the input
-            // This ensures types like "Counter" are available when compiling functions
+            // Prepend type definitions from the module AND other project modules to the input
+            // This ensures types like "Counter" (same module) and "Person" (other modules) are available
             // Track prefix line count for error line adjustment
             let (input_with_types, prefix_line_count) = if !actual_module_name.is_empty() && actual_module_name != "repl" {
                 let mut prefix = String::new();
+                let mut added_types: HashSet<String> = HashSet::new();
 
-                // Add type definitions from the source manager if available
+                // First, add type definitions from the SAME module (source manager)
                 if let Some(ref sm) = self.source_manager {
                     for def_name in sm.definitions_in_module(&actual_module_name) {
                         if let Some(source) = sm.get_source(&def_name) {
@@ -1943,20 +1944,45 @@ impl ReplEngine {
                             if trimmed.starts_with("type ") || trimmed.starts_with("reactive ") {
                                 prefix.push_str(trimmed);
                                 prefix.push_str("\n\n");
+                                // Track the type name to avoid duplicates
+                                if let Some(name_start) = trimmed.find(char::is_whitespace) {
+                                    let rest = trimmed[name_start..].trim_start();
+                                    if let Some(name_end) = rest.find(|c: char| !c.is_alphanumeric() && c != '_') {
+                                        added_types.insert(rest[..name_end].to_string());
+                                    }
+                                }
                             }
                         }
                     }
-                } else {
-                    // Fallback: get types from the compiler for this module
-                    let module_prefix_str = format!("{}.", actual_module_name);
-                    for (type_name, type_val) in self.compiler.get_all_types() {
-                        if type_name.starts_with(&module_prefix_str) {
-                            let type_source = self.reconstruct_type_source_for_check(&type_val);
-                            if !type_source.is_empty() {
-                                prefix.push_str(&type_source);
-                                prefix.push_str("\n\n");
-                            }
-                        }
+                }
+
+                // Then, add type definitions from OTHER modules (via compiler's type registry)
+                // This enables cross-module type references like Person from test_types
+                for (type_name, type_val) in self.compiler.get_all_types() {
+                    // Skip stdlib types and types from the same module
+                    if type_name.starts_with("stdlib.") {
+                        continue;
+                    }
+                    let module_prefix = format!("{}.", actual_module_name);
+                    if type_name.starts_with(&module_prefix) {
+                        continue; // Already added from source manager
+                    }
+                    // Extract unqualified name
+                    let short_name = if let Some(dot_pos) = type_name.rfind('.') {
+                        &type_name[dot_pos + 1..]
+                    } else {
+                        &type_name[..]
+                    };
+                    // Skip if we already added this type name
+                    if added_types.contains(short_name) {
+                        continue;
+                    }
+                    // Reconstruct type source
+                    let type_source = self.reconstruct_type_source_for_check(&type_val);
+                    if !type_source.is_empty() {
+                        prefix.push_str(&type_source);
+                        prefix.push_str("\n\n");
+                        added_types.insert(short_name.to_string());
                     }
                 }
 
@@ -4717,7 +4743,19 @@ impl ReplEngine {
             let _ = sm.load_source_files();
         }
 
-        // Compile all bodies, collecting errors
+        // CRITICAL: Add import aliases for user-defined types so they can be used by unqualified names
+        // E.g., if test_types.nos defines "type Person = {...}", code in main.nos can use "Person"
+        // This is needed because the compiler doesn't automatically resolve cross-module types
+        for (name, _type_val) in self.compiler.get_all_types() {
+            // Only add aliases for user-defined types (not stdlib)
+            if !name.starts_with("stdlib.") {
+                if let Some(dot_pos) = name.rfind('.') {
+                    let short_name = &name[dot_pos + 1..];
+                    self.compiler.add_import_alias(short_name, &name);
+                }
+            }
+        }
+
         // Compile all bodies, collecting errors
         let errors = self.compiler.compile_all_collecting_errors();
 
@@ -19572,7 +19610,83 @@ main() = {
         cleanup(&temp_dir);
     }
 
-    /// Scenario 24: Errors while typing should be detected by check_module_compiles
+    /// Scenario 24: COMMIT path should also handle cross-module types correctly
+    /// This tests recompile_module_with_content which is used when committing changes
+    #[test]
+    fn test_commit_cross_module_type_reference() {
+        let temp_dir = create_temp_dir("commit_cross_type");
+
+        // Create test_types.nos with type definitions (like the real project)
+        {
+            let mut f = std::fs::File::create(temp_dir.join("test_types.nos")).unwrap();
+            writeln!(f, "# Variant type for testing").unwrap();
+            writeln!(f, "type MyResult = Success(Int) | Failure(String)").unwrap();
+            writeln!(f, "").unwrap();
+            writeln!(f, "# Record type for testing").unwrap();
+            writeln!(f, "pub type Person = {{ name: String, age: Int }}").unwrap();
+        }
+
+        // Create good.nos with helper functions
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a, b) = a + b").unwrap();
+            writeln!(f, "pub multiply(x, y) = x * y").unwrap();
+        }
+
+        // Create main.nos that uses types from test_types - initially correct
+        let initial_main = r#"main() = {
+    x = good.addff(3, 2)
+    y = good.multiply(2,3)
+    p = Person(name: "petter", age: 11)
+    a = p.age
+    r = Failure("hupp")
+    0
+}
+"#;
+        std::fs::write(temp_dir.join("main.nos"), initial_main).unwrap();
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // First, verify the initial load works (no errors about Person/Failure)
+        let initial_status = engine.get_compile_status("main.main");
+        println!("Initial compile status: {:?}", initial_status);
+
+        // The initial version should compile without "unknown type Person" error
+        // (It uses Person and Failure from test_types module)
+        if let Some(CompileStatus::CompileError(e)) = &initial_status {
+            assert!(!e.contains("unknown type") && !e.contains("Unknown type"),
+                    "Initial load should NOT have 'unknown type' error. Got: {}", e);
+        }
+
+        // Now simulate committing a changed version with an error
+        let main_with_error = r#"main() = {
+    x = good.addff(3, 2)
+    y = good.multiply(2,3)
+    p = Person(name: "petter", age: 11)
+    a = p.age
+    r = Failure("hupp")
+    undefined_var_error
+}
+"#;
+        // This is the COMMIT path - it should properly handle cross-module types
+        let commit_result = engine.recompile_module_with_content("main", main_with_error);
+        println!("Commit result: {:?}", commit_result);
+
+        // The error should be about undefined_var_error, NOT about unknown type Person
+        assert!(commit_result.is_err(), "Should have error for undefined variable");
+        let err_msg = commit_result.unwrap_err();
+        println!("Commit error message: {}", err_msg);
+
+        assert!(!err_msg.contains("unknown type") && !err_msg.contains("Unknown type"),
+                "COMMIT should NOT report 'unknown type Person' - types from other modules should be visible. Got: {}", err_msg);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 25: Errors while typing should be detected by check_module_compiles
     #[test]
     fn test_realtime_error_detection() {
         let temp_dir = create_temp_dir("realtime_err");
