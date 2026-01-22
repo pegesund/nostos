@@ -2908,6 +2908,86 @@ impl NostosLanguageServer {
         None
     }
 
+    /// Generate insertText for a function/method with parameter placeholders
+    /// e.g., "add" with signature "(Int, Int) -> Int" becomes "add(,)"
+    /// For 0-arity functions, returns "name()"
+    fn generate_function_insert_text(name: &str, signature: Option<&str>) -> String {
+        let arity = signature.map(|sig| Self::count_parameters(sig)).unwrap_or(0);
+        if arity == 0 {
+            format!("{}()", name)
+        } else {
+            let commas = ",".repeat(arity.saturating_sub(1));
+            format!("{}({})", name, commas)
+        }
+    }
+
+    /// Count the number of parameters in a function signature
+    /// Handles signatures like "(Int, Int) -> Int" or "Int -> Int -> Int"
+    fn count_parameters(signature: &str) -> usize {
+        // First, strip trait bounds like "Num a => ..."
+        let sig = if let Some(pos) = signature.find("=>") {
+            signature[pos + 2..].trim()
+        } else {
+            signature.trim()
+        };
+
+        // Check if it's a tuple-style signature "(a, b, c) -> result"
+        if sig.starts_with('(') {
+            if let Some(paren_end) = sig.find(')') {
+                let params = &sig[1..paren_end];
+                if params.trim().is_empty() {
+                    return 0;
+                }
+                // Count commas, handling nested types like List[Int]
+                let mut count = 1;
+                let mut depth = 0;
+                for c in params.chars() {
+                    match c {
+                        '[' | '(' | '{' => depth += 1,
+                        ']' | ')' | '}' => depth -= 1,
+                        ',' if depth == 0 => count += 1,
+                        _ => {}
+                    }
+                }
+                return count;
+            }
+        }
+
+        // Arrow-style signature "a -> b -> c" (curried)
+        // Count arrows, the result is one less than number of parts
+        let mut count = 0;
+        let mut depth = 0;
+        let mut chars = sig.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '[' | '(' | '{' => depth += 1,
+                ']' | ')' | '}' => depth -= 1,
+                '-' if depth == 0 => {
+                    if chars.peek() == Some(&'>') {
+                        chars.next();
+                        count += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        // For "a -> b -> c", count=2, meaning 2 params (a and b), result is c
+        count
+    }
+
+    /// Generate insertText for a type constructor with named fields
+    /// e.g., "Person" with fields ["name: String", "age: Int"] becomes "Person(name: , age: )"
+    fn generate_type_insert_text(name: &str, fields: &[String]) -> String {
+        if fields.is_empty() {
+            name.to_string()
+        } else {
+            let field_names: Vec<&str> = fields.iter()
+                .map(|f| f.split(':').next().unwrap_or("").trim())
+                .collect();
+            format!("{}({})", name, field_names.iter().map(|f| format!("{}: ", f)).collect::<Vec<_>>().join(", "))
+        }
+    }
+
     /// Extract the expression before the dot, handling brackets and parens
     fn extract_receiver_expression(text: &str) -> &str {
         let chars: Vec<char> = text.chars().collect();
@@ -2976,6 +3056,69 @@ impl NostosLanguageServer {
             text
         };
 
+        // Check if we're inside a type constructor call like "Person(" or "module.Person("
+        // Look for pattern: (Module.)?TypeName( where cursor is after the paren
+        if let Some(paren_pos) = text_to_cursor.rfind('(') {
+            let before_paren = text_to_cursor[..paren_pos].trim_end();
+            let after_paren = &text_to_cursor[paren_pos + 1..];
+
+            // Only trigger if after_paren is empty or starts with whitespace/identifier
+            // Don't trigger in middle of function calls with args already present
+            let in_field_context = after_paren.is_empty()
+                || after_paren.chars().all(|c| c.is_whitespace())
+                || (after_paren.trim_start().is_empty());
+
+            if in_field_context {
+                // Extract type name (could be "Person" or "module.Person")
+                let type_expr_start = before_paren.rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != '.')
+                    .map(|i| i + 1)
+                    .unwrap_or(0);
+                let type_expr = &before_paren[type_expr_start..];
+
+                // Check if it looks like a type (starts with uppercase)
+                let base_name = if let Some(dot_idx) = type_expr.rfind('.') {
+                    &type_expr[dot_idx + 1..]
+                } else {
+                    type_expr
+                };
+
+                if !base_name.is_empty() && base_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                    // This looks like a type constructor - check if we have this type
+                    let known_types = engine.get_types();
+                    let matching_type = known_types.iter()
+                        .find(|t| {
+                            // Match "Person" or "module.Person"
+                            *t == type_expr || t.ends_with(&format!(".{}", type_expr)) || t.ends_with(&format!(".{}", base_name))
+                        });
+
+                    if let Some(full_type_name) = matching_type {
+                        let fields = engine.get_type_fields(full_type_name);
+                        if !fields.is_empty() {
+                            eprintln!("REPL constructor completion: type='{}', fields={:?}", full_type_name, fields);
+
+                            for field_info in &fields {
+                                // field_info is "name: type" format
+                                let field_name = field_info.split(':').next().unwrap_or(field_info).trim();
+                                items.push(serde_json::json!({
+                                    "label": format!("{}: ", field_name),
+                                    "kind": "field",
+                                    "detail": field_info,
+                                    "insertText": format!("{}: ", field_name),
+                                    "replaceStart": paren_pos + 1,
+                                    "replaceEnd": cursor_pos
+                                }));
+                            }
+
+                            // Return early with constructor field completions
+                            if !items.is_empty() {
+                                return items;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Check if we're completing after a dot
         if let Some(dot_pos) = text_to_cursor.rfind('.') {
             let before_dot = &text_to_cursor[..dot_pos];
@@ -3022,29 +3165,64 @@ impl NostosLanguageServer {
             }
 
             if is_module {
-                // Module completion - show functions from this module
+                // Module completion - show functions and types from this module
                 let module_name = known_modules.iter()
                     .find(|m| m == &expr || m.eq_ignore_ascii_case(expr))
                     .map(|s| s.as_str())
                     .unwrap_or(expr);
 
+                let partial_lower = partial_after.to_lowercase();
+
+                // Add functions from the module
                 for fn_name in engine.get_functions() {
                     if fn_name.starts_with(&format!("{}.", module_name)) {
                         let short_name = fn_name.strip_prefix(&format!("{}.", module_name))
                             .unwrap_or(&fn_name);
 
+                        // Strip arity suffix like "/2" or "/_,_"
+                        let display_name = if let Some(pos) = short_name.find('/') {
+                            &short_name[..pos]
+                        } else {
+                            short_name
+                        };
+
+                        if display_name.starts_with('_') {
+                            continue;
+                        }
+
+                        if partial_after.is_empty() || display_name.to_lowercase().starts_with(&partial_lower) {
+                            let signature = engine.get_function_signature(&fn_name);
+                            let insert_text = Self::generate_function_insert_text(display_name, signature.as_deref());
+                            items.push(serde_json::json!({
+                                "label": display_name,
+                                "kind": "function",
+                                "detail": signature,
+                                "insertText": insert_text,
+                                "replaceStart": dot_pos + 1,
+                                "replaceEnd": cursor_pos
+                            }));
+                        }
+                    }
+                }
+
+                // Add types from the module
+                for type_name in engine.get_types() {
+                    if type_name.starts_with(&format!("{}.", module_name)) {
+                        let short_name = type_name.strip_prefix(&format!("{}.", module_name))
+                            .unwrap_or(&type_name);
+
                         if short_name.starts_with('_') {
                             continue;
                         }
 
-                        let partial_lower = partial_after.to_lowercase();
                         if partial_after.is_empty() || short_name.to_lowercase().starts_with(&partial_lower) {
-                            let signature = engine.get_function_signature(&fn_name);
+                            let fields = engine.get_type_fields(&type_name);
+                            let insert_text = Self::generate_type_insert_text(short_name, &fields);
                             items.push(serde_json::json!({
                                 "label": short_name,
-                                "kind": "function",
-                                "detail": signature,
-                                "insertText": short_name,
+                                "kind": "type",
+                                "detail": format!("type {}", type_name),
+                                "insertText": insert_text,
                                 "replaceStart": dot_pos + 1,
                                 "replaceEnd": cursor_pos
                             }));
@@ -3122,12 +3300,13 @@ impl NostosLanguageServer {
                             continue;
                         }
                         if partial_after.is_empty() || method_name.to_lowercase().starts_with(&partial_lower) {
+                            let insert_text = Self::generate_function_insert_text(method_name, Some(signature));
                             items.push(serde_json::json!({
                                 "label": method_name,
                                 "kind": "method",
                                 "detail": signature,
                                 "documentation": doc,
-                                "insertText": method_name,
+                                "insertText": insert_text,
                                 "replaceStart": dot_pos + 1,
                                 "replaceEnd": cursor_pos
                             }));
@@ -3140,12 +3319,13 @@ impl NostosLanguageServer {
                             continue;
                         }
                         if partial_after.is_empty() || method_name.to_lowercase().starts_with(&partial_lower) {
+                            let insert_text = Self::generate_function_insert_text(&method_name, Some(&signature));
                             items.push(serde_json::json!({
                                 "label": method_name,
                                 "kind": "method",
                                 "detail": signature,
                                 "documentation": doc,
-                                "insertText": method_name,
+                                "insertText": insert_text,
                                 "replaceStart": dot_pos + 1,
                                 "replaceEnd": cursor_pos
                             }));
@@ -3158,12 +3338,13 @@ impl NostosLanguageServer {
                             continue;
                         }
                         if partial_after.is_empty() || method_name.to_lowercase().starts_with(&partial_lower) {
+                            let insert_text = Self::generate_function_insert_text(&method_name, Some(&signature));
                             items.push(serde_json::json!({
                                 "label": method_name,
                                 "kind": "method",
                                 "detail": signature,
                                 "documentation": doc,
-                                "insertText": method_name,
+                                "insertText": insert_text,
                                 "replaceStart": dot_pos + 1,
                                 "replaceEnd": cursor_pos
                             }));
@@ -3228,11 +3409,12 @@ impl NostosLanguageServer {
 
                 if partial.is_empty() || display_name.to_lowercase().starts_with(&partial_lower) {
                     let signature = engine.get_function_signature(&fn_name);
+                    let insert_text = Self::generate_function_insert_text(display_name, signature.as_deref());
                     items.push(serde_json::json!({
                         "label": display_name,
                         "kind": "function",
                         "detail": signature,
-                        "insertText": display_name,
+                        "insertText": insert_text,
                         "replaceStart": word_start,
                         "replaceEnd": cursor_pos
                     }));
@@ -3244,11 +3426,27 @@ impl NostosLanguageServer {
             for type_name in engine.get_types() {
                 let display_name = type_name.rsplit('.').next().unwrap_or(&type_name);
                 if partial.is_empty() || display_name.to_lowercase().starts_with(&partial_lower) {
+                    let fields = engine.get_type_fields(&type_name);
+                    let insert_text = Self::generate_type_insert_text(display_name, &fields);
                     items.push(serde_json::json!({
                         "label": display_name,
                         "kind": "type",
                         "detail": type_name,
-                        "insertText": display_name,
+                        "insertText": insert_text,
+                        "replaceStart": word_start,
+                        "replaceEnd": cursor_pos
+                    }));
+                }
+            }
+
+            // Add modules
+            for module_name in engine.get_known_modules() {
+                if partial.is_empty() || module_name.to_lowercase().starts_with(&partial_lower) {
+                    items.push(serde_json::json!({
+                        "label": &module_name,
+                        "kind": "module",
+                        "detail": format!("module {}", module_name),
+                        "insertText": &module_name,
                         "replaceStart": word_start,
                         "replaceEnd": cursor_pos
                     }));
@@ -3451,5 +3649,212 @@ impl NostosLanguageServer {
         }
 
         (fn_name, comma_count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_count_parameters_tuple_style() {
+        // Empty params
+        assert_eq!(NostosLanguageServer::count_parameters("() -> Int"), 0);
+
+        // Single param
+        assert_eq!(NostosLanguageServer::count_parameters("(Int) -> Int"), 1);
+
+        // Two params
+        assert_eq!(NostosLanguageServer::count_parameters("(Int, Int) -> Int"), 2);
+
+        // Three params
+        assert_eq!(NostosLanguageServer::count_parameters("(Int, String, Bool) -> Int"), 3);
+
+        // With nested types
+        assert_eq!(NostosLanguageServer::count_parameters("(List[Int], Map[String, Int]) -> Bool"), 2);
+
+        // With trait bounds
+        assert_eq!(NostosLanguageServer::count_parameters("Num a => (a, a) -> a"), 2);
+    }
+
+    #[test]
+    fn test_count_parameters_arrow_style() {
+        // a -> b (one param)
+        assert_eq!(NostosLanguageServer::count_parameters("Int -> Int"), 1);
+
+        // a -> b -> c (two params)
+        assert_eq!(NostosLanguageServer::count_parameters("Int -> Int -> Int"), 2);
+
+        // With nested types
+        assert_eq!(NostosLanguageServer::count_parameters("List[Int] -> Map[String, Int] -> Bool"), 2);
+    }
+
+    #[test]
+    fn test_generate_function_insert_text() {
+        // Zero arity
+        assert_eq!(
+            NostosLanguageServer::generate_function_insert_text("foo", Some("() -> Int")),
+            "foo()"
+        );
+
+        // One param
+        assert_eq!(
+            NostosLanguageServer::generate_function_insert_text("bar", Some("(Int) -> Int")),
+            "bar()"
+        );
+
+        // Two params
+        assert_eq!(
+            NostosLanguageServer::generate_function_insert_text("add", Some("(Int, Int) -> Int")),
+            "add(,)"
+        );
+
+        // Three params
+        assert_eq!(
+            NostosLanguageServer::generate_function_insert_text("func", Some("(Int, String, Bool) -> Int")),
+            "func(,,)"
+        );
+
+        // No signature (defaults to 0 arity)
+        assert_eq!(
+            NostosLanguageServer::generate_function_insert_text("unknown", None),
+            "unknown()"
+        );
+    }
+
+    #[test]
+    fn test_generate_type_insert_text() {
+        // No fields
+        assert_eq!(
+            NostosLanguageServer::generate_type_insert_text("Unit", &[]),
+            "Unit"
+        );
+
+        // One field
+        assert_eq!(
+            NostosLanguageServer::generate_type_insert_text("Wrapper", &["value: Int".to_string()]),
+            "Wrapper(value: )"
+        );
+
+        // Two fields
+        assert_eq!(
+            NostosLanguageServer::generate_type_insert_text("Person", &["name: String".to_string(), "age: Int".to_string()]),
+            "Person(name: , age: )"
+        );
+
+        // Three fields
+        assert_eq!(
+            NostosLanguageServer::generate_type_insert_text("Point3D", &["x: Float".to_string(), "y: Float".to_string(), "z: Float".to_string()]),
+            "Point3D(x: , y: , z: )"
+        );
+    }
+
+    #[test]
+    fn test_strip_arity_suffix_from_function_name() {
+        // Verify that the helper strips arity suffix properly
+        let fn_name = "module.addff/_,_";
+        let short_name = fn_name.strip_prefix("module.").unwrap();
+
+        // Strip arity suffix
+        let display_name = if let Some(pos) = short_name.find('/') {
+            &short_name[..pos]
+        } else {
+            short_name
+        };
+
+        assert_eq!(display_name, "addff", "Should strip arity suffix /_,_");
+
+        // Test with simple numeric arity
+        let fn_name2 = "module.foo/2";
+        let short_name2 = fn_name2.strip_prefix("module.").unwrap();
+        let display_name2 = if let Some(pos) = short_name2.find('/') {
+            &short_name2[..pos]
+        } else {
+            short_name2
+        };
+        assert_eq!(display_name2, "foo", "Should strip arity suffix /2");
+
+        // Test without arity suffix
+        let fn_name3 = "module.bar";
+        let short_name3 = fn_name3.strip_prefix("module.").unwrap();
+        let display_name3 = if let Some(pos) = short_name3.find('/') {
+            &short_name3[..pos]
+        } else {
+            short_name3
+        };
+        assert_eq!(display_name3, "bar", "Should keep name as-is without arity suffix");
+    }
+
+    #[test]
+    fn test_repl_module_type_completion_detection() {
+        // Test that module.TypeName pattern is detected correctly
+        // The actual completion logic requires a running engine, but we can test the detection pattern
+
+        let type_expr = "module.Person";
+
+        // Check if it looks like a type (base name starts with uppercase)
+        let base_name = if let Some(dot_idx) = type_expr.rfind('.') {
+            &type_expr[dot_idx + 1..]
+        } else {
+            type_expr
+        };
+
+        assert_eq!(base_name, "Person");
+        assert!(base_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false),
+            "Type names should start with uppercase");
+
+        // Test plain type
+        let type_expr2 = "Person";
+        let base_name2 = if let Some(dot_idx) = type_expr2.rfind('.') {
+            &type_expr2[dot_idx + 1..]
+        } else {
+            type_expr2
+        };
+        assert_eq!(base_name2, "Person");
+        assert!(base_name2.chars().next().map(|c| c.is_uppercase()).unwrap_or(false));
+
+        // Test lowercase function (should not be treated as type)
+        let func_expr = "module.calculate";
+        let base_name3 = if let Some(dot_idx) = func_expr.rfind('.') {
+            &func_expr[dot_idx + 1..]
+        } else {
+            func_expr
+        };
+        assert_eq!(base_name3, "calculate");
+        assert!(!base_name3.chars().next().map(|c| c.is_uppercase()).unwrap_or(false),
+            "Function names start with lowercase, should not be treated as type");
+    }
+
+    #[test]
+    fn test_constructor_field_context_detection() {
+        // Test the logic for detecting when we're inside a constructor call
+
+        // Case 1: Just opened paren "Person("
+        let text = "Person(";
+        let paren_pos = text.rfind('(').unwrap();
+        let after_paren = &text[paren_pos + 1..];
+        let in_field_context = after_paren.is_empty()
+            || after_paren.chars().all(|c| c.is_whitespace())
+            || after_paren.trim_start().is_empty();
+        assert!(in_field_context, "Just after '(' should be field context");
+
+        // Case 2: Space after paren "Person( "
+        let text2 = "Person( ";
+        let paren_pos2 = text2.rfind('(').unwrap();
+        let after_paren2 = &text2[paren_pos2 + 1..];
+        let in_field_context2 = after_paren2.is_empty()
+            || after_paren2.chars().all(|c| c.is_whitespace())
+            || after_paren2.trim_start().is_empty();
+        assert!(in_field_context2, "After '( ' should be field context");
+
+        // Case 3: With module prefix "test_types.Person("
+        let text3 = "test_types.Person(";
+        let paren_pos3 = text3.rfind('(').unwrap();
+        let before_paren3 = text3[..paren_pos3].trim_end();
+        let type_expr_start = before_paren3.rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != '.')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let type_expr = &before_paren3[type_expr_start..];
+        assert_eq!(type_expr, "test_types.Person", "Should extract full type expression");
     }
 }
