@@ -52,3 +52,4 @@ todo/
 bench/venv/
 bench/nalgebra_rust/target/
 bench/http_db_benchmark
+yolo.sh
