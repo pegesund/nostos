@@ -19686,7 +19686,70 @@ main() = {
         cleanup(&temp_dir);
     }
 
-    /// Scenario 25: Errors while typing should be detected by check_module_compiles
+    /// Scenario 25: Errors should be detected at project startup (load_directory)
+    /// This tests that files with errors are properly marked when the project loads
+    #[test]
+    fn test_errors_detected_at_startup() {
+        let temp_dir = create_temp_dir("startup_errors");
+
+        // Create good.nos with helper functions
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a, b) = a + b").unwrap();
+            writeln!(f, "pub multiply(x, y) = x * y").unwrap();
+        }
+
+        // Create main.nos WITH AN ERROR at startup
+        let main_content = r#"main() = {
+    x = good.addff(3, 2)
+    y = good.multiply(2,3)
+    startup_undefined_error
+}
+"#;
+        std::fs::write(temp_dir.join("main.nos"), main_content).unwrap();
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_stdlib().ok();
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // CRITICAL: After load_directory, the error should be detected
+        // This is what the LSP uses to publish initial diagnostics
+        let all_status = engine.get_all_compile_status();
+        println!("All compile status after load_directory:");
+        for (name, status) in &all_status {
+            println!("  {}: {}", name, status);
+        }
+
+        // Find status for main.main (not stdlib.html.main!)
+        let main_status = all_status.iter()
+            .find(|(name, _)| name == "main.main" || name.starts_with("main.main/"));
+        println!("main.main status: {:?}", main_status);
+
+        assert!(main_status.is_some(), "main.main should have compile status");
+        let (_, status_str) = main_status.unwrap();
+
+        // The status should indicate an error about the undefined variable
+        assert!(status_str.contains("Error") || status_str.contains("error"),
+                "main.main should have an error status at startup. Got: {}", status_str);
+        assert!(status_str.contains("startup_undefined_error") || status_str.contains("unknown variable"),
+                "Error should mention the undefined variable. Got: {}", status_str);
+
+        // Also verify get_error_definitions returns this error
+        let error_defs = engine.get_error_definitions();
+        println!("Error definitions: {:?}", error_defs);
+        assert!(!error_defs.is_empty(), "Should have error definitions at startup");
+
+        // Verify file_has_errors returns true for main.nos
+        let main_path = temp_dir.join("main.nos").to_string_lossy().to_string();
+        let has_errors = engine.file_has_errors(&main_path);
+        println!("file_has_errors(main.nos): {}", has_errors);
+        assert!(has_errors, "file_has_errors should return true for main.nos");
+
+        cleanup(&temp_dir);
+    }
+
+    /// Scenario 26: Errors while typing should be detected by check_module_compiles
     #[test]
     fn test_realtime_error_detection() {
         let temp_dir = create_temp_dir("realtime_err");

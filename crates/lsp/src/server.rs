@@ -722,8 +722,56 @@ impl LanguageServer for NostosLanguageServer {
 
             match init_result {
                 Ok(engine) => {
+                    // Collect errors before storing engine
+                    let error_defs = engine.get_error_definitions();
+                    let root = self.root_path.lock().unwrap().clone();
+
                     *self.engine.lock().unwrap() = Some(engine);
                     eprintln!("Engine initialized in {:?}", start.elapsed());
+
+                    // Publish diagnostics for files with errors at startup
+                    if !error_defs.is_empty() {
+                        eprintln!("Publishing {} startup errors...", error_defs.len());
+                        for (fn_name, error_msg) in error_defs {
+                            // Extract module name from function name (e.g., "main.main" -> "main")
+                            let module_name = if let Some(dot_pos) = fn_name.find('.') {
+                                &fn_name[..dot_pos]
+                            } else {
+                                &fn_name[..]
+                            };
+
+                            // Build file path from module name
+                            if let Some(ref root_path) = root {
+                                let file_path = root_path.join(format!("{}.nos", module_name));
+                                if file_path.exists() {
+                                    let uri = Url::from_file_path(&file_path).ok();
+                                    if let Some(uri) = uri {
+                                        // Read file content for better error location
+                                        let content = std::fs::read_to_string(&file_path).ok();
+                                        let (line, message) = Self::parse_error_location(&error_msg, content.as_deref());
+
+                                        let diagnostic = Diagnostic {
+                                            range: Range {
+                                                start: Position { line, character: 0 },
+                                                end: Position { line, character: 100 },
+                                            },
+                                            severity: Some(DiagnosticSeverity::ERROR),
+                                            message,
+                                            source: Some("nostos".to_string()),
+                                            ..Default::default()
+                                        };
+
+                                        // Store in file_errors for persistence
+                                        self.file_errors.insert(uri.clone(), vec![diagnostic.clone()]);
+
+                                        // Publish to client
+                                        self.client.publish_diagnostics(uri, vec![diagnostic], None).await;
+                                        eprintln!("Published startup error for {}", file_path.display());
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
                     eprintln!("Engine initialization failed: {}", e);
