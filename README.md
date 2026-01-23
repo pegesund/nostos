@@ -22,6 +22,11 @@ fibonacci(n) = fibonacci(n - 1) + fibonacci(n - 2)
 sum([]) = 0
 sum([head | tail]) = head + sum(tail)
 
+# Quicksort in 3 lines
+quicksort([]) = []
+quicksort([pivot | rest]) =
+    quicksort(rest.filter(x => x < pivot)) ++ [pivot] ++ quicksort(rest.filter(x => x >= pivot))
+
 # Pipes chain beautifully
 result = users
     .filter(u => u.active)
@@ -548,6 +553,114 @@ nostos> factorial(5)
 [BREAK] factorial(5)
   Press Enter to continue, 'c' to skip remaining...
 ```
+
+---
+
+## Functional First, Pragmatism Always
+
+Nostos is designed to **save you time**. That's the only metric that matters. We prefer functional patterns because they're often clearer and safer, but we won't force you into contortions when a mutable variable just makes sense.
+
+### Immutable by Default
+
+Data structures are immutable by default. Updates create new versions with structural sharing—fast and safe:
+
+```nos
+# Immutable list operations
+numbers = [1, 2, 3]
+doubled = numbers.map(x => x * 2)  # Creates new list
+filtered = numbers.filter(x => x > 1)  # Original unchanged
+
+# Immutable maps
+config = %{"port": 8080, "host": "localhost"}
+updated = Map.insert(config, "debug", true)  # New map, config unchanged
+```
+
+This prevents entire classes of bugs. No surprise mutations, no defensive copying needed.
+
+### Mutable Variables When You Need Them
+
+Sometimes a loop with a mutable accumulator is clearer than a fold. We're okay with that:
+
+```nos
+# Functional style - elegant for simple cases
+sumFunctional(numbers) = numbers.reduce(0, (acc, x) => acc + x)
+
+# Imperative style - clearer for complex logic
+sumImperative(numbers) = {
+    mut total = 0
+    mut count = 0
+
+    for n in numbers {
+        if n > 0 then {
+            total = total + n
+            count = count + 1
+        } else ()
+    }
+
+    if count > 0 then total / count else 0
+}
+```
+
+Use `mut` when it makes your intent clearer. The data structures themselves remain immutable—only local variables can be reassigned.
+
+### Thread-Safe Globals with mvars
+
+Need shared state across processes? Use `mvar` for thread-safe global variables:
+
+```nos
+# Declare a thread-safe global counter
+mvar requestCount: Int = 0
+
+# Safe to update from any process
+handleRequest(req) = {
+    requestCount = requestCount + 1  # Atomic update
+    println("Request #" ++ show(requestCount))
+    respondOk(req)
+}
+
+# Multiple processes can safely increment
+main() = {
+    server = Server.bind(8080)
+    # Each request spawns a process, all safely update the counter
+    Server.accept_loop(server, req => spawn { handleRequest(req) })
+}
+```
+
+`mvar` uses locks internally, so updates are atomic. Use them sparingly—message passing is usually better—but they're there when you need simple shared counters or caches.
+
+### Choose What Reads Best
+
+Here's the same task both ways. Pick the style that's clearest for your use case:
+
+```nos
+# Functional: great for transformations
+processItems(items) =
+    items
+        .filter(item => item.active)
+        .map(item => item.name.toUpper())
+        .sort()
+
+# Imperative: better when you need early exit or complex conditions
+processItemsImperative(items) = {
+    mut result = []
+
+    for item in items {
+        if !item.active then continue else ()
+
+        # Complex condition that would be awkward in filter
+        if item.score > 100 && item.age < 18 then {
+            result = result ++ [item.name.toUpper()]
+        } else ()
+
+        # Early exit when we have enough
+        if result.length() >= 10 then break else ()
+    }
+
+    result.sort()
+}
+```
+
+Both are valid Nostos. Use whichever makes the code easier to understand. **Your time matters more than purity.**
 
 ---
 
