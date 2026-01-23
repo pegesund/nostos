@@ -884,7 +884,7 @@ impl ReplEngine {
                     // Determine if this module should be auto-imported (is in core modules list)
                     // Extract the module name without "stdlib." prefix
                     let module_short_name = module_prefix.strip_prefix("stdlib.").unwrap_or(&module_prefix);
-                    let is_core_module = core_modules.is_empty() || core_modules.contains(module_short_name);
+                    let is_core_module = !core_modules.is_empty() && core_modules.contains(module_short_name);
 
                     // Collect function names from this module for prelude imports (only core modules)
                     if is_core_module {
