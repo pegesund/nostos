@@ -33,7 +33,7 @@ lookupField(fields, key) = match fields {
 }
 
 # Create a typed message JSON string
-pub makeMessage(msgType, payload) =
+pub makeMessage(msgType, payload) -> String =
     "{\"type\":\"" ++ escapeJsonString(msgType) ++ "\",\"payload\":\"" ++ escapeJsonString(payload) ++ "\"}"
 
 # Escape special characters for JSON strings

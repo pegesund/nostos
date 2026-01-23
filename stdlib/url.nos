@@ -66,7 +66,7 @@ parseQueryPairs(pairs, acc) = {
 }
 
 # Get just the path part of a URL (before query string)
-pub urlPath(url) = {
+pub urlPath(url) -> String = {
     qIdx = String.indexOf(url, "?")
     if qIdx >= 0
         then String.substring(url, 0, qIdx)
@@ -74,7 +74,7 @@ pub urlPath(url) = {
 }
 
 # Get just the query string part of a URL (after ?)
-pub urlQueryString(url) = {
+pub urlQueryString(url) -> String = {
     qIdx = String.indexOf(url, "?")
     if qIdx >= 0
         then String.substring(url, qIdx + 1, String.length(url))
