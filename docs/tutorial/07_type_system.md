@@ -73,7 +73,7 @@ main() = {
     p3 = Point(p, x: 10, z: 30) # {x: 10, y: 2, z: 30}
 
     # Works with qualified type names from modules
-    use stdlib.rhtml
+    use stdlib.rhtml.*
     result = RHtml(div([span("Hello")]))
     updated = stdlib.rhtml.RHtmlResult(result, deps: newDeps)
 }
