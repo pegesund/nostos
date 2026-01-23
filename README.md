@@ -583,50 +583,49 @@ Sometimes a loop with a mutable accumulator is clearer than a fold. We're okay w
 
 ```nos
 # Functional style - elegant for simple cases
-sumFunctional(numbers) = numbers.reduce(0, (acc, x) => acc + x)
+sumFunctional(numbers) = numbers.fold(0, (acc, x) => acc + x)
 
 # Imperative style - clearer for complex logic
-sumImperative(numbers) = {
-    mut total = 0
-    mut count = 0
+averagePositive(numbers) = {
+    var total = 0
+    var count = 0
 
-    for n in numbers {
+    numbers.each(n => {
         if n > 0 then {
             total = total + n
             count = count + 1
         } else ()
-    }
+    })
 
     if count > 0 then total / count else 0
 }
 ```
 
-Use `mut` when it makes your intent clearer. The data structures themselves remain immutable—only local variables can be reassigned.
+Use `var` when it makes your intent clearer. The data structures themselves remain immutable—only local variables can be reassigned.
 
 ### Thread-Safe Globals with mvars
 
 Need shared state across processes? Use `mvar` for thread-safe global variables:
 
 ```nos
+use stdlib.server.{serve, respondText}
+
 # Declare a thread-safe global counter
 mvar requestCount: Int = 0
 
 # Safe to update from any process
 handleRequest(req) = {
     requestCount = requestCount + 1  # Atomic update
-    println("Request #" ++ show(requestCount))
-    respondOk(req)
+    respondText(req, "Request #" ++ show(requestCount))
 }
 
 # Multiple processes can safely increment
-main() = {
-    server = Server.bind(8080)
-    # Each request spawns a process, all safely update the counter
-    Server.accept_loop(server, req => spawn { handleRequest(req) })
-}
+main() = serve(8080, handleRequest)
 ```
 
-`mvar` uses locks internally, so updates are atomic. Use them sparingly—message passing is usually better—but they're there when you need simple shared counters or caches.
+Each HTTP request spawns a new process. All processes safely update `requestCount` because `mvar` uses locks internally—updates are atomic.
+
+Use `mvar` sparingly. Message passing between processes is usually better, but `mvar` is perfect for simple shared counters, caches, or configuration.
 
 ### Choose What Reads Best
 
@@ -640,23 +639,29 @@ processItems(items) =
         .map(item => item.name.toUpper())
         .sort()
 
-# Imperative: better when you need early exit or complex conditions
+# Imperative: better when you need complex conditions
 processItemsImperative(items) = {
-    mut result = []
+    var result = []
 
-    for item in items {
-        if !item.active then continue else ()
-
-        # Complex condition that would be awkward in filter
-        if item.score > 100 && item.age < 18 then {
+    items.each(item => {
+        # Skip inactive items
+        if !item.active then ()
+        else if item.score > 100 && item.age < 18 then {
+            # Complex condition that would be awkward in filter
             result = result ++ [item.name.toUpper()]
         } else ()
-
-        # Early exit when we have enough
-        if result.length() >= 10 then break else ()
-    }
+    })
 
     result.sort()
+}
+
+# Or use a for loop with range
+collectSquares() = {
+    var squares = []
+    for i = 1 to 10 {
+        squares = squares ++ [i * i]
+    }
+    squares  # [1, 4, 9, 16, 25, 36, 49, 64, 81, 100]
 }
 ```
 
