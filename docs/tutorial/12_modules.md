@@ -34,23 +34,54 @@ use stdlib.json.{jsonParse, Null, Bool, Number, String, Array, Object}
 #   Array(List[Json]), Object(List[(String, Json)])
 ```
 
-## Built-in Modules
+## Auto-Imported Core Modules
 
-Some modules are built into the runtime and don't require explicit imports:
+Core stdlib modules are automatically imported and available without `use` statements:
+
+| Module | Description |
+|--------|-------------|
+| list | List operations (map, filter, fold, etc.) |
+| string | String manipulation functions |
+| map | Map operations (get, insert, keys, etc.) |
+| set | Set operations |
+| option | Option type (Some/None) |
+| result | Result type (Ok/Err) |
+| traits | Core traits (Show, Eq, Ord) |
+| io | I/O operations (println, readLine) |
+
+These are available directly:
+
+```nostos
+# No import needed for core modules
+main() = {
+    # List operations
+    nums = [1, 2, 3]
+    doubled = nums.map(x => x * 2)
+
+    # String operations
+    upper = "hello".toUpper()  # "HELLO"
+    parts = "a,b,c".split(",")  # ["a", "b", "c"]
+
+    # Map operations
+    m = %{"a": 1, "b": 2}
+    value = m.get("a")  # Some(1)
+}
+```
+
+## Built-in Runtime Modules
+
+These modules are built into the runtime (not written in Nostos) and are accessed via qualified names:
 
 | Module | Description |
 |--------|-------------|
 | Pg | PostgreSQL database access |
 | Http | HTTP client for making requests |
 | File | File system operations |
-| String | String manipulation functions |
-| List | List operations (map, filter, fold, etc.) |
-| Map | Map operations (get, insert, keys, etc.) |
-
-These built-in modules are accessed directly without import:
+| Time | Time and date functions |
+| WebSocket | WebSocket connections |
 
 ```nostos
-# No import needed for built-in modules
+# Builtins are accessed via Module.function syntax
 main() = {
     # PostgreSQL
     conn = Pg.connect("host=localhost user=postgres")
@@ -63,16 +94,12 @@ main() = {
     # File I/O
     content = File.read("config.txt")
     File.write("output.txt", "Hello!")
-
-    # String operations
-    upper = String.toUpper("hello")  # "HELLO"
-    parts = String.split("a,b,c", ",")  # ["a", "b", "c"]
 }
 ```
 
-## Standard Library Modules
+## Domain-Specific Standard Library Modules
 
-The `stdlib` namespace contains modules written in Nostos itself. These require explicit imports:
+The `stdlib` namespace contains domain-specific modules that **require explicit imports**:
 
 | Module | Provides |
 |--------|----------|

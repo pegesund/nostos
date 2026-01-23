@@ -1,4 +1,6 @@
 # HTTP Server Test
+use stdlib.server.*
+
 #
 # Simple HTTP server for manual testing:
 # - Listens on port 8080

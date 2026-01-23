@@ -6,9 +6,8 @@
 #
 # The background pusher will automatically update the page every 2 seconds!
 
-use stdlib.rweb
-use stdlib.rweb.{rwebTrigger, onSessionEndCallback}
-use stdlib.rhtml
+use stdlib.rweb.*
+use stdlib.rhtml.*
 
 # Room-based messaging: Map from room name to list of writerIds in that room
 mvar roomMembers: Map[String, List[Int]] = %{}

@@ -1,4 +1,6 @@
 # JSON Round-Trip Examples
+use stdlib.json.*
+
 # Demonstrates converting Nostos values to JSON and back
 
 # ===========================================

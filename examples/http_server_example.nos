@@ -1,4 +1,6 @@
 # HTTP Server Example
+use stdlib.server.*
+
 #
 # Demonstrates low-level server API with proper spawn-per-request pattern:
 # - Server.bind(port) starts listening, returns handle

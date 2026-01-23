@@ -6,6 +6,8 @@
 # Run with: ./target/release/nostos examples/hello_server.nos
 # Test with: wrk -t4 -c100 -d30s http://localhost:8080/
 
+use stdlib.server.*
+
 handleRequest(server, req, main_pid) = {
   path = req.path
 

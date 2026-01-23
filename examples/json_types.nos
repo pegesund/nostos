@@ -1,4 +1,6 @@
 # JSON Type Conversion Examples
+use stdlib.json.*
+
 # Demonstrates fromJson[T] for typed deserialization
 
 # ===========================================

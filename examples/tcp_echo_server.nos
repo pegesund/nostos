@@ -1,4 +1,6 @@
 # TCP Echo Server Example
+use stdlib.server.*
+
 # Run this in one terminal, then run tcp_echo_client.nos in another
 
 # Read-echo loop for a client

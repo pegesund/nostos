@@ -16,8 +16,8 @@
 #   curl -X POST -d "name=Alice&email=alice@example.com" http://localhost:8080/users
 #   curl -X POST -d "from=1&to=2&amount=50" http://localhost:8080/transfer
 
-use stdlib.html.{Html, render}
-use stdlib.server.{serve, getParam, respondHtml, redirect, redirectWith, respond400, respond405, respond503, setCookieWithAge}
+use stdlib.html.*
+use stdlib.server.*
 use stdlib.pool.{initPool, query, execute, withConn, transaction, tryTransaction}
 
 # --- Database Setup ---

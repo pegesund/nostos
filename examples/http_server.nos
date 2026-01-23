@@ -1,4 +1,6 @@
 # HTTP Server with VM Stats Monitoring
+use stdlib.server.*
+
 #
 # HTTP server with spawn-per-request pattern:
 # - /       : Hello message

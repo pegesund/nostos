@@ -1,4 +1,6 @@
 # TCP Chat Server Example
+use stdlib.server.*
+
 # A simple multi-client chat server using MVars for shared state
 # Connect multiple clients with: nc localhost 5000
 

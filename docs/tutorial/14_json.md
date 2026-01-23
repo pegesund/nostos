@@ -24,7 +24,7 @@ main() = {
 }
 ```
 
-**Note:** In the REPL, stdlib functions are auto-imported so you can use `jsonParse` directly.
+**Note:** Core stdlib modules (list, string, map, set, option, result, traits, io) are auto-imported. For JSON functions, you need to explicitly import them with `use stdlib.json.*`.
 
 ## Typed Deserialization with fromJson
 

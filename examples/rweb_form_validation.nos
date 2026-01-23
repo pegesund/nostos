@@ -9,8 +9,8 @@
 # Run with: ./target/release/nostos examples/rweb_form_validation.nos
 # Then open http://localhost:8100 in your browser
 
-use stdlib.rweb
-use stdlib.rhtml
+use stdlib.rweb.*
+use stdlib.rhtml.*
 
 reactive FormState = { name: String, email: String, message: String }
 

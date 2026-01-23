@@ -9,8 +9,8 @@
 # Run with: ./target/release/nostos examples/rweb_debounced_search.nos
 # Then open http://localhost:8101 in your browser
 
-use stdlib.rweb
-use stdlib.rhtml
+use stdlib.rweb.*
+use stdlib.rhtml.*
 
 reactive SearchState = { query: String, results: String, searchCount: Int }
 

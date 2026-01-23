@@ -1,4 +1,6 @@
 # JSON API Examples
+use stdlib.json.*
+
 # Demonstrates practical JSON handling with HTTP APIs
 
 # ===========================================

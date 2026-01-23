@@ -1,4 +1,6 @@
 # HTTP Error Handling
+use stdlib.server.*
+
 #
 # Demonstrates IO error handling patterns with exceptions:
 # - All IO throws exceptions on error (caught with try/catch)

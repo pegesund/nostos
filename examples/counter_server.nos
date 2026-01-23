@@ -1,4 +1,6 @@
 # Counter Server
+use stdlib.server.*
+
 # 
 # Demonstrates stateful server processes:
 # - counter_loop: maintains state via recursive message handling
