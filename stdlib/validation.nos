@@ -138,7 +138,7 @@ validateFields(params, rules, fields, errors) = match fields {
 
 # --- Helper: Get first error message ---
 
-pub firstError(result: ValidationResult) = match result {
+pub firstError(result: ValidationResult) -> String = match result {
     Valid(_) -> ""
     Invalid(errors) -> {
         keys = Map.keys(errors)
@@ -151,7 +151,7 @@ pub firstError(result: ValidationResult) = match result {
 
 # --- Helper: Get all error messages as list ---
 
-pub allErrors(result: ValidationResult) = match result {
+pub allErrors(result: ValidationResult) -> List[String] = match result {
     Valid(_) -> []
     Invalid(errors) -> collectErrors(Map.keys(errors), errors, [])
 }
@@ -163,14 +163,14 @@ collectErrors(keys, errors, acc) = match keys {
 
 # --- Helper: Check if field has error ---
 
-pub hasError(result: ValidationResult, field: String) = match result {
+pub hasError(result: ValidationResult, field: String) -> Bool = match result {
     Valid(_) -> false
     Invalid(errors) -> Map.contains(errors, field)
 }
 
 # --- Helper: Get error for specific field ---
 
-pub getError(result: ValidationResult, field: String) = match result {
+pub getError(result: ValidationResult, field: String) -> String = match result {
     Valid(_) -> ""
     Invalid(errors) ->
         if Map.contains(errors, field) then Map.get(errors, field)
