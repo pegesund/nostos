@@ -4,6 +4,8 @@
 
 After wandering through callback hell, fighting with async/await, and battling race conditions—Nostos welcomes you home to a place where concurrent code is simple, readable, and just works.
 
+**⚠️ Early Stage Software:** It is early days and version 1.0 is not ready. For brave developers and early adopters only.
+
 ---
 
 ## What Makes Nostos Different
