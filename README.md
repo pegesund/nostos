@@ -86,7 +86,7 @@ Not just syntax highlighting—true understanding:
 
 ---
 
-## Batteries Included
+## Some Batteries Included
 
 ### PostgreSQL
 
@@ -198,6 +198,77 @@ server = Tcp.listen(9000)
 client = Tcp.accept(server)
 Tcp.send(client, "Hello!")
 message = Tcp.receive(client)
+```
+
+### WebSockets
+
+Real-time bidirectional communication:
+
+```nos
+# Server
+handle(req) = {
+    if WebSocket.isUpgrade(req) then {
+        ws = WebSocket.accept(req.id)
+        WebSocket.send(ws, "Welcome!")
+        message = WebSocket.recv(ws)
+        WebSocket.close(ws)
+    } else respond404(req)
+}
+
+# Client
+ws = WebSocket.connect("wss://echo.websocket.org")
+WebSocket.send(ws, "Hello!")
+response = WebSocket.recv(ws)
+```
+
+### Cryptography
+
+Secure hashing and password storage:
+
+```nos
+# Hashing
+sha = Crypto.sha256("password123")  # Hex string
+sha512 = Crypto.sha512("data")
+
+# Password hashing (bcrypt)
+hash = Crypto.bcryptHash("password", 12)  # Cost factor 12
+valid = Crypto.bcryptVerify("password", hash)  # true
+
+# Random bytes for tokens/keys
+token = Crypto.randomBytes(32)  # 32 random bytes as hex
+```
+
+### Regular Expressions
+
+Pattern matching and text processing:
+
+```nos
+# Match and find
+if Regex.matches("hello123", "\\d+") then println("Has numbers")
+Regex.find("Price: $42.99", "\\$[0-9.]+")  # Some("$42.99")
+
+# Replace
+Regex.replace("hello world", "world", "Nostos")  # "hello Nostos"
+Regex.replaceAll("a1b2c3", "\\d", "X")  # "aXbXcX"
+
+# Split and capture
+words = Regex.split("one,two,three", ",")  # ["one", "two", "three"]
+```
+
+### File I/O
+
+Read and write files with ease:
+
+```nos
+# Simple read/write
+content = File.readAll("config.txt")
+File.writeAll("output.txt", "Hello, world!")
+File.append("log.txt", "Error: connection failed\n")
+
+# Streaming for large files
+handle = File.open("large.dat", "r")
+line = File.readLine(handle)
+File.close(handle)
 ```
 
 ### JSON
