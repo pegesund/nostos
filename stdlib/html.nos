@@ -9,25 +9,25 @@ pub type Html =
     | Empty
 
 # Empty node - renders to nothing, useful for conditionals
-empty() = Empty
+pub empty() = Empty
 
 # Text node helper
-text(str: String) = Text(str)
+pub text(str: String) = Text(str)
 
 # Raw HTML (unescaped) - use with caution!
-raw(str: String) = Raw(str)
+pub raw(str: String) = Raw(str)
 
 # === Attribute helpers ===
 
 # Filter out empty attribute values and merge with extra attrs
-filterEmptyAttrs(attrs: List[(String, String)]) =
+pub filterEmptyAttrs(attrs: List[(String, String)]) =
     attrs.filter(attr => attr.1 != "")
 
-buildAttrs(named: List[(String, String)], extra: List[(String, String)]) =
+pub buildAttrs(named: List[(String, String)], extra: List[(String, String)]) =
     filterEmptyAttrs(named) ++ extra
 
 # Generic element constructor
-el(tag: String, attrs: List[(String, String)], children: List[Html]) = Element(tag, attrs, children)
+pub el(tag: String, attrs: List[(String, String)], children: List[Html]) = Element(tag, attrs, children)
 
 # === Tag functions with named parameters ===
 # Each tag supports:
@@ -36,193 +36,193 @@ el(tag: String, attrs: List[(String, String)], children: List[Html]) = Element(t
 
 # --- Container elements with common attrs ---
 
-div(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub div(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("div", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-div(str: String, class = "", id = "", style = "", attrs = []) =
+pub div(str: String, class = "", id = "", style = "", attrs = []) =
     Element("div", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-span(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub span(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("span", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-span(str: String, class = "", id = "", style = "", attrs = []) =
+pub span(str: String, class = "", id = "", style = "", attrs = []) =
     Element("span", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-p(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub p(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("p", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-p(str: String, class = "", id = "", style = "", attrs = []) =
+pub p(str: String, class = "", id = "", style = "", attrs = []) =
     Element("p", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
 # --- Headings ---
 
-h1(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub h1(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("h1", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-h1(str: String, class = "", id = "", style = "", attrs = []) =
+pub h1(str: String, class = "", id = "", style = "", attrs = []) =
     Element("h1", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-h2(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub h2(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("h2", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-h2(str: String, class = "", id = "", style = "", attrs = []) =
+pub h2(str: String, class = "", id = "", style = "", attrs = []) =
     Element("h2", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-h3(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub h3(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("h3", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-h3(str: String, class = "", id = "", style = "", attrs = []) =
+pub h3(str: String, class = "", id = "", style = "", attrs = []) =
     Element("h3", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-h4(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub h4(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("h4", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-h4(str: String, class = "", id = "", style = "", attrs = []) =
+pub h4(str: String, class = "", id = "", style = "", attrs = []) =
     Element("h4", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-h5(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub h5(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("h5", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-h5(str: String, class = "", id = "", style = "", attrs = []) =
+pub h5(str: String, class = "", id = "", style = "", attrs = []) =
     Element("h5", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-h6(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub h6(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("h6", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-h6(str: String, class = "", id = "", style = "", attrs = []) =
+pub h6(str: String, class = "", id = "", style = "", attrs = []) =
     Element("h6", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
 # --- Lists ---
 
-ul(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub ul(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("ul", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-ol(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub ol(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("ol", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
 
-li(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub li(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("li", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-li(str: String, class = "", id = "", style = "", attrs = []) =
+pub li(str: String, class = "", id = "", style = "", attrs = []) =
     Element("li", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
 # --- Tables ---
 
-table(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub table(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("table", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-thead(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub thead(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("thead", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-tbody(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub tbody(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("tbody", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-tr(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub tr(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("tr", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
 
-th(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub th(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("th", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-th(str: String, class = "", id = "", style = "", attrs = []) =
+pub th(str: String, class = "", id = "", style = "", attrs = []) =
     Element("th", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-td(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub td(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("td", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-td(str: String, class = "", id = "", style = "", attrs = []) =
+pub td(str: String, class = "", id = "", style = "", attrs = []) =
     Element("td", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
 # --- Semantic elements ---
 
-nav(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub nav(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("nav", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-header(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub header(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("header", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-footer(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub footer(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("footer", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-section(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub section(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("section", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-article(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub article(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("article", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-aside(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub aside(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("aside", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-main(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub main(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("main", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
 
 # Note: Named headEl to avoid conflict with stdlib head() for lists
-headEl(children: List[Html], attrs = []) = Element("head", attrs, children)
-body(children: List[Html], class = "", id = "", style = "", attrs = []) =
+pub headEl(children: List[Html], attrs = []) = Element("head", attrs, children)
+pub body(children: List[Html], class = "", id = "", style = "", attrs = []) =
     Element("body", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
 
 # --- Form elements ---
 
-form(children: List[Html], action = "", method = "", class = "", id = "", attrs = []) =
+pub form(children: List[Html], action = "", method = "", class = "", id = "", attrs = []) =
     Element("form", buildAttrs([("action", action), ("method", method), ("class", class), ("id", id)], attrs), children)
 
-button(children: List[Html], btnType = "", class = "", id = "", onclick = "", disabled = "", dataAction = "", dataTestid = "", attrs = []) =
+pub button(children: List[Html], btnType = "", class = "", id = "", onclick = "", disabled = "", dataAction = "", dataTestid = "", attrs = []) =
     Element("button", buildAttrs([("type", btnType), ("class", class), ("id", id), ("onclick", onclick), ("disabled", disabled), ("data-action", dataAction), ("data-testid", dataTestid)], attrs), children)
-button(str: String, btnType = "", class = "", id = "", onclick = "", disabled = "", dataAction = "", dataTestid = "", attrs = []) =
+pub button(str: String, btnType = "", class = "", id = "", onclick = "", disabled = "", dataAction = "", dataTestid = "", attrs = []) =
     Element("button", buildAttrs([("type", btnType), ("class", class), ("id", id), ("onclick", onclick), ("disabled", disabled), ("data-action", dataAction), ("data-testid", dataTestid)], attrs), [Text(str)])
 
-label(children: List[Html], forId = "", class = "", id = "", attrs = []) =
+pub label(children: List[Html], forId = "", class = "", id = "", attrs = []) =
     Element("label", buildAttrs([("for", forId), ("class", class), ("id", id)], attrs), children)
-label(str: String, forId = "", class = "", id = "", attrs = []) =
+pub label(str: String, forId = "", class = "", id = "", attrs = []) =
     Element("label", buildAttrs([("for", forId), ("class", class), ("id", id)], attrs), [Text(str)])
 
-textarea(str: String, name = "", placeholder = "", rows = "", cols = "", class = "", id = "", attrs = []) =
+pub textarea(str: String, name = "", placeholder = "", rows = "", cols = "", class = "", id = "", attrs = []) =
     Element("textarea", buildAttrs([("name", name), ("placeholder", placeholder), ("rows", rows), ("cols", cols), ("class", class), ("id", id)], attrs), [Text(str)])
 
-select(children: List[Html], name = "", class = "", id = "", attrs = []) =
+pub select(children: List[Html], name = "", class = "", id = "", attrs = []) =
     Element("select", buildAttrs([("name", name), ("class", class), ("id", id)], attrs), children)
 
-option(str: String, value = "", selected = "", attrs = []) =
+pub option(str: String, value = "", selected = "", attrs = []) =
     Element("option", buildAttrs([("value", value), ("selected", selected)], attrs), [Text(str)])
 
 # --- Text formatting ---
 
-title(str: String) = Element("title", [], [Text(str)])
-strong(str: String, class = "", id = "", attrs = []) =
+pub title(str: String) = Element("title", [], [Text(str)])
+pub strong(str: String, class = "", id = "", attrs = []) =
     Element("strong", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
-em(str: String, class = "", id = "", attrs = []) =
+pub em(str: String, class = "", id = "", attrs = []) =
     Element("em", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
-code(str: String, class = "", id = "", attrs = []) =
+pub code(str: String, class = "", id = "", attrs = []) =
     Element("code", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
-pre(str: String, class = "", id = "", attrs = []) =
+pub pre(str: String, class = "", id = "", attrs = []) =
     Element("pre", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
-small(str: String, class = "", id = "", attrs = []) =
+pub small(str: String, class = "", id = "", attrs = []) =
     Element("small", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
 
 # --- Self-closing tags ---
 
-br() = Element("br", [], [])
-hr(class = "", id = "", attrs = []) =
+pub br() = Element("br", [], [])
+pub hr(class = "", id = "", attrs = []) =
     Element("hr", buildAttrs([("class", class), ("id", id)], attrs), [])
 
-img(src = "", alt = "", width = "", height = "", class = "", id = "", attrs = []) =
+pub img(src = "", alt = "", width = "", height = "", class = "", id = "", attrs = []) =
     Element("img", buildAttrs([("src", src), ("alt", alt), ("width", width), ("height", height), ("class", class), ("id", id)], attrs), [])
 
-input(inputType = "", name = "", value = "", placeholder = "", class = "", id = "", checked = "", disabled = "", readonly = "", attrs = []) =
+pub input(inputType = "", name = "", value = "", placeholder = "", class = "", id = "", checked = "", disabled = "", readonly = "", attrs = []) =
     Element("input", buildAttrs([("type", inputType), ("name", name), ("value", value), ("placeholder", placeholder), ("class", class), ("id", id), ("checked", checked), ("disabled", disabled), ("readonly", readonly)], attrs), [])
 
-meta(name = "", content = "", charset = "", attrs = []) =
+pub meta(name = "", content = "", charset = "", attrs = []) =
     Element("meta", buildAttrs([("name", name), ("content", content), ("charset", charset)], attrs), [])
 
-linkTag(rel = "", href = "", linkType = "", attrs = []) =
+pub linkTag(rel = "", href = "", linkType = "", attrs = []) =
     Element("link", buildAttrs([("rel", rel), ("href", href), ("type", linkType)], attrs), [])
 
 # --- Links ---
 
-a(children: List[Html], href = "", target = "", class = "", id = "", attrs = []) =
+pub a(children: List[Html], href = "", target = "", class = "", id = "", attrs = []) =
     Element("a", buildAttrs([("href", href), ("target", target), ("class", class), ("id", id)], attrs), children)
-a(str: String, href = "", target = "", class = "", id = "", attrs = []) =
+pub a(str: String, href = "", target = "", class = "", id = "", attrs = []) =
     Element("a", buildAttrs([("href", href), ("target", target), ("class", class), ("id", id)], attrs), [Text(str)])
 
 # Legacy support: a(attrs, children) and a(attrs, str)
-aWithAttrs(attrs: List[(String, String)], children: List[Html]) = Element("a", attrs, children)
-aWithAttrs(attrs: List[(String, String)], str: String) = Element("a", attrs, [Text(str)])
+pub aWithAttrs(attrs: List[(String, String)], children: List[Html]) = Element("a", attrs, children)
+pub aWithAttrs(attrs: List[(String, String)], str: String) = Element("a", attrs, [Text(str)])
 
 # --- Script and style ---
 
-script(src = "", scriptType = "", attrs = []) =
+pub script(src = "", scriptType = "", attrs = []) =
     Element("script", buildAttrs([("src", src), ("type", scriptType)], attrs), [])
-scriptInline(content: String, scriptType = "", attrs = []) =
+pub scriptInline(content: String, scriptType = "", attrs = []) =
     Element("script", buildAttrs([("type", scriptType)], attrs), [Raw(content)])
 
-styleTag(content: String, attrs = []) =
+pub styleTag(content: String, attrs = []) =
     Element("style", attrs, [Raw(content)])
 
 # --- iframe ---
 
-iframe(src = "", width = "", height = "", class = "", id = "", attrs = []) =
+pub iframe(src = "", width = "", height = "", class = "", id = "", attrs = []) =
     Element("iframe", buildAttrs([("src", src), ("width", width), ("height", height), ("class", class), ("id", id)], attrs), [])
 
 # === Rendering ===
 
-escapeChar(c: Char) = match c {
+pub escapeChar(c: Char) = match c {
     '<' -> "&lt;"
     '>' -> "&gt;"
     '&' -> "&amp;"
@@ -232,20 +232,20 @@ escapeChar(c: Char) = match c {
 }
 
 # Escape HTML using recursion (avoid method calls for stdlib compatibility)
-escapeHtmlChars([]: List[Char]) = ""
-escapeHtmlChars([c | rest]: List[Char]) = escapeChar(c) ++ escapeHtmlChars(rest)
+pub escapeHtmlChars([]: List[Char]) = ""
+pub escapeHtmlChars([c | rest]: List[Char]) = escapeChar(c) ++ escapeHtmlChars(rest)
 
-escapeHtml(str: String) = escapeHtmlChars(String.chars(str))
+pub escapeHtml(str: String) = escapeHtmlChars(String.chars(str))
 
-renderAttr(attr) = {
+pub renderAttr(attr) = {
     (name, value) = attr
     " " ++ name ++ "=\"" ++ escapeHtml(value) ++ "\""
 }
 
-renderAttrs([]) = ""
-renderAttrs([attr | rest]) = renderAttr(attr) ++ renderAttrs(rest)
+pub renderAttrs([]) = ""
+pub renderAttrs([attr | rest]) = renderAttr(attr) ++ renderAttrs(rest)
 
-isSelfClosing(tag: String) = match tag {
+pub isSelfClosing(tag: String) = match tag {
     "area" -> true
     "base" -> true
     "br" -> true
@@ -263,7 +263,7 @@ isSelfClosing(tag: String) = match tag {
 }
 
 # Buffer-optimized rendering using VM buffer instructions
-renderAttrToBuffer((name, value), buf) = {
+pub renderAttrToBuffer((name, value), buf) = {
     Buffer.append(buf, " ")
     Buffer.append(buf, name)
     Buffer.append(buf, "=\"")
@@ -271,19 +271,19 @@ renderAttrToBuffer((name, value), buf) = {
     Buffer.append(buf, "\"")
 }
 
-renderAttrsToBuffer([], _buf) = ()
-renderAttrsToBuffer([attr | rest], buf) = {
+pub renderAttrsToBuffer([], _buf) = ()
+pub renderAttrsToBuffer([attr | rest], buf) = {
     renderAttrToBuffer(attr, buf)
     renderAttrsToBuffer(rest, buf)
 }
 
-renderChildrenToBuffer([], _buf) = ()
-renderChildrenToBuffer([child | rest], buf) = {
+pub renderChildrenToBuffer([], _buf) = ()
+pub renderChildrenToBuffer([child | rest], buf) = {
     renderToBuffer(child, buf)
     renderChildrenToBuffer(rest, buf)
 }
 
-renderToBuffer(node, buf) = match node {
+pub renderToBuffer(node, buf) = match node {
     Element(tag, attrs, children) ->
         if isSelfClosing(tag) then {
             Buffer.append(buf, "<")
@@ -305,7 +305,7 @@ renderToBuffer(node, buf) = match node {
     Empty -> ()
 }
 
-render(node: Html) = {
+pub render(node: Html) = {
     buf = Buffer.new()
     renderToBuffer(node, buf)
     Buffer.toString(buf)

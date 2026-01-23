@@ -5,6 +5,8 @@
 # Only card-title reads User (card reads Theme)
 # When User changes, only "card-title" should re-render
 
+use stdlib.rhtml.*
+
 reactive User = { name: String }
 reactive Theme = { color: String }
 

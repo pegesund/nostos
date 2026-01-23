@@ -1,4 +1,4 @@
-use stdlib.rhtml
+use stdlib.rhtml.*
 
 # expect: [header]
 # When a record changes, find affected components

@@ -1,4 +1,4 @@
-use stdlib.rhtml
+use stdlib.rhtml.*
 
 # expect: true
 # Test that updateState preserves renderers for all components

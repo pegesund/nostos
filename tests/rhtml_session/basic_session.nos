@@ -1,8 +1,8 @@
 # expect: 0
 # Test basic session creation and retrieval
 
-use stdlib.rhtml
-use stdlib.rhtml_session
+use stdlib.rhtml.*
+use stdlib.rhtml_session.*
 
 main() = {
     # Create initial state

@@ -1,16 +1,18 @@
 # expect: true
 # Complex crossing: 3 records, 4 components with various dependencies
-# 
+#
 # Records: User, Theme, Config
 # Components:
 #   - userOnly: reads User
-#   - themeOnly: reads Theme  
+#   - themeOnly: reads Theme
 #   - userTheme: reads User AND Theme
 #   - allThree: reads User AND Theme AND Config
 #
 # When User changes: [userOnly, userTheme, allThree] affected
 # When Theme changes: [themeOnly, userTheme, allThree] affected
 # When Config changes: [allThree] affected
+
+use stdlib.rhtml.*
 
 reactive User = { name: String }
 reactive Theme = { color: String }

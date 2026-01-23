@@ -1,6 +1,8 @@
 # expect: 1
 # Deps tracking: single reactive record should have 1 entry
 
+use stdlib.rhtml.*
+
 reactive User = { name: String }
 
 main() = {

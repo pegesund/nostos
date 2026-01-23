@@ -1,7 +1,7 @@
 # expect: true
 # Test: When a component is removed during re-render, its renderer is cleaned up
 
-use stdlib.rhtml
+use stdlib.rhtml.*
 
 reactive State = { showChild: Bool }
 

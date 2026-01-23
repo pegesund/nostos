@@ -1,6 +1,8 @@
 # expect: <div><div id="a" data-component="true"><p>A</p></div><div id="b" data-component="true"><p>B</p></div></div>
 # Multiple sibling components render correctly
 
+use stdlib.rhtml.*
+
 compA() = RHtml(p("A"))
 compB() = RHtml(p("B"))
 

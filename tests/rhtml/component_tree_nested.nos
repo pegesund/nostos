@@ -1,6 +1,8 @@
 # expect: 2
 # Component tree tracks nested structure
 
+use stdlib.rhtml.*
+
 inner() = RHtml(p("Hello"))
 outer() = RHtml(div([component("inner", inner)]))
 

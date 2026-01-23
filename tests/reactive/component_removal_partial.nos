@@ -1,7 +1,7 @@
 # expect: true
 # Test: Partial removal - some children removed, others kept
 
-use stdlib.rhtml
+use stdlib.rhtml.*
 
 reactive State = { showB: Bool }
 

@@ -31,7 +31,7 @@
 pub type LogLevel = LDebug | LInfo | LWarn | LError | LFatal
 
 # Convert log level to string
-levelToString(level) = match level {
+pub levelToString(level) = match level {
     LDebug -> "DEBUG"
     LInfo -> "INFO"
     LWarn -> "WARN"
@@ -40,7 +40,7 @@ levelToString(level) = match level {
 }
 
 # Get priority for comparison (higher = more severe)
-levelPriority(level) = match level {
+pub levelPriority(level) = match level {
     LDebug -> 0
     LInfo -> 1
     LWarn -> 2
@@ -52,14 +52,14 @@ levelPriority(level) = match level {
 pub type LogEntry = { level: LogLevel, message: String, timestamp: Int, source: String }
 
 # Create entries
-makeEntry(level, message) = LogEntry(level, message, Time.now(), "")
-makeEntryFrom(level, message, source) = LogEntry(level, message, Time.now(), source)
+pub makeEntry(level, message) = LogEntry(level, message, Time.now(), "")
+pub makeEntryFrom(level, message, source) = LogEntry(level, message, Time.now(), source)
 
 # Pad with zeros
-repeatStr(0, acc) = acc
-repeatStr(n, acc) = repeatStr(n - 1, acc ++ "0")
+pub repeatStr(0, acc) = acc
+pub repeatStr(n, acc) = repeatStr(n - 1, acc ++ "0")
 
-padZero(n, width) = {
+pub padZero(n, width) = {
     s = show(n)
     len = s.length()
     if len >= width then s
@@ -67,7 +67,7 @@ padZero(n, width) = {
 }
 
 # Format timestamp
-formatTimestamp(ts) = {
+pub formatTimestamp(ts) = {
     millis = ts % 1000
     totalSecs = ts / 1000
     secs = totalSecs % 60
@@ -86,7 +86,7 @@ formatTimestamp(ts) = {
 }
 
 # Format a log entry
-formatEntry(entry) = {
+pub formatEntry(entry) = {
     ts = formatTimestamp(entry.timestamp)
     lvl = levelToString(entry.level)
     src = if entry.source == "" then "" else "[" ++ entry.source ++ "] "
@@ -105,50 +105,50 @@ end
 # Console Logger
 pub type ConsoleLogger = { minLevel: LogLevel }
 
-newConsoleLogger() = ConsoleLogger(LDebug)
-newConsoleLoggerWithLevel(level) = ConsoleLogger(level)
+pub newConsoleLogger() = ConsoleLogger(LDebug)
+pub newConsoleLoggerWithLevel(level) = ConsoleLogger(level)
 
-consoleLog(logger, entry) = {
+pub consoleLog(logger, entry) = {
     if levelPriority(entry.level) >= levelPriority(logger.minLevel) then
         println(formatEntry(entry))
     else ()
 }
-consoleFlush(logger) = flushStdout()
+pub consoleFlush(logger) = flushStdout()
 
 # Stderr Logger
 pub type StderrLogger = { minLevel: LogLevel }
 
-newStderrLogger() = StderrLogger(LDebug)
-newStderrLoggerWithLevel(level) = StderrLogger(level)
+pub newStderrLogger() = StderrLogger(LDebug)
+pub newStderrLoggerWithLevel(level) = StderrLogger(level)
 
-stderrLog(logger, entry) = {
+pub stderrLog(logger, entry) = {
     if levelPriority(entry.level) >= levelPriority(logger.minLevel) then
         eprintln(formatEntry(entry))
     else ()
 }
-stderrFlush(logger) = flushStderr()
+pub stderrFlush(logger) = flushStderr()
 
 # Convenience functions for console logger
-logDebug(logger, message) = consoleLog(logger, makeEntry(LDebug, message))
-logInfo(logger, message) = consoleLog(logger, makeEntry(LInfo, message))
-logWarn(logger, message) = consoleLog(logger, makeEntry(LWarn, message))
-logError(logger, message) = consoleLog(logger, makeEntry(LError, message))
-logFatal(logger, message) = consoleLog(logger, makeEntry(LFatal, message))
+pub logDebug(logger, message) = consoleLog(logger, makeEntry(LDebug, message))
+pub logInfo(logger, message) = consoleLog(logger, makeEntry(LInfo, message))
+pub logWarn(logger, message) = consoleLog(logger, makeEntry(LWarn, message))
+pub logError(logger, message) = consoleLog(logger, makeEntry(LError, message))
+pub logFatal(logger, message) = consoleLog(logger, makeEntry(LFatal, message))
 
 # Log with source
-logDebugFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LDebug, message, source))
-logInfoFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LInfo, message, source))
-logWarnFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LWarn, message, source))
-logErrorFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LError, message, source))
-logFatalFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LFatal, message, source))
+pub logDebugFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LDebug, message, source))
+pub logInfoFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LInfo, message, source))
+pub logWarnFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LWarn, message, source))
+pub logErrorFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LError, message, source))
+pub logFatalFrom(logger, source, message) = consoleLog(logger, makeEntryFrom(LFatal, message, source))
 
 # File Logger (simple, no rotation)
 pub type FileLogger = { path: String, minLevel: LogLevel }
 
-newFileLogger(path) = FileLogger(path, LDebug)
-newFileLoggerWithLevel(path, level) = FileLogger(path, level)
+pub newFileLogger(path) = FileLogger(path, LDebug)
+pub newFileLoggerWithLevel(path, level) = FileLogger(path, level)
 
-fileLog(logger, entry) = {
+pub fileLog(logger, entry) = {
     if levelPriority(entry.level) >= levelPriority(logger.minLevel) then {
         line = formatEntry(entry) ++ "\n"
         handle = File.open(logger.path, "a")
@@ -157,7 +157,7 @@ fileLog(logger, entry) = {
     } else ()
 }
 
-fileFlush(logger) = {
+pub fileFlush(logger) = {
     # File is already closed after each write, so this is a no-op
     ()
 }
@@ -165,11 +165,11 @@ fileFlush(logger) = {
 # Rotating File Logger
 pub type RotatingFileLogger = { path: String, minLevel: LogLevel, maxSize: Int, maxBackups: Int }
 
-newRotatingFileLogger(path, maxSize, maxBackups) = RotatingFileLogger(path, LDebug, maxSize, maxBackups)
-newRotatingFileLoggerWithLevel(path, level, maxSize, maxBackups) = RotatingFileLogger(path, level, maxSize, maxBackups)
+pub newRotatingFileLogger(path, maxSize, maxBackups) = RotatingFileLogger(path, LDebug, maxSize, maxBackups)
+pub newRotatingFileLoggerWithLevel(path, level, maxSize, maxBackups) = RotatingFileLogger(path, level, maxSize, maxBackups)
 
 # Rotate files: app.log -> app.log.1, app.log.1 -> app.log.2, etc.
-rotateFilesImpl(basePath, n, maxBackups) = {
+pub rotateFilesImpl(basePath, n, maxBackups) = {
     if n == 0 then ()
     else {
         oldPath = basePath ++ "." ++ show(n)
@@ -184,7 +184,7 @@ rotateFilesImpl(basePath, n, maxBackups) = {
     }
 }
 
-rotateFiles(basePath, maxBackups) = {
+pub rotateFiles(basePath, maxBackups) = {
     # Shift all existing backups
     rotateFilesImpl(basePath, maxBackups, maxBackups)
 
@@ -194,7 +194,7 @@ rotateFiles(basePath, maxBackups) = {
     else ()
 }
 
-rotatingFileLog(logger, entry) = {
+pub rotatingFileLog(logger, entry) = {
     if levelPriority(entry.level) >= levelPriority(logger.minLevel) then {
         # Check if rotation needed
         needsRotation = if File.exists(logger.path) then
@@ -211,23 +211,23 @@ rotatingFileLog(logger, entry) = {
     } else ()
 }
 
-rotatingFileFlush(logger) = {
+pub rotatingFileFlush(logger) = {
     # File is already closed after each write, so this is a no-op
     ()
 }
 
 # Convenience functions for file logger
-fileLogDebug(logger, message) = fileLog(logger, makeEntry(LDebug, message))
-fileLogInfo(logger, message) = fileLog(logger, makeEntry(LInfo, message))
-fileLogWarn(logger, message) = fileLog(logger, makeEntry(LWarn, message))
-fileLogError(logger, message) = fileLog(logger, makeEntry(LError, message))
-fileLogFatal(logger, message) = fileLog(logger, makeEntry(LFatal, message))
+pub fileLogDebug(logger, message) = fileLog(logger, makeEntry(LDebug, message))
+pub fileLogInfo(logger, message) = fileLog(logger, makeEntry(LInfo, message))
+pub fileLogWarn(logger, message) = fileLog(logger, makeEntry(LWarn, message))
+pub fileLogError(logger, message) = fileLog(logger, makeEntry(LError, message))
+pub fileLogFatal(logger, message) = fileLog(logger, makeEntry(LFatal, message))
 
 # Convenience functions for rotating file logger
-rotatingLogDebug(logger, message) = rotatingFileLog(logger, makeEntry(LDebug, message))
-rotatingLogInfo(logger, message) = rotatingFileLog(logger, makeEntry(LInfo, message))
-rotatingLogWarn(logger, message) = rotatingFileLog(logger, makeEntry(LWarn, message))
-rotatingLogError(logger, message) = rotatingFileLog(logger, makeEntry(LError, message))
-rotatingLogFatal(logger, message) = rotatingFileLog(logger, makeEntry(LFatal, message))
+pub rotatingLogDebug(logger, message) = rotatingFileLog(logger, makeEntry(LDebug, message))
+pub rotatingLogInfo(logger, message) = rotatingFileLog(logger, makeEntry(LInfo, message))
+pub rotatingLogWarn(logger, message) = rotatingFileLog(logger, makeEntry(LWarn, message))
+pub rotatingLogError(logger, message) = rotatingFileLog(logger, makeEntry(LError, message))
+pub rotatingLogFatal(logger, message) = rotatingFileLog(logger, makeEntry(LFatal, message))
 
 

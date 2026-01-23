@@ -1,4 +1,4 @@
-use stdlib.rhtml
+use stdlib.rhtml.*
 
 # expect: [card]
 # When parent and child both affected, only re-render parent

@@ -27,30 +27,30 @@ pub type RHtmlResult = { tree: RNode, deps: Map[Int, List[String]], components: 
 # Creates an RHtmlResult from an RNode (for internal use)
 # Users should use RHtml(...) macro which handles tag name transformation
 
-wrapNode(node: RNode) = RHtmlResult(tree: node, deps: %{}, components: [], renderers: %{}, changedIds: [])
+pub wrapNode(node: RNode) = RHtmlResult(tree: node, deps: %{}, components: [], renderers: %{}, changedIds: [])
 
 # === Attribute helpers ===
 
-attr(name: String, value: String) = (name, value)
+pub attr(name: String, value: String) = (name, value)
 
 # Filter out empty attribute values and merge with extra attrs
-filterEmptyAttrs(attrs: List[(String, String)]) =
+pub filterEmptyAttrs(attrs: List[(String, String)]) =
     attrs.filter(attr => attr.1 != "")
 
-buildAttrs(named: List[(String, String)], extra: List[(String, String)]) =
+pub buildAttrs(named: List[(String, String)], extra: List[(String, String)]) =
     filterEmptyAttrs(named) ++ extra
 
 # === Text and special ===
 
-text(str: String) = Text(str)
-raw(str: String) = Raw(str)
-empty() = Empty
+pub text(str: String) = Text(str)
+pub raw(str: String) = Raw(str)
+pub empty() = Empty
 
 # === Component ===
 # component(name, renderFn) is handled specially by the compiler
 # It stores the function, calls it, merges deps, and returns Component(name)
 # This stub is for type checking only
-component(name: String, renderFn: () -> RHtmlResult) = Component(name)
+pub component(name: String, renderFn: () -> RHtmlResult) = Component(name)
 
 # === Tag functions with named parameters ===
 # Each tag supports:
@@ -59,156 +59,156 @@ component(name: String, renderFn: () -> RHtmlResult) = Component(name)
 
 # --- Container elements with common attrs ---
 
-div(children: List[RNode], class = "", id = "", style = "", dataTestid = "", attrs = []) =
+pub div(children: List[RNode], class = "", id = "", style = "", dataTestid = "", attrs = []) =
     Element("div", buildAttrs([("class", class), ("id", id), ("style", style), ("data-testid", dataTestid)], attrs), children)
-div(str: String, class = "", id = "", style = "", dataTestid = "", attrs = []) =
+pub div(str: String, class = "", id = "", style = "", dataTestid = "", attrs = []) =
     Element("div", buildAttrs([("class", class), ("id", id), ("style", style), ("data-testid", dataTestid)], attrs), [Text(str)])
 
-span(children: List[RNode], class = "", id = "", style = "", dataTestid = "", attrs = []) =
+pub span(children: List[RNode], class = "", id = "", style = "", dataTestid = "", attrs = []) =
     Element("span", buildAttrs([("class", class), ("id", id), ("style", style), ("data-testid", dataTestid)], attrs), children)
-span(str: String, class = "", id = "", style = "", dataTestid = "", attrs = []) =
+pub span(str: String, class = "", id = "", style = "", dataTestid = "", attrs = []) =
     Element("span", buildAttrs([("class", class), ("id", id), ("style", style), ("data-testid", dataTestid)], attrs), [Text(str)])
 
-p(children: List[RNode], class = "", id = "", style = "", dataTestid = "", attrs = []) =
+pub p(children: List[RNode], class = "", id = "", style = "", dataTestid = "", attrs = []) =
     Element("p", buildAttrs([("class", class), ("id", id), ("style", style), ("data-testid", dataTestid)], attrs), children)
-p(str: String, class = "", id = "", style = "", dataTestid = "", attrs = []) =
+pub p(str: String, class = "", id = "", style = "", dataTestid = "", attrs = []) =
     Element("p", buildAttrs([("class", class), ("id", id), ("style", style), ("data-testid", dataTestid)], attrs), [Text(str)])
 
 # --- Headings ---
 
-h1(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub h1(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("h1", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-h1(str: String, class = "", id = "", style = "", attrs = []) =
+pub h1(str: String, class = "", id = "", style = "", attrs = []) =
     Element("h1", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-h2(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub h2(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("h2", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-h2(str: String, class = "", id = "", style = "", attrs = []) =
+pub h2(str: String, class = "", id = "", style = "", attrs = []) =
     Element("h2", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-h3(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub h3(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("h3", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-h3(str: String, class = "", id = "", style = "", attrs = []) =
+pub h3(str: String, class = "", id = "", style = "", attrs = []) =
     Element("h3", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-h4(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub h4(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("h4", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-h4(str: String, class = "", id = "", style = "", attrs = []) =
+pub h4(str: String, class = "", id = "", style = "", attrs = []) =
     Element("h4", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-h5(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub h5(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("h5", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-h5(str: String, class = "", id = "", style = "", attrs = []) =
+pub h5(str: String, class = "", id = "", style = "", attrs = []) =
     Element("h5", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-h6(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub h6(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("h6", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-h6(str: String, class = "", id = "", style = "", attrs = []) =
+pub h6(str: String, class = "", id = "", style = "", attrs = []) =
     Element("h6", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
 # --- Lists ---
 
-ul(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub ul(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("ul", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-ol(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub ol(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("ol", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
 
-li(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub li(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("li", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-li(str: String, class = "", id = "", style = "", attrs = []) =
+pub li(str: String, class = "", id = "", style = "", attrs = []) =
     Element("li", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
 # --- Tables ---
 
-table(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub table(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("table", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-thead(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub thead(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("thead", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-tbody(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub tbody(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("tbody", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-tr(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub tr(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("tr", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
 
-th(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub th(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("th", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-th(str: String, class = "", id = "", style = "", attrs = []) =
+pub th(str: String, class = "", id = "", style = "", attrs = []) =
     Element("th", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-td(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub td(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("td", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-td(str: String, class = "", id = "", style = "", attrs = []) =
+pub td(str: String, class = "", id = "", style = "", attrs = []) =
     Element("td", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
 # --- Semantic elements ---
 
-nav(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub nav(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("nav", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-header(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub header(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("header", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-footer(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub footer(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("footer", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-section(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub section(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("section", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-article(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub article(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("article", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-aside(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub aside(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("aside", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
-main(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub main(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("main", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
 
-html(children: List[RNode], attrs = []) = Element("html", attrs, children)
-headEl(children: List[RNode], attrs = []) = Element("head", attrs, children)
-body(children: List[RNode], class = "", id = "", style = "", attrs = []) =
+pub html(children: List[RNode], attrs = []) = Element("html", attrs, children)
+pub headEl(children: List[RNode], attrs = []) = Element("head", attrs, children)
+pub body(children: List[RNode], class = "", id = "", style = "", attrs = []) =
     Element("body", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
 
 # --- Form elements ---
 
 # Form with novalidate option to disable HTML5 validation
-form(children: List[RNode], action = "", method = "", class = "", id = "", novalidate = "", dataAction = "", attrs = []) =
+pub form(children: List[RNode], action = "", method = "", class = "", id = "", novalidate = "", dataAction = "", attrs = []) =
     Element("form", buildAttrs([("action", action), ("method", method), ("class", class), ("id", id), ("novalidate", novalidate), ("data-action", dataAction)], attrs), children)
 
-button(children: List[RNode], btnType = "", class = "", id = "", onclick = "", disabled = "", dataAction = "", dataTestid = "", attrs = []) =
+pub button(children: List[RNode], btnType = "", class = "", id = "", onclick = "", disabled = "", dataAction = "", dataTestid = "", attrs = []) =
     Element("button", buildAttrs([("type", btnType), ("class", class), ("id", id), ("onclick", onclick), ("disabled", disabled), ("data-action", dataAction), ("data-testid", dataTestid)], attrs), children)
-button(str: String, btnType = "", class = "", id = "", onclick = "", disabled = "", dataAction = "", dataTestid = "", attrs = []) =
+pub button(str: String, btnType = "", class = "", id = "", onclick = "", disabled = "", dataAction = "", dataTestid = "", attrs = []) =
     Element("button", buildAttrs([("type", btnType), ("class", class), ("id", id), ("onclick", onclick), ("disabled", disabled), ("data-action", dataAction), ("data-testid", dataTestid)], attrs), [Text(str)])
 
-label(children: List[RNode], forId = "", class = "", id = "", attrs = []) =
+pub label(children: List[RNode], forId = "", class = "", id = "", attrs = []) =
     Element("label", buildAttrs([("for", forId), ("class", class), ("id", id)], attrs), children)
-label(str: String, forId = "", class = "", id = "", attrs = []) =
+pub label(str: String, forId = "", class = "", id = "", attrs = []) =
     Element("label", buildAttrs([("for", forId), ("class", class), ("id", id)], attrs), [Text(str)])
 
 # Textarea with HTML5 validation attributes
-textarea(str: String, name = "", placeholder = "", rows = "", cols = "", class = "", id = "", required = "", minLength = "", maxLength = "", dataOnchange = "", dataOninput = "", attrs = []) =
+pub textarea(str: String, name = "", placeholder = "", rows = "", cols = "", class = "", id = "", required = "", minLength = "", maxLength = "", dataOnchange = "", dataOninput = "", attrs = []) =
     Element("textarea", buildAttrs([("name", name), ("placeholder", placeholder), ("rows", rows), ("cols", cols), ("class", class), ("id", id), ("required", required), ("minlength", minLength), ("maxlength", maxLength), ("data-onchange", dataOnchange), ("data-oninput", dataOninput)], attrs), [Text(str)])
 
 # Select with required attribute
-select(children: List[RNode], name = "", class = "", id = "", required = "", dataOnchange = "", dataTestid = "", attrs = []) =
+pub select(children: List[RNode], name = "", class = "", id = "", required = "", dataOnchange = "", dataTestid = "", attrs = []) =
     Element("select", buildAttrs([("name", name), ("class", class), ("id", id), ("required", required), ("data-onchange", dataOnchange), ("data-testid", dataTestid)], attrs), children)
 
-option(str: String, value = "", selected = "", attrs = []) =
+pub option(str: String, value = "", selected = "", attrs = []) =
     Element("option", buildAttrs([("value", value), ("selected", selected)], attrs), [Text(str)])
 
 # --- Text formatting ---
 
-title(str: String) = Element("title", [], [Text(str)])
-strong(str: String, class = "", id = "", attrs = []) =
+pub title(str: String) = Element("title", [], [Text(str)])
+pub strong(str: String, class = "", id = "", attrs = []) =
     Element("strong", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
-em(str: String, class = "", id = "", attrs = []) =
+pub em(str: String, class = "", id = "", attrs = []) =
     Element("em", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
-code(str: String, class = "", id = "", attrs = []) =
+pub code(str: String, class = "", id = "", attrs = []) =
     Element("code", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
-pre(str: String, class = "", id = "", attrs = []) =
+pub pre(str: String, class = "", id = "", attrs = []) =
     Element("pre", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
-small(str: String, class = "", id = "", attrs = []) =
+pub small(str: String, class = "", id = "", attrs = []) =
     Element("small", buildAttrs([("class", class), ("id", id)], attrs), [Text(str)])
 
 # --- Self-closing tags ---
 
-br() = Element("br", [], [])
-hr(class = "", id = "", attrs = []) =
+pub br() = Element("br", [], [])
+pub hr(class = "", id = "", attrs = []) =
     Element("hr", buildAttrs([("class", class), ("id", id)], attrs), [])
 
-img(src = "", alt = "", width = "", height = "", class = "", id = "", attrs = []) =
+pub img(src = "", alt = "", width = "", height = "", class = "", id = "", attrs = []) =
     Element("img", buildAttrs([("src", src), ("alt", alt), ("width", width), ("height", height), ("class", class), ("id", id)], attrs), [])
 
 # Input with HTML5 validation attributes
@@ -216,20 +216,20 @@ img(src = "", alt = "", width = "", height = "", class = "", id = "", attrs = []
 # minLength/maxLength: min/max character length
 # pattern: regex pattern for validation
 # min/max: for number inputs
-input(inputType = "", name = "", value = "", placeholder = "", class = "", id = "", checked = "", disabled = "", readonly = "", required = "", minLength = "", maxLength = "", pattern = "", min = "", max = "", dataOnchange = "", dataOninput = "", dataTestid = "", attrs = []) =
+pub input(inputType = "", name = "", value = "", placeholder = "", class = "", id = "", checked = "", disabled = "", readonly = "", required = "", minLength = "", maxLength = "", pattern = "", min = "", max = "", dataOnchange = "", dataOninput = "", dataTestid = "", attrs = []) =
     Element("input", buildAttrs([("type", inputType), ("name", name), ("value", value), ("placeholder", placeholder), ("class", class), ("id", id), ("checked", checked), ("disabled", disabled), ("readonly", readonly), ("required", required), ("minlength", minLength), ("maxlength", maxLength), ("pattern", pattern), ("min", min), ("max", max), ("data-onchange", dataOnchange), ("data-oninput", dataOninput), ("data-testid", dataTestid)], attrs), [])
 
-meta(name = "", content = "", charset = "", attrs = []) =
+pub meta(name = "", content = "", charset = "", attrs = []) =
     Element("meta", buildAttrs([("name", name), ("content", content), ("charset", charset)], attrs), [])
 
-linkTag(rel = "", href = "", linkType = "", attrs = []) =
+pub linkTag(rel = "", href = "", linkType = "", attrs = []) =
     Element("link", buildAttrs([("rel", rel), ("href", href), ("type", linkType)], attrs), [])
 
 # --- Links ---
 
-a(children: List[RNode], href = "", target = "", class = "", id = "", attrs = []) =
+pub a(children: List[RNode], href = "", target = "", class = "", id = "", attrs = []) =
     Element("a", buildAttrs([("href", href), ("target", target), ("class", class), ("id", id)], attrs), children)
-a(str: String, href = "", target = "", class = "", id = "", attrs = []) =
+pub a(str: String, href = "", target = "", class = "", id = "", attrs = []) =
     Element("a", buildAttrs([("href", href), ("target", target), ("class", class), ("id", id)], attrs), [Text(str)])
 
 # --- Script tag for raw JavaScript ---
@@ -237,13 +237,13 @@ a(str: String, href = "", target = "", class = "", id = "", attrs = []) =
 # Script block for embedding JavaScript
 # The content is NOT escaped - it's inserted as-is
 # Named scriptBlock to avoid conflict with html.script(src) for external scripts
-scriptBlock(js: String, attrs = []) = Element("script", attrs, [Raw(js)])
+pub scriptBlock(js: String, attrs = []) = Element("script", attrs, [Raw(js)])
 
 # --- JavaScript Action Helpers ---
 # These generate rweb.sendAction() calls for use in onclick, oninput, etc.
 
 # Escape a string for use in JavaScript string literals
-escapeJsChar(c: Char) = match c {
+pub escapeJsChar(c: Char) = match c {
     '\'' -> "\\'"
     '"' -> "\\\""
     '\\' -> "\\\\"
@@ -253,70 +253,70 @@ escapeJsChar(c: Char) = match c {
     _ -> String.from_chars([c])
 }
 
-escapeJsChars(chars: List[Char]) = match chars {
+pub escapeJsChars(chars: List[Char]) = match chars {
     [] -> ""
     [c | rest] -> escapeJsChar(c) ++ escapeJsChars(rest)
 }
 
-escapeJs(s: String) = escapeJsChars(String.chars(s))
+pub escapeJs(s: String) = escapeJsChars(String.chars(s))
 
 # Generate rweb.sendAction() call with no params
 # Usage: button("Ping", onclick: action("ping"))
 # Output: rweb.sendAction('ping', {})
-action(name: String) =
+pub action(name: String) =
     "rweb.sendAction('" ++ escapeJs(name) ++ "', {})"
 
 # Generate rweb.sendAction() call with static params (values known at render time)
 # Usage: button("Delete", onclick: action("delete", %{"id" -> "42"}))
 # Output: rweb.sendAction('delete', {id: '42'})
-actionParamToJs(key: String, value: String) =
+pub actionParamToJs(key: String, value: String) =
     "'" ++ escapeJs(key) ++ "': '" ++ escapeJs(value) ++ "'"
 
-actionParamsToJs(params: List[(String, String)]) = match params {
+pub actionParamsToJs(params: List[(String, String)]) = match params {
     [] -> ""
     [(k, v)] -> actionParamToJs(k, v)
     [(k, v) | rest] -> actionParamToJs(k, v) ++ ", " ++ actionParamsToJs(rest)
 }
 
-action(name: String, params: Map[String, String]) =
+pub action(name: String, params: Map[String, String]) =
     "rweb.sendAction('" ++ escapeJs(name) ++ "', {" ++ actionParamsToJs(Map.toList(params)) ++ "})"
 
 # Generate rweb.sendAction() call with dynamic JS expressions (evaluated in browser)
 # Usage: button("Search", onclick: actionJs("search", [("query", "document.getElementById('q').value")]))
 # Output: rweb.sendAction('search', {query: document.getElementById('q').value})
 # Note: The values are JS expressions, NOT quoted strings
-actionJsParamToJs(key: String, jsExpr: String) =
+pub actionJsParamToJs(key: String, jsExpr: String) =
     "'" ++ escapeJs(key) ++ "': " ++ jsExpr
 
-actionJsParamsToJs(params: List[(String, String)]) = match params {
+pub actionJsParamsToJs(params: List[(String, String)]) = match params {
     [] -> ""
     [(k, v)] -> actionJsParamToJs(k, v)
     [(k, v) | rest] -> actionJsParamToJs(k, v) ++ ", " ++ actionJsParamsToJs(rest)
 }
 
-actionJs(name: String, jsParams: List[(String, String)]) =
+pub actionJs(name: String, jsParams: List[(String, String)]) =
     "rweb.sendAction('" ++ escapeJs(name) ++ "', {" ++ actionJsParamsToJs(jsParams) ++ "})"
 
 # Generic element constructor
-el(tag: String, attrs: List[(String, String)], children: List[RNode]) = Element(tag, attrs, children)
+pub el(tag: String, attrs: List[(String, String)], children: List[RNode]) = Element(tag, attrs, children)
 
 # === Rendering ===
 
 # Render RHtmlResult - uses renderers map for component content
-renderRHtml(result: RHtmlResult) = {
+pub renderRHtml(result: RHtmlResult) = {
     buf = Buffer.new()
     renderToBuffer(result.tree, result.renderers, buf)
     Buffer.toString(buf)
 }
 
 # Render RNode directly (no component support)
-renderRNode(rhtml: RNode) = {
+pub renderRNode(rhtml: RNode) = {
     buf = Buffer.new()
     renderToBuffer(rhtml, %{}, buf)
     Buffer.toString(buf)
 }
 
-renderToBuffer(rhtml: RNode, renderers: Map[String, () -> RHtmlResult], buf) = match rhtml {
+pub renderToBuffer(rhtml: RNode, renderers: Map[String, () -> RHtmlResult], buf) = match rhtml {
     Element(tag, attrs, children) -> {
         Buffer.append(buf, "<")
         Buffer.append(buf, tag)
@@ -348,7 +348,7 @@ renderToBuffer(rhtml: RNode, renderers: Map[String, () -> RHtmlResult], buf) = m
     }
 }
 
-renderChildrenToBuffer(children: List[RNode], renderers: Map[String, () -> RHtmlResult], buf) = match children {
+pub renderChildrenToBuffer(children: List[RNode], renderers: Map[String, () -> RHtmlResult], buf) = match children {
     [] -> ()
     [child | rest] -> {
         renderToBuffer(child, renderers, buf)
@@ -356,7 +356,7 @@ renderChildrenToBuffer(children: List[RNode], renderers: Map[String, () -> RHtml
     }
 }
 
-renderAttrs(attrs: List[(String, String)], buf) = match attrs {
+pub renderAttrs(attrs: List[(String, String)], buf) = match attrs {
     [] -> ()
     [(name, value) | rest] -> {
         Buffer.append(buf, " ")
@@ -368,7 +368,7 @@ renderAttrs(attrs: List[(String, String)], buf) = match attrs {
     }
 }
 
-isSelfClosing(tag: String) = match tag {
+pub isSelfClosing(tag: String) = match tag {
     "br" -> true
     "hr" -> true
     "img" -> true
@@ -378,7 +378,7 @@ isSelfClosing(tag: String) = match tag {
     _ -> false
 }
 
-escapeChar(c: Char) = match c {
+pub escapeChar(c: Char) = match c {
     '<' -> "&lt;"
     '>' -> "&gt;"
     '&' -> "&amp;"
@@ -387,28 +387,28 @@ escapeChar(c: Char) = match c {
     _ -> String.from_chars([c])
 }
 
-escapeHtmlChars(chars: List[Char]) = match chars {
+pub escapeHtmlChars(chars: List[Char]) = match chars {
     [] -> ""
     [c | rest] -> escapeChar(c) ++ escapeHtmlChars(rest)
 }
 
-escapeHtml(str: String) = escapeHtmlChars(String.chars(str))
+pub escapeHtml(str: String) = escapeHtmlChars(String.chars(str))
 
 # === State Transition Helpers ===
 
 # Get component names affected by a reactive record change
-affectedComponents(deps: Map[Int, List[String]], recordId: Int) =
+pub affectedComponents(deps: Map[Int, List[String]], recordId: Int) =
     if Map.contains(deps, recordId) then Map.get(deps, recordId)
     else []
 
 # Helper: check if list contains string
-listContainsStr(list: List[String], s: String) = match list {
+pub listContainsStr(list: List[String], s: String) = match list {
     [] -> false
     [x | rest] -> if x == s then true else listContainsStr(rest, s)
 }
 
 # Helper: add item to list if not present
-addUniqueStr(items: List[String], acc: List[String]) = match items {
+pub addUniqueStr(items: List[String], acc: List[String]) = match items {
     [] -> acc
     [x | rest] ->
         if listContainsStr(acc, x) then addUniqueStr(rest, acc)
@@ -416,10 +416,10 @@ addUniqueStr(items: List[String], acc: List[String]) = match items {
 }
 
 # Helper: union of two lists (no duplicates)
-unionStrLists(a: List[String], b: List[String]) = addUniqueStr(b, a)
+pub unionStrLists(a: List[String], b: List[String]) = addUniqueStr(b, a)
 
 # Collect affected components from multiple records
-collectAffectedHelper(deps: Map[Int, List[String]], ids: List[Int], acc: List[String]) = match ids {
+pub collectAffectedHelper(deps: Map[Int, List[String]], ids: List[Int], acc: List[String]) = match ids {
     [] -> acc
     [id | rest] -> {
         affected = affectedComponents(deps, id)
@@ -428,17 +428,17 @@ collectAffectedHelper(deps: Map[Int, List[String]], ids: List[Int], acc: List[St
 }
 
 # Get components affected by multiple record changes (union)
-affectedComponentsMulti(deps: Map[Int, List[String]], recordIds: List[Int]) =
+pub affectedComponentsMulti(deps: Map[Int, List[String]], recordIds: List[Int]) =
     collectAffectedHelper(deps, recordIds, [])
 
 # Helper: check if any item from list1 is in list2
-anyInList(list1: List[String], list2: List[String]) = match list1 {
+pub anyInList(list1: List[String], list2: List[String]) = match list1 {
     [] -> false
     [x | rest] -> if listContainsStr(list2, x) then true else anyInList(rest, list2)
 }
 
 # Build ancestry map from component trees
-buildAncestryMap(trees, ancestors, acc) = match trees {
+pub buildAncestryMap(trees, ancestors, acc) = match trees {
     [] -> acc
     [CNode(name, children) | rest] -> {
         newAcc = Map.insert(acc, name, ancestors)
@@ -449,7 +449,7 @@ buildAncestryMap(trees, ancestors, acc) = match trees {
 }
 
 # Filter list of affected names to only keep outermost
-filterAffectedList(affected: List[String], ancestryMap: Map[String, List[String]], acc: List[String]) = match affected {
+pub filterAffectedList(affected: List[String], ancestryMap: Map[String, List[String]], acc: List[String]) = match affected {
     [] -> acc
     [name | rest] -> {
         ancestors = if Map.contains(ancestryMap, name) then Map.get(ancestryMap, name) else []
@@ -460,7 +460,7 @@ filterAffectedList(affected: List[String], ancestryMap: Map[String, List[String]
 }
 
 # Filter affected components to only the outermost ones
-filterOutermost(affected, components) = {
+pub filterOutermost(affected, components) = {
     ancestryMap = buildAncestryMap(components, [], %{})
     filterAffectedList(affected, ancestryMap, [])
 }
@@ -470,7 +470,7 @@ filterOutermost(affected, components) = {
 # Re-render a list of component names, collecting results
 # Each render function is called with the component name on the render stack
 # so that deps are tracked correctly
-reRenderComponents(names, renderers, acc) = match names {
+pub reRenderComponents(names, renderers, acc) = match names {
     [] -> acc
     [name | rest] ->
         if Map.contains(renderers, name) then {
@@ -484,22 +484,22 @@ reRenderComponents(names, renderers, acc) = match names {
 }
 
 # Helper for integer lists (for deps keys)
-listContainsInt(list, n) = match list {
+pub listContainsInt(list, n) = match list {
     [] -> false
     [x | rest] -> if x == n then true else listContainsInt(rest, n)
 }
 
-addUniqueInt(items, acc) = match items {
+pub addUniqueInt(items, acc) = match items {
     [] -> acc
     [x | rest] ->
         if listContainsInt(acc, x) then addUniqueInt(rest, acc)
         else addUniqueInt(rest, [x | acc])
 }
 
-unionIntLists(a, b) = addUniqueInt(b, a)
+pub unionIntLists(a, b) = addUniqueInt(b, a)
 
 # Merge two deps maps (union the component lists for each key)
-mergeDeps(deps1, deps2, keys, acc) = match keys {
+pub mergeDeps(deps1, deps2, keys, acc) = match keys {
     [] -> acc
     [key | rest] -> {
         list1 = if Map.contains(deps1, key) then Map.get(deps1, key) else []
@@ -510,14 +510,14 @@ mergeDeps(deps1, deps2, keys, acc) = match keys {
 }
 
 # Merge deps from a single re-rendered component
-mergeSingleDeps(baseDeps, componentResult) = {
+pub mergeSingleDeps(baseDeps, componentResult) = {
     newDeps = componentResult.deps
     allKeys = unionIntLists(Map.keys(baseDeps), Map.keys(newDeps))
     mergeDeps(baseDeps, newDeps, allKeys, %{})
 }
 
 # Merge renderers: second map overwrites first for same keys
-mergeRenderers(r1, r2, keys, acc) = match keys {
+pub mergeRenderers(r1, r2, keys, acc) = match keys {
     [] -> acc
     [key | rest] ->
         if Map.contains(r2, key) then
@@ -529,21 +529,21 @@ mergeRenderers(r1, r2, keys, acc) = match keys {
 }
 
 # Merge renderers from a single re-rendered component
-mergeSingleRenderers(baseRenderers, componentResult) = {
+pub mergeSingleRenderers(baseRenderers, componentResult) = {
     newRenderers = componentResult.renderers
     allKeys = unionStrLists(Map.keys(baseRenderers), Map.keys(newRenderers))
     mergeRenderers(baseRenderers, newRenderers, allKeys, %{})
 }
 
 # Build map from component name to its new children (from re-rendered results)
-buildChildrenMap(reRendered, acc) = match reRendered {
+pub buildChildrenMap(reRendered, acc) = match reRendered {
     [] -> acc
     [(name, result) | rest] ->
         buildChildrenMap(rest, Map.insert(acc, name, result.components))
 }
 
 # Update component trees: replace children of re-rendered components
-updateTrees(trees, childrenMap) = match trees {
+pub updateTrees(trees, childrenMap) = match trees {
     [] -> []
     [CNode(name, children) | rest] ->
         if Map.contains(childrenMap, name) then {
@@ -557,7 +557,7 @@ updateTrees(trees, childrenMap) = match trees {
 }
 
 # Remove component names from a deps list
-removeFromList(toRemove, list) = match list {
+pub removeFromList(toRemove, list) = match list {
     [] -> []
     [x | rest] ->
         if listContainsStr(toRemove, x) then removeFromList(toRemove, rest)
@@ -565,7 +565,7 @@ removeFromList(toRemove, list) = match list {
 }
 
 # Remove affected components from all deps entries
-removeFromDeps(deps, toRemove, keys, acc) = match keys {
+pub removeFromDeps(deps, toRemove, keys, acc) = match keys {
     [] -> acc
     [key | rest] -> {
         components = Map.get(deps, key)
@@ -577,7 +577,7 @@ removeFromDeps(deps, toRemove, keys, acc) = match keys {
 # === Component Cleanup (for removed subcomponents) ===
 
 # Collect all component names from a tree (including descendants)
-collectComponentNames(trees, acc) = match trees {
+pub collectComponentNames(trees, acc) = match trees {
     [] -> acc
     [CNode(name, children) | rest] -> {
         withName = [name | acc]
@@ -587,7 +587,7 @@ collectComponentNames(trees, acc) = match trees {
 }
 
 # Get old children for a component from the component tree
-getOldChildren(componentName, trees) = match trees {
+pub getOldChildren(componentName, trees) = match trees {
     [] -> []
     [CNode(name, children) | rest] ->
         if name == componentName then children
@@ -602,7 +602,7 @@ getOldChildren(componentName, trees) = match trees {
 }
 
 # Find components that were removed (in old but not in new)
-findRemovedNames(oldNames, newNames, acc) = match oldNames {
+pub findRemovedNames(oldNames, newNames, acc) = match oldNames {
     [] -> acc
     [name | rest] ->
         if listContainsStr(newNames, name) then findRemovedNames(rest, newNames, acc)
@@ -610,14 +610,14 @@ findRemovedNames(oldNames, newNames, acc) = match oldNames {
 }
 
 # Remove keys from a map
-removeFromMap(map, keysToRemove) = match keysToRemove {
+pub removeFromMap(map, keysToRemove) = match keysToRemove {
     [] -> map
     [key | rest] -> removeFromMap(Map.remove(map, key), rest)
 }
 
 # Find all removed components when re-rendering a list of components
 # Returns list of all component names that should be cleaned up
-findAllRemovedComponents(reRendered, componentTree, acc) = match reRendered {
+pub findAllRemovedComponents(reRendered, componentTree, acc) = match reRendered {
     [] -> acc
     [(name, result) | rest] -> {
         # Get old children from original tree
@@ -636,7 +636,7 @@ findAllRemovedComponents(reRendered, componentTree, acc) = match reRendered {
 }
 
 # Merge all deps and renderers from re-rendered results
-mergeAllResults(baseDeps, baseRenderers, reRendered) = match reRendered {
+pub mergeAllResults(baseDeps, baseRenderers, reRendered) = match reRendered {
     [] -> (baseDeps, baseRenderers)
     [(_, result) | rest] -> {
         newDeps = mergeSingleDeps(baseDeps, result)
@@ -646,7 +646,7 @@ mergeAllResults(baseDeps, baseRenderers, reRendered) = match reRendered {
 }
 
 # Main state update function
-updateState(state, changedRecordIds) = {
+pub updateState(state, changedRecordIds) = {
     affected = affectedComponentsMulti(state.deps, changedRecordIds)
     outermost = filterOutermost(affected, state.components)
     reRendered = reRenderComponents(outermost, state.renderers, [])

@@ -1,6 +1,8 @@
 # expect: 2
 # Deps tracking: two different reactive records should have 2 entries
 
+use stdlib.rhtml.*
+
 reactive User = { name: String }
 reactive Theme = { color: String }
 

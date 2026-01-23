@@ -1,7 +1,7 @@
 # expect: true
 # Test: When a component with nested children is removed, all descendants are cleaned
 
-use stdlib.rhtml
+use stdlib.rhtml.*
 
 reactive State = { showChild: Bool }
 

@@ -1,7 +1,7 @@
 # expect: true
 # Test: Re-render with same children - nothing should be removed
 
-use stdlib.rhtml
+use stdlib.rhtml.*
 
 reactive State = { counter: Int }
 

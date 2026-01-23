@@ -5,6 +5,8 @@
 # All three read User
 # When User changes, only "page" should be in outermost
 
+use stdlib.rhtml.*
+
 reactive User = { name: String }
 
 main() = {

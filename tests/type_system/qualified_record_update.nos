@@ -2,7 +2,7 @@
 # Qualified record update syntax: module.Type(base, field: value)
 # Creates a new record with updated field values using a qualified type name
 
-use stdlib.rhtml
+use stdlib.rhtml.*
 
 main() = {
     # Create a basic RHtml result

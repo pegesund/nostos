@@ -24,40 +24,40 @@ mvar sessions: Map[String, RHtmlResult] = %{}
 mvar sessionCounter: Int = 0
 
 # Generate a unique session ID (uses atomic self-updating pattern)
-generateSessionId() = {
+pub generateSessionId() = {
     sessionCounter = sessionCounter + 1
     "session_" ++ show(sessionCounter - 1)
 }
 
 # Create a new session with initial state
 # Returns the session ID
-createSession(initialState: RHtmlResult) = {
+pub createSession(initialState: RHtmlResult) = {
     sessionId = generateSessionId()
     sessions = Map.insert(sessions, sessionId, initialState)
     sessionId
 }
 
 # Create a session with a specific ID (e.g., from a cookie)
-createSessionWithId(sessionId: String, initialState: RHtmlResult) = {
+pub createSessionWithId(sessionId: String, initialState: RHtmlResult) = {
     sessions = Map.insert(sessions, sessionId, initialState)
     sessionId
 }
 
 # Check if a session exists
-hasSession(sessionId: String) = Map.contains(sessions, sessionId)
+pub hasSession(sessionId: String) = Map.contains(sessions, sessionId)
 
 # Get session state (returns the RHtmlResult or throws if not found)
-getSession(sessionId: String) =
+pub getSession(sessionId: String) =
     if Map.contains(sessions, sessionId) then Map.get(sessions, sessionId)
     else throw("Session not found: " ++ sessionId)
 
 # Get session state as Option
-getSessionOpt(sessionId: String) =
+pub getSessionOpt(sessionId: String) =
     if Map.contains(sessions, sessionId) then Some(Map.get(sessions, sessionId))
     else None()
 
 # Set/replace session state directly
-setSession(sessionId: String, state: RHtmlResult) = {
+pub setSession(sessionId: String, state: RHtmlResult) = {
     sessions = Map.insert(sessions, sessionId, state)
     state
 }
@@ -65,7 +65,7 @@ setSession(sessionId: String, state: RHtmlResult) = {
 # Update session state when reactive records change
 # Returns the new state, or None if session not found
 # NOTE: Uses separate read/write to avoid compare-and-set pattern detection
-updateSessionState(sessionId: String, changedRecordIds: List[Int]) = {
+pub updateSessionState(sessionId: String, changedRecordIds: List[Int]) = {
     # Read current state via helper function (no mvar read in this function's condition)
     match getSessionOpt(sessionId) {
         Some(state) -> {
@@ -80,19 +80,19 @@ updateSessionState(sessionId: String, changedRecordIds: List[Int]) = {
 }
 
 # Remove a session (e.g., on logout)
-removeSession(sessionId: String) = {
+pub removeSession(sessionId: String) = {
     sessions = Map.remove(sessions, sessionId)
     ()
 }
 
 # Get all session IDs (for debugging/admin)
-allSessionIds() = Map.keys(sessions)
+pub allSessionIds() = Map.keys(sessions)
 
 # Get session count
-sessionCount() = Map.size(sessions)
+pub sessionCount() = Map.size(sessions)
 
 # Render a session's current state to HTML string
-renderSession(sessionId: String) =
+pub renderSession(sessionId: String) =
     if Map.contains(sessions, sessionId) then {
         state = Map.get(sessions, sessionId)
         Some(renderRHtml(state))

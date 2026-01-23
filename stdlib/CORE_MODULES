@@ -1,0 +1,12 @@
+# Core stdlib modules that are auto-imported globally
+# These provide fundamental language features used by most programs
+# All other stdlib modules require explicit `use` statements
+
+list
+string
+map
+set
+option
+result
+traits
+io

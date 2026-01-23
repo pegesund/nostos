@@ -1,8 +1,8 @@
 # expect: 0
 # Test multiple concurrent sessions
 
-use stdlib.rhtml
-use stdlib.rhtml_session
+use stdlib.rhtml.*
+use stdlib.rhtml_session.*
 
 main() = {
     # Create multiple sessions

@@ -1,6 +1,8 @@
 # expect: <div><div id="greeting" data-component="true"><h1>Alice</h1></div></div>
 # Single component with reactive data
 
+use stdlib.rhtml.*
+
 reactive User = { name: String }
 
 main() = {

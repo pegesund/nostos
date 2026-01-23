@@ -1,7 +1,7 @@
 # expect: []
 # Test that RHtmlResult.changedIds is empty when no reactive records are modified
 
-use stdlib.rhtml
+use stdlib.rhtml.*
 
 reactive Counter = { value: Int }
 

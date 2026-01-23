@@ -1,6 +1,8 @@
 # expect: <div><div id="outer" data-component="true"><div><div id="inner" data-component="true"><p>Hello</p></div></div></div></div>
 # Nested components render correctly
 
+use stdlib.rhtml.*
+
 inner() = RHtml(p("Hello"))
 outer() = RHtml(div([component("inner", inner)]))
 

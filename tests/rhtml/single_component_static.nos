@@ -1,6 +1,8 @@
 # expect: <div><div id="greeting" data-component="true"><h1>Hello</h1></div></div>
 # Single component with static content (no reactive data)
 
+use stdlib.rhtml.*
+
 greeting() = RHtml(h1("Hello"))
 
 main() = {

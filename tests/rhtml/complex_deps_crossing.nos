@@ -1,6 +1,8 @@
 # expect: 3
 # Complex: 3 reactive records, multiple components reading various combinations
 
+use stdlib.rhtml.*
+
 reactive User = { name: String }
 reactive Theme = { color: String }
 reactive Config = { debug: Bool }

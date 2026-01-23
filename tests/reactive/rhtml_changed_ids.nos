@@ -1,7 +1,7 @@
 # expect: 1
 # Test that RHtmlResult.changedIds contains IDs of reactive records modified during render
 
-use stdlib.rhtml
+use stdlib.rhtml.*
 
 reactive Counter = { value: Int }
 

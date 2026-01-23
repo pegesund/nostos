@@ -1,4 +1,4 @@
-use stdlib.rhtml
+use stdlib.rhtml.*
 
 # expect: 3
 # Multiple components affected by single record change

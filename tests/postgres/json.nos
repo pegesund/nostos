@@ -2,6 +2,8 @@
 # PostgreSQL JSON/JSONB type tests
 # REQUIRES: PostgreSQL running at localhost with user/password: postgres/postgres
 
+use stdlib.json.*
+
 # Test inserting and selecting JSON as a string
 test_json_string(conn) = {
     # Create a test table with JSONB column

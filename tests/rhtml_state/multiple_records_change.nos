@@ -1,4 +1,4 @@
-use stdlib.rhtml
+use stdlib.rhtml.*
 
 # expect: 4
 # Multiple records change at once - union of affected components

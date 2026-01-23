@@ -78,6 +78,9 @@ pub struct CachedFunction {
     /// None means no default or complex default that requires AST parsing.
     #[serde(default)]
     pub default_values: Vec<Option<CachedValue>>,
+    /// Whether this function is public (true) or private (false).
+    #[serde(default)]
+    pub is_public: bool,
 }
 
 // ============================================================================
@@ -977,6 +980,7 @@ pub fn function_to_cached(func: &FunctionValue) -> Option<CachedFunction> {
         return_type: func.return_type.clone(),
         required_params: func.required_params,
         default_values: vec![],  // Populated separately from AST if available
+        is_public: false,  // Default to private, will be updated from AST
     })
 }
 
@@ -1007,6 +1011,7 @@ pub fn function_to_cached_with_fn_list(func: &FunctionValue, function_list: &[St
         return_type: func.return_type.clone(),
         required_params: func.required_params,
         default_values: vec![],  // Populated separately from AST if available
+        is_public: false,  // Default to private, will be updated from AST
     })
 }
 

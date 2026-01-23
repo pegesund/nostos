@@ -14,10 +14,10 @@ pub type Json =
 
 # --- Character classification helpers ---
 
-is_whitespace(c) = c == ' ' || c == '\n' || c == '\t' || c == '\r'
+pub is_whitespace(c) = c == ' ' || c == '\n' || c == '\t' || c == '\r'
 
 # Match digit characters explicitly since char comparisons aren't supported
-is_digit(c) = match c {
+pub is_digit(c) = match c {
     '0' -> true
     '1' -> true
     '2' -> true
@@ -34,7 +34,7 @@ is_digit(c) = match c {
 }
 # --- Whitespace handling ---
 
-skip_ws(chars) = match chars {
+pub skip_ws(chars) = match chars {
     [c | rest] -> if is_whitespace(c) then skip_ws(rest) else chars
     [] -> []
 
@@ -42,17 +42,17 @@ skip_ws(chars) = match chars {
 }
 # --- Primitive parsers ---
 
-parse_null(chars) = match chars {
+pub parse_null(chars) = match chars {
     ['n', 'u', 'l', 'l' | rest] -> (Null, rest)
     _ -> (Null, chars)
 
 }
-parse_true(chars) = match chars {
+pub parse_true(chars) = match chars {
     ['t', 'r', 'u', 'e' | rest] -> (Bool(true), rest)
     _ -> (Bool(false), chars)
 
 }
-parse_false(chars) = match chars {
+pub parse_false(chars) = match chars {
     ['f', 'a', 'l', 's', 'e' | rest] -> (Bool(false), rest)
     _ -> (Bool(false), chars)
 
@@ -60,7 +60,7 @@ parse_false(chars) = match chars {
 }
 # --- Number parsing ---
 
-collect_digits(chars, acc) = match chars {
+pub collect_digits(chars, acc) = match chars {
     [c | rest] -> if is_digit(c)
                   then collect_digits(rest, acc ++ [c])
                   else (acc, chars)
@@ -68,7 +68,7 @@ collect_digits(chars, acc) = match chars {
 
 }
 # Collect integer part, optional decimal point and fractional part
-collect_number_chars(chars, acc) = {
+pub collect_number_chars(chars, acc) = {
     (int_digits, after_int) = collect_digits(chars, acc)
     match after_int {
         ['.' | rest] -> {
@@ -79,7 +79,7 @@ collect_number_chars(chars, acc) = {
     }
 }
 
-parse_number(chars) = match chars {
+pub parse_number(chars) = match chars {
     ['-' | rest] -> {
         (num_chars, remaining) = collect_number_chars(rest, [])
         num = optUnwrapOr(String.toFloat(String.from_chars(num_chars)), 0.0)
@@ -95,19 +95,19 @@ parse_number(chars) = match chars {
 }
 # --- String parsing ---
 
-collect_string_chars(chars, acc) = match chars {
+pub collect_string_chars(chars, acc) = match chars {
     ['"' | rest]  -> (acc, rest)
     ['\\', c | rest] -> collect_string_chars(rest, acc ++ [c])
     [c | rest]    -> collect_string_chars(rest, acc ++ [c])
     []            -> (acc, [])
 
 }
-parse_string(chars) = {
+pub parse_string(chars) = {
     (content, rest) = collect_string_chars(chars, [])
     (String(String.from_chars(content)), rest)
 }
 
-extract_string(json) = match json {
+pub extract_string(json) = match json {
     String(s) -> s
     _ -> ""
 
@@ -115,7 +115,7 @@ extract_string(json) = match json {
 }
 # --- Array parsing ---
 
-parse_array_items(chars) = {
+pub parse_array_items(chars) = {
     trimmed = skip_ws(chars)
     match trimmed {
         [']' | rest] -> ([], rest)
@@ -123,7 +123,7 @@ parse_array_items(chars) = {
     }
 }
 
-parse_array_item(chars) = {
+pub parse_array_item(chars) = {
     (value, after_value) = parse_value(chars)
     after_ws = skip_ws(after_value)
     match after_ws {
@@ -136,7 +136,7 @@ parse_array_item(chars) = {
     }
 }
 
-parse_array(chars) = {
+pub parse_array(chars) = {
     (items, rest) = parse_array_items(chars)
     (Array(items), rest)
 }
@@ -144,7 +144,7 @@ parse_array(chars) = {
 
 # --- Object parsing ---
 
-parse_object_items(chars) = {
+pub parse_object_items(chars) = {
     trimmed = skip_ws(chars)
     match trimmed {
         ['}' | rest] -> ([], rest)
@@ -152,7 +152,7 @@ parse_object_items(chars) = {
     }
 }
 
-parse_object_entry(chars) = {
+pub parse_object_entry(chars) = {
     (key_json, after_key) = parse_value(chars)
     key = extract_string(key_json)
     after_colon = skip_ws(after_key)
@@ -173,7 +173,7 @@ parse_object_entry(chars) = {
     }
 }
 
-parse_object(chars) = {
+pub parse_object(chars) = {
     (items, rest) = parse_object_items(chars)
     (Object(items), rest)
 }
@@ -181,7 +181,7 @@ parse_object(chars) = {
 
 # --- Main value parser ---
 
-parse_value(chars) = {
+pub parse_value(chars) = {
     trimmed = skip_ws(chars)
     match trimmed {
         ['{' | rest] -> parse_object(rest)
@@ -197,16 +197,16 @@ parse_value(chars) = {
 
 # --- Stringify helpers ---
 
-stringify_array([], acc) = acc
-stringify_array([x], acc) = acc ++ stringify(x)
-stringify_array([x | rest], acc) = stringify_array(rest, acc ++ stringify(x) ++ ",")
+pub stringify_array([], acc) = acc
+pub stringify_array([x], acc) = acc ++ stringify(x)
+pub stringify_array([x | rest], acc) = stringify_array(rest, acc ++ stringify(x) ++ ",")
 
-stringify_object([], acc) = acc
-stringify_object([(k, v)], acc) = acc ++ "\"" ++ k ++ "\":" ++ stringify(v)
-stringify_object([(k, v) | rest], acc) =
+pub stringify_object([], acc) = acc
+pub stringify_object([(k, v)], acc) = acc ++ "\"" ++ k ++ "\":" ++ stringify(v)
+pub stringify_object([(k, v) | rest], acc) =
     stringify_object(rest, acc ++ "\"" ++ k ++ "\":" ++ stringify(v) ++ ",")
 
-stringify(json) -> String = match json {
+pub stringify(json) -> String = match json {
     Null -> "null"
     Bool(true) -> "true"
     Bool(false) -> "false"
@@ -220,13 +220,13 @@ stringify(json) -> String = match json {
 # --- JSON to Type Conversion ---
 
 # Find a value by key in Object pairs list
-findField(pairs, key) = match pairs {
+pub findField(pairs, key) = match pairs {
     [] -> Null
     [(k, v) | rest] -> if k == key then v else findField(rest, key)
 
 }
 # Check if type is a numeric type
-isNumericType(typeName) =
+pub isNumericType(typeName) =
     typeName == "Int" || typeName == "Int8" || typeName == "Int16" ||
     typeName == "Int32" || typeName == "Int64" ||
     typeName == "UInt8" || typeName == "UInt16" || typeName == "UInt32" || typeName == "UInt64" ||
@@ -234,7 +234,7 @@ isNumericType(typeName) =
     typeName == "BigInt"
 
 # Convert a number to the expected numeric type
-convertNumber(n, typeName) =
+pub convertNumber(n, typeName) =
     if typeName == "Int" || typeName == "Int64" then n.asInt64()
     else if typeName == "Int8" then n.asInt8()
     else if typeName == "Int16" then n.asInt16()
@@ -248,7 +248,7 @@ convertNumber(n, typeName) =
     else n  # Float64 or Float
 
 # Convert a Json value to the expected primitive type
-convertPrimitive(json, typeName) =
+pub convertPrimitive(json, typeName) =
     if isNumericType(typeName) then
         match json {
             Number(n) -> convertNumber(n, typeName)
@@ -277,7 +277,7 @@ convertPrimitive(json, typeName) =
         fromJsonValue(typeName, json)
 
 # Build field map for record construction
-buildRecordFields(fields, pairs, acc) = match fields {
+pub buildRecordFields(fields, pairs, acc) = match fields {
     [] -> acc
     [field | rest] -> {
         fieldName = Map.get(field, "name")
@@ -290,19 +290,19 @@ buildRecordFields(fields, pairs, acc) = match fields {
 
 }
 # Check if a key exists in pairs list
-hasKey(pairs, key) = match pairs {
+pub hasKey(pairs, key) = match pairs {
     [] -> false
     [(k, _) | rest] -> if k == key then true else hasKey(rest, key)
 
 }
 # Parse field index from name like "_0", "_1", etc.
-parseFieldIndex(name) = match String.chars(name) {
+pub parseFieldIndex(name) = match String.chars(name) {
     ['_' | rest] -> optUnwrapOr(String.toInt(String.from_chars(rest)), -1)
     _ -> -1
 
 }
 # Get element at index from list
-listGet(list, idx) = match list {
+pub listGet(list, idx) = match list {
     [] -> Null
     [x | rest] -> if idx == 0 then x else listGet(rest, idx - 1)
 
@@ -310,7 +310,7 @@ listGet(list, idx) = match list {
 # Extract field value from Json for variant field building
 # - Single-field variants: value is passed directly (e.g., 42 for Ok(42))
 # - Multi-field variants: value is an array (e.g., [10, 20] for Click(10, 20))
-getVariantFieldValue(fieldName, jsonValue) = match jsonValue {
+pub getVariantFieldValue(fieldName, jsonValue) = match jsonValue {
     Array(items) -> {
         # Multi-field variant uses array format
         idx = parseFieldIndex(fieldName)
@@ -325,7 +325,7 @@ getVariantFieldValue(fieldName, jsonValue) = match jsonValue {
 
 }
 # Build field map for variant constructor
-buildVariantFields(ctorFields, jsonValue, acc) = match ctorFields {
+pub buildVariantFields(ctorFields, jsonValue, acc) = match ctorFields {
     [] -> acc
     [field | rest] -> {
         fieldName = Map.get(field, "name")
@@ -338,7 +338,7 @@ buildVariantFields(ctorFields, jsonValue, acc) = match ctorFields {
 
 }
 # Find constructor by name in constructors list
-findConstructor(constructors, name) = match constructors {
+pub findConstructor(constructors, name) = match constructors {
     [] -> %{}
     [ctor | rest] ->
         if Map.get(ctor, "name") == name
@@ -348,12 +348,12 @@ findConstructor(constructors, name) = match constructors {
 }
 # Parse a parameterized type name like "Result[Int, String]"
 # Returns (baseType, [typeArgs])
-parseTypeName(typeName) = {
+pub parseTypeName(typeName) = {
     chars = String.chars(typeName)
     parseTypeNameChars(chars, [], 0)
 }
 
-parseTypeNameChars(chars, acc, depth) = match chars {
+pub parseTypeNameChars(chars, acc, depth) = match chars {
     [] -> (String.from_chars(acc), [])
     ['[' | rest] -> {
         baseName = String.from_chars(acc)
@@ -363,7 +363,7 @@ parseTypeNameChars(chars, acc, depth) = match chars {
     [c | rest] -> parseTypeNameChars(rest, acc ++ [c], depth)
 
 }
-parseTypeArgs(chars, currentArg, args, depth) = match chars {
+pub parseTypeArgs(chars, currentArg, args, depth) = match chars {
     [] -> (args ++ [String.trim(String.from_chars(currentArg))], [])
     [']' | rest] ->
         if depth == 0 then
@@ -380,7 +380,7 @@ parseTypeArgs(chars, currentArg, args, depth) = match chars {
 
 }
 # Build substitution map from type params to concrete types
-buildTypeParamMap(typeParams, typeArgs, acc) = match typeParams {
+pub buildTypeParamMap(typeParams, typeArgs, acc) = match typeParams {
     [] -> acc
     [param | restParams] -> match typeArgs {
         [] -> acc
@@ -388,7 +388,7 @@ buildTypeParamMap(typeParams, typeArgs, acc) = match typeParams {
     }
 }
 # Substitute type parameter in a field type
-substituteTypeParam(fieldType, typeParamMap) =
+pub substituteTypeParam(fieldType, typeParamMap) =
     if Map.contains(typeParamMap, fieldType)
     then Map.get(typeParamMap, fieldType)
     else fieldType
@@ -447,7 +447,7 @@ pub fromJsonValue(typeName, json) = {
 }
 
 # Build field map for record construction with type param substitution
-buildRecordFieldsWithSubs(fields, pairs, typeParamMap, acc) = match fields {
+pub buildRecordFieldsWithSubs(fields, pairs, typeParamMap, acc) = match fields {
     [] -> acc
     [field | rest] -> {
         fieldName = Map.get(field, "name")
@@ -461,7 +461,7 @@ buildRecordFieldsWithSubs(fields, pairs, typeParamMap, acc) = match fields {
 
 }
 # Build field map for variant constructor with type param substitution
-buildVariantFieldsWithSubs(ctorFields, jsonValue, typeParamMap, acc) = match ctorFields {
+pub buildVariantFieldsWithSubs(ctorFields, jsonValue, typeParamMap, acc) = match ctorFields {
     [] -> acc
     [field | rest] -> {
         fieldName = Map.get(field, "name")

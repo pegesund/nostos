@@ -1,6 +1,8 @@
 # expect: true
 # Deps tracking: two components reading same reactive record
 
+use stdlib.rhtml.*
+
 reactive User = { name: String }
 
 main() = {

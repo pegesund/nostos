@@ -1,7 +1,7 @@
 # expect: true
 # Test: When a component is removed, its deps entries are also cleaned
 
-use stdlib.rhtml
+use stdlib.rhtml.*
 
 reactive State = { showChild: Bool }
 reactive Counter = { value: Int }

@@ -1,6 +1,8 @@
 # expect: 4
 # Renderers map should contain all components (including nested)
 
+use stdlib.rhtml.*
+
 inner() = RHtml(p("inner"))
 middle() = RHtml(div([component("inner", inner)]))
 outer() = RHtml(div([component("middle", middle)]))

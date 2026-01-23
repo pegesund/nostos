@@ -897,6 +897,15 @@ fn try_load_stdlib_from_cache(
             }
         });
         compiler.register_external_function(&cached_fn.name, std::sync::Arc::new(func));
+
+        // Register visibility for use statement wildcard imports
+        let visibility = if cached_fn.is_public {
+            nostos_syntax::ast::Visibility::Public
+        } else {
+            nostos_syntax::ast::Visibility::Private
+        };
+        compiler.register_function_visibility(&cached_fn.name, visibility);
+
         loaded_count += 1;
     }
 
@@ -981,8 +990,33 @@ fn build_stdlib_cache() -> ExitCode {
     // Initialize compiler
     let mut compiler = Compiler::new_empty();
 
+    // Read CORE_MODULES to determine which modules should be auto-imported
+    let core_modules_path = stdlib_path.join("CORE_MODULES");
+    let core_modules: std::collections::HashSet<String> = if core_modules_path.exists() {
+        match fs::read_to_string(&core_modules_path) {
+            Ok(content) => content
+                .lines()
+                .map(|line| line.trim())
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(|s| s.to_string())
+                .collect(),
+            Err(e) => {
+                eprintln!("Warning: Could not read CORE_MODULES file: {}", e);
+                eprintln!("All stdlib modules will be auto-imported");
+                std::collections::HashSet::new()
+            }
+        }
+    } else {
+        eprintln!("Warning: CORE_MODULES file not found, all stdlib modules will be auto-imported");
+        std::collections::HashSet::new()
+    };
+
+    if !core_modules.is_empty() {
+        println!("Core modules (auto-imported): {}", core_modules.iter().cloned().collect::<Vec<_>>().join(", "));
+    }
+
     // Track module info for cache
-    let mut modules: Vec<(String, String, PathBuf, Vec<(String, String)>)> = Vec::new(); // (module_name, source_hash, path, prelude_imports)
+    let mut modules: Vec<(String, String, PathBuf, Vec<(String, String)>, std::collections::HashMap<String, bool>)> = Vec::new(); // (module_name, source_hash, path, prelude_imports, function_visibility)
 
     // Track function names for prelude imports (same as main execution path)
     let mut stdlib_functions: Vec<(String, String)> = Vec::new();
@@ -1030,29 +1064,53 @@ fn build_stdlib_cache() -> ExitCode {
             }
         };
 
-        // Collect function and type names for prelude imports (same as main execution path)
+        // Determine if this module should be auto-imported (is in core modules list)
+        // Extract the module name without "stdlib." prefix
+        let module_short_name = module_name.strip_prefix("stdlib.").unwrap_or(&module_name);
+        let is_core_module = core_modules.is_empty() || core_modules.contains(module_short_name);
+
+        // Collect function and type names
+        // Note: ALL stdlib functions are added to stdlib_functions for compilation (so they can reference each other)
+        // But only CORE module imports are saved to module_prelude_imports (for auto-import)
         let mut module_prelude_imports = Vec::new();
+        let mut function_visibility = std::collections::HashMap::new();
         for item in &module.items {
             match item {
                 nostos_syntax::ast::Item::FnDef(fn_def) => {
                     let local_name = fn_def.name.node.clone();
                     let qualified_name = format!("{}.{}", module_name, local_name);
+                    let is_public = matches!(fn_def.visibility, nostos_syntax::ast::Visibility::Public);
+
+                    // Track visibility for later use in cache
+                    function_visibility.insert(qualified_name.clone(), is_public);
+
+                    // All functions added for compilation (so stdlib functions can call each other)
                     stdlib_functions.push((local_name.clone(), qualified_name.clone()));
-                    module_prelude_imports.push((local_name, qualified_name));
+
+                    // Only core modules added to prelude (for auto-import to user code)
+                    if is_core_module {
+                        module_prelude_imports.push((local_name, qualified_name));
+                    }
                 }
                 nostos_syntax::ast::Item::TypeDef(type_def) => {
                     if matches!(type_def.visibility, nostos_syntax::ast::Visibility::Public) {
                         let local_name = type_def.name.node.clone();
                         let qualified_name = format!("{}.{}", module_name, local_name);
+
+                        // All types added for compilation
                         stdlib_functions.push((local_name.clone(), qualified_name.clone()));
-                        module_prelude_imports.push((local_name, qualified_name));
+
+                        // Only core modules added to prelude
+                        if is_core_module {
+                            module_prelude_imports.push((local_name, qualified_name));
+                        }
                     }
                 }
                 _ => {}
             }
         }
 
-        modules.push((module_name, source_hash, file_path.clone(), module_prelude_imports));
+        modules.push((module_name, source_hash, file_path.clone(), module_prelude_imports, function_visibility));
 
         if let Err(e) = compiler.add_module(&module, components, std::sync::Arc::new(source), file_path.to_str().unwrap().to_string()) {
             eprintln!("Error adding module {}: {}", file_path.display(), e);
@@ -1098,7 +1156,7 @@ fn build_stdlib_cache() -> ExitCode {
 
     // Group functions by module and save
     let mut saved_count = 0;
-    for (module_name, source_hash, path, prelude_imports) in &modules {
+    for (module_name, source_hash, path, prelude_imports, fn_visibility) in &modules {
         let module_prefix = format!("{}.", module_name);
 
         // Collect functions for this module
@@ -1106,7 +1164,13 @@ fn build_stdlib_cache() -> ExitCode {
         for (func_name, func) in functions {
             if func_name.starts_with(&module_prefix) || func.module.as_deref() == Some(module_name.as_str()) {
                 // Use function_to_cached_with_fn_list to convert CallDirect to CallByName
-                if let Some(cached) = function_to_cached_with_fn_list(func, function_list) {
+                if let Some(mut cached) = function_to_cached_with_fn_list(func, function_list) {
+                    // Update visibility from AST
+                    // Strip signature from function name (e.g., "stdlib.rhtml.h1/List,..." -> "stdlib.rhtml.h1")
+                    let base_name = func_name.split('/').next().unwrap_or(func_name);
+                    if let Some(&is_public) = fn_visibility.get(base_name) {
+                        cached.is_public = is_public;
+                    }
                     cached_functions.push(cached);
                 }
             }

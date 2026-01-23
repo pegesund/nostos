@@ -1,4 +1,4 @@
-use stdlib.rhtml
+use stdlib.rhtml.*
 
 # expect: true
 # Test that updateState returns a valid RHtmlResult with correct structure

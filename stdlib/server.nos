@@ -5,7 +5,7 @@
 # Look up a value by key in a list of (key, value) pairs.
 # Works for queryParams, cookies, formParams, headers.
 # Returns "" if not found.
-getParam(params, key) = match params {
+pub getParam(params, key) = match params {
     [] -> ""
     [(k, v) | rest] -> if k == key then v else getParam(rest, key)
 }
@@ -13,80 +13,80 @@ getParam(params, key) = match params {
 # --- Response Helpers ---
 
 # Send a plain text response (200 OK)
-respondText(req, body) =
+pub respondText(req, body) =
     Server.respond(req.id, 200, [("Content-Type", "text/plain")], body)
 
 # Send a plain text response with extra headers (e.g., Set-Cookie)
-respondTextWith(req, body, headers) =
+pub respondTextWith(req, body, headers) =
     Server.respond(req.id, 200, [("Content-Type", "text/plain")] ++ headers, body)
 
 # Send an HTML response (200 OK)
-respondHtml(req, body) =
+pub respondHtml(req, body) =
     Server.respond(req.id, 200, [("Content-Type", "text/html")], body)
 
 # Send an HTML response with extra headers
-respondHtmlWith(req, body, headers) =
+pub respondHtmlWith(req, body, headers) =
     Server.respond(req.id, 200, [("Content-Type", "text/html")] ++ headers, body)
 
 # Send a JSON response (200 OK)
-respondJson(req, body) =
+pub respondJson(req, body) =
     Server.respond(req.id, 200, [("Content-Type", "application/json")], body)
 
 # Send a JSON response with extra headers
-respondJsonWith(req, body, headers) =
+pub respondJsonWith(req, body, headers) =
     Server.respond(req.id, 200, [("Content-Type", "application/json")] ++ headers, body)
 
 # Send a 400 Bad Request
-respond400(req, msg) =
+pub respond400(req, msg) =
     Server.respond(req.id, 400, [("Content-Type", "text/plain")], msg)
 
 # Send a 401 Unauthorized
-respond401(req, msg) =
+pub respond401(req, msg) =
     Server.respond(req.id, 401, [("Content-Type", "text/plain")], msg)
 
 # Send a 404 Not Found
-respond404(req) =
+pub respond404(req) =
     Server.respond(req.id, 404, [("Content-Type", "text/plain")], "Not Found: " ++ req.path)
 
 # Send a 405 Method Not Allowed
-respond405(req) =
+pub respond405(req) =
     Server.respond(req.id, 405, [("Content-Type", "text/plain")], "Method Not Allowed")
 
 # Send a 503 Service Unavailable (e.g., pool exhausted)
-respond503(req, msg) =
+pub respond503(req, msg) =
     Server.respond(req.id, 503, [("Content-Type", "text/plain")], msg)
 
 # Send a redirect (302 Found)
-redirect(req, url) =
+pub redirect(req, url) =
     Server.respond(req.id, 302, [("Location", url)], "")
 
 # Send a redirect with extra headers (e.g., Set-Cookie)
-redirectWith(req, url, headers) =
+pub redirectWith(req, url, headers) =
     Server.respond(req.id, 302, [("Location", url)] ++ headers, "")
 
 # --- Cookie Helpers ---
 
 # Get a cookie value from cookies list
 # cookies is List[(String, String)] from req.cookies
-getCookie(cookies, name) = getParam(cookies, name)
+pub getCookie(cookies, name) = getParam(cookies, name)
 
 # Check if a cookie exists
-hasCookie(cookies, name) = getCookie(cookies, name) != ""
+pub hasCookie(cookies, name) = getCookie(cookies, name) != ""
 
 # Build a Set-Cookie header tuple
-setCookie(name, value) =
+pub setCookie(name, value) =
     ("Set-Cookie", name ++ "=" ++ value ++ "; Path=/; HttpOnly")
 
 # Build a Set-Cookie header with max age (seconds)
-setCookieWithAge(name, value, maxAge) =
+pub setCookieWithAge(name, value, maxAge) =
     ("Set-Cookie", name ++ "=" ++ value ++ "; Path=/; HttpOnly; Max-Age=" ++ show(maxAge))
 
 # Build a secure cookie (for HTTPS)
-setSecureCookie(name, value, maxAge) =
+pub setSecureCookie(name, value, maxAge) =
     ("Set-Cookie", name ++ "=" ++ value ++ "; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=" ++ show(maxAge))
 
 # Build a cookie deletion header
-clearCookie(name) =
+pub clearCookie(name) =
     ("Set-Cookie", name ++ "=; Path=/; Max-Age=0")
 
 # --- WebSocket Loop ---
@@ -94,7 +94,7 @@ clearCookie(name) =
 # Run a WebSocket message loop. Handler receives (ws, msg) and returns:
 #   true  -> continue receiving
 #   false -> close connection
-wsLoop(ws, handler) = {
+pub wsLoop(ws, handler) = {
     ok = try {
         msg = WebSocket.recv(ws)
         handler(ws, msg)
@@ -108,12 +108,12 @@ wsLoop(ws, handler) = {
 # --- Server Loop ---
 
 # Run an HTTP server with spawn-per-request pattern.
-serve(port, handler) = {
+pub serve(port, handler) = {
     server = Server.bind(port)
     acceptLoop(server, handler)
 }
 
-acceptLoop(server, handler) = {
+pub acceptLoop(server, handler) = {
     ok = try {
         req = Server.accept(server)
         spawn { handler(req) }
@@ -125,7 +125,7 @@ acceptLoop(server, handler) = {
 # --- Static File Serving ---
 
 # Get MIME type from file extension
-mimeType(path) = {
+pub mimeType(path) = {
     ext = getExtension(path)
     match ext {
         "html" -> "text/html"
@@ -159,13 +159,13 @@ mimeType(path) = {
 
 # Extract file extension from path
 # Finds the last '.' and returns everything after it
-getExtension(path) = {
+pub getExtension(path) = {
     chars = String.chars(path)
     collectFromEnd(chars, [])
 }
 
 # Collect extension by tracking chars after the last dot
-collectFromEnd(chars, afterDot) = match chars {
+pub collectFromEnd(chars, afterDot) = match chars {
     [] -> String.from_chars(afterDot)
     ['.' | rest] -> collectFromEnd(rest, [])  # Reset - found a dot
     ['/' | rest] -> collectFromEnd(rest, [])  # Reset - found a slash
@@ -173,7 +173,7 @@ collectFromEnd(chars, afterDot) = match chars {
 }
 
 # Check if MIME type is text-based (can use string body)
-isTextMime(mime) = match mime {
+pub isTextMime(mime) = match mime {
     "text/html" -> true
     "text/css" -> true
     "text/plain" -> true
@@ -187,7 +187,7 @@ isTextMime(mime) = match mime {
 
 # Serve a static file
 # Returns true if file was served, false if not found
-respondFile(req, filePath) = {
+pub respondFile(req, filePath) = {
     exists = File.exists(filePath)
     if exists then {
         mime = mimeType(filePath)
@@ -208,7 +208,7 @@ respondFile(req, filePath) = {
 # Maps request path to files under the given directory
 # Example: serveStatic(req, "/static", "./public")
 #   /static/css/style.css -> ./public/css/style.css
-serveStatic(req, urlPrefix, directory) = {
+pub serveStatic(req, urlPrefix, directory) = {
     path = req.path
     # Check if path starts with prefix
     if String.startsWith(path, urlPrefix) then {

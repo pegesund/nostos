@@ -1,6 +1,8 @@
 # expect: <div><h1>Hello</h1></div>
 # Basic RHtml without components
 
+use stdlib.rhtml.{RHtml, renderRHtml, div, h1}
+
 main() = {
     result = RHtml(div([h1("Hello")]))
     renderRHtml(result)
