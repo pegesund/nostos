@@ -839,7 +839,28 @@ impl ReplEngine {
             let mut stdlib_files = Vec::new();
             visit_dirs(path, &mut stdlib_files)?;
 
-            // Track all stdlib function names for prelude imports
+            // Read CORE_MODULES to determine which modules should be auto-imported
+            let core_modules_path = path.join("CORE_MODULES");
+            let core_modules: std::collections::HashSet<String> = if core_modules_path.exists() {
+                match fs::read_to_string(&core_modules_path) {
+                    Ok(content) => content
+                        .lines()
+                        .map(|line| line.trim())
+                        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                        .map(|s| s.to_string())
+                        .collect(),
+                    Err(e) => {
+                        eprintln!("Warning: Could not read CORE_MODULES file: {}", e);
+                        eprintln!("All stdlib modules will be auto-imported");
+                        std::collections::HashSet::new()
+                    }
+                }
+            } else {
+                eprintln!("Warning: CORE_MODULES file not found, all stdlib modules will be auto-imported");
+                std::collections::HashSet::new()
+            };
+
+            // Track stdlib function names for prelude imports (only core modules)
             let mut stdlib_functions: Vec<(String, String)> = Vec::new();
 
             for file_path in &stdlib_files {
@@ -860,12 +881,19 @@ impl ReplEngine {
                     }
                     let module_prefix = components.join(".");
 
-                    // Collect function names from this module for prelude imports
-                    for item in &module.items {
-                        if let nostos_syntax::ast::Item::FnDef(fn_def) = item {
-                            let local_name = fn_def.name.node.clone();
-                            let qualified_name = format!("{}.{}", module_prefix, local_name);
-                            stdlib_functions.push((local_name, qualified_name));
+                    // Determine if this module should be auto-imported (is in core modules list)
+                    // Extract the module name without "stdlib." prefix
+                    let module_short_name = module_prefix.strip_prefix("stdlib.").unwrap_or(&module_prefix);
+                    let is_core_module = core_modules.is_empty() || core_modules.contains(module_short_name);
+
+                    // Collect function names from this module for prelude imports (only core modules)
+                    if is_core_module {
+                        for item in &module.items {
+                            if let nostos_syntax::ast::Item::FnDef(fn_def) = item {
+                                let local_name = fn_def.name.node.clone();
+                                let qualified_name = format!("{}.{}", module_prefix, local_name);
+                                stdlib_functions.push((local_name, qualified_name));
+                            }
                         }
                     }
 
@@ -874,7 +902,7 @@ impl ReplEngine {
                 }
             }
 
-            // Register prelude imports so stdlib functions are available without prefix
+            // Register prelude imports so core stdlib functions are available without prefix
             for (local_name, qualified_name) in stdlib_functions {
                 self.compiler.add_prelude_import(local_name, qualified_name);
             }
