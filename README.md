@@ -132,6 +132,63 @@ main() = serve(8080, handleRequest)
 
 Each HTTP request spawns a new process. All processes safely update `requestCount` because `mvar` uses locks internally. Use `mvar` sparingly—message passing is usually better—but it's perfect for simple shared counters or caches.
 
+**Traditional Loops** — All the imperative control flow you'd expect:
+
+```nos
+# While loops with condition
+factorial(n) = {
+    var result = 1
+    var i = 1
+    while i <= n {
+        result = result * i
+        i = i + 1
+    }
+    result
+}
+
+# For loops with ranges
+sumSquares(n) = {
+    var sum = 0
+    for i = 1 to n {
+        sum = sum + (i * i)
+    }
+    sum
+}
+
+# Break to exit early
+findFirst(arr, target) = {
+    var result = -1
+    for i = 0 to arr.length() {
+        if arr[i] == target then {
+            result = i
+            break  # Exit loop when found
+        } else ()
+    }
+    result
+}
+
+# Continue to skip iterations
+sumPositive(arr) = {
+    var total = 0
+    for i = 0 to arr.length() {
+        if arr[i] < 0 then continue  # Skip negatives
+        total = total + arr[i]
+    }
+    total
+}
+
+# Early return from functions
+searchMatrix(matrix, value) = {
+    for row = 0 to matrix.length() {
+        for col = 0 to matrix[row].length() {
+            if matrix[row][col] == value then
+                return (row, col)  # Found it, return immediately
+        }
+    }
+    (-1, -1)  # Not found
+}
+```
+
 Both functional and imperative styles are valid. **Use whichever makes the code easier to understand. Your time matters more than purity.**
 
 ### Non-Blocking by Default
