@@ -3405,6 +3405,9 @@ impl NostosLanguageServer {
                     let partial_lower = partial_after.to_lowercase();
                     let mut seen = std::collections::HashSet::new();
 
+                    // Get imported names to filter UFCS methods from non-imported modules
+                    let imported_names = engine.get_imported_names();
+
                     // Add builtin methods
                     for (method_name, signature, doc) in nostos_repl::ReplEngine::get_builtin_methods_for_type(&type_name) {
                         if !seen.insert(method_name.to_string()) {
@@ -3424,8 +3427,15 @@ impl NostosLanguageServer {
                         }
                     }
 
-                    // Add UFCS methods
+                    // Add UFCS methods (only from imported modules)
                     for (method_name, signature, doc) in engine.get_ufcs_methods_for_type(&type_name) {
+                        // CRITICAL: Only show UFCS methods if they're imported
+                        // This prevents stdlib.html.a, stdlib.html.div, etc. from appearing
+                        // when user types "xx". on a string without importing stdlib.html
+                        if !imported_names.contains(method_name.as_str()) {
+                            continue;
+                        }
+
                         if !seen.insert(method_name.clone()) {
                             continue;
                         }
@@ -3445,6 +3455,11 @@ impl NostosLanguageServer {
 
                     // Add trait methods
                     for (method_name, signature, doc) in engine.get_trait_methods_for_type(&type_name) {
+                        // Only show trait methods if they're imported
+                        if !imported_names.contains(method_name.as_str()) {
+                            continue;
+                        }
+
                         if !seen.insert(method_name.clone()) {
                             continue;
                         }
