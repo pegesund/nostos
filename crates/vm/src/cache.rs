@@ -148,6 +148,11 @@ pub struct CachedModule {
     /// Module-level mutable variables (mvars)
     #[serde(default)]
     pub mvars: Vec<CachedMvar>,
+    /// Dependency function signatures for validation
+    /// Maps: dependency_module_name -> (function_name -> expected_signature)
+    /// Used to detect when imported functions change signatures
+    #[serde(default)]
+    pub dependency_signatures: HashMap<String, HashMap<String, FunctionSignature>>,
 }
 
 use crate::value::TypeValue;
@@ -1196,6 +1201,7 @@ mod tests {
             prelude_imports: vec![],
             types: vec![],
             mvars: vec![],
+            dependency_signatures: HashMap::new(),
         };
 
         let bytes = bincode::serialize(&module).expect("Failed to serialize module");

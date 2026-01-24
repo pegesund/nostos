@@ -164,9 +164,11 @@ fn load_from_cache(cached: &CachedModule) -> Result<(), String> {
 3. ✅ **Cache storing after compilation** - Stores compiled modules to cache (Feature #1 DONE)
 4. ✅ **Source hash validation** - Rejects cache if source changed (Feature #1 DONE)
 5. ✅ **Integration test** - REPL test verifies cache works end-to-end
-6. ⚠️  **Dependency signature validation** - Partially implemented (Feature #2 IN PROGRESS)
-   - `is_module_cache_valid()` checks dependencies exist in cache
-   - Full signature comparison NOT YET implemented
+6. ✅ **Dependency signature validation** - FULLY implemented (Feature #2 DONE)
+   - Added `dependency_signatures` field to CachedModule
+   - Stores expected function signatures for each dependency
+   - `is_module_cache_valid()` compares actual vs expected signatures
+   - Cache invalidated if dependency signature changed
 7. ⚠️  **Compiler state population** - NOT YET implemented
    - Loading cache into VM works ✓
    - But compiler state (types, function signatures) not populated

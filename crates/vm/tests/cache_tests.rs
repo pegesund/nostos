@@ -33,6 +33,7 @@ fn create_test_cache(
         prelude_imports: Vec::new(),
         types: Vec::new(),
         mvars: Vec::new(),
+        dependency_signatures: HashMap::new(), // No dependencies for simple test
     };
 
     let cache_path = cache_dir.join(format!("{}.cache", module_name));

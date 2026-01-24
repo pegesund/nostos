@@ -4888,6 +4888,21 @@ impl ReplEngine {
                             .into_iter()
                             .collect();
 
+                        // Collect dependency signatures for validation (Feature #2)
+                        // For each dependency, store its function signatures so we can detect changes
+                        let mut dependency_signatures = std::collections::HashMap::new();
+                        for dep_module in &dependencies {
+                            // Try to get dependency's signatures from its cache
+                            if let Some(dep_cached) = self.module_cache.get_from_memory(dep_module, "") {
+                                if !dep_cached.cached.function_signatures.is_empty() {
+                                    dependency_signatures.insert(
+                                        dep_module.clone(),
+                                        dep_cached.cached.function_signatures.clone()
+                                    );
+                                }
+                            }
+                        }
+
                         // Create cached module
                         let cached_module = CachedModule {
                             module_path: components.clone(),
@@ -4898,6 +4913,7 @@ impl ReplEngine {
                             prelude_imports: Vec::new(),
                             types: module_types,
                             mvars: module_mvars,
+                            dependency_signatures,
                         };
 
                         let compiled_data = CompiledModuleData {
@@ -9028,21 +9044,46 @@ Keyboard shortcuts (TUI):
             None => return false, // No cache or source hash mismatch
         };
 
-        // Validate dependency signatures
+        // Feature #2: Validate dependency signatures
         // For each module this module depends on, check that the imported functions
         // still have the same signatures they had when this module was cached
         for dep_module_name in &cached_data.dependencies {
             // Get the current state of the dependency module
-            // We need to check if any function signatures have changed
+            let current_dep = match self.module_cache.get_from_memory(dep_module_name, "") {
+                Some(data) => data,
+                None => {
+                    // Dependency not in cache at all - needs recompilation
+                    return false;
+                }
+            };
 
-            // For now, conservatively reject cache if ANY dependency exists
-            // Full signature validation requires storing expected signatures in cache
-            // TODO: Implement full signature checking when CachedModule includes
-            // dependency_signatures: HashMap<String, HashMap<String, FunctionSignature>>
-
-            if self.module_cache.get_from_memory(dep_module_name, "").is_none() {
-                // Dependency not in cache at all - needs recompilation
-                return false;
+            // Get expected signatures for this dependency (if any were stored)
+            if let Some(expected_sigs) = cached_data.cached.dependency_signatures.get(dep_module_name) {
+                // Validate each expected function signature
+                for (fn_name, expected_sig) in expected_sigs {
+                    match current_dep.cached.function_signatures.get(fn_name) {
+                        Some(actual_sig) => {
+                            // Compare signatures - if different, cache is stale
+                            if actual_sig != expected_sig {
+                                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
+                                    use std::io::Write;
+                                    let _ = writeln!(f, "Cache INVALID: {}.{} signature changed", dep_module_name, fn_name);
+                                    let _ = writeln!(f, "  Expected: {:?}", expected_sig);
+                                    let _ = writeln!(f, "  Actual: {:?}", actual_sig);
+                                }
+                                return false;
+                            }
+                        }
+                        None => {
+                            // Expected function no longer exists - cache is stale
+                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
+                                use std::io::Write;
+                                let _ = writeln!(f, "Cache INVALID: {}.{} no longer exists", dep_module_name, fn_name);
+                            }
+                            return false;
+                        }
+                    }
+                }
             }
         }
 

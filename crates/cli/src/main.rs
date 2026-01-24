@@ -263,6 +263,7 @@ fn save_extension_to_cache(
         prelude_imports: Vec::new(),
         types: module_types,
         mvars: module_mvars,
+        dependency_signatures: std::collections::HashMap::new(),
     };
 
     // Save the module
@@ -481,6 +482,7 @@ fn save_package_to_cache(
             prelude_imports: Vec::new(),
             types: module_types,
             mvars: module_mvars,
+            dependency_signatures: std::collections::HashMap::new(),
         };
 
         // Save the module
@@ -741,6 +743,7 @@ fn save_project_to_cache(
             prelude_imports: Vec::new(),
             types: module_types,
             mvars: module_mvars,
+            dependency_signatures: std::collections::HashMap::new(),
         };
 
         // Save the module
@@ -1201,6 +1204,7 @@ fn build_stdlib_cache() -> ExitCode {
             prelude_imports: prelude_imports.clone(),
             types: module_types,
             mvars: module_mvars,
+            dependency_signatures: std::collections::HashMap::new(),
         };
 
         // Save even modules with no functions (for types/traits-only modules)
