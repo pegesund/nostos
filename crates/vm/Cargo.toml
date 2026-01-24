@@ -57,3 +57,4 @@ harness = false
 
 [dev-dependencies]
 nostos-compiler = { path = "../compiler" }
+tempfile = "3.24.0"
