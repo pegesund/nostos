@@ -21402,8 +21402,8 @@ mod tests {
     #[test]
     fn test_compile_tail_recursive() {
         let source = "
-            sum(n, acc) = if n == 0 then acc else sum(n - 1, acc + n)
-            main() = sum(100, 0)
+            mySum(n, acc) = if n == 0 then acc else mySum(n - 1, acc + n)
+            main() = mySum(100, 0)
         ";
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int64(5050)));
@@ -21747,11 +21747,11 @@ mod tests {
     #[test]
     fn test_e2e_list_cons_pattern() {
         let source = "
-            sum(xs) = match xs {
+            mySum(xs) = match xs {
                 [] -> 0
-                [h | t] -> h + sum(t)
+                [h | t] -> h + mySum(t)
             }
-            main() = sum([1, 2, 3, 4, 5])
+            main() = mySum([1, 2, 3, 4, 5])
         ";
         // 1 + 2 + 3 + 4 + 5 = 15
         let result = compile_and_run(source);
@@ -21761,11 +21761,11 @@ mod tests {
     #[test]
     fn test_e2e_list_head_tail() {
         let source = "
-            head(xs) = match xs {
+            myHead(xs) = match xs {
                 [h | _] -> h
                 [] -> 0
             }
-            main() = head([42, 1, 2])
+            main() = myHead([42, 1, 2])
         ";
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int64(42)));
@@ -21852,11 +21852,11 @@ mod tests {
     #[test]
     fn test_e2e_list_length() {
         let source = "
-            len(xs) = match xs {
+            myLen(xs) = match xs {
                 [] -> 0
-                [_ | t] -> 1 + len(t)
+                [_ | t] -> 1 + myLen(t)
             }
-            main() = len([1, 2, 3, 4, 5])
+            main() = myLen([1, 2, 3, 4, 5])
         ";
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int64(5)));
@@ -21865,15 +21865,15 @@ mod tests {
     #[test]
     fn test_e2e_list_map() {
         let source = "
-            map(f, xs) = match xs {
+            myMap(f, xs) = match xs {
                 [] -> []
-                [h | t] -> [f(h) | map(f, t)]
+                [h | t] -> [f(h) | myMap(f, t)]
             }
-            sum(xs) = match xs {
+            mySum(xs) = match xs {
                 [] -> 0
-                [h | t] -> h + sum(t)
+                [h | t] -> h + mySum(t)
             }
-            main() = sum(map(x => x * 2, [1, 2, 3]))
+            main() = mySum(myMap(x => x * 2, [1, 2, 3]))
         ";
         // [2, 4, 6] => sum = 12
         let result = compile_and_run(source);
@@ -21883,15 +21883,15 @@ mod tests {
     #[test]
     fn test_e2e_list_filter() {
         let source = "
-            filter(pred, xs) = match xs {
+            myFilter(pred, xs) = match xs {
                 [] -> []
-                [h | t] -> if pred(h) then [h | filter(pred, t)] else filter(pred, t)
+                [h | t] -> if pred(h) then [h | myFilter(pred, t)] else myFilter(pred, t)
             }
-            sum(xs) = match xs {
+            mySum(xs) = match xs {
                 [] -> 0
-                [h | t] -> h + sum(t)
+                [h | t] -> h + mySum(t)
             }
-            main() = sum(filter(x => x > 2, [1, 2, 3, 4, 5]))
+            main() = sum(myFilter(x => x > 2, [1, 2, 3, 4, 5]))
         ";
         // [3, 4, 5] => sum = 12
         let result = compile_and_run(source);
@@ -21901,15 +21901,15 @@ mod tests {
     #[test]
     fn test_e2e_list_append() {
         let source = "
-            append(xs, ys) = match xs {
+            myAppend(xs, ys) = match xs {
                 [] -> ys
-                [h | t] -> [h | append(t, ys)]
+                [h | t] -> [h | myAppend(t, ys)]
             }
-            sum(xs) = match xs {
+            mySum(xs) = match xs {
                 [] -> 0
-                [h | t] -> h + sum(t)
+                [h | t] -> h + mySum(t)
             }
-            main() = sum(append([1, 2], [3, 4, 5]))
+            main() = mySum(myAppend([1, 2], [3, 4, 5]))
         ";
         // [1, 2, 3, 4, 5] => sum = 15
         let result = compile_and_run(source);
@@ -21923,12 +21923,12 @@ mod tests {
                 [] -> acc
                 [h | t] -> reverseHelper(t, [h | acc])
             }
-            reverse(xs) = reverseHelper(xs, [])
-            head(xs) = match xs {
+            myReverse(xs) = reverseHelper(xs, [])
+            myHead(xs) = match xs {
                 [h | _] -> h
                 [] -> 0
             }
-            main() = head(reverse([1, 2, 3, 4, 5]))
+            main() = myHead(myReverse([1, 2, 3, 4, 5]))
         ";
         // reverse [1,2,3,4,5] = [5,4,3,2,1], head = 5
         let result = compile_and_run(source);
@@ -22047,15 +22047,15 @@ mod tests {
     #[test]
     fn test_e2e_list_take() {
         let source = "
-            take(n, xs) = if n == 0 then [] else match xs {
+            myTake(n, xs) = if n == 0 then [] else match xs {
                 [] -> []
-                [h | t] -> [h | take(n - 1, t)]
+                [h | t] -> [h | myTake(n - 1, t)]
             }
-            sum(xs) = match xs {
+            mySum(xs) = match xs {
                 [] -> 0
-                [h | t] -> h + sum(t)
+                [h | t] -> h + mySum(t)
             }
-            main() = sum(take(3, [1, 2, 3, 4, 5]))
+            main() = mySum(myTake(3, [1, 2, 3, 4, 5]))
         ";
         // take 3 [1,2,3,4,5] = [1,2,3], sum = 6
         let result = compile_and_run(source);
@@ -22065,15 +22065,15 @@ mod tests {
     #[test]
     fn test_e2e_list_drop() {
         let source = "
-            drop(n, xs) = if n == 0 then xs else match xs {
+            myDrop(n, xs) = if n == 0 then xs else match xs {
                 [] -> []
-                [_ | t] -> drop(n - 1, t)
+                [_ | t] -> myDrop(n - 1, t)
             }
-            sum(xs) = match xs {
+            mySum(xs) = match xs {
                 [] -> 0
-                [h | t] -> h + sum(t)
+                [h | t] -> h + mySum(t)
             }
-            main() = sum(drop(2, [1, 2, 3, 4, 5]))
+            main() = mySum(myDrop(2, [1, 2, 3, 4, 5]))
         ";
         // drop 2 [1,2,3,4,5] = [3,4,5], sum = 12
         let result = compile_and_run(source);
@@ -22134,18 +22134,18 @@ mod tests {
     #[test]
     fn test_e2e_list_zip() {
         let source = "
-            zip(xs, ys) = match xs {
+            myZip(xs, ys) = match xs {
                 [] -> []
                 [hx | tx] -> match ys {
                     [] -> []
-                    [hy | ty] -> [(hx, hy) | zip(tx, ty)]
+                    [hy | ty] -> [(hx, hy) | myZip(tx, ty)]
                 }
             }
             sumPairs(ps) = match ps {
                 [] -> 0
                 [p | t] -> p.0 + p.1 + sumPairs(t)
             }
-            main() = sumPairs(zip([1, 2, 3], [10, 20, 30]))
+            main() = sumPairs(myZip([1, 2, 3], [10, 20, 30]))
         ";
         // zip = [(1,10), (2,20), (3,30)], sumPairs = 1+10+2+20+3+30 = 66
         let result = compile_and_run(source);
@@ -22240,13 +22240,13 @@ mod tests {
     #[test]
     fn test_e2e_higher_order_list_operations() {
         let source = "
-            map(f, xs) = match xs {
+            myMap(f, xs) = match xs {
                 [] -> []
-                [h | t] -> [f(h) | map(f, t)]
+                [h | t] -> [f(h) | myMap(f, t)]
             }
-            filter(p, xs) = match xs {
+            myFilter(p, xs) = match xs {
                 [] -> []
-                [h | t] -> if p(h) then [h | filter(p, t)] else filter(p, t)
+                [h | t] -> if p(h) then [h | myFilter(p, t)] else myFilter(p, t)
             }
             foldl(f, acc, xs) = match xs {
                 [] -> acc
@@ -22254,8 +22254,8 @@ mod tests {
             }
             main() = {
                 nums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-                doubled = map(x => x * 2, nums)
-                evens = filter(x => (x - (x / 2) * 2) == 0, doubled)
+                doubled = myMap(x => x * 2, nums)
+                evens = myFilter(x => (x - (x / 2) * 2) == 0, doubled)
                 foldl((a, b) => a + b, 0, evens)
             }
         ";
@@ -22270,15 +22270,15 @@ mod tests {
     fn test_e2e_list_nth() {
         let source = "
             type Option[T] = Some(T) | None
-            nth(n, xs) = match xs {
+            myNth(n, xs) = match xs {
                 [] -> None
-                [h | t] -> if n == 0 then Some(h) else nth(n - 1, t)
+                [h | t] -> if n == 0 then Some(h) else myNth(n - 1, t)
             }
             unwrap(opt) = match opt {
                 Some(x) -> x
                 None -> 0
             }
-            main() = unwrap(nth(2, [10, 20, 30, 40]))
+            main() = unwrap(myNth(2, [10, 20, 30, 40]))
         ";
         // nth 2 = 30
         let result = compile_and_run(source);
@@ -22288,15 +22288,15 @@ mod tests {
     #[test]
     fn test_e2e_list_all_any() {
         let source = "
-            all(p, xs) = match xs {
+            myAll(p, xs) = match xs {
                 [] -> true
-                [h | t] -> if p(h) then all(p, t) else false
+                [h | t] -> if p(h) then myAll(p, t) else false
             }
-            any(p, xs) = match xs {
+            myAny(p, xs) = match xs {
                 [] -> false
-                [h | t] -> if p(h) then true else any(p, t)
+                [h | t] -> if p(h) then true else myAny(p, t)
             }
-            main() = all(x => x > 0, [1, 2, 3]) && any(x => x > 2, [1, 2, 3])
+            main() = myAll(x => x > 0, [1, 2, 3]) && myAny(x => x > 2, [1, 2, 3])
         ";
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Bool(true)));
@@ -22320,10 +22320,10 @@ mod tests {
     fn test_e2e_tree_depth() {
         let source = "
             type Tree[T] = Leaf(T) | Node(Tree[T], Tree[T])
-            max(a, b) = if a > b then a else b
+            myMax(a, b) = if a > b then a else b
             depth(tree) = match tree {
                 Leaf(_) -> 1
-                Node(l, r) -> 1 + max(depth(l), depth(r))
+                Node(l, r) -> 1 + myMax(depth(l), depth(r))
             }
             main() = depth(Node(Node(Leaf(1), Node(Leaf(2), Leaf(3))), Leaf(4)))
         ";
@@ -22336,12 +22336,12 @@ mod tests {
     fn test_e2e_expression_evaluator() {
         let source = "
             type Expr = Num(Int) | Add(Expr, Expr) | Mul(Expr, Expr)
-            eval(expr) = match expr {
+            myEval(expr) = match expr {
                 Num(n) -> n
-                Add(e1, e2) -> eval(e1) + eval(e2)
-                Mul(e1, e2) -> eval(e1) * eval(e2)
+                Add(e1, e2) -> myEval(e1) + myEval(e2)
+                Mul(e1, e2) -> myEval(e1) * myEval(e2)
             }
-            main() = eval(Add(Mul(Num(3), Num(4)), Num(5)))
+            main() = myEval(Add(Mul(Num(3), Num(4)), Num(5)))
         ";
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int64(17)));
@@ -22437,9 +22437,9 @@ mod tests {
     #[test]
     fn test_e2e_multiclause_with_patterns() {
         let source = "
-            len([]) = 0
-            len([_ | t]) = 1 + len(t)
-            main() = len([1, 2, 3, 4, 5])
+            myLen([]) = 0
+            myLen([_ | t]) = 1 + myLen(t)
+            main() = myLen([1, 2, 3, 4, 5])
         ";
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int64(5)));
@@ -22448,9 +22448,9 @@ mod tests {
     #[test]
     fn test_e2e_multiclause_sum_list() {
         let source = "
-            sum([]) = 0
-            sum([h | t]) = h + sum(t)
-            main() = sum([1, 2, 3, 4, 5])
+            mySum([]) = 0
+            mySum([h | t]) = h + mySum(t)
+            main() = mySum([1, 2, 3, 4, 5])
         ";
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int64(15)));
@@ -22461,10 +22461,10 @@ mod tests {
         let source = "
             reverse_acc([], acc) = acc
             reverse_acc([h | t], acc) = reverse_acc(t, [h | acc])
-            reverse(xs) = reverse_acc(xs, [])
-            len([]) = 0
-            len([_ | t]) = 1 + len(t)
-            main() = len(reverse([1, 2, 3, 4, 5]))
+            myReverse(xs) = reverse_acc(xs, [])
+            myLen([]) = 0
+            myLen([_ | t]) = 1 + myLen(t)
+            main() = myLen(myReverse([1, 2, 3, 4, 5]))
         ";
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int64(5)));
@@ -22540,9 +22540,9 @@ mod tests {
     #[test]
     fn test_e2e_function_with_guard() {
         let source = "
-            abs(n) when n < 0 = -n
-            abs(n) = n
-            main() = abs(-5) + abs(3)
+            myAbs(n) when n < 0 = -n
+            myAbs(n) = n
+            main() = myAbs(-5) + myAbs(3)
         ";
         let result = compile_and_run(source);
         assert_eq!(result, Ok(Value::Int64(8)));
@@ -23369,9 +23369,9 @@ mod tests {
 
     #[test]
     fn test_hm_06_pow_unified() {
-        let sig = get_signature("pow(x, y) = x ** y\nmain() = 0", "pow").unwrap();
+        let sig = get_signature("myPow(x, y) = x ** y\nmain() = 0", "myPow").unwrap();
         assert!(sig_matches(&sig, &["a -> a -> a", "Int -> Int -> Int"]),
-            "pow: expected unified types, got: {}", sig);
+            "myPow: expected unified types, got: {}", sig);
     }
 
     #[test]
@@ -23551,8 +23551,8 @@ mod tests {
 
     #[test]
     fn test_hm_33_if_with_int_branches() {
-        let sig = get_signature("abs(x) = if x < 0 then -x else x\nmain() = 0", "abs").unwrap();
-        assert!(sig.contains("->"), "abs: expected function, got: {}", sig);
+        let sig = get_signature("myAbs(x) = if x < 0 then -x else x\nmain() = 0", "myAbs").unwrap();
+        assert!(sig.contains("->"), "myAbs: expected function, got: {}", sig);
     }
 
     #[test]
@@ -23596,8 +23596,8 @@ mod tests {
 
     #[test]
     fn test_hm_40_ternary_like() {
-        let sig = get_signature("max(a, b) = if a > b then a else b\nmain() = 0", "max").unwrap();
-        assert!(sig.contains("->"), "max: expected function, got: {}", sig);
+        let sig = get_signature("myMax(a, b) = if a > b then a else b\nmain() = 0", "myMax").unwrap();
+        assert!(sig.contains("->"), "myMax: expected function, got: {}", sig);
     }
 
     // -------------------------------------------------------------------------
@@ -23612,8 +23612,8 @@ mod tests {
 
     #[test]
     fn test_hm_42_const() {
-        let sig = get_signature("const(x, y) = x\nmain() = 0", "const").unwrap();
-        assert_eq!(sig, "a -> b -> a", "const: got: {}", sig);
+        let sig = get_signature("myConst(x, y) = x\nmain() = 0", "myConst").unwrap();
+        assert_eq!(sig, "a -> b -> a", "myConst: got: {}", sig);
     }
 
     #[test]
@@ -23712,8 +23712,8 @@ mod tests {
 
     #[test]
     fn test_hm_58_all_annotated() {
-        let sig = get_signature("all(a: Int, b: Int, c: Int) -> Int = a + b + c\nmain() = 0", "all").unwrap();
-        assert_eq!(sig, "Int -> Int -> Int -> Int", "all: got: {}", sig);
+        let sig = get_signature("myAll(a: Int, b: Int, c: Int) -> Int = a + b + c\nmain() = 0", "myAll").unwrap();
+        assert_eq!(sig, "Int -> Int -> Int -> Int", "myAll: got: {}", sig);
     }
 
     #[test]
@@ -23799,8 +23799,8 @@ mod tests {
 
     #[test]
     fn test_hm_71_empty_list() {
-        let sig = get_signature("empty() = []\nmain() = 0", "empty").unwrap();
-        assert!(sig.contains("List"), "empty: expected List, got: {}", sig);
+        let sig = get_signature("myEmpty() = []\nmain() = 0", "myEmpty").unwrap();
+        assert!(sig.contains("List"), "myEmpty: expected List, got: {}", sig);
     }
 
     #[test]
@@ -23852,8 +23852,8 @@ mod tests {
     #[test]
     fn test_hm_79_list_length() {
         // Use multi-clause function with pattern matching
-        let sig = get_signature("len([]) = 0\nlen([_ | t]) = 1 + len(t)\nmain() = 0", "len").unwrap();
-        assert!(sig.contains("->"), "len: expected function, got: {}", sig);
+        let sig = get_signature("myLen([]) = 0\nmyLen([_ | t]) = 1 + myLen(t)\nmain() = 0", "myLen").unwrap();
+        assert!(sig.contains("->"), "myLen: expected function, got: {}", sig);
     }
 
     #[test]
@@ -23891,9 +23891,9 @@ mod tests {
 
     #[test]
     fn test_hm_84_record_with_both_fields() {
-        let src = "type Point = { x: Int, y: Int }\nsum(p: Point) = p.x + p.y\nmain() = 0";
-        let sig = get_signature(src, "sum").unwrap();
-        assert!(sig.contains("Point") && sig.contains("Int"), "sum: got: {}", sig);
+        let src = "type Point = { x: Int, y: Int }\nmySum(p: Point) = p.x + p.y\nmain() = 0";
+        let sig = get_signature(src, "mySum").unwrap();
+        assert!(sig.contains("Point") && sig.contains("Int"), "mySum: got: {}", sig);
     }
 
     #[test]
@@ -24127,8 +24127,8 @@ mod tests {
     #[test]
     fn test_hm_116_match_list_empty() {
         // Multi-clause for list patterns
-        let sig = get_signature("isEmpty([]) = true\nisEmpty(_) = false\nmain() = 0", "isEmpty").unwrap();
-        assert!(sig.ends_with("-> Bool") || sig.contains("Bool"), "isEmpty: got: {}", sig);
+        let sig = get_signature("myIsEmpty([]) = true\nmyIsEmpty(_) = false\nmain() = 0", "myIsEmpty").unwrap();
+        assert!(sig.ends_with("-> Bool") || sig.contains("Bool"), "myIsEmpty: got: {}", sig);
     }
 
     #[test]
@@ -24148,8 +24148,8 @@ mod tests {
     #[test]
     fn test_hm_119_match_nested_tuple() {
         // Single clause with nested tuple pattern
-        let sig = get_signature("flatten(((a, b), c)) = (a, b, c)\nmain() = 0", "flatten").unwrap();
-        assert!(sig.contains("->"), "flatten: got: {}", sig);
+        let sig = get_signature("myFlatten(((a, b), c)) = (a, b, c)\nmain() = 0", "myFlatten").unwrap();
+        assert!(sig.contains("->"), "myFlatten: got: {}", sig);
     }
 
     #[test]
@@ -24187,15 +24187,15 @@ mod tests {
     #[test]
     fn test_hm_124_block_shadowing() {
         // Shadowing with newlines
-        let sig = get_signature("shadow(x) = {\n    x = x + 1\n    x = x * 2\n    x\n}\nmain() = 0", "shadow").unwrap();
+        let sig = get_signature("shadow(x) = {\n    var x = x + 1\n    var x = x * 2\n    x\n}\nmain() = 0", "shadow").unwrap();
         assert!(sig.contains("->"), "shadow: got: {}", sig);
     }
 
     #[test]
     fn test_hm_125_block_returns_last() {
         // Just expressions with newlines
-        let sig = get_signature("last() = {\n    1\n    2\n    3\n}\nmain() = 0", "last").unwrap();
-        assert_eq!(sig, "Int", "last: got: {}", sig);
+        let sig = get_signature("myLast() = {\n    1\n    2\n    3\n}\nmain() = 0", "myLast").unwrap();
+        assert_eq!(sig, "Int", "myLast: got: {}", sig);
     }
 
     #[test]
