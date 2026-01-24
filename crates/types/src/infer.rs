@@ -2175,8 +2175,22 @@ impl<'a> InferCtx<'a> {
 
             // Concat: lists or strings
             BinOp::Concat => {
-                self.unify(left_ty.clone(), right_ty);
-                Ok(left_ty)
+                // List concatenation allows heterogeneous types (design decision)
+                // [String] ++ [Int] produces a mixed list at runtime
+                // We just check both are lists, but don't unify their element types
+                match (&left_ty, &right_ty) {
+                    (Type::List(_), Type::List(_)) => {
+                        // Return a list with a fresh type variable
+                        // since we can't know statically what types the mixed list contains
+                        Ok(Type::List(Box::new(self.fresh())))
+                    }
+                    _ => {
+                        // If not both lists, fall back to old behavior (unify)
+                        // This handles cases like string concatenation
+                        self.unify(left_ty.clone(), right_ty);
+                        Ok(left_ty)
+                    }
+                }
             }
 
             // Cons: h :: t means prepend h to list t
