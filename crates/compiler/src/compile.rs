@@ -26,10 +26,10 @@ pub struct BuiltinInfo {
 /// All built-in functions with their signatures and documentation.
 pub const BUILTINS: &[BuiltinInfo] = &[
     // === Core ===
-    BuiltinInfo { name: "println", signature: "a -> ()", doc: "Print a value to stdout followed by a newline" },
-    BuiltinInfo { name: "print", signature: "a -> ()", doc: "Print a value to stdout without newline" },
-    BuiltinInfo { name: "eprintln", signature: "a -> ()", doc: "Print a value to stderr followed by a newline (auto-flushes)" },
-    BuiltinInfo { name: "eprint", signature: "a -> ()", doc: "Print a value to stderr without newline (auto-flushes)" },
+    BuiltinInfo { name: "println", signature: "Show a => a -> ()", doc: "Print a value to stdout followed by a newline" },
+    BuiltinInfo { name: "print", signature: "Show a => a -> ()", doc: "Print a value to stdout without newline" },
+    BuiltinInfo { name: "eprintln", signature: "Show a => a -> ()", doc: "Print a value to stderr followed by a newline (auto-flushes)" },
+    BuiltinInfo { name: "eprint", signature: "Show a => a -> ()", doc: "Print a value to stderr without newline (auto-flushes)" },
     BuiltinInfo { name: "flushStdout", signature: "() -> ()", doc: "Flush stdout buffer" },
     BuiltinInfo { name: "flushStderr", signature: "() -> ()", doc: "Flush stderr buffer" },
     BuiltinInfo { name: "show", signature: "a -> String", doc: "Convert any value to its string representation" },
@@ -18207,6 +18207,20 @@ impl Compiler {
         // Create a fresh type environment for inference
         let mut env = nostos_types::standard_env();
 
+        // Register ALL builtins from BUILTINS array
+        // Don't override functions that are already in standard_env (like println, print, show)
+        // because those have manually crafted type params
+        for builtin in BUILTINS {
+            // Skip if already registered in standard_env
+            if env.functions.contains_key(builtin.name) {
+                continue;
+            }
+            // Parse the builtin's signature (which may include trait constraints)
+            if let Some(func_type) = self.parse_signature_string(builtin.signature) {
+                env.insert_function(builtin.name.to_string(), func_type);
+            }
+        }
+
         // Register known types from the compiler context
         for (name, type_info) in &self.types {
             // Get type parameters from the original TypeDef if available
@@ -18593,6 +18607,20 @@ impl Compiler {
     pub fn type_check_fn(&self, def: &FnDef, qualified_name: &str) -> Result<(), CompileError> {
         // Create a fresh type environment for inference
         let mut env = nostos_types::standard_env();
+
+        // Register ALL builtins from BUILTINS array
+        // Don't override functions that are already in standard_env (like println, print, show)
+        // because those have manually crafted type params
+        for builtin in BUILTINS {
+            // Skip if already registered in standard_env
+            if env.functions.contains_key(builtin.name) {
+                continue;
+            }
+            // Parse the builtin's signature (which may include trait constraints)
+            if let Some(func_type) = self.parse_signature_string(builtin.signature) {
+                env.insert_function(builtin.name.to_string(), func_type);
+            }
+        }
 
         // Register known types from the compiler context
         for (name, type_info) in &self.types {
@@ -19768,11 +19796,37 @@ impl Compiler {
     fn parse_signature_string(&self, sig: &str) -> Option<nostos_types::FunctionType> {
         let sig = sig.trim();
 
-        // Handle constraint syntax: "Show a => a -> String" -> "a -> String"
-        let sig_without_constraints = if let Some(idx) = sig.find("=>") {
-            sig[idx + 2..].trim()
+        // Parse constraint syntax: "Show a, Eq b => a -> b -> Bool"
+        let (type_params, sig_without_constraints) = if let Some(idx) = sig.find("=>") {
+            let constraint_part = sig[..idx].trim();
+            let sig_part = sig[idx + 2..].trim();
+
+            // Parse constraints: "Show a, Eq b" or "Show a"
+            let mut type_param_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+
+            for constraint_clause in constraint_part.split(',') {
+                let clause = constraint_clause.trim();
+                // Parse "Show a" or "Eq b"
+                let parts: Vec<&str> = clause.split_whitespace().collect();
+                if parts.len() == 2 {
+                    let trait_name = parts[0].to_string();
+                    let type_param_name = parts[1].to_string();
+                    type_param_map.entry(type_param_name).or_insert_with(Vec::new).push(trait_name);
+                }
+            }
+
+            // Convert to TypeParam vec
+            let mut type_params = Vec::new();
+            for (name, constraints) in type_param_map {
+                type_params.push(nostos_types::TypeParam {
+                    name,
+                    constraints,
+                });
+            }
+
+            (type_params, sig_part)
         } else {
-            sig
+            (vec![], sig)
         };
 
         // Split by " -> " to get parameter and return types
@@ -19797,7 +19851,7 @@ impl Compiler {
         let ret = self.type_name_to_type(ret_str.trim());
 
         Some(nostos_types::FunctionType { required_params: None,
-            type_params: vec![],
+            type_params,
             params,
             ret: Box::new(ret),
         })

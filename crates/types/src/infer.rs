@@ -880,6 +880,14 @@ impl<'a> InferCtx<'a> {
                         t2.display(),
                     ));
                 }
+                // If t2 is also a Var, merge their trait bounds
+                if let Type::Var(id2) = t2 {
+                    // Merge trait bounds from id2 into id
+                    let bounds2 = self.trait_bounds.get(&id2).cloned().unwrap_or_default();
+                    for bound in bounds2 {
+                        self.add_trait_bound(*id, bound);
+                    }
+                }
                 self.env.substitution.insert(*id, t2);
                 Ok(())
             }
@@ -891,6 +899,14 @@ impl<'a> InferCtx<'a> {
                         format!("?{}", id),
                         t1.display(),
                     ));
+                }
+                // If t1 is also a Var, merge their trait bounds
+                if let Type::Var(id1) = t1 {
+                    // Merge trait bounds from id1 into id
+                    let bounds1 = self.trait_bounds.get(&id1).cloned().unwrap_or_default();
+                    for bound in bounds1 {
+                        self.add_trait_bound(*id, bound);
+                    }
                 }
                 self.env.substitution.insert(*id, t1);
                 Ok(())
