@@ -2151,16 +2151,19 @@ impl<'a> InferCtx<'a> {
                     // Scalar operations: custom type OP numeric type
                     // e.g., Vec * Float, Vec + Int - compiler generates scalar function calls
                     (Type::Named { .. }, Type::Float | Type::Int | Type::Float64 | Type::Int64) |
-                    (Type::Named { .. }, Type::Var(_)) => {
+                    (Type::Named { .. }, Type::Var(_)) |
+                    (Type::Record(_), Type::Float | Type::Int | Type::Float64 | Type::Int64) |
+                    (Type::Record(_), Type::Var(_)) => {
                         // Custom type with numeric scalar - require Num trait and return the custom type
                         // The compiler will dispatch to {typeLower}{Op}Scalar function
                         self.require_trait(left_ty.clone(), "Num");
                         Ok(left_ty)
                     }
-                    // Handle type variable on left with numeric on right - defer unification
-                    // This allows Vec (as Var) * Float to succeed when the Var is later resolved to Vec
+                    // Type variable + concrete numeric → unify for lambda parameter inference
+                    // If the Var actually resolves to a Named type, it would have been caught by
+                    // the Named case above (since we match on resolved_left, not left_ty)
                     (Type::Var(_), Type::Float | Type::Int | Type::Float64 | Type::Int64) => {
-                        // Don't unify - let the compiler handle scalar dispatch if left resolves to Named
+                        self.unify(left_ty.clone(), right_ty.clone());
                         self.require_trait(left_ty.clone(), "Num");
                         Ok(left_ty)
                     }

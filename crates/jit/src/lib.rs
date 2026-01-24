@@ -22,7 +22,7 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module};
 
-use nostos_vm::value::{ConstIdx, FunctionValue, Instruction, Value};
+use nostos_vm::value::{ConstIdx, FunctionValue, Instruction, RegList, Value};
 
 /// Array element types supported by JIT
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -3317,13 +3317,13 @@ mod tests {
         // SubInt r3, r0, r1  ; r3 = n - 1 (else branch starts here, IP=4)
         chunk.code.push(Instruction::SubInt(3, 0, 1));
         // CallSelf r4, [r3]  ; r4 = fib(n-1)
-        chunk.code.push(Instruction::CallSelf(4, Arc::new([3])));
+        chunk.code.push(Instruction::CallSelf(4, RegList(Arc::new([3]))));
         // LoadConst r5, 1    ; r5 = 2
         chunk.code.push(Instruction::LoadConst(5, 1));
         // SubInt r6, r0, r5  ; r6 = n - 2
         chunk.code.push(Instruction::SubInt(6, 0, 5));
         // CallSelf r7, [r6]  ; r7 = fib(n-2)
-        chunk.code.push(Instruction::CallSelf(7, Arc::new([6])));
+        chunk.code.push(Instruction::CallSelf(7, RegList(Arc::new([6]))));
         // AddInt r8, r4, r7  ; r8 = fib(n-1) + fib(n-2)
         chunk.code.push(Instruction::AddInt(8, 4, 7));
         // Return r8
@@ -3444,10 +3444,10 @@ mod tests {
         chunk.code.push(Instruction::Jump(8));             // 5
         chunk.code.push(Instruction::LoadConst(5, 1));     // 6
         chunk.code.push(Instruction::SubInt(6, 0, 5));     // 7
-        chunk.code.push(Instruction::CallSelf(7, Arc::new([6]))); // 8
+        chunk.code.push(Instruction::CallSelf(7, RegList(Arc::new([6])))); // 8
         chunk.code.push(Instruction::LoadConst(8, 2));     // 9
         chunk.code.push(Instruction::SubInt(9, 0, 8));     // 10
-        chunk.code.push(Instruction::CallSelf(10, Arc::new([9]))); // 11
+        chunk.code.push(Instruction::CallSelf(10, RegList(Arc::new([9])))); // 11
         chunk.code.push(Instruction::AddInt(11, 7, 10));   // 12
         chunk.code.push(Instruction::Move(3, 11));         // 13
         chunk.code.push(Instruction::Return(3));           // 14
@@ -3527,7 +3527,7 @@ mod tests {
         // IP=6: r7 = i + 1
         chunk.code.push(Instruction::AddInt(7, 1, 8));
         // IP=7: tail call: sumArray(arr, i+1, acc+arr[i])
-        chunk.code.push(Instruction::TailCallSelf(Arc::new([0, 7, 6])));
+        chunk.code.push(Instruction::TailCallSelf(RegList(Arc::new([0, 7, 6]))));
         // IP=8: return acc (base case)
         chunk.code.push(Instruction::Return(2));
 

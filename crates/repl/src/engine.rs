@@ -17194,12 +17194,13 @@ mod postgres_module_tests {
         let mut engine = ReplEngine::new(config);
         engine.load_stdlib().ok();
 
-        // Stdlib functions are automatically added to prelude during load_stdlib
-        // This makes them available by their local names (htmlParse, etc.)
+        // Only CORE_MODULES are automatically added to prelude during load_stdlib
+        // html_parser is not a core module, so htmlParse is NOT automatically imported
         let functions = engine.get_functions();
         let has_htmlparse = functions.iter().any(|f| f == "htmlParse");
         println!("After load_stdlib: htmlParse available = {}", has_htmlparse);
-        assert!(has_htmlparse, "Stdlib functions should be in prelude after load_stdlib");
+        // htmlParse should NOT be available yet (it's not a core module)
+        assert!(!has_htmlparse, "htmlParse should not be auto-imported (not a core module)");
 
         // Explicit use statement also works (adds alias if needed)
         let result = engine.eval("use stdlib.html_parser.{htmlParse as hp}");
@@ -18282,7 +18283,7 @@ end
         match engine.eval("show(v)") {
             Ok(result) => {
                 println!("OK: {}", result);
-                assert!(result.contains("Vec["), "Expected Vec[...], got: {}", result);
+                assert!(result.contains("testvec.Vec{data:"), "Expected testvec.Vec{{data:...}}, got: {}", result);
             }
             Err(e) => {
                 println!("ERR: {}", e);
@@ -18295,7 +18296,7 @@ end
         match engine.eval("v.show()") {
             Ok(result) => {
                 println!("OK: {}", result);
-                assert!(result.contains("Vec["), "Expected Vec[...], got: {}", result);
+                assert!(result.contains("testvec.Vec{data:"), "Expected testvec.Vec{{data:...}}, got: {}", result);
             }
             Err(e) => {
                 println!("ERR: {}", e);
