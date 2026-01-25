@@ -641,7 +641,10 @@ impl<'a> InferCtx<'a> {
     pub fn finalize_expr_types(&mut self) {
         let resolved: HashMap<Span, Type> = self.expr_types
             .iter()
-            .map(|(span, ty)| (*span, self.apply_full_subst(ty)))
+            .map(|(span, ty)| {
+                let resolved_ty = self.apply_full_subst(ty);
+                (*span, resolved_ty)
+            })
             .collect();
         self.expr_types = resolved;
     }
@@ -2959,7 +2962,7 @@ impl<'a> InferCtx<'a> {
 
     /// Infer types for a module.
     pub fn infer_module(&mut self, module: &Module) -> Result<(), TypeError> {
-        // First pass: collect type and function definitions
+        // First pass: collect type definitions, function signatures, and mvar types
         for item in &module.items {
             match item {
                 Item::TypeDef(td) => {
@@ -2989,11 +2992,16 @@ impl<'a> InferCtx<'a> {
                         },
                     );
                 }
+                Item::MvarDef(mvar) => {
+                    // Mvar has a required type annotation - register it early so functions can see it
+                    let annotated_ty = self.type_from_ast(&mvar.ty);
+                    self.env.bind(mvar.name.node.clone(), annotated_ty, true);
+                }
                 _ => {}
             }
         }
 
-        // Second pass: infer function bodies
+        // Second pass: infer function bodies and mvar initializers
         for item in &module.items {
             match item {
                 Item::FnDef(fd) => {
@@ -3001,6 +3009,12 @@ impl<'a> InferCtx<'a> {
                 }
                 Item::Binding(binding) => {
                     self.infer_binding(binding)?;
+                }
+                Item::MvarDef(mvar) => {
+                    // Verify mvar initializer matches the annotated type
+                    let annotated_ty = self.type_from_ast(&mvar.ty);
+                    let value_ty = self.infer_expr(&mvar.value)?;
+                    self.unify(value_ty, annotated_ty);
                 }
                 _ => {}
             }

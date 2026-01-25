@@ -1877,6 +1877,13 @@ impl Compiler {
                 env.bind(var_name.clone(), ty, false);
             }
 
+            // Bind module-level mutable variables (mvars) in the TypeEnv
+            // This allows functions to reference mvars and have proper type inference
+            for (mvar_name, mvar_info) in &self.mvars {
+                let mvar_type = self.type_name_to_type(&mvar_info.type_name);
+                env.bind(mvar_name.clone(), mvar_type, true);
+            }
+
             // Copy function imports from compiler to TypeEnv for cross-module resolution
             // This allows imported functions like `query` from `stdlib.pool` to be found
             // during type inference even when called by their short name
@@ -1892,23 +1899,12 @@ impl Compiler {
                 }
             }
 
-            // Infer only user functions that don't have complete type annotations
+            // Infer ALL user functions to capture expression types for compilation.
+            // Even functions with complete type annotations need body inference for
+            // proper method dispatch and expression type recording.
             let mut ctx = InferCtx::new(&mut env);
             for (_, (fn_def, _, _, _, _, _)) in &user_fns {
-                // Skip HM inference for functions with complete type annotations.
-                // A function has complete annotations if:
-                // 1. It has at least one parameter AND all params have type annotations, AND
-                // 2. It has a return type annotation
-                // For parameterless functions (like main()), we need inference.
-                let clause = fn_def.clauses.first();
-                let has_all_param_annotations = clause.map_or(false, |c| {
-                    !c.params.is_empty() && c.params.iter().all(|p| p.ty.is_some())
-                });
-                let has_return_annotation = clause.map_or(false, |c| c.return_type.is_some());
-                let has_all_type_annotations = has_all_param_annotations && has_return_annotation;
-                if !has_all_type_annotations {
-                    let _ = ctx.infer_function(fn_def);
-                }
+                let _ = ctx.infer_function(fn_def);
             }
 
             // Solve user constraints
@@ -11851,7 +11847,9 @@ impl Compiler {
             }
             // Leaked type parameter - fall through to pattern-based inference
         } else if matches!(expr, Expr::MethodCall(..)) {
-            eprintln!("HM_MISS: MethodCall span={:?}", expr.span());
+            // Type inference couldn't determine the type for this method call
+            // This indicates a gap in inference that should be investigated
+            eprintln!("HM_MISS: MethodCall span={:?} (inferred_expr_types has {} entries)", expr.span(), self.inferred_expr_types.len());
         }
 
         // Fallback: Pattern-based type inference
