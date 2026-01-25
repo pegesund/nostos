@@ -1688,11 +1688,23 @@ impl Compiler {
                 }
             }
 
-            // Register builtins
+            // Register builtins with both bare name and arity-qualified name
             for builtin in BUILTINS {
-                if !env.functions.contains_key(builtin.name) {
-                    if let Some(fn_type) = self.parse_signature_string(builtin.signature) {
-                        env.insert_function(builtin.name.to_string(), fn_type);
+                if let Some(fn_type) = self.parse_signature_string(builtin.signature) {
+                    // Register with bare name if not already present
+                    if !env.functions.contains_key(builtin.name) {
+                        env.insert_function(builtin.name.to_string(), fn_type.clone());
+                    }
+                    // Also register with arity-qualified name (e.g., "map/_,_")
+                    let arity = fn_type.params.len();
+                    let arity_suffix = if arity == 0 {
+                        "/".to_string()
+                    } else {
+                        format!("/{}", vec!["_"; arity].join(","))
+                    };
+                    let arity_qualified = format!("{}{}", builtin.name, arity_suffix);
+                    if !env.functions.contains_key(&arity_qualified) {
+                        env.insert_function(arity_qualified, fn_type);
                     }
                 }
             }
@@ -1743,11 +1755,19 @@ impl Compiler {
             // Transfer inferred expression types from stdlib inference.
             // With file_id in Span, spans are now unique across files.
             // Apply substitution to resolve type variables to concrete types.
-            let stdlib_expr_types: HashMap<_, _> = ctx.take_expr_types()
-                .into_iter()
-                .map(|(span, ty)| (span, ctx.apply_full_subst(&ty)))
-                .collect();
-            self.inferred_expr_types.extend(stdlib_expr_types);
+            // Transfer types, preferring concrete types over non-concrete.
+            // Only skip if new type is non-concrete AND existing type IS concrete.
+            for (span, ty) in ctx.take_expr_types() {
+                let resolved = ctx.apply_full_subst(&ty);
+                let is_concrete = resolved.is_concrete();
+                let existing_is_concrete = self.inferred_expr_types.get(&span)
+                    .map(|t| t.is_concrete())
+                    .unwrap_or(false);
+                if is_concrete || !existing_is_concrete {
+                    // Insert if new is concrete OR existing is also non-concrete
+                    self.inferred_expr_types.insert(span, resolved);
+                }
+            }
 
             // Apply full substitution (including TypeParam resolution) only to stdlib signatures
             for (fn_name, fn_type) in self.pending_fn_signatures.iter_mut() {
@@ -1838,7 +1858,18 @@ impl Compiler {
                 if fn_val.signature.is_some() {
                     if let Some(sig) = fn_val.signature.as_ref() {
                         if let Some(fn_type) = self.parse_signature_string(sig) {
-                            env.insert_function(fn_name.clone(), fn_type);
+                            env.insert_function(fn_name.clone(), fn_type.clone());
+
+                            // Also register with short name for functions like flatMap
+                            if let Some(slash_pos) = fn_name.find('/') {
+                                let base_name = &fn_name[..slash_pos];
+                                if let Some(dot_pos) = base_name.rfind('.') {
+                                    let short_name = &base_name[dot_pos + 1..];
+                                    if !env.functions.contains_key(short_name) {
+                                        env.insert_function(short_name.to_string(), fn_type);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1847,13 +1878,67 @@ impl Compiler {
             // Register ALL pending function signatures (stdlib now resolved, user still has type vars)
             for (fn_name, fn_type) in &self.pending_fn_signatures {
                 env.insert_function(fn_name.clone(), fn_type.clone());
+
+                // Also register with arity-qualified wildcard suffix and short name
+                // E.g., "stdlib.list.flatMap/List[T],(T) -> List[U]" -> "flatMap/_,_" and "flatMap"
+                if let Some(slash_pos) = fn_name.find('/') {
+                    let base_name = &fn_name[..slash_pos];
+                    let param_str = &fn_name[slash_pos + 1..];
+                    // Count commas to get arity (handling nested brackets)
+                    let arity = if param_str.is_empty() {
+                        0
+                    } else {
+                        let mut count = 1;
+                        let mut depth = 0;
+                        for ch in param_str.chars() {
+                            match ch {
+                                '[' | '(' | '{' => depth += 1,
+                                ']' | ')' | '}' => depth -= 1,
+                                ',' if depth == 0 => count += 1,
+                                _ => {}
+                            }
+                        }
+                        count
+                    };
+                    let arity_suffix = if arity == 0 {
+                        "/".to_string()
+                    } else {
+                        format!("/{}", vec!["_"; arity].join(","))
+                    };
+
+                    // Extract the short function name (after the last dot)
+                    if let Some(dot_pos) = base_name.rfind('.') {
+                        let short_name = &base_name[dot_pos + 1..];
+                        let short_qualified = format!("{}{}", short_name, arity_suffix);
+                        // Register with arity-qualified short name (e.g., "flatMap/_,_")
+                        if !env.functions.contains_key(&short_qualified) {
+                            env.insert_function(short_qualified.clone(), fn_type.clone());
+                        }
+                        // Also register with bare short name (e.g., "flatMap")
+                        if !env.functions.contains_key(short_name) {
+                            env.insert_function(short_name.to_string(), fn_type.clone());
+                        }
+                    }
+                }
             }
 
-            // Register builtins
+            // Register builtins with both bare name and arity-qualified name
             for builtin in BUILTINS {
-                if !env.functions.contains_key(builtin.name) {
-                    if let Some(fn_type) = self.parse_signature_string(builtin.signature) {
-                        env.insert_function(builtin.name.to_string(), fn_type);
+                if let Some(fn_type) = self.parse_signature_string(builtin.signature) {
+                    // Register with bare name if not already present
+                    if !env.functions.contains_key(builtin.name) {
+                        env.insert_function(builtin.name.to_string(), fn_type.clone());
+                    }
+                    // Also register with arity-qualified name (e.g., "map/_,_")
+                    let arity = fn_type.params.len();
+                    let arity_suffix = if arity == 0 {
+                        "/".to_string()
+                    } else {
+                        format!("/{}", vec!["_"; arity].join(","))
+                    };
+                    let arity_qualified = format!("{}{}", builtin.name, arity_suffix);
+                    if !env.functions.contains_key(&arity_qualified) {
+                        env.insert_function(arity_qualified, fn_type);
                     }
                 }
             }
@@ -1917,11 +2002,19 @@ impl Compiler {
             // Transfer inferred expression types from user inference.
             // With file_id in Span, spans are now unique across files.
             // Apply substitution to resolve type variables to concrete types.
-            let user_expr_types: HashMap<_, _> = ctx.take_expr_types()
-                .into_iter()
-                .map(|(span, ty)| (span, ctx.apply_full_subst(&ty)))
-                .collect();
-            self.inferred_expr_types.extend(user_expr_types);
+            // Only insert types that are concrete or more concrete than existing entries.
+            // This prevents an unresolved type variable from overwriting a resolved type.
+            for (span, ty) in ctx.take_expr_types() {
+                let resolved = ctx.apply_full_subst(&ty);
+                let is_concrete = resolved.is_concrete();
+                let existing_is_concrete = self.inferred_expr_types.get(&span)
+                    .map(|t| t.is_concrete())
+                    .unwrap_or(false);
+                if is_concrete || !existing_is_concrete {
+                    // Insert if new is concrete OR existing is also non-concrete
+                    self.inferred_expr_types.insert(span, resolved);
+                }
+            }
 
             // Apply full substitution (including TypeParam resolution) only to user signatures
             for (fn_name, fn_type) in self.pending_fn_signatures.iter_mut() {
@@ -11850,8 +11943,6 @@ impl Compiler {
                 return Some(result);
             }
             // Leaked type parameter - fall through to pattern-based inference
-        } else if matches!(expr, Expr::MethodCall(..)) {
-            eprintln!("HM_MISS: MethodCall span={:?}", expr.span());
         }
 
         // Fallback: Pattern-based type inference
@@ -18591,13 +18682,23 @@ impl Compiler {
         // Don't override functions that are already in standard_env (like println, print, show)
         // because those have manually crafted type params
         for builtin in BUILTINS {
-            // Skip if already registered in standard_env
-            if env.functions.contains_key(builtin.name) {
-                continue;
-            }
             // Parse the builtin's signature (which may include trait constraints)
             if let Some(func_type) = self.parse_signature_string(builtin.signature) {
-                env.insert_function(builtin.name.to_string(), func_type);
+                // Register with bare name if not already present
+                if !env.functions.contains_key(builtin.name) {
+                    env.insert_function(builtin.name.to_string(), func_type.clone());
+                }
+                // Also register with arity-qualified name (e.g., "map/_,_")
+                let arity = func_type.params.len();
+                let arity_suffix = if arity == 0 {
+                    "/".to_string()
+                } else {
+                    format!("/{}", vec!["_"; arity].join(","))
+                };
+                let arity_qualified = format!("{}{}", builtin.name, arity_suffix);
+                if !env.functions.contains_key(&arity_qualified) {
+                    env.insert_function(arity_qualified, func_type);
+                }
             }
         }
 
@@ -18740,6 +18841,18 @@ impl Compiler {
 
                 // Always register with type suffix (allows multiple overloads)
                 env.insert_function(qualified_name, fn_type.clone());
+
+                // Also register with arity-qualified name (e.g., "map/_,_")
+                let arity = fn_type.params.len();
+                let arity_suffix = if arity == 0 {
+                    "/".to_string()
+                } else {
+                    format!("/{}", vec!["_"; arity].join(","))
+                };
+                let arity_qualified = format!("{}{}", builtin.name, arity_suffix);
+                if !env.functions.contains_key(&arity_qualified) {
+                    env.insert_function(arity_qualified, fn_type.clone());
+                }
 
                 // Also register under bare name if not already present
                 if !env.functions.contains_key(builtin.name) {
@@ -19012,13 +19125,23 @@ impl Compiler {
         // Don't override functions that are already in standard_env (like println, print, show)
         // because those have manually crafted type params
         for builtin in BUILTINS {
-            // Skip if already registered in standard_env
-            if env.functions.contains_key(builtin.name) {
-                continue;
-            }
             // Parse the builtin's signature (which may include trait constraints)
             if let Some(func_type) = self.parse_signature_string(builtin.signature) {
-                env.insert_function(builtin.name.to_string(), func_type);
+                // Register with bare name if not already present
+                if !env.functions.contains_key(builtin.name) {
+                    env.insert_function(builtin.name.to_string(), func_type.clone());
+                }
+                // Also register with arity-qualified name (e.g., "map/_,_")
+                let arity = func_type.params.len();
+                let arity_suffix = if arity == 0 {
+                    "/".to_string()
+                } else {
+                    format!("/{}", vec!["_"; arity].join(","))
+                };
+                let arity_qualified = format!("{}{}", builtin.name, arity_suffix);
+                if !env.functions.contains_key(&arity_qualified) {
+                    env.insert_function(arity_qualified, func_type);
+                }
             }
         }
 
@@ -20143,13 +20266,21 @@ impl Compiler {
             "()" | "Unit" => nostos_types::Type::Unit,
             "?" | "_" => nostos_types::Type::Var(u32::MAX), // Unknown/untyped param
             _ => {
-                // Check if this is a type variable (single lowercase letter)
-                // Type variables like 'a', 'b', 'c' are used in polymorphic signatures
-                if ty.len() == 1 && ty.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false) {
-                    // Convert to a consistent type variable ID based on the letter
-                    // 'a' -> 1, 'b' -> 2, etc.
-                    let var_id = (ty.chars().next().unwrap() as u32) - ('a' as u32) + 1;
-                    nostos_types::Type::Var(var_id)
+                // Check if this is a type variable (single letter, lowercase or uppercase)
+                // Type variables like 'a', 'b', 'T', 'U' are used in polymorphic signatures
+                if ty.len() == 1 {
+                    let ch = ty.chars().next().unwrap();
+                    if ch.is_ascii_lowercase() {
+                        // 'a' -> 1, 'b' -> 2, etc.
+                        let var_id = (ch as u32) - ('a' as u32) + 1;
+                        nostos_types::Type::Var(var_id)
+                    } else if ch.is_ascii_uppercase() {
+                        // 'T' -> 20, 'U' -> 21, etc. (offset to avoid collision with lowercase)
+                        let var_id = (ch as u32) - ('A' as u32) + 20;
+                        nostos_types::Type::Var(var_id)
+                    } else {
+                        nostos_types::Type::Named { name: ty.to_string(), args: vec![] }
+                    }
                 } else {
                     nostos_types::Type::Named { name: ty.to_string(), args: vec![] }
                 }
