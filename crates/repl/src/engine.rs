@@ -1593,11 +1593,7 @@ impl ReplEngine {
     /// - Module-qualified types (like "testvec.Vec") - not in scope
     /// - Type parameters (single lowercase letter like "a") - not concrete
     fn is_safe_type_annotation(type_ann: &str) -> bool {
-        // Skip module-qualified types (e.g., "nalgebra.Vec")
-        // These aren't valid in local binding type annotations
-        if type_ann.contains('.') {
-            return false;
-        }
+        // Module-qualified types (e.g., "testvec.Vec") ARE valid and needed for scalar operations
         // Skip function types (e.g., "Int -> Int") - can't be used in binding annotations
         if type_ann.contains("->") {
             return false;
@@ -1642,20 +1638,9 @@ impl ReplEngine {
                 .iter()
                 .filter(|(var_name, _)| *var_name != name) // Don't inject the variable being defined
                 .map(|(var_name, binding)| {
-                    if let Some(ref type_ann) = binding.type_annotation {
-                        // Module-qualified types (e.g., "nalgebra.Vec") don't work in
-                        // type annotations within function bodies, so skip them.
-                        // The thunk already returns the correct type.
-                        if type_ann.contains('.') {
-                            format!("{} = {}()", var_name, binding.thunk_name)
-                        } else if Self::is_safe_type_annotation(type_ann) {
-                            format!("{}: {} = {}()", var_name, type_ann, binding.thunk_name)
-                        } else {
-                            format!("{} = {}()", var_name, binding.thunk_name)
-                        }
-                    } else {
-                        format!("{} = {}()", var_name, binding.thunk_name)
-                    }
+                    // Don't use type annotations - they don't work reliably for module-qualified types.
+                    // Instead, rely on function return type propagation and the env bindings added in compile.rs
+                    format!("{} = {}()", var_name, binding.thunk_name)
                 })
                 .collect();
             if bindings.is_empty() {
@@ -2477,22 +2462,15 @@ impl ReplEngine {
         self.eval_counter += 1;
         let eval_name = format!("__repl_eval_{}__", self.eval_counter);
 
-        // Include type annotations so the compiler knows variable types for trait dispatch
+        // Don't use type annotations - they don't work reliably for module-qualified types.
+        // Instead, rely on function return type propagation and the env bindings added in compile.rs
         let bindings_preamble = if self.var_bindings.is_empty() {
             String::new()
         } else {
             let bindings: Vec<String> = self.var_bindings
                 .iter()
                 .map(|(name, binding)| {
-                    if let Some(ref type_ann) = binding.type_annotation {
-                        if Self::is_safe_type_annotation(type_ann) {
-                            format!("{}: {} = {}()", name, type_ann, binding.thunk_name)
-                        } else {
-                            format!("{} = {}()", name, binding.thunk_name)
-                        }
-                    } else {
-                        format!("{} = {}()", name, binding.thunk_name)
-                    }
+                    format!("{} = {}()", name, binding.thunk_name)
                 })
                 .collect();
             bindings.join("\n    ") + "\n    "
@@ -3228,12 +3206,21 @@ impl ReplEngine {
     fn get_variable_type_from_thunk(&self, thunk_name: &str) -> Option<String> {
         // First, try to get the HM-inferred type
         if let Some(hm_type) = self.compiler.get_function_return_type_hm(thunk_name) {
+            eprintln!("DEBUG get_variable_type_from_thunk({}): hm_type={:?}, concrete={}", thunk_name, hm_type, hm_type.is_concrete());
             // Only use the type if it's fully concrete (no Var or TypeParam)
             if hm_type.is_concrete() {
                 let type_str = hm_type.display();
                 // Additional check: don't use function types as annotations (can't be parsed)
                 if !type_str.contains("->") {
-                    return Some(type_str);
+                    // Resolve short type names to qualified names via imports
+                    // e.g., "Vec" -> "testvec.Vec" if "use testvec.*" was used
+                    let qualified_name = self.compiler.resolve_type_name(&type_str)
+                        .unwrap_or_else(|| {
+                            eprintln!("DEBUG: Could not resolve type name '{}', using as-is", type_str);
+                            type_str.clone()
+                        });
+                    eprintln!("DEBUG: Resolved type '{}' -> '{}'", type_str, qualified_name);
+                    return Some(qualified_name);
                 }
             }
             // Type has variables, don't use as annotation

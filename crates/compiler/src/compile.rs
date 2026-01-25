@@ -1696,6 +1696,14 @@ impl Compiler {
                 }
             }
 
+            // Bind REPL local variables in the TypeEnv for HM inference
+            // This allows expressions like `v * 2.0` to know that `v: testvec.Vec`
+            // and dispatch correctly to scalar operations
+            for (var_name, type_name) in &self.local_types {
+                let ty = self.type_name_to_type(type_name);
+                env.bind(var_name.clone(), ty, false);
+            }
+
             // Update next_var to avoid collisions with type variables in registered functions
             // Signatures use Var(1), Var(2) etc for type params 'a', 'b', so we need fresh vars
             // to start after the maximum var ID in any signature
@@ -1852,6 +1860,14 @@ impl Compiler {
                 if env.next_var <= max_id {
                     env.next_var = max_id.saturating_add(1);
                 }
+            }
+
+            // Bind REPL local variables in the TypeEnv for HM inference
+            // This allows expressions like `v * 2.0` to know that `v: testvec.Vec`
+            // and dispatch correctly to scalar operations
+            for (var_name, type_name) in &self.local_types {
+                let ty = self.type_name_to_type(type_name);
+                env.bind(var_name.clone(), ty, false);
             }
 
             // Infer only user functions that don't have complete type annotations
@@ -2159,8 +2175,9 @@ impl Compiler {
             }
         }
 
-        // Clear pending_fn_signatures now that the third pass is done
-        self.pending_fn_signatures.clear();
+        // NOTE: Don't clear pending_fn_signatures yet - the REPL needs them to get variable types
+        // after compilation via get_function_return_type_hm()
+        // self.pending_fn_signatures.clear();
 
         // Check for mvar safety violations (prevents runtime deadlocks)
         let mvar_errors = self.check_mvar_deadlocks();
@@ -17714,6 +17731,27 @@ impl Compiler {
         self.trait_defs.get(name)
     }
 
+    /// Resolve a type name to its fully qualified name via imports.
+    /// e.g., "Vec" -> "testvec.Vec" if "use testvec.*" was used.
+    /// Returns None if the type is not found in imports.
+    pub fn resolve_type_name(&self, short_name: &str) -> Option<String> {
+        // First check if it's already qualified
+        if short_name.contains('.') {
+            return Some(short_name.to_string());
+        }
+
+        // Check imports map (e.g., from "use testvec.*")
+        if let Some(qualified) = self.imports.get(short_name) {
+            // The imports map contains function names too, so check if this is a type
+            if self.types.contains_key(qualified) {
+                return Some(qualified.clone());
+            }
+        }
+
+        // Not found in imports, return None
+        None
+    }
+
     /// Find a function by base name or full qualified name.
     /// Supports both "add" and "add/_,_" formats.
     fn find_function(&self, name: &str) -> Option<&Arc<FunctionValue>> {
@@ -18807,6 +18845,14 @@ impl Compiler {
             );
         }
 
+        // Bind REPL local variables in the TypeEnv for HM inference
+        // This allows expressions like `v * 2.0` to know that `v: testvec.Vec`
+        // and dispatch correctly to scalar operations
+        for (var_name, type_name) in &self.local_types {
+            let ty = self.type_name_to_type(type_name);
+            env.bind(var_name.clone(), ty, false);
+        }
+
         // Create inference context
         let mut ctx = InferCtx::new(&mut env);
 
@@ -19323,6 +19369,14 @@ impl Compiler {
                     ret: Box::new(ret_ty),
                 },
             );
+        }
+
+        // Bind REPL local variables in the TypeEnv for HM inference
+        // This allows expressions like `v * 2.0` to know that `v: testvec.Vec`
+        // and dispatch correctly to scalar operations
+        for (var_name, type_name) in &self.local_types {
+            let ty = self.type_name_to_type(type_name);
+            env.bind(var_name.clone(), ty, false);
         }
 
         // Create inference context

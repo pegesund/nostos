@@ -138,6 +138,57 @@ impl<'a> InferCtx<'a> {
             .push(Constraint::HasField(ty, field.to_string(), field_ty));
     }
 
+    /// Peek at pending constraints to see what a type variable will resolve to.
+    /// This is used during pattern matching (e.g., for scalar dispatch) to look ahead
+    /// at constraints that will be solved later.
+    /// Returns the concrete type if found in pending constraints, otherwise returns the input type.
+    fn peek_pending_resolution(&self, ty: &Type) -> Type {
+        if let Type::Var(var_id) = ty {
+            // Search through pending constraints for ones that bind this variable
+            for constraint in &self.constraints {
+                if let Constraint::Equal(t1, t2, _) = constraint {
+                    // Check if this constraint binds our variable to a concrete type
+                    if let Type::Var(id1) = t1 {
+                        if *id1 == *var_id {
+                            // Found Var(var_id) = t2
+                            if matches!(t2, Type::Named { .. } | Type::Record(_) | Type::Variant(_)) {
+                                return t2.clone();
+                            }
+                        }
+                    }
+                    if let Type::Var(id2) = t2 {
+                        if *id2 == *var_id {
+                            // Found t1 = Var(var_id)
+                            if matches!(t1, Type::Named { .. } | Type::Record(_) | Type::Variant(_)) {
+                                return t1.clone();
+                            }
+                        }
+                    }
+
+                    // Special case: Function types with return type constraints
+                    // e.g., Function(...ret: Named) = Function(...ret: Var(24))
+                    if let (Type::Function(ft1), Type::Function(ft2)) = (t1, t2) {
+                        if let Type::Var(ret_id) = ft2.ret.as_ref() {
+                            if *ret_id == *var_id {
+                                if matches!(ft1.ret.as_ref(), Type::Named { .. } | Type::Record(_) | Type::Variant(_)) {
+                                    return ft1.ret.as_ref().clone();
+                                }
+                            }
+                        }
+                        if let Type::Var(ret_id) = ft1.ret.as_ref() {
+                            if *ret_id == *var_id {
+                                if matches!(ft2.ret.as_ref(), Type::Named { .. } | Type::Record(_) | Type::Variant(_)) {
+                                    return ft2.ret.as_ref().clone();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        ty.clone()
+    }
+
     /// Uncurry a curried function type into an uncurried one.
     /// For example, `b -> a -> b` (curried) becomes `(b, a) -> b` (uncurried).
     /// Returns the flattened parameter list and the final return type.
@@ -2134,8 +2185,13 @@ impl<'a> InferCtx<'a> {
                 let resolved_left = self.env.apply_subst(&left_ty);
                 let resolved_right = self.env.apply_subst(&right_ty);
 
+                // For scalar dispatch, peek at pending constraints to see through type variables
+                // This allows patterns like `(Named, Float)` to match even when the Named type
+                // is currently represented as Var(x) that will resolve to Named during solving
+                let left_for_dispatch = self.peek_pending_resolution(&resolved_left);
+
                 // Check for Int/Float mixing - result is Float due to implicit coercion
-                match (&resolved_left, &resolved_right) {
+                match (&left_for_dispatch, &resolved_right) {
                     (Type::Int, Type::Float) | (Type::Float, Type::Int) |
                     (Type::Int, Type::Float64) | (Type::Float64, Type::Int) |
                     (Type::Int64, Type::Float) | (Type::Float, Type::Int64) |
@@ -2150,6 +2206,8 @@ impl<'a> InferCtx<'a> {
                     }
                     // Scalar operations: custom type OP numeric type
                     // e.g., Vec * Float, Vec + Int - compiler generates scalar function calls
+                    // We use left_for_dispatch which peeks at pending constraints, so this pattern
+                    // matches even when the left type is currently Var(x) but will resolve to Named
                     (Type::Named { .. }, Type::Float | Type::Int | Type::Float64 | Type::Int64) |
                     (Type::Named { .. }, Type::Var(_)) |
                     (Type::Record(_), Type::Float | Type::Int | Type::Float64 | Type::Int64) |
@@ -2160,8 +2218,7 @@ impl<'a> InferCtx<'a> {
                         Ok(left_ty)
                     }
                     // Type variable + concrete numeric → unify for lambda parameter inference
-                    // If the Var actually resolves to a Named type, it would have been caught by
-                    // the Named case above (since we match on resolved_left, not left_ty)
+                    // This case handles lambdas where the parameter type needs to be inferred
                     (Type::Var(_), Type::Float | Type::Int | Type::Float64 | Type::Int64) => {
                         self.unify(left_ty.clone(), right_ty.clone());
                         self.require_trait(left_ty.clone(), "Num");
