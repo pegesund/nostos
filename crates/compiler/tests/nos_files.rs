@@ -2,6 +2,12 @@
 //!
 //! Test files should have a `# expect: <value>` comment at the top to specify
 //! the expected result of running main().
+//!
+//! KNOWN ISSUE: These tests may SIGSEGV when run via `cargo test` (both in parallel
+//! and single-threaded), but all tests pass when run via `tests/runall.sh` or
+//! individually with the nostos binary. The issue appears to be in test harness
+//! cleanup/teardown, not in the compiler or VM. Use `cd tests && ./runall.sh`
+//! as the canonical test method (see CLAUDE.md).
 
 use nostos_compiler::compile::{compile_module, compile_module_with_stdlib, MvarInitValue};
 use nostos_syntax::parse;
