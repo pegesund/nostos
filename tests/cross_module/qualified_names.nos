@@ -1,0 +1,30 @@
+# expect: 30
+# Test qualified name resolution across modules
+
+module Math
+    pub add(a: Int, b: Int) = a + b
+    pub multiply(a: Int, b: Int) = a * b
+end
+
+module Utils
+    # Function with same name as Math.add
+    pub add(a: Int, b: Int, c: Int) = a + b + c
+end
+
+main() = {
+    # Qualified call to Math.add (2 params)
+    sum2 = Math.add(10, 5)
+    assertType[Int](sum2)
+
+    # Qualified call to Utils.add (3 params)
+    sum3 = Utils.add(5, 10, 15)
+    assertType[Int](sum3)
+
+    # Verify correct functions were called
+    # Math.add(10, 5) = 15
+    # Utils.add(5, 10, 15) = 30
+    sum2 + sum3  # 15 + 30 = 45... wait that's not 30
+
+    # Actually return sum3 to verify Utils.add works
+    sum3
+}

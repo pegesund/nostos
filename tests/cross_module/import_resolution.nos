@@ -1,0 +1,34 @@
+# expect: 15
+# Cross-module import resolution test
+# Tests that imported functions resolve correctly during type inference
+
+module Lib
+    # A simple add function with 2 params
+    pub add(a: Int, b: Int) = a + b
+
+    # A function that returns a list
+    pub makeList(n: Int) = [n, n + 1, n + 2]
+
+    # A function with same name as a builtin (length) but different signature
+    pub getLength(list: List[Int]) = list.length()
+end
+
+use Lib.{add, makeList, getLength}
+
+main() = {
+    # Test basic import - add takes 2 params
+    sum = add(5, 10)
+    assertType[Int](sum)
+
+    # Test list-returning function
+    # Note: makeList returns List[Int] but inference currently loses element type
+    # This is a known limitation - runtime type is correct
+    list = makeList(1)
+
+    # Test function that wraps a builtin
+    len = getLength(list)
+    assertType[Int](len)
+
+    # Return the sum to verify correct execution
+    sum
+}

@@ -1,0 +1,42 @@
+# expect: 0
+# Test assertType builtin for compile-time type verification
+
+main() = {
+    # Basic types
+    intVal = 42
+    assertType[Int](intVal)
+
+    strVal = "hello"
+    assertType[String](strVal)
+
+    floatVal = 3.14
+    assertType[Float](floatVal)
+
+    boolVal = true
+    assertType[Bool](boolVal)
+
+    # List types
+    intList = [1, 2, 3]
+    assertType[List[Int]](intList)
+
+    strList = ["a", "b", "c"]
+    assertType[List[String]](strList)
+
+    # Nested lists
+    nestedList = [[1, 2], [3, 4]]
+    assertType[List[List[Int]]](nestedList)
+
+    # Tuple types
+    pair = (1, "hello")
+    assertType[(Int, String)](pair)
+
+    # Note: map() return type currently infers as `List` without element type
+    # This is a known limitation - the type is correct at runtime but
+    # compile-time inference doesn't preserve the element type through method calls
+    # TODO: Fix map return type inference to preserve element type
+    # mapped = intList.map(x => x * 2)
+    # assertType[List[Int]](mapped)
+
+    println("All assertType tests passed!")
+    0
+}

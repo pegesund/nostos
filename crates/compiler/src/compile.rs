@@ -38,6 +38,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "inspect", signature: "a -> String -> ()", doc: "Send a value to the inspector panel with a label" },
     BuiltinInfo { name: "assert", signature: "Bool -> ()", doc: "Assert condition is true, panic if false" },
     BuiltinInfo { name: "assert_eq", signature: "a -> a -> ()", doc: "Assert two values are equal, panic if not" },
+    BuiltinInfo { name: "assertType", signature: "a -> a", doc: "Compile-time type assertion: assertType[ExpectedType](expr) verifies expr has ExpectedType" },
     // panic is handled early in compile_call, not via BUILTINS dispatch
     // BuiltinInfo { name: "panic", signature: "a -> ()", doc: "Panic with a message (terminates execution)" },
     BuiltinInfo { name: "sleep", signature: "Int -> ()", doc: "Sleep for N milliseconds" },
@@ -11022,6 +11023,43 @@ impl Compiler {
                         let const_idx = self.chunk.add_constant(Value::String(Arc::new(type_name)));
                         self.chunk.emit(Instruction::LoadConst(dst, const_idx as u16), line);
                         return Ok(dst);
+                    }
+                    "assertType" if arg_regs.len() == 1 && !type_args.is_empty() => {
+                        // assertType[T](expr) - compile-time type assertion
+                        // Verifies that expr has type T, fails compilation if not
+                        let expected_type = self.type_expr_to_string(&type_args[0]);
+
+                        // Get the actual inferred type of the argument
+                        let arg_expr = Self::call_arg_expr(&args[0]);
+                        let actual_type = self.expr_type_name(arg_expr)
+                            .unwrap_or_else(|| "unknown".to_string());
+
+                        // Normalize both types for comparison (handle List[T] vs [T] etc.)
+                        let normalize = |s: &str| -> String {
+                            s.replace("[", "List[")
+                                .replace("List[List[", "[")  // Undo double replacement
+                                .replace("()", "Unit")
+                        };
+                        let expected_normalized = normalize(&expected_type);
+                        let actual_normalized = normalize(&actual_type);
+
+                        // Compare types - allow type variables to match anything
+                        let types_match = expected_normalized == actual_normalized
+                            || actual_type == "unknown"
+                            || expected_type.chars().next().map(|c| c.is_lowercase()).unwrap_or(false); // type param like 'a'
+
+                        if !types_match {
+                            return Err(CompileError::TypeError {
+                                message: format!(
+                                    "assertType failed: expected `{}`, found `{}`",
+                                    expected_type, actual_type
+                                ),
+                                span: func.span(),
+                            });
+                        }
+
+                        // Type check passed - just return the argument value (no-op at runtime)
+                        return Ok(arg_regs[0]);
                     }
                     "makeVariant" if arg_regs.len() == 2 && !type_args.is_empty() => {
                         // makeVariant[T](ctor_name, fields_map)

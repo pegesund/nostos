@@ -1,0 +1,25 @@
+# expect: 42
+# Test function visibility across modules with type annotations
+
+module Math
+    pub double(x: Int) -> Int = x * 2
+    pub half(x: Int) -> Int = x / 2
+    pub identity(x: Int) -> Int = x
+end
+
+use Math.{double, half, identity}
+
+main() = {
+    # Use imported functions with type annotations
+    a = double(10)
+    assertType[Int](a)
+
+    b = half(a)
+    assertType[Int](b)
+
+    c = identity(42)
+    assertType[Int](c)
+
+    # Verify results: double(10) = 20, half(20) = 10, identity(42) = 42
+    c
+}
