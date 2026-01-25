@@ -457,6 +457,14 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Runtime.numThreads", signature: "() -> Int", doc: "Get number of OS threads in process (Linux only)" },
     BuiltinInfo { name: "Runtime.tokioWorkers", signature: "() -> Int", doc: "Get number of tokio worker threads (Linux only)" },
     BuiltinInfo { name: "Runtime.blockingThreads", signature: "() -> Int", doc: "Get number of tokio blocking threads (Linux only)" },
+
+    // === Encoding ===
+    BuiltinInfo { name: "Base64.encode", signature: "String -> String", doc: "Encode string to base64" },
+    BuiltinInfo { name: "Base64.decode", signature: "String -> (String, String)", doc: "Decode base64 string, returns (status, decoded)" },
+    BuiltinInfo { name: "Url.encode", signature: "String -> String", doc: "URL-encode a string" },
+    BuiltinInfo { name: "Url.decode", signature: "String -> (String, String)", doc: "URL-decode a string, returns (status, decoded)" },
+    BuiltinInfo { name: "Encoding.toBytes", signature: "String -> [Int]", doc: "Convert string to UTF-8 byte list" },
+    BuiltinInfo { name: "Encoding.fromBytes", signature: "[Int] -> (String, String)", doc: "Convert UTF-8 bytes to string, returns (status, decoded)" },
 ];
 
 /// Check if a function name shadows a built-in function.
