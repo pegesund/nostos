@@ -96,7 +96,6 @@ dependencies = [
 [[package]]
 name = "nostos-extension"
 version = "0.1.0"
-source = "git+https://github.com/pegesund/nostos?branch=master#53ed201cde3254d3f993f3c3be5843894274b3de"
 dependencies = [
  "parking_lot",
  "rayon",
