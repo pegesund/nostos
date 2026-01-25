@@ -1723,9 +1723,15 @@ impl Compiler {
             for (_, (fn_def, _, _, _, _, _)) in &stdlib_fns {
                 // Skip HM inference for stdlib functions with complete type annotations
                 // This is a major performance optimization since HM inference is expensive
-                let has_all_type_annotations = fn_def.clauses.first().map_or(false, |clause| {
-                    clause.params.iter().all(|p| p.ty.is_some())
+                // A function has complete annotations if:
+                // 1. It has at least one parameter AND all params have type annotations, AND
+                // 2. It has a return type annotation
+                let clause = fn_def.clauses.first();
+                let has_all_param_annotations = clause.map_or(false, |c| {
+                    !c.params.is_empty() && c.params.iter().all(|p| p.ty.is_some())
                 });
+                let has_return_annotation = clause.map_or(false, |c| c.return_type.is_some());
+                let has_all_type_annotations = has_all_param_annotations && has_return_annotation;
                 if !has_all_type_annotations {
                     let _ = ctx.infer_function(fn_def);
                 }
@@ -1889,10 +1895,17 @@ impl Compiler {
             // Infer only user functions that don't have complete type annotations
             let mut ctx = InferCtx::new(&mut env);
             for (_, (fn_def, _, _, _, _, _)) in &user_fns {
-                // Skip HM inference for functions with complete type annotations
-                let has_all_type_annotations = fn_def.clauses.first().map_or(false, |clause| {
-                    clause.params.iter().all(|p| p.ty.is_some())
+                // Skip HM inference for functions with complete type annotations.
+                // A function has complete annotations if:
+                // 1. It has at least one parameter AND all params have type annotations, AND
+                // 2. It has a return type annotation
+                // For parameterless functions (like main()), we need inference.
+                let clause = fn_def.clauses.first();
+                let has_all_param_annotations = clause.map_or(false, |c| {
+                    !c.params.is_empty() && c.params.iter().all(|p| p.ty.is_some())
                 });
+                let has_return_annotation = clause.map_or(false, |c| c.return_type.is_some());
+                let has_all_type_annotations = has_all_param_annotations && has_return_annotation;
                 if !has_all_type_annotations {
                     let _ = ctx.infer_function(fn_def);
                 }
@@ -11837,6 +11850,8 @@ impl Compiler {
                 return Some(result);
             }
             // Leaked type parameter - fall through to pattern-based inference
+        } else if matches!(expr, Expr::MethodCall(..)) {
+            eprintln!("HM_MISS: MethodCall span={:?}", expr.span());
         }
 
         // Fallback: Pattern-based type inference
