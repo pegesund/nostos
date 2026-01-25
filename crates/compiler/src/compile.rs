@@ -1726,23 +1726,13 @@ impl Compiler {
                 }
             }
 
-            // Infer only stdlib functions that don't have complete type annotations
+            // Infer ALL stdlib functions to ensure expression types are stored.
+            // Even functions with complete type annotations need inference to store
+            // types for inner expressions (e.g., method calls inside the function body).
+            // The stdlib is only compiled once and cached, so this cost is acceptable.
             let mut ctx = InferCtx::new(&mut env);
             for (_, (fn_def, _, _, _, _, _)) in &stdlib_fns {
-                // Skip HM inference for stdlib functions with complete type annotations
-                // This is a major performance optimization since HM inference is expensive
-                // A function has complete annotations if:
-                // 1. It has at least one parameter AND all params have type annotations, AND
-                // 2. It has a return type annotation
-                let clause = fn_def.clauses.first();
-                let has_all_param_annotations = clause.map_or(false, |c| {
-                    !c.params.is_empty() && c.params.iter().all(|p| p.ty.is_some())
-                });
-                let has_return_annotation = clause.map_or(false, |c| c.return_type.is_some());
-                let has_all_type_annotations = has_all_param_annotations && has_return_annotation;
-                if !has_all_type_annotations {
-                    let _ = ctx.infer_function(fn_def);
-                }
+                let _ = ctx.infer_function(fn_def);
             }
 
             // Solve stdlib constraints
@@ -11854,11 +11844,8 @@ impl Compiler {
                 return Some(result);
             }
             // Leaked type parameter - fall through to pattern-based inference
-        } else if matches!(expr, Expr::MethodCall(..)) {
-            // Type inference couldn't determine the type for this method call
-            // This indicates a gap in inference that should be investigated
-            eprintln!("HM_MISS: MethodCall span={:?} (inferred_expr_types has {} entries)", expr.span(), self.inferred_expr_types.len());
         }
+        // Note: If we reach here for a MethodCall, the pattern-based fallback below handles it correctly.
 
         // Fallback: Pattern-based type inference
         match expr {
