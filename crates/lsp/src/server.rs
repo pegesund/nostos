@@ -1306,13 +1306,27 @@ impl LanguageServer for NostosLanguageServer {
 
         eprintln!("Hover word: '{}' at {}..{}", word, word_start, word_end);
 
+        // Compute byte offset for HM type lookup
+        let byte_offset = Self::line_col_to_byte_offset(&content, position.line as usize, word_start);
+
         // Get local bindings for type inference
         let engine_guard = self.engine.lock().unwrap();
         let engine_ref = engine_guard.as_ref();
         let local_vars = Self::extract_local_bindings(&content, line_num + 1, engine_ref);
 
+        // Try HM-inferred type first (uses position-based lookup)
+        let hm_type = if let Some(engine) = engine_ref {
+            // Use file_id 0 since that's what the parser uses by default
+            engine.get_inferred_type_at_position(0, byte_offset)
+        } else {
+            None
+        };
+
         // Try to get type/signature information
-        let hover_info = if let Some(engine) = engine_ref {
+        let hover_info = if let Some(ty) = hm_type {
+            // Got an HM-inferred type - use it
+            Some(format!("```nostos\n{}: {}\n```\n*(inferred)*", word, ty))
+        } else if let Some(engine) = engine_ref {
             self.get_hover_info(engine, &word, &local_vars, line)
         } else {
             None
@@ -3659,6 +3673,18 @@ impl NostosLanguageServer {
         }
 
         items
+    }
+
+    /// Convert line/column (0-based) to byte offset in content
+    fn line_col_to_byte_offset(content: &str, line: usize, col: usize) -> usize {
+        let mut offset = 0;
+        for (i, line_content) in content.lines().enumerate() {
+            if i == line {
+                return offset + col;
+            }
+            offset += line_content.len() + 1; // +1 for newline
+        }
+        offset
     }
 
     /// Extract the word/identifier at the cursor position

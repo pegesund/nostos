@@ -1203,6 +1203,9 @@ pub struct Compiler {
     /// Inferred expression types from HM inference, keyed by Span.
     /// Used for proper type-based method dispatch instead of string hacks.
     inferred_expr_types: HashMap<nostos_syntax::Span, nostos_types::Type>,
+    /// File path to file_id mapping for LSP hover support.
+    /// Allows looking up types by file path instead of file_id.
+    file_path_to_id: HashMap<String, u32>,
 
     // === Performance indexes (O(1) lookups instead of O(n) iterations) ===
     /// Base function name -> all function keys with that base name
@@ -1397,6 +1400,7 @@ impl Compiler {
             extension_signatures: HashMap::new(),
             extension_types: HashMap::new(),
             inferred_expr_types: HashMap::new(),
+            file_path_to_id: HashMap::new(),
             functions_by_base: HashMap::new(),
             function_variants: HashMap::new(),
             function_prefixes: HashSet::new(),
@@ -2756,6 +2760,7 @@ impl Compiler {
             extension_signatures: HashMap::new(),
             extension_types: HashMap::new(),
             inferred_expr_types: HashMap::new(),
+            file_path_to_id: HashMap::new(),
             functions_by_base: HashMap::new(),
             function_variants: HashMap::new(),
             function_prefixes: HashSet::new(),

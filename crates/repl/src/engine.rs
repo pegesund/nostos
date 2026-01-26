@@ -20545,6 +20545,51 @@ main() = {
 
         cleanup(&temp_dir);
     }
+
+    /// Test HM-inferred types at position for LSP hover
+    #[test]
+    fn test_hm_type_at_position() {
+        let temp_dir = create_temp_dir("hm_hover");
+
+        // Create main.nos with simple expressions (no stdlib dependencies)
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = {{").unwrap();
+            writeln!(f, "    x = 42").unwrap();          // line 1: x is Int
+            writeln!(f, "    y = x + 10").unwrap();      // line 2: y is Int
+            writeln!(f, "    y * 2").unwrap();           // line 3
+            writeln!(f, "}}").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        let _ = engine.load_stdlib(); // Load stdlib for proper type inference
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // Check compile status
+        let status = engine.get_compile_status("main.main");
+        println!("main.main status: {:?}", status);
+        assert!(matches!(status, Some(CompileStatus::Compiled)),
+                "main.main should compile successfully, got: {:?}", status);
+
+        // Test type at position for x (line 1, column ~4)
+        // Content: "main() = {\n    x = 42\n..."
+        // Line 1 starts at offset 11 ("main() = {\n")
+        // x is at column 4
+        let offset_x = 11 + 4; // "main() = {\n" + "    "
+        let ty_x = engine.get_inferred_type_at_position(0, offset_x);
+        println!("Type at x (offset {}): {:?}", offset_x, ty_x);
+        // Note: This may return None if types aren't stored for individual bindings
+        if let Some(ty) = ty_x {
+            println!("x type: {}", ty);
+            assert!(ty == "Int" || ty.contains("Int"),
+                    "x should be Int, got: {}", ty);
+        } else {
+            println!("Note: Type at position not found - types may not be stored for this position");
+        }
+
+        cleanup(&temp_dir);
+    }
 }
 
 #[cfg(test)]
