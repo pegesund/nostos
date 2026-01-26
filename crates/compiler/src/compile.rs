@@ -2775,6 +2775,32 @@ impl Compiler {
         self.get_inferred_type(expr).map(|ty| ty.display())
     }
 
+    /// Look up the inferred type at a specific position in a file.
+    /// Used by LSP for hover information.
+    /// Returns the type string for the smallest expression span containing the position.
+    pub fn get_inferred_type_at_position(&self, file_id: u32, byte_offset: usize) -> Option<String> {
+        // Find all spans that contain this position
+        let mut matching: Vec<(&nostos_syntax::Span, &nostos_types::Type)> = self.inferred_expr_types
+            .iter()
+            .filter(|(span, _)| {
+                span.file_id == file_id
+                    && span.start <= byte_offset
+                    && span.end > byte_offset
+            })
+            .collect();
+
+        // Sort by span size (smallest first) to get the most specific type
+        matching.sort_by_key(|(span, _)| span.end - span.start);
+
+        // Return the type of the smallest matching span
+        matching.first().map(|(_, ty)| ty.display())
+    }
+
+    /// Get all inferred expression types (for debugging/introspection).
+    pub fn get_all_inferred_types(&self) -> &HashMap<nostos_syntax::Span, nostos_types::Type> {
+        &self.inferred_expr_types
+    }
+
     /// Enable REPL mode - bypasses visibility checks for interactive exploration
     pub fn set_repl_mode(&mut self, enabled: bool) {
         self.repl_mode = enabled;

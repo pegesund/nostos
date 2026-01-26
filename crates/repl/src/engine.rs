@@ -2982,6 +2982,14 @@ impl ReplEngine {
         types
     }
 
+    /// Get the HM-inferred type at a specific position in a file.
+    /// Used by LSP for hover information.
+    /// file_id: The file identifier (from Span.file_id)
+    /// byte_offset: The byte offset in the file
+    pub fn get_inferred_type_at_position(&self, file_id: u32, byte_offset: usize) -> Option<String> {
+        self.compiler.get_inferred_type_at_position(file_id, byte_offset)
+    }
+
     /// Get all debug breakpoints
     pub fn get_breakpoints(&self) -> Vec<String> {
         self.debug_breakpoints.iter().cloned().collect()
@@ -3857,7 +3865,8 @@ impl ReplEngine {
         None
     }
 
-    /// Resolve generic return types based on the actual type
+    /// Resolve generic return types based on the actual type.
+    /// Uses structural matching for container types.
     fn resolve_generic_return_type(&self, base_type: &str, return_type: &str) -> String {
         // String.chars() returns List[Char]
         if base_type == "String" && return_type == "List" {
@@ -3866,14 +3875,14 @@ impl ReplEngine {
 
         // Handle List[X] methods
         if base_type.starts_with("List[") && base_type.ends_with(']') {
-            let elem_type = &base_type[5..base_type.len()-1]; // Extract X from List[X]
+            let elem_type = &base_type[5..base_type.len()-1];
 
-            // List[X].filter/map/drop/take returns List[X]
-            if return_type == "List" {
+            // List[X].filter/map/drop/take/reverse/sort etc. returns List[X]
+            if return_type == "List" || return_type == "[a]" {
                 return base_type.to_string();
             }
 
-            // List[X].get/head/last returns X (the element type)
+            // List[X].get/head/last returns element type
             // Generic return types like "a" should resolve to the element type
             if return_type.len() == 1 && return_type.chars().next().map_or(false, |c| c.is_lowercase()) {
                 return elem_type.to_string();
@@ -3886,9 +3895,149 @@ impl ReplEngine {
                     return format!("Option[{}]", elem_type);
                 }
             }
+
+            // List[(a, Int)] for enumerate
+            if return_type == "List[(a, Int)]" {
+                return format!("List[({}, Int)]", elem_type);
+            }
+        }
+
+        // Handle Map[K, V] methods
+        if base_type.starts_with("Map[") && base_type.ends_with(']') {
+            // Extract K and V from Map[K, V]
+            if let Some((key_type, value_type)) = Self::extract_map_types(base_type) {
+                // Map.keys() -> List[K]
+                if return_type == "List[k]" || return_type == "[k]" {
+                    return format!("List[{}]", key_type);
+                }
+                // Map.values() -> List[V]
+                if return_type == "List[v]" || return_type == "[v]" {
+                    return format!("List[{}]", value_type);
+                }
+                // Map.toList() -> List[(K, V)]
+                if return_type == "List[(k, v)]" {
+                    return format!("List[({}, {})]", key_type, value_type);
+                }
+                // Map.get(k) -> Option[V]
+                if return_type == "Option[v]" || return_type.starts_with("Option[") {
+                    let inner = &return_type[7..return_type.len()-1];
+                    if inner == "v" || (inner.len() == 1 && inner.chars().next().map_or(false, |c| c.is_lowercase())) {
+                        return format!("Option[{}]", value_type);
+                    }
+                }
+                // Generic v -> V
+                if return_type == "v" || (return_type.len() == 1 && return_type.chars().next().map_or(false, |c| c == 'v')) {
+                    return value_type.to_string();
+                }
+                // Map union/intersection/difference -> Map[K, V]
+                if return_type == "Map" || return_type == "Map[k, v]" {
+                    return base_type.to_string();
+                }
+            }
+        }
+
+        // Handle Set[X] methods
+        if base_type.starts_with("Set[") && base_type.ends_with(']') {
+            let elem_type = &base_type[4..base_type.len()-1];
+
+            // Set.toList() -> List[X]
+            if return_type == "List" || return_type == "[a]" {
+                return format!("List[{}]", elem_type);
+            }
+            // Set union/intersection/difference -> Set[X]
+            if return_type == "Set" || return_type == "Set[a]" {
+                return base_type.to_string();
+            }
+        }
+
+        // Handle Option[T] methods
+        if base_type.starts_with("Option[") && base_type.ends_with(']') {
+            let inner_type = &base_type[7..base_type.len()-1];
+
+            // Option.unwrap/getOrElse -> T
+            if return_type.len() == 1 && return_type.chars().next().map_or(false, |c| c.is_lowercase()) {
+                return inner_type.to_string();
+            }
+            // Option.map returns Option (with potentially different inner type, but same if identity)
+            if return_type == "Option" || return_type.starts_with("Option[") {
+                // For now, assume same inner type for simple cases
+                if return_type == "Option" {
+                    return base_type.to_string();
+                }
+            }
+        }
+
+        // Handle Result[T, E] methods
+        if base_type.starts_with("Result[") && base_type.ends_with(']') {
+            if let Some((ok_type, err_type)) = Self::extract_result_types(base_type) {
+                // Result.unwrap -> T
+                if return_type == "t" || return_type == "a" {
+                    return ok_type.to_string();
+                }
+                // Result.unwrapErr -> E
+                if return_type == "e" {
+                    return err_type.to_string();
+                }
+                // Result.map -> Result[U, E] (assume same types for simple inference)
+                if return_type == "Result" {
+                    return base_type.to_string();
+                }
+            }
         }
 
         return_type.to_string()
+    }
+
+    /// Extract key and value types from "Map[K, V]"
+    fn extract_map_types(map_type: &str) -> Option<(String, String)> {
+        if !map_type.starts_with("Map[") || !map_type.ends_with(']') {
+            return None;
+        }
+        let inner = &map_type[4..map_type.len()-1];
+        // Handle nested types by counting brackets
+        let mut depth = 0;
+        let mut comma_pos = None;
+        for (i, c) in inner.chars().enumerate() {
+            match c {
+                '[' | '(' => depth += 1,
+                ']' | ')' => depth -= 1,
+                ',' if depth == 0 => {
+                    comma_pos = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let pos = comma_pos?;
+        let key = inner[..pos].trim().to_string();
+        let value = inner[pos + 1..].trim().to_string();
+        Some((key, value))
+    }
+
+    /// Extract ok and error types from "Result[T, E]"
+    fn extract_result_types(result_type: &str) -> Option<(String, String)> {
+        if !result_type.starts_with("Result[") || !result_type.ends_with(']') {
+            return None;
+        }
+        let inner = &result_type[7..result_type.len()-1];
+        // Handle nested types by counting brackets
+        let mut depth = 0;
+        let mut comma_pos = None;
+        for (i, c) in inner.chars().enumerate() {
+            match c {
+                '[' | '(' => depth += 1,
+                ']' | ')' => depth -= 1,
+                ',' if depth == 0 => {
+                    comma_pos = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let pos = comma_pos?;
+        let ok_type = inner[..pos].trim().to_string();
+        let err_type = inner[pos + 1..].trim().to_string();
+        Some((ok_type, err_type))
     }
 
     /// Get the signature for a function (for autocomplete display)

@@ -808,6 +808,24 @@ impl<'a> InferCtx<'a> {
         }
     }
 
+    /// Generate warning messages for expressions with unresolved type parameters.
+    /// Returns a list of (span, message) pairs for each unresolved expression.
+    pub fn unresolved_type_param_warnings(&self) -> Vec<(Span, String)> {
+        self.unresolved_type_params.iter().map(|(span, ty, param_name)| {
+            let type_display = ty.display();
+            let msg = format!(
+                "Type parameter '{}' could not be inferred (type is '{}'). Consider adding a type annotation.",
+                param_name, type_display
+            );
+            (*span, msg)
+        }).collect()
+    }
+
+    /// Check if there are any unresolved type parameters.
+    pub fn has_unresolved_type_params(&self) -> bool {
+        !self.unresolved_type_params.is_empty()
+    }
+
     /// Get the resolved type for an expression by its span.
     /// Returns None if the expression wasn't inferred or if types haven't been finalized.
     pub fn get_expr_type(&self, span: &Span) -> Option<&Type> {
