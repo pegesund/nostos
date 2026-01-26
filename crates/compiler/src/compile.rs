@@ -14349,11 +14349,21 @@ impl Compiler {
             }
 
             // Set types for pattern variables based on scrutinee type
-            if let Some(ref ty) = scrut_type {
-                let binding_types = self.extract_pattern_binding_types(&arm.pattern, ty);
-                for (var_name, var_type) in binding_types {
-                    self.local_types.insert(var_name, var_type);
+            // Try structural type matching first (more reliable), fall back to string-based
+            let mut binding_types = Vec::new();
+            let used_structural = if let Some(scrut_ty) = self.inferred_expr_types.get(&scrutinee.span()) {
+                let scrut_ty = scrut_ty.clone(); // Clone to avoid borrow issues
+                self.extract_pattern_binding_types_structural(&arm.pattern, &scrut_ty, &mut binding_types)
+            } else {
+                false
+            };
+            if !used_structural {
+                if let Some(ref ty) = scrut_type {
+                    binding_types = self.extract_pattern_binding_types(&arm.pattern, ty);
                 }
+            }
+            for (var_name, var_type) in binding_types {
+                self.local_types.insert(var_name, var_type);
             }
 
             // Compile guard if present
@@ -14535,6 +14545,90 @@ impl Compiler {
             Pattern::Set(_, _) | Pattern::StringCons(_, _) => {
                 // Not handling these for now
             }
+        }
+    }
+
+    /// Extract type bindings using structural Type matching (more reliable than string parsing).
+    /// Returns true if structural matching succeeded, false if we should fall back to string-based.
+    fn extract_pattern_binding_types_structural(&self, pattern: &Pattern, ty: &nostos_types::Type, result: &mut Vec<(String, String)>) -> bool {
+        use nostos_types::Type;
+
+        // Only proceed if the type is fully resolved (no type variables or params)
+        if !self.is_type_structurally_resolved(ty) {
+            return false;
+        }
+
+        match pattern {
+            Pattern::Var(ident) => {
+                let ty_str = ty.display();
+                // Skip empty or generic "Tuple" type names
+                if !ty_str.is_empty() && !matches!(ty, Type::Tuple(_) if ty_str == "Tuple") {
+                    result.push((ident.node.clone(), ty_str));
+                }
+                true
+            }
+            Pattern::Tuple(pats, _) => {
+                if let Type::Tuple(elem_types) = ty {
+                    for (i, pat) in pats.iter().enumerate() {
+                        if i < elem_types.len() {
+                            // Recursively extract, but fall back to string if structural fails
+                            if !self.extract_pattern_binding_types_structural(pat, &elem_types[i], result) {
+                                self.extract_pattern_binding_types_inner(pat, &elem_types[i].display(), result);
+                            }
+                        }
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            Pattern::Wildcard(_) => true,
+            // Literal patterns don't bind anything
+            Pattern::Int(_, _) | Pattern::Int8(_, _) | Pattern::Int16(_, _) | Pattern::Int32(_, _) |
+            Pattern::UInt8(_, _) | Pattern::UInt16(_, _) | Pattern::UInt32(_, _) | Pattern::UInt64(_, _) |
+            Pattern::BigInt(_, _) | Pattern::Float(_, _) | Pattern::Float32(_, _) | Pattern::Decimal(_, _) |
+            Pattern::String(_, _) | Pattern::Char(_, _) | Pattern::Bool(_, _) | Pattern::Unit(_) => true,
+            Pattern::List(list_pat, _) => {
+                if let Type::List(elem_ty) = ty {
+                    match list_pat {
+                        ListPattern::Empty => {}
+                        ListPattern::Cons(head_pats, tail) => {
+                            for pat in head_pats {
+                                if !self.extract_pattern_binding_types_structural(pat, elem_ty, result) {
+                                    self.extract_pattern_binding_types_inner(pat, &elem_ty.display(), result);
+                                }
+                            }
+                            if let Some(tail_pat) = tail {
+                                // Tail has the same type as the whole list
+                                if !self.extract_pattern_binding_types_structural(tail_pat, ty, result) {
+                                    self.extract_pattern_binding_types_inner(tail_pat, &ty.display(), result);
+                                }
+                            }
+                        }
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            Pattern::Variant(_ctor_ident, fields, _) => {
+                // For Named types with type arguments, extract the arguments
+                if let Type::Named { args, .. } = ty {
+                    if let VariantPatternFields::Positional(patterns) = fields {
+                        // For single type arg and single pattern, use structural extraction
+                        if args.len() == 1 && patterns.len() == 1 {
+                            if !self.extract_pattern_binding_types_structural(&patterns[0], &args[0], result) {
+                                self.extract_pattern_binding_types_inner(&patterns[0], &args[0].display(), result);
+                            }
+                            return true;
+                        }
+                    }
+                }
+                // Fall back to string-based for complex variant patterns
+                false
+            }
+            // For other patterns, fall back to string-based
+            _ => false,
         }
     }
 
