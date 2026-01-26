@@ -7042,13 +7042,27 @@ impl Compiler {
                 // For variants with positional fields, convert field name to numeric index
                 // For records, keep the field name as-is (VM looks up by name)
                 let mut field_index: Option<usize> = None;
-                if let Some(type_name) = self.expr_type_name(obj) {
-                    // Strip type parameters to get base type (e.g., Box[Int] -> Box)
-                    let base_type = if let Some(bracket_pos) = type_name.find('[') {
-                        &type_name[..bracket_pos]
-                    } else {
-                        &type_name
-                    };
+
+                // Try structural type first to get base type name
+                let base_type_structural = self.inferred_expr_types.get(&obj.span())
+                    .and_then(|ty| self.get_type_base_name_from_type(ty));
+
+                // Fall back to string-based if structural not available
+                let base_type_string = if base_type_structural.is_none() {
+                    self.expr_type_name(obj).map(|type_name| {
+                        // Strip type parameters to get base type (e.g., Box[Int] -> Box)
+                        if let Some(bracket_pos) = type_name.find('[') {
+                            type_name[..bracket_pos].to_string()
+                        } else {
+                            type_name
+                        }
+                    })
+                } else {
+                    None
+                };
+
+                let base_type = base_type_structural.or(base_type_string);
+                if let Some(ref base_type) = base_type {
 
                     // Check if this is a variant type with positional fields
                     // Records keep field names; variants need numeric indices
