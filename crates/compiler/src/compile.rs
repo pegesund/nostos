@@ -9128,9 +9128,33 @@ impl Compiler {
 
                 // Type-based builtin method dispatch for receiver-style calls
                 // Handles m.get(k) where m is a Map, s.toUpper() where s is a String, etc.
+
+                // Try structural type matching first (more reliable when type is resolved)
+                let structural_base_type: Option<&str> = self.inferred_expr_types.get(&obj.span())
+                    .and_then(|ty| {
+                        use nostos_types::Type;
+                        match ty {
+                            Type::Map(_, _) => Some("Map"),
+                            Type::Set(_) => Some("Set"),
+                            Type::List(_) => Some("List"),
+                            Type::String => Some("String"),
+                            Type::Named { name, .. } => {
+                                // Check for known named types
+                                match name.as_str() {
+                                    "Buffer" | "Float64Array" | "Int64Array" | "Float32Array" => Some(name.as_str()),
+                                    _ => None, // Fall through to string-based for user types
+                                }
+                            }
+                            _ => None,
+                        }
+                    });
+
                 if let Some(type_name) = self.expr_type_name(obj) {
+                    // Use structural base type if available, otherwise parse from string
+                    let base_type = structural_base_type.map(|s| s.to_string());
+
                     // Check for Map type - handles "Map[K, V]", "Map", and "Map k v" (with type vars)
-                    let builtin_name: Option<&str> = if type_name.starts_with("Map[") || type_name == "Map" || type_name.starts_with("Map ") {
+                    let builtin_name: Option<&str> = if base_type.as_deref() == Some("Map") || type_name.starts_with("Map[") || type_name == "Map" || type_name.starts_with("Map ") {
                         match method.node.as_str() {
                             "get" => Some("Map.get"),
                             "lookup" => Some("Map.lookup"),
@@ -9148,7 +9172,7 @@ impl Compiler {
                             "toList" => Some("Map.toList"),
                             _ => None,
                         }
-                    } else if type_name.starts_with("Set[") || type_name == "Set" || type_name.starts_with("Set ") {
+                    } else if base_type.as_deref() == Some("Set") || type_name.starts_with("Set[") || type_name == "Set" || type_name.starts_with("Set ") {
                         match method.node.as_str() {
                             "contains" => Some("Set.contains"),
                             "insert" => Some("Set.insert"),
@@ -9164,7 +9188,7 @@ impl Compiler {
                             "toList" => Some("Set.toList"),
                             _ => None,
                         }
-                    } else if type_name == "String" {
+                    } else if base_type.as_deref() == Some("String") || type_name == "String" {
                         match method.node.as_str() {
                             "length" => Some("String.length"),
                             "chars" => Some("String.chars"),
@@ -9192,7 +9216,7 @@ impl Compiler {
                             "isEmpty" => Some("String.isEmpty"),
                             _ => None,
                         }
-                    } else if type_name == "Buffer" {
+                    } else if base_type.as_deref() == Some("Buffer") || type_name == "Buffer" {
                         // Buffer uses special bytecode instructions, handle directly
                         match method.node.as_str() {
                             "append" => {
@@ -9215,7 +9239,7 @@ impl Compiler {
                             }
                             _ => None,
                         }
-                    } else if type_name == "Float64Array" {
+                    } else if base_type.as_deref() == Some("Float64Array") || type_name == "Float64Array" {
                         match method.node.as_str() {
                             "length" => Some("Float64Array.length"),
                             "get" => Some("Float64Array.get"),
@@ -9223,7 +9247,7 @@ impl Compiler {
                             "toList" => Some("Float64Array.toList"),
                             _ => None,
                         }
-                    } else if type_name == "Int64Array" {
+                    } else if base_type.as_deref() == Some("Int64Array") || type_name == "Int64Array" {
                         match method.node.as_str() {
                             "length" => Some("Int64Array.length"),
                             "get" => Some("Int64Array.get"),
@@ -9231,7 +9255,7 @@ impl Compiler {
                             "toList" => Some("Int64Array.toList"),
                             _ => None,
                         }
-                    } else if type_name == "Float32Array" {
+                    } else if base_type.as_deref() == Some("Float32Array") || type_name == "Float32Array" {
                         match method.node.as_str() {
                             "length" => Some("Float32Array.length"),
                             "get" => Some("Float32Array.get"),
