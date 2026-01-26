@@ -12884,6 +12884,7 @@ impl AsyncVM {
             arity: 2,
             func: Box::new(|args, heap| {
                 use regex::Regex;
+                let option_type = Arc::new("Option".to_string());
                 let s = match &args[0] {
                     GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
                     _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
@@ -12897,8 +12898,15 @@ impl AsyncVM {
                         match Regex::new(&pattern) {
                             Ok(re) => {
                                 match re.find(&s) {
-                                    Some(m) => Ok(GcValue::String(heap.alloc_string(m.as_str().to_string()))),
-                                    None => Ok(GcValue::Unit)
+                                    Some(m) => {
+                                        let str_val = GcValue::String(heap.alloc_string(m.as_str().to_string()));
+                                        let ptr = heap.alloc_variant(option_type, Arc::new("Some".to_string()), vec![str_val]);
+                                        Ok(GcValue::Variant(ptr))
+                                    }
+                                    None => {
+                                        let ptr = heap.alloc_variant(option_type, Arc::new("None".to_string()), vec![]);
+                                        Ok(GcValue::Variant(ptr))
+                                    }
                                 }
                             },
                             Err(e) => Err(RuntimeError::Panic(format!("Invalid regex: {}", e)))
@@ -13038,6 +13046,7 @@ impl AsyncVM {
             arity: 2,
             func: Box::new(|args, heap| {
                 use regex::Regex;
+                let option_type = Arc::new("Option".to_string());
                 let s = match &args[0] {
                     GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
                     _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
@@ -13058,9 +13067,14 @@ impl AsyncVM {
                                                 None => GcValue::Unit
                                             })
                                             .collect();
-                                        Ok(GcValue::List(heap.make_list(groups)))
+                                        let list_val = GcValue::List(heap.make_list(groups));
+                                        let ptr = heap.alloc_variant(option_type, Arc::new("Some".to_string()), vec![list_val]);
+                                        Ok(GcValue::Variant(ptr))
                                     },
-                                    None => Ok(GcValue::Unit)
+                                    None => {
+                                        let ptr = heap.alloc_variant(option_type, Arc::new("None".to_string()), vec![]);
+                                        Ok(GcValue::Variant(ptr))
+                                    }
                                 }
                             },
                             Err(e) => Err(RuntimeError::Panic(format!("Invalid regex: {}", e)))
