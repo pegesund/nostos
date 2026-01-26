@@ -20653,6 +20653,360 @@ main() = {
 
         cleanup(&temp_dir);
     }
+
+    /// Test that method chains on strings work after loading a project
+    #[test]
+    fn test_method_chain_after_project_load() {
+        let temp_dir = create_temp_dir("method_chain");
+
+        // Create good.nos module
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a, b) = a + b").unwrap();
+            writeln!(f, "pub multiply(x, y) = x * y").unwrap();
+        }
+
+        // Create test_types.nos with method chains
+        {
+            let mut f = std::fs::File::create(temp_dir.join("test_types.nos")).unwrap();
+            writeln!(f, "use good.*").unwrap();
+            writeln!(f, "").unwrap();
+            writeln!(f, "type MyResult = Success(Int) | Failure(String)").unwrap();
+            writeln!(f, "").unwrap();
+            writeln!(f, "main() = {{").unwrap();
+            writeln!(f, "    x = good.addff(3, 2)").unwrap();
+            writeln!(f, "    g2 = [[\"a\", \"b\"]]").unwrap();
+            writeln!(f, "    x2 = g2[0][0]").unwrap();
+            writeln!(f, "    x2.chars().drop(1).get(1).show()").unwrap();
+            writeln!(f, "    r = Failure(\"hupp\")").unwrap();
+            writeln!(f, "    r.show()").unwrap();
+            writeln!(f, "}}").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        let _ = engine.load_stdlib();
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // Check compile status
+        let status = engine.get_compile_status("test_types.main");
+        println!("test_types.main status: {:?}", status);
+
+        // Now test check_module_compiles on the same content
+        let content = std::fs::read_to_string(temp_dir.join("test_types.nos")).unwrap();
+        let result = engine.check_module_compiles("test_types", &content);
+        println!("check_module_compiles result: {:?}", result);
+
+        assert!(result.is_ok(),
+            "Method chain x2.chars().drop(1).get(1).show() should compile, got: {:?}", result);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Test that get chain inference works correctly
+    #[test]
+    fn test_get_chain_type_inference() {
+        let temp_dir = create_temp_dir("get_chain");
+
+        // Create main.nos with get chain
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = {{").unwrap();
+            writeln!(f, "    g2 = [[\"a\", \"b\"]]").unwrap();
+            writeln!(f, "    x = g2.get(0).get(0)").unwrap();
+            writeln!(f, "    x").unwrap();
+            writeln!(f, "}}").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        let _ = engine.load_stdlib();
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // Check compile status
+        let status = engine.get_compile_status("main.main");
+        println!("main.main status: {:?}", status);
+
+        // Get all inferred types
+        let types = engine.get_inferred_types_in_range(0, 0, 200);
+        println!("Found {} types", types.len());
+        for (span, ty) in &types {
+            println!("  Span {:?}: {}", span, ty);
+        }
+
+        // Look for the type of x - it should be String, not List
+        let x_types: Vec<_> = types.iter()
+            .filter(|(_, ty)| ty.contains("String") || ty.contains("List"))
+            .collect();
+        println!("Types containing String or List: {:?}", x_types);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Test that simulates exactly what the LSP does on file open
+    /// 1. Load project directory
+    /// 2. Check compile status (for any errors during load)
+    /// 3. Call check_module_compiles (for real-time feedback)
+    #[test]
+    fn test_lsp_file_open_simulation() {
+        let temp_dir = create_temp_dir("lsp_open_sim");
+
+        // Create good.nos module (dependency)
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a, b) = a + b").unwrap();
+            writeln!(f, "pub multiply(x, y) = x * y").unwrap();
+        }
+
+        // Create test_types.nos
+        let test_types_content = r#"use good.*
+
+# Variant type for testing
+type MyResult = Success(Int) | Failure(String)
+
+# Record type for testing
+pub type Person = { name: String, age: Int }
+
+# Trait for testing
+trait Describable
+    describe(self) -> String
+end
+
+main() = {
+    x = good.addff(3, 2)
+    y = good.multiply(2,3)
+    yy = [1,2,3]
+    yy.map(m => m.asInt8())
+    y1 = 33
+    g = asInt32(y1)
+    good.addff(11, 22)
+
+    y1.asInt32()
+
+    gg = [[0,1]]
+    gg.map(m => m.map(n => n.asFloat32()))
+    # test
+    g2 = [["a" ,"b"]]
+    x2 = g2[0][0]
+    y3 = "ffff"
+    x2.chars().drop(1).get(1).show()
+
+    p = Person(name: "petter", age: 11)
+    # p.
+    a = p.age
+    r = Failure("hupp")
+    r.show()
+}
+"#;
+        {
+            let mut f = std::fs::File::create(temp_dir.join("test_types.nos")).unwrap();
+            write!(f, "{}", test_types_content).unwrap();
+        }
+
+        // Step 1: Create engine (like LSP init)
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        let _ = engine.load_stdlib();
+
+        // Step 2: Load project directory (like LSP's load_directory in initialized handler)
+        println!("=== Step 2: load_directory ===");
+        let load_result = engine.load_directory(temp_dir.to_str().unwrap());
+        println!("load_directory result: {:?}", load_result);
+
+        // Step 3: Check compile status for all functions (after load)
+        println!("\n=== Step 3: Check compile status after load ===");
+        for (fn_name, status) in engine.get_all_compile_status() {
+            if fn_name.starts_with("test_types.") || fn_name.starts_with("good.") {
+                println!("  {}: {}", fn_name, status);
+            }
+        }
+
+        // Check if any errors in compile status
+        let has_errors = engine.get_all_compile_status().iter()
+            .any(|(name, status)| {
+                (name.starts_with("test_types.") || name.starts_with("good.")) &&
+                status.contains("Error")
+            });
+        println!("Has errors in compile status: {}", has_errors);
+
+        // Step 4: Simulate file open - call check_module_compiles
+        // (This is what LSP's check_file does)
+        println!("\n=== Step 4: check_module_compiles (simulating file open) ===");
+        let check_result = engine.check_module_compiles("test_types", test_types_content);
+        println!("check_module_compiles result: {:?}", check_result);
+
+        // ASSERTIONS
+        assert!(!has_errors, "Should have no errors in compile status after load");
+        assert!(check_result.is_ok(),
+            "check_module_compiles should return Ok, got: {:?}", check_result);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Test that check_module_compiles returns Ok for the test_types.nos file
+    /// This is what the LSP's check_file() uses for real-time feedback
+    #[test]
+    fn test_check_module_compiles_test_types() {
+        let temp_dir = create_temp_dir("check_module");
+
+        // Create good.nos module (dependency)
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a, b) = a + b").unwrap();
+            writeln!(f, "pub multiply(x, y) = x * y").unwrap();
+        }
+
+        // Create test_types.nos
+        let test_types_content = r#"use good.*
+
+# Variant type for testing
+type MyResult = Success(Int) | Failure(String)
+
+# Record type for testing
+pub type Person = { name: String, age: Int }
+
+# Trait for testing
+trait Describable
+    describe(self) -> String
+end
+
+main() = {
+    x = good.addff(3, 2)
+    y = good.multiply(2,3)
+    yy = [1,2,3]
+    yy.map(m => m.asInt8())
+    y1 = 33
+    g = asInt32(y1)
+    good.addff(11, 22)
+
+    y1.asInt32()
+
+    gg = [[0,1]]
+    gg.map(m => m.map(n => n.asFloat32()))
+    # test
+    g2 = [["a" ,"b"]]
+    x2 = g2[0][0]
+    y3 = "ffff"
+    x2.chars().drop(1).get(1).show()
+
+    p = Person(name: "petter", age: 11)
+    # p.
+    a = p.age
+    r = Failure("hupp")
+    r.show()
+}
+"#;
+        {
+            let mut f = std::fs::File::create(temp_dir.join("test_types.nos")).unwrap();
+            write!(f, "{}", test_types_content).unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        let _ = engine.load_stdlib();
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // Now test check_module_compiles (this is what the LSP uses for real-time checking)
+        println!("=== Testing check_module_compiles ===");
+        let result = engine.check_module_compiles("test_types", test_types_content);
+        println!("check_module_compiles result: {:?}", result);
+
+        assert!(result.is_ok(),
+            "check_module_compiles should return Ok for test_types.nos, got: {:?}", result);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Comprehensive integration test that replicates the user's test_status_project
+    /// Tests that all variables get correct types and no false positive errors
+    #[test]
+    fn test_full_project_types_and_errors() {
+        let temp_dir = create_temp_dir("full_project");
+
+        // Create good.nos module (dependency)
+        {
+            let mut f = std::fs::File::create(temp_dir.join("good.nos")).unwrap();
+            writeln!(f, "pub addff(a, b) = a + b").unwrap();
+            writeln!(f, "pub multiply(x, y) = x * y").unwrap();
+        }
+
+        // Create test_types.nos - exact replica of user's file
+        {
+            let mut f = std::fs::File::create(temp_dir.join("test_types.nos")).unwrap();
+            writeln!(f, "use good.*").unwrap();
+            writeln!(f, "").unwrap();
+            writeln!(f, "# Variant type for testing").unwrap();
+            writeln!(f, "type MyResult = Success(Int) | Failure(String)").unwrap();
+            writeln!(f, "").unwrap();
+            writeln!(f, "# Record type for testing").unwrap();
+            writeln!(f, "pub type Person = {{ name: String, age: Int }}").unwrap();
+            writeln!(f, "").unwrap();
+            writeln!(f, "# Trait for testing").unwrap();
+            writeln!(f, "trait Describable").unwrap();
+            writeln!(f, "    describe(self) -> String").unwrap();
+            writeln!(f, "end").unwrap();
+            writeln!(f, "").unwrap();
+            writeln!(f, "main() = {{").unwrap();
+            writeln!(f, "    x = good.addff(3, 2)").unwrap();           // line 15: Int
+            writeln!(f, "    y = good.multiply(2,3)").unwrap();         // line 16: Int
+            writeln!(f, "    yy = [1,2,3]").unwrap();                   // line 17: List[Int]
+            writeln!(f, "    yy.map(m => m.asInt8())").unwrap();        // line 18
+            writeln!(f, "    y1 = 33").unwrap();                        // line 19: Int
+            writeln!(f, "    g = asInt32(y1)").unwrap();                // line 20: Int32
+            writeln!(f, "    good.addff(11, 22)").unwrap();             // line 21
+            writeln!(f, "    ").unwrap();                               // line 22
+            writeln!(f, "    y1.asInt32()").unwrap();                   // line 23
+            writeln!(f, "").unwrap();                                   // line 24
+            writeln!(f, "    gg = [[0,1]]").unwrap();                   // line 25: List[List[Int]]
+            writeln!(f, "    gg.map(m => m.map(n => n.asFloat32()))").unwrap(); // line 26
+            writeln!(f, "    # test").unwrap();                         // line 27
+            writeln!(f, "    g2 = [[\"a\" ,\"b\"]]").unwrap();          // line 28: List[List[String]]
+            writeln!(f, "    x2 = g2[0][0]").unwrap();                  // line 29: String
+            writeln!(f, "    y3 = \"ffff\"").unwrap();                  // line 30: String
+            writeln!(f, "    x2.chars().drop(1).get(1).show()").unwrap(); // line 31: THIS IS THE PROBLEM LINE
+            writeln!(f, "").unwrap();                                   // line 32
+            writeln!(f, "    p = Person(name: \"petter\", age: 11)").unwrap(); // line 33: Person
+            writeln!(f, "    # p.").unwrap();                           // line 34
+            writeln!(f, "    a = p.age").unwrap();                      // line 35: Int
+            writeln!(f, "    r = Failure(\"hupp\")").unwrap();          // line 36: MyResult
+            writeln!(f, "    r.show()").unwrap();                       // line 37
+            writeln!(f, "}}").unwrap();                                 // line 38
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        let _ = engine.load_stdlib();
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // Check compile status for all functions
+        println!("=== Compile Status ===");
+        let all_status = engine.get_all_compile_status();
+        for (name, status) in &all_status {
+            println!("  {}: {}", name, status);
+        }
+
+        // Check test_types.main specifically - should NOT have any errors
+        let main_status = engine.get_compile_status("test_types.main");
+        println!("\ntest_types.main status: {:?}", main_status);
+
+        // CRITICAL: test_types.main should compile without errors
+        assert!(
+            matches!(main_status, Some(CompileStatus::Compiled)),
+            "test_types.main should compile successfully without errors, got: {:?}",
+            main_status
+        );
+
+        // Also verify good.addff and good.multiply compiled
+        let addff_status = engine.get_compile_status("good.addff");
+        println!("good.addff status: {:?}", addff_status);
+        assert!(
+            matches!(addff_status, Some(CompileStatus::Compiled)),
+            "good.addff should compile, got: {:?}",
+            addff_status
+        );
+
+        cleanup(&temp_dir);
+    }
 }
 
 #[cfg(test)]
