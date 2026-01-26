@@ -13636,6 +13636,115 @@ impl Compiler {
         true
     }
 
+    // =========================================================================
+    // Structural Type Helpers (work with nostos_types::Type directly)
+    // =========================================================================
+
+    /// Check if a Type is fully resolved (no unresolved type variables or type parameters).
+    /// This is the structural equivalent of `is_type_concrete` for the Type enum.
+    fn is_type_structurally_resolved(&self, ty: &nostos_types::Type) -> bool {
+        use nostos_types::Type;
+        match ty {
+            Type::TypeParam(_) => false,
+            Type::Var(_) => false, // Type variables should be resolved by finalize_expr_types
+            Type::List(elem) => self.is_type_structurally_resolved(elem),
+            Type::Array(elem) => self.is_type_structurally_resolved(elem),
+            Type::Map(k, v) => self.is_type_structurally_resolved(k) && self.is_type_structurally_resolved(v),
+            Type::Set(elem) => self.is_type_structurally_resolved(elem),
+            Type::Tuple(elems) => elems.iter().all(|e| self.is_type_structurally_resolved(e)),
+            Type::Function(ft) => {
+                ft.params.iter().all(|p| self.is_type_structurally_resolved(p))
+                    && self.is_type_structurally_resolved(&ft.ret)
+            }
+            Type::Named { args, .. } => args.iter().all(|a| self.is_type_structurally_resolved(a)),
+            Type::IO(inner) => self.is_type_structurally_resolved(inner),
+            Type::Record(rec) => rec.fields.iter().all(|(_, t, _)| self.is_type_structurally_resolved(t)),
+            Type::Variant(var) => var.constructors.iter().all(|c| {
+                use nostos_types::Constructor;
+                match c {
+                    Constructor::Unit(_) => true,
+                    Constructor::Positional(_, types) => types.iter().all(|t| self.is_type_structurally_resolved(t)),
+                    Constructor::Named(_, fields) => fields.iter().all(|(_, t)| self.is_type_structurally_resolved(t)),
+                }
+            }),
+            // All primitive types are resolved
+            _ => true,
+        }
+    }
+
+    /// Get the base type name from a Type for method dispatch (structural version).
+    /// Returns the "container" name like "List", "Map", "String" without type parameters.
+    fn get_type_base_name_from_type(&self, ty: &nostos_types::Type) -> Option<String> {
+        use nostos_types::Type;
+        match ty {
+            Type::Int | Type::Int64 => Some("Int".to_string()),
+            Type::Int8 => Some("Int8".to_string()),
+            Type::Int16 => Some("Int16".to_string()),
+            Type::Int32 => Some("Int32".to_string()),
+            Type::UInt8 => Some("UInt8".to_string()),
+            Type::UInt16 => Some("UInt16".to_string()),
+            Type::UInt32 => Some("UInt32".to_string()),
+            Type::UInt64 => Some("UInt64".to_string()),
+            Type::Float | Type::Float64 => Some("Float".to_string()),
+            Type::Float32 => Some("Float32".to_string()),
+            Type::BigInt => Some("BigInt".to_string()),
+            Type::Decimal => Some("Decimal".to_string()),
+            Type::String => Some("String".to_string()),
+            Type::Bool => Some("Bool".to_string()),
+            Type::Char => Some("Char".to_string()),
+            Type::Unit => Some("()".to_string()),
+            Type::List(_) => Some("List".to_string()),
+            Type::Array(_) => Some("Array".to_string()),
+            Type::Map(_, _) => Some("Map".to_string()),
+            Type::Set(_) => Some("Set".to_string()),
+            Type::Tuple(_) => Some("Tuple".to_string()),
+            Type::Named { name, .. } => Some(name.clone()),
+            Type::Record(rec) => rec.name.clone(),
+            Type::Variant(var) => Some(var.name.clone()),
+            Type::Function(_) => Some("Fn".to_string()),
+            Type::IO(inner) => self.get_type_base_name_from_type(inner),
+            // Runtime types
+            Type::Pid => Some("Pid".to_string()),
+            Type::Ref => Some("Ref".to_string()),
+            // Type variables and params don't have a base name
+            Type::Var(_) | Type::TypeParam(_) | Type::Never => None,
+        }
+    }
+
+    /// Extract the element type from a container Type (List, Set, Array).
+    /// Returns None if the type is not a single-element container.
+    fn get_element_type_from_type<'ty>(&self, ty: &'ty nostos_types::Type) -> Option<&'ty nostos_types::Type> {
+        use nostos_types::Type;
+        match ty {
+            Type::List(elem) => Some(elem.as_ref()),
+            Type::Set(elem) => Some(elem.as_ref()),
+            Type::Array(elem) => Some(elem.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// Extract key and value types from a Map Type.
+    /// Returns None if the type is not a Map.
+    fn get_map_types_from_type<'ty>(&self, ty: &'ty nostos_types::Type) -> Option<(&'ty nostos_types::Type, &'ty nostos_types::Type)> {
+        use nostos_types::Type;
+        match ty {
+            Type::Map(k, v) => Some((k.as_ref(), v.as_ref())),
+            _ => None,
+        }
+    }
+
+    /// Get the inferred Type for an expression directly (no string conversion).
+    /// Returns None if no type was inferred or if the type is not fully resolved.
+    /// Use this when you need structural pattern matching on the Type.
+    fn expr_type(&self, expr: &Expr) -> Option<&nostos_types::Type> {
+        if let Some(ty) = self.inferred_expr_types.get(&expr.span()) {
+            if self.is_type_structurally_resolved(ty) {
+                return Some(ty);
+            }
+        }
+        None
+    }
+
     /// Convert a TypeExpr to a concrete type name, or None if it's a type parameter.
     fn type_expr_to_type_name(&self, ty: &TypeExpr) -> Option<String> {
         match ty {

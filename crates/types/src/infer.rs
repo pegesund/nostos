@@ -61,6 +61,9 @@ pub struct InferCtx<'a> {
     /// Tracks type variables that came from unannotated function parameters.
     /// Maps var ID to (function name, parameter name) for better error messages.
     unannotated_param_vars: HashMap<u32, (String, String)>,
+    /// Tracks expressions where types couldn't be fully resolved (contain TypeParams after finalization).
+    /// This is informational - code generation should handle these via fallback paths.
+    pub unresolved_type_params: Vec<(Span, Type, String)>, // (span, type, param_name)
 }
 
 impl<'a> InferCtx<'a> {
@@ -76,6 +79,7 @@ impl<'a> InferCtx<'a> {
             expr_types: HashMap::new(),
             type_param_mappings: HashMap::new(),
             unannotated_param_vars: HashMap::new(),
+            unresolved_type_params: Vec::new(),
         }
     }
 
@@ -748,15 +752,60 @@ impl<'a> InferCtx<'a> {
     /// Apply the current substitution to all stored expression types.
     /// This should be called after solve() to get the resolved types.
     /// Also resolves any remaining TypeParams using type_param_mappings.
+    /// Tracks any expressions with unresolved type parameters in `unresolved_type_params`.
     pub fn finalize_expr_types(&mut self) {
-        let resolved: HashMap<Span, Type> = self.expr_types
-            .iter()
-            .map(|(span, ty)| {
-                let resolved_ty = self.apply_full_subst(ty);
-                (*span, resolved_ty)
-            })
-            .collect();
-        self.expr_types = resolved;
+        self.unresolved_type_params.clear();
+
+        let mut resolved_types = HashMap::new();
+        let mut unresolved = Vec::new();
+
+        for (span, ty) in &self.expr_types {
+            let resolved_ty = self.apply_full_subst(ty);
+
+            // Track expressions that still have unresolved TypeParams
+            if self.contains_type_param(&resolved_ty) {
+                if let Some(param_name) = self.extract_type_param_name(&resolved_ty) {
+                    unresolved.push((*span, resolved_ty.clone(), param_name));
+                }
+            }
+
+            resolved_types.insert(*span, resolved_ty);
+        }
+
+        self.expr_types = resolved_types;
+        self.unresolved_type_params = unresolved;
+    }
+
+    /// Extract the first TypeParam name from a type (for error reporting).
+    fn extract_type_param_name(&self, ty: &Type) -> Option<String> {
+        match ty {
+            Type::TypeParam(name) => Some(name.clone()),
+            Type::Var(id) => {
+                if let Some(resolved) = self.env.substitution.get(id) {
+                    self.extract_type_param_name(resolved)
+                } else {
+                    None
+                }
+            }
+            Type::List(elem) => self.extract_type_param_name(elem),
+            Type::Array(elem) => self.extract_type_param_name(elem),
+            Type::Map(k, v) => self.extract_type_param_name(k).or_else(|| self.extract_type_param_name(v)),
+            Type::Set(elem) => self.extract_type_param_name(elem),
+            Type::Tuple(elems) => elems.iter().find_map(|e| self.extract_type_param_name(e)),
+            Type::Function(ft) => {
+                ft.params.iter().find_map(|p| self.extract_type_param_name(p))
+                    .or_else(|| self.extract_type_param_name(&ft.ret))
+            }
+            Type::Named { args, .. } => args.iter().find_map(|a| self.extract_type_param_name(a)),
+            Type::IO(inner) => self.extract_type_param_name(inner),
+            Type::Record(rec) => rec.fields.iter().find_map(|(_, t, _)| self.extract_type_param_name(t)),
+            Type::Variant(var) => var.constructors.iter().find_map(|c| match c {
+                Constructor::Unit(_) => None,
+                Constructor::Positional(_, types) => types.iter().find_map(|t| self.extract_type_param_name(t)),
+                Constructor::Named(_, fields) => fields.iter().find_map(|(_, t)| self.extract_type_param_name(t)),
+            }),
+            _ => None,
+        }
     }
 
     /// Get the resolved type for an expression by its span.
@@ -953,6 +1002,74 @@ impl<'a> InferCtx<'a> {
         let ty = self.env.apply_subst(ty);
         // Then resolve any TypeParams
         self.resolve_type_params(&ty)
+    }
+
+    /// Check if a type contains unresolved TypeParams (not just type variables).
+    /// Used to detect when type parameters have leaked into resolved types.
+    pub fn contains_type_param(&self, ty: &Type) -> bool {
+        match ty {
+            Type::TypeParam(_) => true,
+            Type::Var(id) => {
+                // Check if this var resolves to a TypeParam
+                if let Some(resolved) = self.env.substitution.get(id) {
+                    self.contains_type_param(resolved)
+                } else {
+                    false
+                }
+            }
+            Type::List(elem) => self.contains_type_param(elem),
+            Type::Array(elem) => self.contains_type_param(elem),
+            Type::Map(k, v) => self.contains_type_param(k) || self.contains_type_param(v),
+            Type::Set(elem) => self.contains_type_param(elem),
+            Type::Tuple(elems) => elems.iter().any(|e| self.contains_type_param(e)),
+            Type::Function(ft) => {
+                ft.params.iter().any(|p| self.contains_type_param(p))
+                    || self.contains_type_param(&ft.ret)
+            }
+            Type::Named { args, .. } => args.iter().any(|a| self.contains_type_param(a)),
+            Type::IO(inner) => self.contains_type_param(inner),
+            Type::Record(rec) => rec.fields.iter().any(|(_, t, _)| self.contains_type_param(t)),
+            Type::Variant(var) => var.constructors.iter().any(|c| match c {
+                Constructor::Unit(_) => false,
+                Constructor::Positional(_, types) => types.iter().any(|t| self.contains_type_param(t)),
+                Constructor::Named(_, fields) => fields.iter().any(|(_, t)| self.contains_type_param(t)),
+            }),
+            _ => false, // Primitives never contain TypeParams
+        }
+    }
+
+    /// Check if a type is fully resolved (no type variables or type parameters).
+    /// This is stricter than contains_type_param - it also rejects unresolved Vars.
+    pub fn is_type_fully_resolved(&self, ty: &Type) -> bool {
+        match ty {
+            Type::TypeParam(_) => false,
+            Type::Var(id) => {
+                // Check if this var has been resolved
+                if let Some(resolved) = self.env.substitution.get(id) {
+                    self.is_type_fully_resolved(resolved)
+                } else {
+                    false // Unresolved type variable
+                }
+            }
+            Type::List(elem) => self.is_type_fully_resolved(elem),
+            Type::Array(elem) => self.is_type_fully_resolved(elem),
+            Type::Map(k, v) => self.is_type_fully_resolved(k) && self.is_type_fully_resolved(v),
+            Type::Set(elem) => self.is_type_fully_resolved(elem),
+            Type::Tuple(elems) => elems.iter().all(|e| self.is_type_fully_resolved(e)),
+            Type::Function(ft) => {
+                ft.params.iter().all(|p| self.is_type_fully_resolved(p))
+                    && self.is_type_fully_resolved(&ft.ret)
+            }
+            Type::Named { args, .. } => args.iter().all(|a| self.is_type_fully_resolved(a)),
+            Type::IO(inner) => self.is_type_fully_resolved(inner),
+            Type::Record(rec) => rec.fields.iter().all(|(_, t, _)| self.is_type_fully_resolved(t)),
+            Type::Variant(var) => var.constructors.iter().all(|c| match c {
+                Constructor::Unit(_) => true,
+                Constructor::Positional(_, types) => types.iter().all(|t| self.is_type_fully_resolved(t)),
+                Constructor::Named(_, fields) => fields.iter().all(|(_, t)| self.is_type_fully_resolved(t)),
+            }),
+            _ => true, // Primitives are always resolved
+        }
     }
 
     /// Recursively resolve TypeParams in a type using type_param_mappings.
