@@ -442,3 +442,14 @@ git stash pop
 ```
 
 **Always have a baseline binary available before debugging regressions!**
+
+## CRITICAL: Do Not Use Weasel Words for Bugs
+
+**NEVER say "known limitation" or "documented limitation" unless:**
+1. There is actual documentation describing the limitation
+2. You can point to where it is documented
+
+If something doesn't work correctly, call it what it is: **a bug** or **incomplete implementation**.
+
+Using phrases like "known limitation" to soften bugs is dishonest and wastes the user's time.
+

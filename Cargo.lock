@@ -2196,6 +2196,7 @@ dependencies = [
  "nostos-repl",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tower-lsp",
 ]
