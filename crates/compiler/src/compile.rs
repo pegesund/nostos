@@ -5631,6 +5631,12 @@ impl Compiler {
         false
     }
 
+    /// Check if a method is a generic builtin that works on any type.
+    /// These methods don't require type information to dispatch - they work universally.
+    fn is_generic_builtin_method(method_name: &str) -> bool {
+        matches!(method_name, "show" | "hash" | "copy")
+    }
+
     /// Map a binary operator to its trait and method name.
     /// Returns (trait_name, method_name) for operators that can be overloaded.
     fn operator_to_trait_method(op: &BinOp) -> Option<(&'static str, &'static str)> {
@@ -9553,9 +9559,10 @@ impl Compiler {
                             });
                         }
                     } else if (type_name.starts_with('?') || self.is_current_type_param(&type_name))
-                               && self.is_known_trait_method(&method.node) {
+                               && self.is_known_trait_method(&method.node)
+                               && !Self::is_generic_builtin_method(&method.node) {
                         // Type is a type variable (from HM inference) or a type parameter,
-                        // and the method is a trait method.
+                        // and the method is a trait method (but not a generic builtin).
                         // This needs monomorphization - the type will be replaced with
                         // a concrete type during instantiation.
                         return Err(CompileError::UnresolvedTraitMethod {
@@ -9619,7 +9626,8 @@ impl Compiler {
                     }
 
                     // Type unknown - check if this is a trait method that needs monomorphization
-                    if self.is_known_trait_method(&method.node) {
+                    // But exclude generic builtins (show, hash, copy) that work on any type
+                    if self.is_known_trait_method(&method.node) && !Self::is_generic_builtin_method(&method.node) {
                         return Err(CompileError::UnresolvedTraitMethod {
                             method: method.node.clone(),
                             span: method.span,
