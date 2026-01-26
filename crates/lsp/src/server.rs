@@ -748,13 +748,13 @@ impl LanguageServer for NostosLanguageServer {
                 document_symbol_provider: Some(OneOf::Left(true)),
                 // Find references
                 references_provider: Some(OneOf::Left(true)),
-                // Inlay hints for type annotations
-                inlay_hint_provider: Some(OneOf::Right(InlayHintServerCapabilities::Options(
-                    InlayHintOptions {
-                        resolve_provider: Some(false),
-                        work_done_progress_options: Default::default(),
-                    }
-                ))),
+                // Inlay hints disabled for now - needs more work
+                // inlay_hint_provider: Some(OneOf::Right(InlayHintServerCapabilities::Options(
+                //     InlayHintOptions {
+                //         resolve_provider: Some(false),
+                //         work_done_progress_options: Default::default(),
+                //     }
+                // ))),
                 // Don't advertise commands here - the extension registers them
                 // and forwards via workspace/executeCommand. Advertising them
                 // causes vscode-languageclient to also try registering them,
@@ -1835,6 +1835,14 @@ impl NostosLanguageServer {
     fn infer_rhs_type(expr: &str, engine: Option<&nostos_repl::ReplEngine>, current_bindings: &std::collections::HashMap<String, String>) -> Option<String> {
         let trimmed = expr.trim();
 
+        // Check for method chain expressions like [["a","b"]].get(0).get(0) or x.chars().drop(1)
+        if trimmed.contains('.') && trimmed.contains('(') {
+            if let Some(inferred) = Self::infer_method_chain_type(trimmed, current_bindings) {
+                eprintln!("Inferred method chain type: {} -> {}", trimmed, inferred);
+                return Some(inferred);
+            }
+        }
+
         // Check for index expressions like g2[0][0] - use current bindings to resolve
         if trimmed.contains('[') && !trimmed.starts_with('[') {
             // This looks like an index expression (not a list literal)
@@ -2581,6 +2589,192 @@ impl NostosLanguageServer {
         }
 
         None
+    }
+
+    /// Infer the type of a method chain expression like [["a","b"]].get(0).get(0)
+    fn infer_method_chain_type(expr: &str, local_vars: &std::collections::HashMap<String, String>) -> Option<String> {
+        let trimmed = expr.trim();
+
+        // Split the expression into base and method calls
+        // We need to handle nested brackets and parentheses properly
+        let mut current_type: Option<String> = None;
+        let mut remaining = trimmed;
+
+        // First, find the base expression (before the first method call)
+        // Handle cases like: [["a","b"]].get(0) or x.method() or "hello".chars()
+
+        // Find the start of method calls by looking for .methodName( pattern
+        // But we need to skip over any . that's part of a float literal or inside brackets
+
+        let mut depth = 0;
+        let mut base_end = 0;
+        let chars: Vec<char> = remaining.chars().collect();
+
+        for (i, &c) in chars.iter().enumerate() {
+            match c {
+                '[' | '(' | '{' => depth += 1,
+                ']' | ')' | '}' => depth -= 1,
+                '.' if depth == 0 => {
+                    // Check if this starts a method call (followed by identifier and paren)
+                    let after_dot: String = chars[i+1..].iter().collect();
+                    if after_dot.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) {
+                        base_end = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if base_end == 0 {
+            // No method call found
+            return None;
+        }
+
+        let base_expr = &remaining[..base_end];
+        remaining = &remaining[base_end..];
+
+        // Infer the base type
+        if base_expr.starts_with('[') {
+            current_type = Self::infer_list_type(base_expr);
+        } else if base_expr.starts_with('"') {
+            current_type = Some("String".to_string());
+        } else if let Some(ty) = local_vars.get(base_expr.trim()) {
+            current_type = Some(ty.clone());
+        }
+
+        // Now process each method call
+        while !remaining.is_empty() && remaining.starts_with('.') {
+            remaining = &remaining[1..]; // Skip the dot
+
+            // Find the method name and arguments
+            let paren_pos = remaining.find('(')?;
+            let method_name = &remaining[..paren_pos];
+
+            // Find matching closing paren
+            let mut depth = 0;
+            let mut close_paren = None;
+            for (i, c) in remaining[paren_pos..].chars().enumerate() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close_paren = Some(paren_pos + i);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            let close_paren = close_paren?;
+
+            // Apply the method to get the new type
+            if let Some(ref recv_type) = current_type {
+                current_type = Self::infer_method_return_type(recv_type, method_name);
+            } else {
+                return None;
+            }
+
+            // Move past this method call
+            remaining = &remaining[close_paren + 1..];
+        }
+
+        current_type
+    }
+
+    /// Infer the return type of a method call based on receiver type
+    fn infer_method_return_type(receiver_type: &str, method_name: &str) -> Option<String> {
+        // Generic methods that work on any type
+        match method_name {
+            "show" => return Some("String".to_string()),
+            "hash" => return Some("Int".to_string()),
+            "copy" => return Some(receiver_type.to_string()),
+            _ => {}
+        }
+
+        // Extract base type and element type for parameterized types
+        let (base_type, elem_type) = if receiver_type.starts_with("List[") && receiver_type.ends_with(']') {
+            ("List", Some(&receiver_type[5..receiver_type.len()-1]))
+        } else if receiver_type.starts_with("Option[") && receiver_type.ends_with(']') {
+            ("Option", Some(&receiver_type[7..receiver_type.len()-1]))
+        } else {
+            (receiver_type, None)
+        };
+
+        match base_type {
+            "List" => {
+                match method_name {
+                    // Methods that preserve List type
+                    "filter" | "take" | "drop" | "reverse" | "sort" | "unique" |
+                    "takeWhile" | "dropWhile" | "init" | "tail" | "push" | "remove" |
+                    "removeAt" | "insertAt" | "set" | "slice" => {
+                        if let Some(elem) = elem_type {
+                            Some(format!("List[{}]", elem))
+                        } else {
+                            Some("List".to_string())
+                        }
+                    }
+                    // Methods that return element type
+                    "get" | "head" | "last" | "nth" | "find" | "sum" | "product" |
+                    "maximum" | "minimum" => {
+                        elem_type.map(|e| e.to_string())
+                    }
+                    // Methods that return Bool
+                    "any" | "all" | "contains" | "isEmpty" => Some("Bool".to_string()),
+                    // Methods that return Int
+                    "length" | "len" | "count" | "indexOf" => Some("Int".to_string()),
+                    // Methods that return Option[element]
+                    "first" | "safeHead" | "safeLast" => {
+                        elem_type.map(|e| format!("Option[{}]", e))
+                    }
+                    // map transforms element type - can't infer without lambda
+                    "map" | "flatMap" => Some("List".to_string()),
+                    "enumerate" => {
+                        if let Some(elem) = elem_type {
+                            Some(format!("List[(Int, {})]", elem))
+                        } else {
+                            Some("List".to_string())
+                        }
+                    }
+                    "flatten" => {
+                        // If element is List[X], result is List[X]
+                        if let Some(elem) = elem_type {
+                            if elem.starts_with("List[") {
+                                Some(elem.to_string())
+                            } else {
+                                Some(format!("List[{}]", elem))
+                            }
+                        } else {
+                            Some("List".to_string())
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            "String" => {
+                match method_name {
+                    "chars" => Some("List[Char]".to_string()),
+                    "lines" | "words" | "split" => Some("List[String]".to_string()),
+                    "trim" | "trimStart" | "trimEnd" | "toUpper" | "toLower" |
+                    "replace" | "replaceAll" | "substring" | "repeat" |
+                    "padStart" | "padEnd" | "reverse" => Some("String".to_string()),
+                    "length" | "indexOf" | "lastIndexOf" => Some("Int".to_string()),
+                    "contains" | "startsWith" | "endsWith" | "isEmpty" => Some("Bool".to_string()),
+                    _ => None,
+                }
+            }
+            "Option" => {
+                match method_name {
+                    "unwrap" | "getOrElse" => elem_type.map(|e| e.to_string()),
+                    "isSome" | "isNone" => Some("Bool".to_string()),
+                    "map" => Some("Option".to_string()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     fn infer_index_expr_type(expr: &str, local_vars: &std::collections::HashMap<String, String>) -> Option<String> {
