@@ -9392,7 +9392,23 @@ impl Compiler {
 
                     // Option/Result method aliasing - redirect to prefixed stdlib functions
                     // This allows opt.map(fn) to call optMap(opt, fn) instead of List.map
-                    let stdlib_alias: Option<&str> = if type_name.starts_with("Option[")
+
+                    // Check structurally first for Option/Result
+                    let is_option_structural = self.inferred_expr_types.get(&obj.span())
+                        .map(|ty| {
+                            if let nostos_types::Type::Named { name, .. } = ty {
+                                name == "Option" || name == "stdlib.list.Option"
+                            } else { false }
+                        }).unwrap_or(false);
+                    let is_result_structural = self.inferred_expr_types.get(&obj.span())
+                        .map(|ty| {
+                            if let nostos_types::Type::Named { name, .. } = ty {
+                                name == "Result" || name == "stdlib.list.Result"
+                            } else { false }
+                        }).unwrap_or(false);
+
+                    let stdlib_alias: Option<&str> = if is_option_structural
+                        || type_name.starts_with("Option[")
                         || type_name == "Option"
                         || type_name.starts_with("stdlib.list.Option[")
                         || type_name == "stdlib.list.Option"
@@ -9406,7 +9422,8 @@ impl Compiler {
                             "isNone" => Some("optIsNone"),
                             _ => None,
                         }
-                    } else if type_name.starts_with("Result[")
+                    } else if is_result_structural
+                        || type_name.starts_with("Result[")
                         || type_name == "Result"
                         || type_name.starts_with("stdlib.list.Result[")
                         || type_name == "stdlib.list.Result"
