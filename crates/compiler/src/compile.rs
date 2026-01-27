@@ -11962,16 +11962,13 @@ impl Compiler {
         // Use HM-inferred type if available (types are resolved after solve())
         // With file_id in Span, multi-file lookups now work correctly.
         if let Some(ty) = self.inferred_expr_types.get(&expr.span()) {
-            let result = ty.display();
+            // Use structural check to avoid converting to string if type has leaked params
             // Skip type parameters that leaked from function calls.
             // When calling a generic function like `computeSize[T](b)`, the type param `T`
             // can incorrectly propagate to the argument's inferred type. In this case,
             // fall through to pattern-based type inference which will give the correct type.
-            // A type parameter is a single uppercase letter not in the types registry,
-            // OR a parameterized type containing a type parameter (e.g., List[T]).
-            let is_leaked_type_param = !self.is_type_concrete(&result);
-            if !is_leaked_type_param {
-                return Some(result);
+            if self.is_type_structurally_resolved(ty) {
+                return Some(ty.display());
             }
             // Leaked type parameter - fall through to pattern-based inference
         }
