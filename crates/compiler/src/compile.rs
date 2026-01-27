@@ -20353,7 +20353,7 @@ impl Compiler {
             }
             // Single element in parens - just return the element type
             if elems.len() == 1 {
-                return elems.into_iter().next().unwrap();
+                return elems.into_iter().next().expect("single element tuple should have one element");
             }
         }
 
@@ -20375,22 +20375,22 @@ impl Compiler {
                 // Handle built-in parameterized types
                 return match name {
                     "List" if args.len() == 1 => {
-                        nostos_types::Type::List(Box::new(args.into_iter().next().unwrap()))
+                        nostos_types::Type::List(Box::new(args.into_iter().next().expect("List should have 1 type arg")))
                     }
                     "Array" if args.len() == 1 => {
-                        nostos_types::Type::Array(Box::new(args.into_iter().next().unwrap()))
+                        nostos_types::Type::Array(Box::new(args.into_iter().next().expect("Array should have 1 type arg")))
                     }
                     "Set" if args.len() == 1 => {
-                        nostos_types::Type::Set(Box::new(args.into_iter().next().unwrap()))
+                        nostos_types::Type::Set(Box::new(args.into_iter().next().expect("Set should have 1 type arg")))
                     }
                     "Map" if args.len() == 2 => {
                         let mut iter = args.into_iter();
-                        let key = iter.next().unwrap();
-                        let val = iter.next().unwrap();
+                        let key = iter.next().expect("Map should have key type arg");
+                        let val = iter.next().expect("Map should have value type arg");
                         nostos_types::Type::Map(Box::new(key), Box::new(val))
                     }
                     "IO" if args.len() == 1 => {
-                        nostos_types::Type::IO(Box::new(args.into_iter().next().unwrap()))
+                        nostos_types::Type::IO(Box::new(args.into_iter().next().expect("IO should have 1 type arg")))
                     }
                     _ => nostos_types::Type::Named {
                         name: name.to_string(),
@@ -20412,22 +20412,22 @@ impl Compiler {
 
             return match name {
                 "List" if args.len() == 1 => {
-                    nostos_types::Type::List(Box::new(args.into_iter().next().unwrap()))
+                    nostos_types::Type::List(Box::new(args.into_iter().next().expect("List should have 1 type arg")))
                 }
                 "Array" if args.len() == 1 => {
-                    nostos_types::Type::Array(Box::new(args.into_iter().next().unwrap()))
+                    nostos_types::Type::Array(Box::new(args.into_iter().next().expect("Array should have 1 type arg")))
                 }
                 "Set" if args.len() == 1 => {
-                    nostos_types::Type::Set(Box::new(args.into_iter().next().unwrap()))
+                    nostos_types::Type::Set(Box::new(args.into_iter().next().expect("Set should have 1 type arg")))
                 }
                 "Map" if args.len() == 2 => {
                     let mut iter = args.into_iter();
-                    let key = iter.next().unwrap();
-                    let val = iter.next().unwrap();
+                    let key = iter.next().expect("Map should have key type arg");
+                    let val = iter.next().expect("Map should have value type arg");
                     nostos_types::Type::Map(Box::new(key), Box::new(val))
                 }
                 "IO" if args.len() == 1 => {
-                    nostos_types::Type::IO(Box::new(args.into_iter().next().unwrap()))
+                    nostos_types::Type::IO(Box::new(args.into_iter().next().expect("IO should have 1 type arg")))
                 }
                 _ => nostos_types::Type::Named {
                     name: name.to_string(),
@@ -20462,7 +20462,7 @@ impl Compiler {
                 if ty.len() == 1 && ty.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false) {
                     // Convert to a consistent type variable ID based on the letter
                     // 'a' -> 1, 'b' -> 2, etc.
-                    let var_id = (ty.chars().next().unwrap() as u32) - ('a' as u32) + 1;
+                    let var_id = (ty.chars().next().expect("single char type should have a char") as u32) - ('a' as u32) + 1;
                     nostos_types::Type::Var(var_id)
                 } else {
                     nostos_types::Type::Named { name: ty.to_string(), args: vec![] }

@@ -646,13 +646,24 @@ impl<'a> InferCtx<'a> {
                 // Too many iterations - likely an infinite loop due to unresolved constraints
                 // solve_completed stays false to indicate incomplete resolution
                 #[cfg(debug_assertions)]
-                eprintln!(
-                    "[TYPE-INVARIANT] solve() hit MAX_ITERATIONS ({}) - {} constraints may be unresolved",
-                    MAX_ITERATIONS,
-                    self.constraints.len()
-                );
+                {
+                    eprintln!(
+                        "[TYPE-INVARIANT] solve() hit MAX_ITERATIONS ({}) - {} constraints may be unresolved",
+                        MAX_ITERATIONS,
+                        self.constraints.len()
+                    );
+                    // Warn about pending method calls that may not be properly validated
+                    if !self.pending_method_calls.is_empty() {
+                        eprintln!(
+                            "[TYPE-INVARIANT] {} pending method calls may have incomplete type checking",
+                            self.pending_method_calls.len()
+                        );
+                    }
+                }
                 // Still finalize what we have, but mark as incomplete
-                self.check_pending_method_calls().ok(); // Best effort
+                // Note: check_pending_method_calls may produce spurious errors since
+                // constraint solving is incomplete - use .ok() to ignore them
+                self.check_pending_method_calls().ok();
                 self.finalize_expr_types();
                 return Ok(());
             }
