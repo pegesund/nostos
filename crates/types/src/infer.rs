@@ -2179,16 +2179,24 @@ impl<'a> InferCtx<'a> {
                 }) = self.env.lookup_type(&resolved_type_name).cloned()
                 {
                     let mut provided = HashMap::new();
+                    let mut positional_count = 0;
                     for field in fields {
                         match field {
                             RecordField::Positional(expr) => {
                                 // Positional args match in order
                                 let ty = self.infer_expr(expr)?;
-                                let idx = provided.len();
+                                let idx = positional_count;
+                                positional_count += 1;
                                 if idx < def_fields.len() {
                                     let (fname, fty, _) = &def_fields[idx];
                                     self.unify(ty, fty.clone());
                                     provided.insert(fname.clone(), ());
+                                } else {
+                                    // Too many positional arguments
+                                    return Err(TypeError::ArityMismatch {
+                                        expected: def_fields.len(),
+                                        found: positional_count,
+                                    });
                                 }
                             }
                             RecordField::Named(fname, expr) => {
@@ -2205,6 +2213,14 @@ impl<'a> InferCtx<'a> {
                                     });
                                 }
                             }
+                        }
+                    }
+
+                    // Check that all required fields are provided
+                    // (fields without defaults are required)
+                    for (fname, _, has_default) in &def_fields {
+                        if !has_default && !provided.contains_key(fname) {
+                            return Err(TypeError::MissingField(fname.clone()));
                         }
                     }
 
@@ -3025,6 +3041,13 @@ impl<'a> InferCtx<'a> {
                                 };
 
                                 if let Some(field_types) = concrete_field_types {
+                                    // Validate pattern arity matches constructor field count
+                                    if pats.len() != field_types.len() {
+                                        return Err(TypeError::ArityMismatch {
+                                            expected: field_types.len(),
+                                            found: pats.len(),
+                                        });
+                                    }
                                     // Use concrete field types from the type definition
                                     // This is key for type narrowing: when matching Add(e1, e2) on Expr,
                                     // we know e1 and e2 are Expr, not just type variables
@@ -3032,6 +3055,13 @@ impl<'a> InferCtx<'a> {
                                         self.infer_pattern(pat, field_ty)?;
                                     }
                                 } else {
+                                    // Validate pattern arity matches constructor param count
+                                    if pats.len() != f.params.len() {
+                                        return Err(TypeError::ArityMismatch {
+                                            expected: f.params.len(),
+                                            found: pats.len(),
+                                        });
+                                    }
                                     // Use constructor params (already substituted for parametric types)
                                     for (pat, param_ty) in pats.iter().zip(f.params.iter()) {
                                         self.infer_pattern(pat, param_ty)?;
@@ -3042,16 +3072,50 @@ impl<'a> InferCtx<'a> {
                             }
                         }
                         VariantPatternFields::Named(fields) => {
+                            // Try to get the constructor's named fields for validation
+                            let ctor_fields: Option<Vec<(String, Type)>> = if let Type::Function(f) = &ctor_ty {
+                                if let Type::Named { name: type_name, .. } = &*f.ret {
+                                    self.env.lookup_variant_named_fields(type_name, &name.node)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
                             for field in fields {
                                 match field {
                                     RecordPatternField::Punned(fname) => {
-                                        let field_ty = self.fresh();
+                                        // Validate field name exists if we have constructor info
+                                        let field_ty = if let Some(ref ctor_fields) = ctor_fields {
+                                            if let Some((_, ty)) = ctor_fields.iter().find(|(n, _)| n == &fname.node) {
+                                                ty.clone()
+                                            } else {
+                                                return Err(TypeError::NoSuchField {
+                                                    ty: name.node.clone(),
+                                                    field: fname.node.clone(),
+                                                });
+                                            }
+                                        } else {
+                                            self.fresh()
+                                        };
                                         self.env.bind(fname.node.clone(), field_ty, false);
                                     }
                                     RecordPatternField::Named(fname, pat) => {
-                                        let field_ty = self.fresh();
+                                        // Validate field name exists if we have constructor info
+                                        let field_ty = if let Some(ref ctor_fields) = ctor_fields {
+                                            if let Some((_, ty)) = ctor_fields.iter().find(|(n, _)| n == &fname.node) {
+                                                ty.clone()
+                                            } else {
+                                                return Err(TypeError::NoSuchField {
+                                                    ty: name.node.clone(),
+                                                    field: fname.node.clone(),
+                                                });
+                                            }
+                                        } else {
+                                            self.fresh()
+                                        };
                                         self.infer_pattern(pat, &field_ty)?;
-                                        let _ = fname;
                                     }
                                     RecordPatternField::Rest(_) => {}
                                 }

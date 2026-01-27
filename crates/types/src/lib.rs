@@ -607,6 +607,21 @@ impl TypeEnv {
         None
     }
 
+    /// Given a type name and constructor name, returns the named field info (name, type) pairs.
+    /// Returns None for unit or positional constructors.
+    pub fn lookup_variant_named_fields(&self, type_name: &str, ctor_name: &str) -> Option<Vec<(String, Type)>> {
+        if let Some(TypeDef::Variant { constructors, .. }) = self.types.get(type_name) {
+            for ctor in constructors {
+                if let Constructor::Named(name, fields) = ctor {
+                    if name == ctor_name {
+                        return Some(fields.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Add a type definition.
     pub fn define_type(&mut self, name: String, def: TypeDef) {
         self.types.insert(name, def);
