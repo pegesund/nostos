@@ -9226,37 +9226,22 @@ impl Compiler {
                 // Handles m.get(k) where m is a Map, s.toUpper() where s is a String, etc.
 
                 // Try structural type matching first (more reliable when type is resolved)
-                let structural_base_type: Option<&str> = self.inferred_expr_types.get(&obj.span())
-                    .and_then(|ty| {
-                        use nostos_types::Type;
-                        match ty {
-                            Type::Map(_, _) => Some("Map"),
-                            Type::Set(_) => Some("Set"),
-                            Type::List(_) => Some("List"),
-                            Type::String => Some("String"),
-                            Type::Named { name, .. } => {
-                                // Check for known named types
-                                match name.as_str() {
-                                    "Buffer" | "Float64Array" | "Int64Array" | "Float32Array" => Some(name.as_str()),
-                                    _ => None, // Fall through to string-based for user types
-                                }
-                            }
-                            _ => None,
-                        }
-                    });
+                // Use expr_type() to get the structural Type, then get_type_base_name_from_type()
+                let structural_base_type: Option<String> = self.expr_type(obj)
+                    .and_then(|ty| self.get_type_base_name_from_type(ty));
 
                 if let Some(type_name) = self.expr_type_name(obj) {
                     // Use structural base type if available, otherwise parse from string
-                    let base_type = structural_base_type.map(|s| s.to_string());
+                    let base_type = structural_base_type.as_deref();
 
                     // Determine type category using structural type first, string fallback only if needed
-                    let is_map = base_type.as_deref() == Some("Map")
+                    let is_map = base_type == Some("Map")
                         || (base_type.is_none() && (type_name.starts_with("Map[") || type_name == "Map"));
-                    let is_set = base_type.as_deref() == Some("Set")
+                    let is_set = base_type == Some("Set")
                         || (base_type.is_none() && (type_name.starts_with("Set[") || type_name == "Set"));
-                    let is_string = base_type.as_deref() == Some("String")
+                    let is_string = base_type == Some("String")
                         || (base_type.is_none() && type_name == "String");
-                    let _is_list = base_type.as_deref() == Some("List")
+                    let _is_list = base_type == Some("List")
                         || (base_type.is_none() && (type_name.starts_with("List[") || type_name == "List"));
 
                     // Check for Map type
@@ -12595,18 +12580,17 @@ impl Compiler {
             }
             // Index expressions - unwrap List element type
             Expr::Index(collection, _, _) => {
-                // Try structural type extraction first (more reliable when available)
-                if let Some(coll_ty) = self.inferred_expr_types.get(&collection.span()) {
-                    use nostos_types::Type;
-                    match coll_ty {
-                        Type::List(elem) if self.is_type_structurally_resolved(elem) => {
+                // Try structural type extraction first using expr_type helper
+                if let Some(coll_ty) = self.expr_type(collection) {
+                    // Use get_element_type_from_type for List/Array
+                    if let Some(elem) = self.get_element_type_from_type(coll_ty) {
+                        if self.is_type_structurally_resolved(elem) {
                             return Some(elem.display());
                         }
-                        Type::Array(elem) if self.is_type_structurally_resolved(elem) => {
-                            return Some(elem.display());
-                        }
-                        Type::String => return Some("Char".to_string()),
-                        _ => {} // Fall through to string-based
+                    }
+                    // String indexing returns Char
+                    if matches!(coll_ty, nostos_types::Type::String) {
+                        return Some("Char".to_string());
                     }
                 }
                 // Fall back to string-based extraction
@@ -13982,8 +13966,6 @@ impl Compiler {
     /// Get the inferred Type for an expression directly (no string conversion).
     /// Returns None if no type was inferred or if the type is not fully resolved.
     /// Use this when you need structural pattern matching on the Type.
-    /// Part of type system improvements - will be used when refactoring string patterns.
-    #[allow(dead_code)]
     fn expr_type(&self, expr: &Expr) -> Option<&nostos_types::Type> {
         if let Some(ty) = self.inferred_expr_types.get(&expr.span()) {
             if self.is_type_structurally_resolved(ty) {
