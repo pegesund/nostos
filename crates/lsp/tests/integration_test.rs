@@ -3662,6 +3662,150 @@ main() = {
     );
 }
 
+/// Test autocomplete for supertrait methods
+/// When a type implements a trait that has a supertrait, autocomplete should show
+/// methods from both the trait AND all supertraits in the hierarchy.
+#[test]
+fn test_lsp_autocomplete_supertrait_methods() {
+    let project_path = create_test_project("supertrait_autocomplete");
+
+    // Create a supertrait hierarchy: Base -> Child
+    // MyType implements both, so x. should show methods from Base AND Child
+    let content = r#"trait Base
+    getValue(self) -> Int
+end
+
+trait Child: Base
+    getDouble(self) -> Int
+end
+
+type MyType = { value: Int }
+
+MyType: Base getValue(self) = self.value end
+MyType: Child getDouble(self) = self.value * 2 end
+
+main() = {
+    x = MyType(10)
+    x.getValue()
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions after "x." (line 15, character 6)
+    let completions = client.completion(&main_uri, 15, 6);
+
+    println!("=== Completions for MyType with supertrait ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+    println!("Completions count: {}", completions.len());
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // Should show method from Base trait (supertrait)
+    let has_get_value = completions.iter().any(|c| c == "getValue");
+    println!("Has getValue (Base trait method): {}", has_get_value);
+
+    // Should show method from Child trait
+    let has_get_double = completions.iter().any(|c| c == "getDouble");
+    println!("Has getDouble (Child trait method): {}", has_get_double);
+
+    // Should show record field
+    let has_value_field = completions.iter().any(|c| c == "value");
+    println!("Has value field: {}", has_value_field);
+
+    assert!(has_get_value, "Expected 'getValue' method from Base supertrait. Got: {:?}", completions);
+    assert!(has_get_double, "Expected 'getDouble' method from Child trait. Got: {:?}", completions);
+    assert!(has_value_field, "Expected 'value' field. Got: {:?}", completions);
+}
+
+/// Test autocomplete for transitive supertrait methods
+/// When A: B: C, a type implementing C should show methods from A, B, and C.
+#[test]
+fn test_lsp_autocomplete_transitive_supertrait_methods() {
+    let project_path = create_test_project("transitive_supertrait_autocomplete");
+
+    // Create a transitive supertrait hierarchy: A -> B -> C
+    let content = r#"trait A
+    getA(self) -> Int
+end
+
+trait B: A
+    getB(self) -> Int
+end
+
+trait C: B
+    getC(self) -> Int
+end
+
+type MyType = { value: Int }
+
+MyType: A getA(self) = self.value end
+MyType: B getB(self) = self.value * 2 end
+MyType: C getC(self) = self.value * 3 end
+
+main() = {
+    x = MyType(10)
+    x.getA()
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions after "x." (line 20, character 6)
+    let completions = client.completion(&main_uri, 20, 6);
+
+    println!("=== Completions for MyType with transitive supertraits ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+    println!("Completions count: {}", completions.len());
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // Should show method from A trait (root supertrait)
+    let has_get_a = completions.iter().any(|c| c == "getA");
+    println!("Has getA (A trait - root supertrait): {}", has_get_a);
+
+    // Should show method from B trait (middle supertrait)
+    let has_get_b = completions.iter().any(|c| c == "getB");
+    println!("Has getB (B trait - middle supertrait): {}", has_get_b);
+
+    // Should show method from C trait (direct trait)
+    let has_get_c = completions.iter().any(|c| c == "getC");
+    println!("Has getC (C trait - direct trait): {}", has_get_c);
+
+    // Should show record field
+    let has_value_field = completions.iter().any(|c| c == "value");
+    println!("Has value field: {}", has_value_field);
+
+    assert!(has_get_a, "Expected 'getA' method from root supertrait A. Got: {:?}", completions);
+    assert!(has_get_b, "Expected 'getB' method from middle supertrait B. Got: {:?}", completions);
+    assert!(has_get_c, "Expected 'getC' method from direct trait C. Got: {:?}", completions);
+    assert!(has_value_field, "Expected 'value' field. Got: {:?}", completions);
+}
+
 fn get_nostos_binary() -> String {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent().unwrap()
