@@ -1,0 +1,15 @@
+# expect: 15
+# Generic function with multiple type parameters
+
+pair(a, b) = (a, b)
+
+# Function that takes two different types and returns a tuple
+makePair[A, B](x: A, y: B) -> (A, B) = (x, y)
+
+main() = {
+    p1 = pair(10, "hello")
+    p2 = makePair(5, 10)
+    (a, _) = p1
+    (b, _) = p2
+    a + b
+}

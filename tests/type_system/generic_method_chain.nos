@@ -1,0 +1,9 @@
+# expect: 3
+# Method chain on generic results
+
+main() = {
+    # Chain of generic operations
+    xs = [1, 2, 3, 4, 5]
+    result = xs.filter(x => x > 2).map(x => x * 2).length()
+    result
+}

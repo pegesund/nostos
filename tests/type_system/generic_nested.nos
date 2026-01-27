@@ -1,0 +1,15 @@
+# expect: 42
+# Nested generic types - List of Options
+
+sumOpt(acc, opt) = match opt {
+    Some(n) -> acc + n
+    None -> acc
+}
+
+main() = {
+    # Create a list of optional integers
+    xs: List[Option[Int]] = [Some(10), None, Some(32)]
+
+    # Sum the present values
+    xs.fold(0, sumOpt)
+}
