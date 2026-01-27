@@ -604,6 +604,18 @@ pub enum CompileError {
     #[error("type error: {message}")]
     TypeError { message: String, span: Span },
 
+    #[error("type mismatch in argument {arg_index}: expected `{expected}`, found `{found}`")]
+    ArgumentTypeMismatch {
+        arg_index: usize,
+        expected: String,
+        found: String,
+        span: Span,
+        /// Optional span pointing to where the expected type is defined
+        definition_span: Option<Span>,
+        /// Name of the function being called
+        function_name: String,
+    },
+
     #[error("mvar safety violation: {message}")]
     MvarSafetyViolation { message: String, span: Span },
 
@@ -758,6 +770,7 @@ impl CompileError {
             CompileError::UnresolvedTraitMethod { span, .. } => *span,
             CompileError::TraitBoundNotSatisfied { span, .. } => *span,
             CompileError::TypeError { span, .. } => *span,
+            CompileError::ArgumentTypeMismatch { span, .. } => *span,
             CompileError::MvarSafetyViolation { span, .. } => *span,
             CompileError::NestedMvarWrite { span, .. } => *span,
             CompileError::BlockingWithMvarLock { span, .. } => *span,
@@ -996,6 +1009,19 @@ impl CompileError {
             }
             CompileError::TypeError { message, .. } => {
                 Self::improve_type_error(message, span)
+            }
+            CompileError::ArgumentTypeMismatch {
+                arg_index, expected, found, definition_span, function_name, ..
+            } => {
+                let mut err = SourceError::compile(
+                    format!("type mismatch in argument {}: expected `{}`, found `{}`", arg_index, expected, found),
+                    span,
+                );
+                // Add secondary label pointing to function definition if available
+                if let Some(def_span) = definition_span {
+                    err = err.with_label(*def_span, format!("parameter type `{}` defined here in `{}`", expected, function_name));
+                }
+                err.with_hint(format!("function `{}` expects `{}` but received `{}`", function_name, expected, found))
             }
             CompileError::MvarSafetyViolation { message, .. } => {
                 SourceError::compile(format!("mvar safety violation: {}", message), span)
@@ -10836,9 +10862,18 @@ impl Compiler {
                     if let Some((idx, expected, actual)) = self.find_first_type_mismatch(
                         &all_clause_types, &arg_types, &type_param_map
                     ) {
-                        return Err(CompileError::TypeError {
-                            message: format!("type mismatch in argument {}: expected `{}` but found `{}`", idx + 1, expected, actual),
+                        // Try to get the function definition span for secondary label
+                        let definition_span = self.functions.get(qname)
+                            .and_then(|f| f.source_span)
+                            .map(|(start, end)| Span::new(start, end));
+
+                        return Err(CompileError::ArgumentTypeMismatch {
+                            arg_index: idx + 1,
+                            expected: expected.clone(),
+                            found: actual.clone(),
                             span: arg_exprs[idx].span(),
+                            definition_span,
+                            function_name: qname.clone(),
                         });
                     }
                 }
