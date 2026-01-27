@@ -37,6 +37,15 @@ pub struct PendingMethodCall {
     pub span: Option<Span>,
 }
 
+/// Error type for incomplete type resolution.
+#[derive(Debug, Clone)]
+pub enum UnresolvedTypeError {
+    /// Type contains unresolved type variables
+    UnresolvedVar(Type),
+    /// Type contains leaked type parameters (TypeParam not resolved to concrete type)
+    LeakedTypeParam(Type),
+}
+
 /// Type inference context.
 pub struct InferCtx<'a> {
     pub env: &'a mut TypeEnv,
@@ -1039,6 +1048,24 @@ impl<'a> InferCtx<'a> {
         let substituted = self.env.apply_subst(ty);
         // Then resolve any TypeParams
         self.resolve_type_params(&substituted)
+    }
+
+    /// Apply full substitution and verify the result is fully resolved.
+    /// Returns Err with the problematic part if resolution is incomplete.
+    pub fn resolve_type_fully(&self, ty: &Type) -> Result<Type, UnresolvedTypeError> {
+        let resolved = self.apply_full_subst(ty);
+
+        // Check for unresolved type variables
+        if self.contains_unresolved_var(&resolved) {
+            return Err(UnresolvedTypeError::UnresolvedVar(resolved));
+        }
+
+        // Check for leaked TypeParams (optional - some callers may allow this)
+        if self.contains_type_param(&resolved) {
+            return Err(UnresolvedTypeError::LeakedTypeParam(resolved));
+        }
+
+        Ok(resolved)
     }
 
     /// Check if a type contains unresolved TypeParams (not just type variables).
