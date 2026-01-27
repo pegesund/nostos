@@ -14,7 +14,7 @@ use nostos_syntax::ast::{
     BinOp, Binding, CallArg, Expr, FnClause, FnDef, Item, MatchArm, Module, Pattern, RecordField,
     RecordPatternField, Span, Stmt, TypeExpr, UnaryOp, VariantPatternFields,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A type constraint generated during inference.
 #[derive(Debug, Clone)]
@@ -64,6 +64,9 @@ pub struct InferCtx<'a> {
     /// Tracks expressions where types couldn't be fully resolved (contain TypeParams after finalization).
     /// This is informational - code generation should handle these via fallback paths.
     pub unresolved_type_params: Vec<(Span, Type, String)>, // (span, type, param_name)
+    /// Type parameters currently in scope (from function type parameters like [T: Hash]).
+    /// Used by type_from_ast to distinguish type parameters from named types.
+    current_type_params: HashSet<String>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -80,6 +83,7 @@ impl<'a> InferCtx<'a> {
             type_param_mappings: HashMap::new(),
             unannotated_param_vars: HashMap::new(),
             unresolved_type_params: Vec::new(),
+            current_type_params: HashSet::new(),
         }
     }
 
@@ -122,33 +126,6 @@ impl<'a> InferCtx<'a> {
     /// Generate a fresh type variable.
     pub fn fresh(&mut self) -> Type {
         self.env.fresh_var()
-    }
-
-    /// Check if a type is concrete (no type variables or parameters).
-    fn is_concrete_type(&self, ty: &Type) -> bool {
-        match ty {
-            Type::Var(_) | Type::TypeParam(_) => false,
-            Type::List(inner) | Type::Array(inner) | Type::Set(inner) | Type::IO(inner) => {
-                self.is_concrete_type(inner)
-            }
-            Type::Map(k, v) => self.is_concrete_type(k) && self.is_concrete_type(v),
-            Type::Tuple(elems) => elems.iter().all(|e| self.is_concrete_type(e)),
-            Type::Function(ft) => {
-                ft.params.iter().all(|p| self.is_concrete_type(p))
-                    && self.is_concrete_type(&ft.ret)
-            }
-            Type::Named { args, .. } => args.iter().all(|a| self.is_concrete_type(a)),
-            Type::Record(rec) => rec.fields.iter().all(|(_, t, _)| self.is_concrete_type(t)),
-            Type::Variant(var) => var.constructors.iter().all(|c| {
-                match c {
-                    Constructor::Unit(_) => true,
-                    Constructor::Positional(_, types) => types.iter().all(|t| self.is_concrete_type(t)),
-                    Constructor::Named(_, fields) => fields.iter().all(|(_, t)| self.is_concrete_type(t)),
-                }
-            }),
-            // Primitives are concrete
-            _ => true,
-        }
     }
 
     /// Extract a parameter name from a pattern for error messages.
@@ -612,10 +589,19 @@ impl<'a> InferCtx<'a> {
                 params: ft.params.iter().map(|p| self.freshen_type(p, var_subst, param_subst)).collect(),
                 ret: Box::new(self.freshen_type(&ft.ret, var_subst, param_subst)),
             }),
-            Type::Named { name, args } => Type::Named {
-                name: name.clone(),
-                args: args.iter().map(|a| self.freshen_type(a, var_subst, param_subst)).collect(),
-            },
+            Type::Named { name, args } => {
+                // Handle type parameters that were stored as Named types with no args
+                // (e.g., "T" might be Named { name: "T", args: [] } instead of TypeParam("T"))
+                if args.is_empty() {
+                    if let Some(replacement) = param_subst.get(name) {
+                        return replacement.clone();
+                    }
+                }
+                Type::Named {
+                    name: name.clone(),
+                    args: args.iter().map(|a| self.freshen_type(a, var_subst, param_subst)).collect(),
+                }
+            }
             Type::IO(inner) => Type::IO(Box::new(self.freshen_type(inner, var_subst, param_subst))),
             Type::Record(rec) => Type::Record(RecordType {
                 name: rec.name.clone(),
@@ -1044,9 +1030,9 @@ impl<'a> InferCtx<'a> {
     /// This is the complete type resolution that should be used after solve().
     pub fn apply_full_subst(&self, ty: &Type) -> Type {
         // First apply the main substitution
-        let ty = self.env.apply_subst(ty);
+        let substituted = self.env.apply_subst(ty);
         // Then resolve any TypeParams
-        self.resolve_type_params(&ty)
+        self.resolve_type_params(&substituted)
     }
 
     /// Check if a type contains unresolved TypeParams (not just type variables).
@@ -1154,10 +1140,20 @@ impl<'a> InferCtx<'a> {
                 ret: Box::new(self.resolve_type_params(&f.ret)),
                 required_params: f.required_params,
             }),
-            Type::Named { name, args } => Type::Named {
-                name: name.clone(),
-                args: args.iter().map(|t| self.resolve_type_params(t)).collect(),
-            },
+            Type::Named { name, args } => {
+                // Handle type parameters that were stored as Named types with no args
+                // (e.g., "T" might be Named { name: "T", args: [] } instead of TypeParam("T"))
+                if args.is_empty() {
+                    if let Some(mapped) = self.type_param_mappings.get(name) {
+                        let substituted = self.env.apply_subst(mapped);
+                        return self.resolve_type_params(&substituted);
+                    }
+                }
+                Type::Named {
+                    name: name.clone(),
+                    args: args.iter().map(|t| self.resolve_type_params(t)).collect(),
+                }
+            }
             Type::IO(inner) => Type::IO(Box::new(self.resolve_type_params(inner))),
             Type::Record(rec) => Type::Record(RecordType {
                 name: rec.name.clone(),
@@ -1504,6 +1500,10 @@ impl<'a> InferCtx<'a> {
         match ty {
             TypeExpr::Name(ident) => {
                 let name = &ident.node;
+                // Check if this is a type parameter in the current scope
+                if self.current_type_params.contains(name) {
+                    return Type::TypeParam(name.clone());
+                }
                 match name.as_str() {
                     // Integer types
                     "Int" => Type::Int,
@@ -1685,19 +1685,6 @@ impl<'a> InferCtx<'a> {
                     arg_types.push(self.infer_expr(expr)?);
                 }
 
-                // Track the function name for better error messages
-                let func_name: Option<String> = if let Expr::Var(ident) = func.as_ref() {
-                    Some(ident.node.clone())
-                } else if let Expr::FieldAccess(base, field, _) = func.as_ref() {
-                    if let Expr::Var(base_ident) = base.as_ref() {
-                        Some(format!("{}.{}", base_ident.node, field.node))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
                 // Special handling for simple variable function calls: try all overloads
                 let func_ty = if let Expr::Var(ident) = func.as_ref() {
                     let name = &ident.node;
@@ -1795,31 +1782,6 @@ impl<'a> InferCtx<'a> {
                     }
                     // If not a function type, fall through to normal unification
                     // which will report an appropriate error
-                }
-
-                // If we have a concrete function type, check arguments explicitly for better errors
-                if let Type::Function(ft) = &func_ty {
-                    if let Some(ref name) = func_name {
-                        // Check each argument against expected parameter type
-                        for (i, (arg_ty, param_ty)) in arg_types.iter().zip(ft.params.iter()).enumerate() {
-                            let resolved_arg = self.env.apply_subst(arg_ty);
-                            let resolved_param = self.env.apply_subst(param_ty);
-
-                            // Only report error if both types are concrete (no type variables)
-                            if self.is_concrete_type(&resolved_arg) && self.is_concrete_type(&resolved_param) {
-                                // types_compatible returns None if incompatible
-                                if self.types_compatible(&resolved_param, &resolved_arg).is_none() {
-                                    self.last_error_span = arg_spans.get(i).copied();
-                                    return Err(TypeError::ArgumentTypeMismatch {
-                                        function_name: name.clone(),
-                                        arg_index: i + 1,
-                                        expected: resolved_param.display(),
-                                        found: resolved_arg.display(),
-                                    });
-                                }
-                            }
-                        }
-                    }
                 }
 
                 let ret_ty = self.fresh();
@@ -2043,12 +2005,13 @@ impl<'a> InferCtx<'a> {
                         let expected_func_ty = Type::Function(FunctionType {
                             required_params: None,
                             type_params: vec![],
-                            params: arg_types,
+                            params: arg_types.clone(),
                             ret: Box::new(ret_ty.clone()),
                         });
 
                         // Unify constructor type with expected - this will catch type mismatches
-                        self.unify(ctor_ty, expected_func_ty);
+                        self.unify(ctor_ty.clone(), expected_func_ty);
+
                         Ok(ret_ty)
                     }
                 } else {
@@ -3015,11 +2978,12 @@ impl<'a> InferCtx<'a> {
                                     .iter()
                                     .map(instantiate)
                                     .collect();
-                                return Some(Type::Function(FunctionType { required_params: None,
+                                let func_ty = Type::Function(FunctionType { required_params: None,
                                     type_params: vec![],
-                                    params: instantiated_params,
-                                    ret: Box::new(result_ty),
-                                }));
+                                    params: instantiated_params.clone(),
+                                    ret: Box::new(result_ty.clone()),
+                                });
+                                return Some(func_ty);
                             }
                         }
                         Constructor::Named(_, fields) => {
@@ -3160,6 +3124,12 @@ impl<'a> InferCtx<'a> {
         let saved_current = self.current_function.take();
         self.current_function = Some(name.clone());
 
+        // Set type parameters in scope (e.g., [T: Hash] -> {"T"})
+        let saved_type_params = std::mem::take(&mut self.current_type_params);
+        for tp in &func.type_params {
+            self.current_type_params.insert(tp.name.node.clone());
+        }
+
         // Get pre-registered type if available (for recursive calls to use the same vars)
         // Try plain name, wildcard qualified name, and any typed overloads
         let arity = func.clauses.first().map(|c| c.params.len()).unwrap_or(0);
@@ -3239,8 +3209,9 @@ impl<'a> InferCtx<'a> {
         // Register function in environment
         self.env.insert_function(name.clone(), func_ty.clone());
 
-        // Restore previous current function
+        // Restore previous current function and type parameters
         self.current_function = saved_current;
+        self.current_type_params = saved_type_params;
 
         Ok(func_ty)
     }
@@ -3368,6 +3339,13 @@ impl<'a> InferCtx<'a> {
             })
             .collect();
 
+        // Set up current_type_params so type_from_ast recognizes type parameters
+        // e.g., for "type Tree[T] = Node(T, Tree[T])", "T" should become TypeParam("T")
+        let saved_type_params = std::mem::take(&mut self.current_type_params);
+        for p in &params {
+            self.current_type_params.insert(p.name.clone());
+        }
+
         let def = match &td.body {
             nostos_syntax::ast::TypeBody::Record(fields) => TypeDef::Record {
                 params,
@@ -3407,9 +3385,14 @@ impl<'a> InferCtx<'a> {
                 target: self.type_from_ast(ty),
             },
             nostos_syntax::ast::TypeBody::Empty => {
+                // Restore type params before early return
+                self.current_type_params = saved_type_params;
                 return Ok(()); // Never type
             }
         };
+
+        // Restore previous type params
+        self.current_type_params = saved_type_params;
 
         self.env.define_type(name, def);
         Ok(())

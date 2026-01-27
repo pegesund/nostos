@@ -11991,6 +11991,7 @@ impl Compiler {
         // This is critical for monomorphization: param_types has the concrete type (e.g., "Box")
         // while inferred_expr_types might have the type parameter (e.g., "T").
         if let Expr::Var(ident) = expr {
+            // DEBUG: Trace variable type lookups
             if let Some(ty) = self.param_types.get(&ident.node) {
                 // Substitute type parameters from current_type_bindings
                 return Some(self.substitute_type_params_in_string(ty));
@@ -13829,7 +13830,17 @@ impl Compiler {
                 ft.params.iter().all(|p| self.is_type_structurally_resolved(p))
                     && self.is_type_structurally_resolved(&ft.ret)
             }
-            Type::Named { args, .. } => args.iter().all(|a| self.is_type_structurally_resolved(a)),
+            Type::Named { name, args } => {
+                // A Named type with no args and a short uppercase name is likely a type parameter
+                // that was incorrectly stored as Named instead of TypeParam
+                if args.is_empty() && name.len() <= 2 && name.chars().all(|c| c.is_ascii_uppercase()) {
+                    // Check if it's actually a defined type
+                    if !self.types.contains_key(name) {
+                        return false; // It's a leaked type parameter
+                    }
+                }
+                args.iter().all(|a| self.is_type_structurally_resolved(a))
+            }
             Type::IO(inner) => self.is_type_structurally_resolved(inner),
             Type::Record(rec) => rec.fields.iter().all(|(_, t, _)| self.is_type_structurally_resolved(t)),
             Type::Variant(var) => var.constructors.iter().all(|c| {
