@@ -5638,7 +5638,7 @@ impl Compiler {
         }
         // Also check for single uppercase letters that aren't known types
         // These are likely type parameters from outer generic functions (e.g., in lambdas)
-        if type_name.len() == 1 && type_name.chars().next().unwrap().is_ascii_uppercase() {
+        if type_name.len() == 1 && type_name.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false) {
             // It's a single uppercase letter - check if it's NOT a known type
             if !self.types.contains_key(type_name) {
                 return true;
