@@ -1,0 +1,28 @@
+# expect: 10
+# Test: trait method on list head inside nested lambdas
+
+type Box = { value: Int }
+
+trait Doubler
+    double(self) -> Int
+end
+
+Box: Doubler
+    double(self) = self.value * 2
+end
+
+main() = {
+    boxes = [Box(value: 5), Box(value: 10), Box(value: 15)]
+    
+    # Outer lambda
+    outer = () => {
+        # Inner lambda that uses trait method on head of list
+        inner = () => {
+            b = head(boxes)
+            b.double()
+        }
+        inner()
+    }
+    
+    outer()
+}

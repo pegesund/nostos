@@ -1,0 +1,24 @@
+# expect: 10
+# Test: trait method chain on list.head() inside nested lambdas
+
+type Box = { value: Int }
+
+trait Doubler
+    double(self) -> Int
+end
+
+Box: Doubler
+    double(self) = self.value * 2
+end
+
+main() = {
+    boxes = [Box(value: 5), Box(value: 10), Box(value: 15)]
+    
+    # Outer lambda with inner lambda using method chain
+    outer = () => {
+        inner = () => boxes.head().double()
+        inner()
+    }
+    
+    outer()
+}
