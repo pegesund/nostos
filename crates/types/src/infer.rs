@@ -76,6 +76,9 @@ pub struct InferCtx<'a> {
     /// Type parameters currently in scope (from function type parameters like [T: Hash]).
     /// Used by type_from_ast to distinguish type parameters from named types.
     current_type_params: HashSet<String>,
+    /// Whether solve() completed normally (all constraints processed).
+    /// False if solve() hit MAX_ITERATIONS limit.
+    solve_completed: bool,
 }
 
 impl<'a> InferCtx<'a> {
@@ -93,6 +96,7 @@ impl<'a> InferCtx<'a> {
             unannotated_param_vars: HashMap::new(),
             unresolved_type_params: Vec::new(),
             current_type_params: HashSet::new(),
+            solve_completed: false,
         }
     }
 
@@ -640,7 +644,16 @@ impl<'a> InferCtx<'a> {
             iteration += 1;
             if iteration > MAX_ITERATIONS {
                 // Too many iterations - likely an infinite loop due to unresolved constraints
-                // Return success but leave type variables unresolved
+                // solve_completed stays false to indicate incomplete resolution
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[TYPE-INVARIANT] solve() hit MAX_ITERATIONS ({}) - {} constraints may be unresolved",
+                    MAX_ITERATIONS,
+                    self.constraints.len()
+                );
+                // Still finalize what we have, but mark as incomplete
+                self.check_pending_method_calls().ok(); // Best effort
+                self.finalize_expr_types();
                 return Ok(());
             }
 
@@ -774,7 +787,16 @@ impl<'a> InferCtx<'a> {
         // Verify post-finalize invariants (debug mode only)
         self.verify_post_finalize_invariants();
 
+        // Mark solve as successfully completed
+        self.solve_completed = true;
+
         Ok(())
+    }
+
+    /// Check if solve() completed normally (all constraints processed).
+    /// Returns false if solve() hit the MAX_ITERATIONS limit.
+    pub fn solve_completed(&self) -> bool {
+        self.solve_completed
     }
 
     /// Apply the current substitution to all stored expression types.
@@ -1259,15 +1281,31 @@ impl<'a> InferCtx<'a> {
     #[cfg(not(debug_assertions))]
     pub fn verify_post_finalize_invariants(&self) -> usize { 0 }
 
+    /// Maximum recursion depth for type resolution functions.
+    /// Prevents stack overflow from circular type references.
+    const MAX_TYPE_RESOLUTION_DEPTH: usize = 100;
+
     /// Recursively resolve TypeParams in a type using type_param_mappings.
     /// If a TypeParam isn't mapped yet, it stays as-is (for finalize_expr_types).
     fn resolve_type_params(&self, ty: &Type) -> Type {
+        self.resolve_type_params_with_depth(ty, 0)
+    }
+
+    /// Internal implementation with depth tracking to prevent stack overflow.
+    fn resolve_type_params_with_depth(&self, ty: &Type, depth: usize) -> Type {
+        // Prevent stack overflow from circular type references
+        if depth > Self::MAX_TYPE_RESOLUTION_DEPTH {
+            #[cfg(debug_assertions)]
+            eprintln!("[TYPE-INVARIANT] resolve_type_params exceeded max depth for: {}", ty.display());
+            return ty.clone();
+        }
+
         match ty {
             Type::TypeParam(name) => {
                 if let Some(mapped) = self.type_param_mappings.get(name) {
                     // Apply substitution to the mapped type (might be a Var that needs resolving)
                     let substituted = self.env.apply_subst(mapped);
-                    self.resolve_type_params(&substituted)
+                    self.resolve_type_params_with_depth(&substituted, depth + 1)
                 } else {
                     ty.clone()
                 }
@@ -1275,25 +1313,25 @@ impl<'a> InferCtx<'a> {
             Type::Var(id) => {
                 // Apply substitution to resolve type variables
                 if let Some(resolved) = self.env.substitution.get(id) {
-                    self.resolve_type_params(resolved)
+                    self.resolve_type_params_with_depth(resolved, depth + 1)
                 } else {
                     ty.clone()
                 }
             }
             Type::Tuple(elems) => {
-                Type::Tuple(elems.iter().map(|t| self.resolve_type_params(t)).collect())
+                Type::Tuple(elems.iter().map(|t| self.resolve_type_params_with_depth(t, depth + 1)).collect())
             }
-            Type::List(elem) => Type::List(Box::new(self.resolve_type_params(elem))),
-            Type::Array(elem) => Type::Array(Box::new(self.resolve_type_params(elem))),
+            Type::List(elem) => Type::List(Box::new(self.resolve_type_params_with_depth(elem, depth + 1))),
+            Type::Array(elem) => Type::Array(Box::new(self.resolve_type_params_with_depth(elem, depth + 1))),
             Type::Map(k, v) => Type::Map(
-                Box::new(self.resolve_type_params(k)),
-                Box::new(self.resolve_type_params(v)),
+                Box::new(self.resolve_type_params_with_depth(k, depth + 1)),
+                Box::new(self.resolve_type_params_with_depth(v, depth + 1)),
             ),
-            Type::Set(elem) => Type::Set(Box::new(self.resolve_type_params(elem))),
+            Type::Set(elem) => Type::Set(Box::new(self.resolve_type_params_with_depth(elem, depth + 1))),
             Type::Function(f) => Type::Function(FunctionType {
                 type_params: f.type_params.clone(),
-                params: f.params.iter().map(|t| self.resolve_type_params(t)).collect(),
-                ret: Box::new(self.resolve_type_params(&f.ret)),
+                params: f.params.iter().map(|t| self.resolve_type_params_with_depth(t, depth + 1)).collect(),
+                ret: Box::new(self.resolve_type_params_with_depth(&f.ret, depth + 1)),
                 required_params: f.required_params,
             }),
             Type::Named { name, args } => {
@@ -1302,19 +1340,19 @@ impl<'a> InferCtx<'a> {
                 if args.is_empty() {
                     if let Some(mapped) = self.type_param_mappings.get(name) {
                         let substituted = self.env.apply_subst(mapped);
-                        return self.resolve_type_params(&substituted);
+                        return self.resolve_type_params_with_depth(&substituted, depth + 1);
                     }
                 }
                 Type::Named {
                     name: name.clone(),
-                    args: args.iter().map(|t| self.resolve_type_params(t)).collect(),
+                    args: args.iter().map(|t| self.resolve_type_params_with_depth(t, depth + 1)).collect(),
                 }
             }
-            Type::IO(inner) => Type::IO(Box::new(self.resolve_type_params(inner))),
+            Type::IO(inner) => Type::IO(Box::new(self.resolve_type_params_with_depth(inner, depth + 1))),
             Type::Record(rec) => Type::Record(RecordType {
                 name: rec.name.clone(),
                 fields: rec.fields.iter()
-                    .map(|(n, t, m)| (n.clone(), self.resolve_type_params(t), *m))
+                    .map(|(n, t, m)| (n.clone(), self.resolve_type_params_with_depth(t, depth + 1), *m))
                     .collect(),
             }),
             _ => ty.clone(),
@@ -1325,6 +1363,18 @@ impl<'a> InferCtx<'a> {
     /// Uses existing mappings if available, creates fresh vars for new TypeParams.
     /// This is used for recursive function calls to avoid TypeParams in the type system.
     fn instantiate_type_params(&mut self, ty: &Type) -> Type {
+        self.instantiate_type_params_with_depth(ty, 0)
+    }
+
+    /// Internal implementation with depth tracking to prevent stack overflow.
+    fn instantiate_type_params_with_depth(&mut self, ty: &Type, depth: usize) -> Type {
+        // Prevent stack overflow from circular type references
+        if depth > Self::MAX_TYPE_RESOLUTION_DEPTH {
+            #[cfg(debug_assertions)]
+            eprintln!("[TYPE-INVARIANT] instantiate_type_params exceeded max depth for: {}", ty.display());
+            return ty.clone();
+        }
+
         match ty {
             Type::TypeParam(name) => {
                 if let Some(mapped) = self.type_param_mappings.get(name).cloned() {
@@ -1336,30 +1386,30 @@ impl<'a> InferCtx<'a> {
                 }
             }
             Type::Tuple(elems) => {
-                Type::Tuple(elems.iter().map(|t| self.instantiate_type_params(t)).collect())
+                Type::Tuple(elems.iter().map(|t| self.instantiate_type_params_with_depth(t, depth + 1)).collect())
             }
-            Type::List(elem) => Type::List(Box::new(self.instantiate_type_params(elem))),
-            Type::Array(elem) => Type::Array(Box::new(self.instantiate_type_params(elem))),
+            Type::List(elem) => Type::List(Box::new(self.instantiate_type_params_with_depth(elem, depth + 1))),
+            Type::Array(elem) => Type::Array(Box::new(self.instantiate_type_params_with_depth(elem, depth + 1))),
             Type::Map(k, v) => Type::Map(
-                Box::new(self.instantiate_type_params(k)),
-                Box::new(self.instantiate_type_params(v)),
+                Box::new(self.instantiate_type_params_with_depth(k, depth + 1)),
+                Box::new(self.instantiate_type_params_with_depth(v, depth + 1)),
             ),
-            Type::Set(elem) => Type::Set(Box::new(self.instantiate_type_params(elem))),
+            Type::Set(elem) => Type::Set(Box::new(self.instantiate_type_params_with_depth(elem, depth + 1))),
             Type::Function(f) => Type::Function(FunctionType {
                 type_params: f.type_params.clone(),
-                params: f.params.iter().map(|t| self.instantiate_type_params(t)).collect(),
-                ret: Box::new(self.instantiate_type_params(&f.ret)),
+                params: f.params.iter().map(|t| self.instantiate_type_params_with_depth(t, depth + 1)).collect(),
+                ret: Box::new(self.instantiate_type_params_with_depth(&f.ret, depth + 1)),
                 required_params: f.required_params,
             }),
             Type::Named { name, args } => Type::Named {
                 name: name.clone(),
-                args: args.iter().map(|t| self.instantiate_type_params(t)).collect(),
+                args: args.iter().map(|t| self.instantiate_type_params_with_depth(t, depth + 1)).collect(),
             },
-            Type::IO(inner) => Type::IO(Box::new(self.instantiate_type_params(inner))),
+            Type::IO(inner) => Type::IO(Box::new(self.instantiate_type_params_with_depth(inner, depth + 1))),
             Type::Record(rec) => Type::Record(RecordType {
                 name: rec.name.clone(),
                 fields: rec.fields.iter()
-                    .map(|(n, t, m)| (n.clone(), self.instantiate_type_params(t), *m))
+                    .map(|(n, t, m)| (n.clone(), self.instantiate_type_params_with_depth(t, depth + 1), *m))
                     .collect(),
             }),
             _ => ty.clone(),
@@ -3290,6 +3340,10 @@ impl<'a> InferCtx<'a> {
         // Set current function for recursive call detection
         let saved_current = self.current_function.take();
         self.current_function = Some(name.clone());
+
+        // Clear type parameter mappings to prevent cross-function pollution.
+        // Each function gets fresh type variable mappings for its type parameters.
+        self.type_param_mappings.clear();
 
         // Set type parameters in scope (e.g., [T: Hash] -> {"T"})
         let saved_type_params = std::mem::take(&mut self.current_type_params);
