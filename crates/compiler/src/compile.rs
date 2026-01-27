@@ -2889,7 +2889,7 @@ impl Compiler {
 
     /// Resolve a name with ambiguity checking.
     /// Returns the fully qualified name or an error if ambiguous.
-    fn resolve_name_checked(&self, name: &str, span: Span) -> Result<String, CompileError> {
+    fn resolve_name_checked(&self, name: &str, _span: Span) -> Result<String, CompileError> {
         // If the name already contains '.', it's already qualified
         if name.contains('.') {
             return Ok(name.to_string());
@@ -3088,7 +3088,7 @@ impl Compiler {
         }
 
         // Check each argument
-        for (i, (clause_type, arg_type)) in clause_types.iter().zip(arg_types.iter()).enumerate() {
+        for (_i, (clause_type, arg_type)) in clause_types.iter().zip(arg_types.iter()).enumerate() {
             if let (Some(expected_expr), Some(actual)) = (clause_type, arg_type) {
                 let expected = self.type_expr_name(expected_expr);
                 // Substitute type parameters
@@ -11881,7 +11881,7 @@ impl Compiler {
     /// Transform `x: Result[T, E] = obj.toType()` to `x: Result[T, E] = requestToType(obj, "T")`
     /// This is syntactic sugar for the requestToType builtin.
     fn try_transform_to_type_call(&self, binding: &Binding) -> Option<Binding> {
-        use nostos_syntax::{TypeExpr, Ident};
+        use nostos_syntax::Ident;
 
         // Check if the value is a method call `obj.toType()` with no arguments
         let (receiver, method_name, args, span) = match &binding.value {
@@ -13441,7 +13441,7 @@ impl Compiler {
                 }
                 None
             }
-            TypeExpr::Function(params, ret) => {
+            TypeExpr::Function(_params, ret) => {
                 // For function types, we'd need to parse the concrete function type
                 // This is complex, so just try the return type for now
                 if let Some(arrow_pos) = concrete.rfind("->") {
@@ -21131,7 +21131,7 @@ impl Compiler {
                 Expr::UnaryOp(*op, Box::new(self.transform_rhtml_expr(operand)), *span)
             }
 
-            Expr::Lambda(params, body, span) => {
+            Expr::Lambda(_params, _body, _span) => {
                 // DO NOT transform lambda bodies - they contain user code, not HTML
                 // The component function receives a lambda that returns RHtmlResult,
                 // and the lambda body should be compiled normally (may call RHtml itself)
