@@ -227,27 +227,114 @@ main() = {
         </div>
     </section>
 
-    <!-- Batteries Included -->
-    <section class="py-20">
+    <!-- PostgreSQL -->
+    <section class="py-16 bg-slate-800/50">
+        <div class="max-w-4xl mx-auto px-4">
+            <h2 class="text-3xl font-bold text-center mb-4">PostgreSQL</h2>
+            <p class="text-lg text-slate-400 text-center mb-8">Query your database with minimal friction. No ORM, just plain queries and safe types.</p>
+            <div class="bg-nostos-code rounded-xl overflow-hidden shadow-2xl border border-slate-800">
+                <div class="flex items-center gap-2 px-4 py-3 bg-slate-800/50 border-b border-slate-700">
+                    <div class="w-3 h-3 rounded-full bg-red-500"></div>
+                    <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+                    <div class="w-3 h-3 rounded-full bg-green-500"></div>
+                    <span class="ml-2 text-xs text-slate-400 font-mono">database.nos</span>
+                </div>
+                <div class="p-6 overflow-x-auto">
+<pre><code class="language-nostos">type User = { name: String, email: String }
+
+main() = {
+    conn = Pg.connect("host=localhost dbname=mydb user=postgres")
+
+    # Parameterized queries prevent SQL injection
+    rows = Pg.query(conn, "SELECT name, email FROM users WHERE age > $1", 18)
+
+    # Or map directly to typed records
+    users: List[User] = query[User](conn, "SELECT name, email FROM users", ())
+    users.map(u => println(u.name ++ ": " ++ u.email))
+}</code></pre>
+                </div>
+            </div>
+            <p class="text-base text-slate-500 text-center mt-4">Connection pooling, transactions, prepared statements, pgvector, LISTEN/NOTIFY, TLS</p>
+        </div>
+    </section>
+
+    <!-- HTTP Server -->
+    <section class="py-16">
+        <div class="max-w-4xl mx-auto px-4">
+            <h2 class="text-3xl font-bold text-center mb-4">HTTP Server & Client</h2>
+            <p class="text-lg text-slate-400 text-center mb-8">Production-ready networking with automatic keep-alive and TLS.</p>
+            <div class="bg-nostos-code rounded-xl overflow-hidden shadow-2xl border border-slate-800">
+                <div class="flex items-center gap-2 px-4 py-3 bg-slate-800/50 border-b border-slate-700">
+                    <div class="w-3 h-3 rounded-full bg-red-500"></div>
+                    <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+                    <div class="w-3 h-3 rounded-full bg-green-500"></div>
+                    <span class="ml-2 text-xs text-slate-400 font-mono">server.nos</span>
+                </div>
+                <div class="p-6 overflow-x-auto">
+<pre><code class="language-nostos"># Server
+handle(req) = match req.path {
+    "/api/users" -> jsonResponse(getUsers())
+    "/health" -> textResponse("OK")
+    _ -> notFound()
+}
+
+main() = Server.start(8080, handle, workers: 8)
+
+# Client
+response = Http.get("https://api.example.com/data")
+data = Json.parse(response.body)</code></pre>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Traits -->
+    <section class="py-16 bg-slate-800/50">
+        <div class="max-w-4xl mx-auto px-4">
+            <h2 class="text-3xl font-bold text-center mb-4">Traits for Polymorphism</h2>
+            <p class="text-lg text-slate-400 text-center mb-8">Define shared behavior without class hierarchies.</p>
+            <div class="bg-nostos-code rounded-xl overflow-hidden shadow-2xl border border-slate-800">
+                <div class="flex items-center gap-2 px-4 py-3 bg-slate-800/50 border-b border-slate-700">
+                    <div class="w-3 h-3 rounded-full bg-red-500"></div>
+                    <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+                    <div class="w-3 h-3 rounded-full bg-green-500"></div>
+                    <span class="ml-2 text-xs text-slate-400 font-mono">traits.nos</span>
+                </div>
+                <div class="p-6 overflow-x-auto">
+<pre><code class="language-nostos">trait Drawable
+    draw(self) -> String
+end
+
+type Circle = { radius: Float }
+type Square = { side: Float }
+
+Circle: Drawable
+    draw(self) = "●"
+end
+
+Square: Drawable
+    draw(self) = "■"
+end
+
+# Works with any Drawable
+render[T: Drawable](shapes: List[T]) = shapes.map(s => s.draw()).join(" ")</code></pre>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- More Batteries -->
+    <section class="py-16">
         <div class="max-w-7xl mx-auto px-4">
-            <h2 class="text-4xl font-bold text-center mb-4">Some Batteries Included</h2>
-            <p class="text-lg text-slate-400 text-center mb-12">HTTP, PostgreSQL, JSON, WebSockets—ready when you are.</p>
+            <h2 class="text-3xl font-bold text-center mb-8">And More...</h2>
             <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-                <div class="p-4 bg-slate-800 rounded-lg border border-slate-700">
-                    <h4 class="font-semibold mb-2 text-blue-400">PostgreSQL</h4>
-                    <p class="text-base text-slate-400">Typed queries, connection pooling, transactions, pgvector support</p>
-                </div>
-                <div class="p-4 bg-slate-800 rounded-lg border border-slate-700">
-                    <h4 class="font-semibold mb-2 text-emerald-400">HTTP Server & Client</h4>
-                    <p class="text-base text-slate-400">Production-ready networking with automatic keep-alive and TLS</p>
-                </div>
                 <div class="p-4 bg-slate-800 rounded-lg border border-slate-700">
                     <h4 class="font-semibold mb-2 text-purple-400">WebSockets</h4>
                     <p class="text-base text-slate-400">Real-time bidirectional communication with TLS support</p>
                 </div>
                 <div class="p-4 bg-slate-800 rounded-lg border border-slate-700">
                     <h4 class="font-semibold mb-2 text-pink-400">Reactive Web (RWeb)</h4>
-                    <p class="text-base text-slate-400">Full-stack reactive apps with server-side rendering and DOM diffing</p>
+                    <p class="text-base text-slate-400">Full-stack reactive apps with server-side rendering</p>
                 </div>
                 <div class="p-4 bg-slate-800 rounded-lg border border-slate-700">
                     <h4 class="font-semibold mb-2 text-yellow-400">JSON</h4>
@@ -255,15 +342,23 @@ main() = {
                 </div>
                 <div class="p-4 bg-slate-800 rounded-lg border border-slate-700">
                     <h4 class="font-semibold mb-2 text-indigo-400">File I/O</h4>
-                    <p class="text-base text-slate-400">Async file operations with streaming for large files</p>
+                    <p class="text-base text-slate-400">Async file operations with streaming</p>
                 </div>
                 <div class="p-4 bg-slate-800 rounded-lg border border-slate-700">
                     <h4 class="font-semibold mb-2 text-red-400">Cryptography</h4>
-                    <p class="text-base text-slate-400">SHA-256/512, bcrypt password hashing, secure random bytes</p>
+                    <p class="text-base text-slate-400">SHA-256/512, bcrypt, secure random</p>
                 </div>
                 <div class="p-4 bg-slate-800 rounded-lg border border-slate-700">
                     <h4 class="font-semibold mb-2 text-cyan-400">Regular Expressions</h4>
-                    <p class="text-base text-slate-400">Fast pattern matching with guaranteed linear time</p>
+                    <p class="text-base text-slate-400">Fast pattern matching, guaranteed linear time</p>
+                </div>
+                <div class="p-4 bg-slate-800 rounded-lg border border-slate-700">
+                    <h4 class="font-semibold mb-2 text-emerald-400">TCP Sockets</h4>
+                    <p class="text-base text-slate-400">Low-level networking when you need it</p>
+                </div>
+                <div class="p-4 bg-slate-800 rounded-lg border border-slate-700">
+                    <h4 class="font-semibold mb-2 text-blue-400">HTML Templating</h4>
+                    <p class="text-base text-slate-400">Type-safe templates with named parameters</p>
                 </div>
             </div>
         </div>
