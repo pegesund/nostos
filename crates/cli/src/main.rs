@@ -799,6 +799,16 @@ fn ensure_stdlib_extracted() -> Option<PathBuf> {
     fs::write(&version_file, STDLIB_VERSION).ok()?;
 
     eprintln!("Stdlib extracted successfully.");
+
+    // Build bytecode cache for fast startup
+    eprintln!("Building bytecode cache for fast startup...");
+    if let Err(e) = build_stdlib_cache_internal(&stdlib_dir, false) {
+        eprintln!("Warning: Failed to build cache: {}", e);
+        // Continue anyway - stdlib will work, just slower
+    } else {
+        eprintln!("Cache built successfully.");
+    }
+
     Some(stdlib_dir)
 }
 
@@ -1023,27 +1033,21 @@ fn try_load_stdlib_from_cache(
 }
 
 /// Build and save the stdlib bytecode cache
-fn build_stdlib_cache() -> ExitCode {
-    println!("Building stdlib bytecode cache...");
-
-    let stdlib_path = match find_stdlib_path() {
-        Some(p) => p,
-        None => {
-            eprintln!("Error: Could not find stdlib directory");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    println!("Found stdlib at: {}", stdlib_path.display());
+/// Internal function to build stdlib cache - can be called from extraction or command
+fn build_stdlib_cache_internal(stdlib_path: &std::path::Path, verbose: bool) -> Result<(), String> {
+    if verbose {
+        eprintln!("Building stdlib bytecode cache...");
+    }
 
     // Collect all stdlib files
     let mut stdlib_files = Vec::new();
-    if let Err(e) = visit_dirs(&stdlib_path, &mut stdlib_files) {
-        eprintln!("Error scanning stdlib: {}", e);
-        return ExitCode::FAILURE;
+    if let Err(e) = visit_dirs(stdlib_path, &mut stdlib_files) {
+        return Err(format!("Error scanning stdlib: {}", e));
     }
 
-    println!("Found {} stdlib files", stdlib_files.len());
+    if verbose {
+        eprintln!("Found {} stdlib files", stdlib_files.len());
+    }
 
     // Initialize compiler
     let mut compiler = Compiler::new_empty();
@@ -1058,19 +1062,14 @@ fn build_stdlib_cache() -> ExitCode {
                 .filter(|line| !line.is_empty() && !line.starts_with('#'))
                 .map(|s| s.to_string())
                 .collect(),
-            Err(e) => {
-                eprintln!("Warning: Could not read CORE_MODULES file: {}", e);
-                eprintln!("All stdlib modules will be auto-imported");
-                std::collections::HashSet::new()
-            }
+            Err(_) => std::collections::HashSet::new(),
         }
     } else {
-        eprintln!("Warning: CORE_MODULES file not found, all stdlib modules will be auto-imported");
         std::collections::HashSet::new()
     };
 
-    if !core_modules.is_empty() {
-        println!("Core modules (auto-imported): {}", core_modules.iter().cloned().collect::<Vec<_>>().join(", "));
+    if verbose && !core_modules.is_empty() {
+        eprintln!("Core modules (auto-imported): {}", core_modules.iter().cloned().collect::<Vec<_>>().join(", "));
     }
 
     // Track module info for cache
@@ -1084,15 +1083,13 @@ fn build_stdlib_cache() -> ExitCode {
         let source = match fs::read_to_string(file_path) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("Error reading {}: {}", file_path.display(), e);
-                return ExitCode::FAILURE;
+                return Err(format!("Error reading {}: {}", file_path.display(), e));
             }
         };
 
         let (module_opt, errors) = parse(&source);
         if !errors.is_empty() {
-            eprintln!("Parse errors in {}", file_path.display());
-            return ExitCode::FAILURE;
+            return Err(format!("Parse errors in {}", file_path.display()));
         }
 
         let module = match module_opt {
@@ -1117,8 +1114,7 @@ fn build_stdlib_cache() -> ExitCode {
         let source_hash = match compute_file_hash(file_path) {
             Ok(h) => h,
             Err(e) => {
-                eprintln!("Error hashing {}: {}", file_path.display(), e);
-                return ExitCode::FAILURE;
+                return Err(format!("Error hashing {}: {}", file_path.display(), e));
             }
         };
 
@@ -1171,8 +1167,7 @@ fn build_stdlib_cache() -> ExitCode {
         modules.push((module_name, source_hash, file_path.clone(), module_prelude_imports, function_visibility));
 
         if let Err(e) = compiler.add_module(&module, components, std::sync::Arc::new(source), file_path.to_str().unwrap().to_string()) {
-            eprintln!("Error adding module {}: {}", file_path.display(), e);
-            return ExitCode::FAILURE;
+            return Err(format!("Error adding module {}: {}", file_path.display(), e));
         }
     }
 
@@ -1182,22 +1177,23 @@ fn build_stdlib_cache() -> ExitCode {
     }
 
     // Compile all functions
-    println!("Compiling stdlib functions...");
-    if let Err((e, filename, source)) = compiler.compile_all() {
-        let source_error = e.to_source_error();
-        source_error.eprint(&filename, &source);
-        return ExitCode::FAILURE;
+    if verbose {
+        eprintln!("Compiling stdlib functions...");
+    }
+    if let Err((e, _filename, _source)) = compiler.compile_all() {
+        return Err(format!("Error compiling stdlib: {:?}", e));
     }
 
     // Get all compiled functions
     let functions = compiler.get_all_functions();
-    println!("Compiled {} functions", functions.len());
+    if verbose {
+        eprintln!("Compiled {} functions", functions.len());
+    }
 
     // Create cache directory
     let cache_dir = get_cache_dir();
     if let Err(e) = fs::create_dir_all(&cache_dir) {
-        eprintln!("Error creating cache directory: {}", e);
-        return ExitCode::FAILURE;
+        return Err(format!("Error creating cache directory: {}", e));
     }
 
     // Initialize cache manager
@@ -1272,14 +1268,36 @@ fn build_stdlib_cache() -> ExitCode {
 
     // Save manifest
     if let Err(e) = cache.save_manifest() {
-        eprintln!("Error saving cache manifest: {}", e);
-        return ExitCode::FAILURE;
+        return Err(format!("Error saving cache manifest: {}", e));
     }
 
-    println!("Saved {} module caches to {}", saved_count, cache_dir.display());
-    println!("Cache built successfully!");
+    if verbose {
+        eprintln!("Saved {} module caches to {}", saved_count, cache_dir.display());
+        eprintln!("Cache built successfully!");
+    }
 
-    ExitCode::SUCCESS
+    Ok(())
+}
+
+/// Build and save the stdlib bytecode cache (command-line entry point)
+fn build_stdlib_cache() -> ExitCode {
+    let stdlib_path = match find_stdlib_path() {
+        Some(p) => p,
+        None => {
+            eprintln!("Error: Could not find stdlib directory");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    eprintln!("Found stdlib at: {}", stdlib_path.display());
+
+    match build_stdlib_cache_internal(&stdlib_path, true) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{}", e);
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Clear the bytecode cache
