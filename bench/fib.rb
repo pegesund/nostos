@@ -9,5 +9,9 @@ def fib(n)
   end
 end
 
+start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 result = fib(40)
-puts result
+elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - start
+
+puts "TIME:#{(elapsed * 1000).to_i}"
+puts "RESULT:#{result}"

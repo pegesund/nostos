@@ -1,5 +1,6 @@
 #!/bin/bash
 # Benchmark runner for Nostos vs Python vs Ruby vs Java
+# Measures computation time only (excludes startup time)
 
 set -e
 
@@ -18,6 +19,7 @@ NC='\033[0m' # No Color
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}    Nostos Benchmark Suite${NC}"
+echo -e "${BLUE}    (Computation time only)${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 
@@ -35,34 +37,38 @@ if [ ! -f "${SCRIPT_DIR}/Fib.class" ] || [ "${SCRIPT_DIR}/Fib.java" -nt "${SCRIP
     javac "${SCRIPT_DIR}/Fib.java"
 fi
 
-# Function to run a benchmark and capture time
+# Function to run a benchmark and capture internal time
+# Each program outputs TIME:<milliseconds> and RESULT:<value>
 run_benchmark() {
     local name=$1
     local cmd=$2
 
     # Run 3 times and take the best
-    local best_time=999999
+    local best_time=999999999
     local result=""
 
     for i in 1 2 3; do
-        local start=$(date +%s.%N)
-        result=$($cmd 2>&1 | head -1)
-        local end=$(date +%s.%N)
-        local elapsed=$(echo "$end - $start" | bc)
+        local output=$($cmd 2>&1)
+        local time_ms=$(echo "$output" | grep "^TIME:" | cut -d: -f2)
+        result=$(echo "$output" | grep "^RESULT:" | cut -d: -f2)
 
-        if (( $(echo "$elapsed < $best_time" | bc -l) )); then
-            best_time=$elapsed
+        if [ -n "$time_ms" ] && [ "$time_ms" -lt "$best_time" ]; then
+            best_time=$time_ms
         fi
     done
 
-    printf "  %-12s %8.3fs  (result: %s)\n" "$name:" "$best_time" "$result"
-    # Return the time via a temp file to avoid subshell issues
+    # Convert ms to seconds for display
+    local time_secs=$(echo "scale=3; $best_time / 1000" | bc)
+    printf "  %-12s %8.3fs  (result: %s)\n" "$name:" "$time_secs" "$result"
+
+    # Return the time in ms via a temp file
     echo "$best_time" > /tmp/bench_time_$$
 }
 
 # Run Fibonacci benchmark
 echo -e "${GREEN}Fibonacci(40) - Recursive${NC}"
 echo "  Running 3 iterations each, showing best time..."
+echo "  (Startup time excluded - measures computation only)"
 echo ""
 
 run_benchmark "Nostos" "$NOSTOS_BIN ${SCRIPT_DIR}/fib.nos"
@@ -83,11 +89,7 @@ echo ""
 echo -e "${YELLOW}Comparison:${NC}"
 echo "----------------------------------------"
 
-# Calculate ratios
-python_ratio=$(echo "scale=1; $nostos_time / $python_time" | bc)
-ruby_ratio=$(echo "scale=1; $nostos_time / $ruby_time" | bc)
-java_ratio=$(echo "scale=1; $nostos_time / $java_time" | bc)
-
+# Calculate ratios (using ms values)
 python_cmp=$(echo "$nostos_time < $python_time" | bc)
 ruby_cmp=$(echo "$nostos_time < $ruby_time" | bc)
 java_cmp=$(echo "$nostos_time < $java_time" | bc)
@@ -96,29 +98,36 @@ if [ "$python_cmp" -eq 1 ]; then
     inv_ratio=$(echo "scale=1; $python_time / $nostos_time" | bc)
     printf "  Nostos is ${GREEN}%sx faster${NC} than Python\n" "$inv_ratio"
 else
-    printf "  Nostos is ${RED}%sx slower${NC} than Python\n" "$python_ratio"
+    ratio=$(echo "scale=1; $nostos_time / $python_time" | bc)
+    printf "  Nostos is ${RED}%sx slower${NC} than Python\n" "$ratio"
 fi
 
 if [ "$ruby_cmp" -eq 1 ]; then
     inv_ratio=$(echo "scale=1; $ruby_time / $nostos_time" | bc)
     printf "  Nostos is ${GREEN}%sx faster${NC} than Ruby\n" "$inv_ratio"
 else
-    printf "  Nostos is ${RED}%sx slower${NC} than Ruby\n" "$ruby_ratio"
+    ratio=$(echo "scale=1; $nostos_time / $ruby_time" | bc)
+    printf "  Nostos is ${RED}%sx slower${NC} than Ruby\n" "$ratio"
 fi
 
 if [ "$java_cmp" -eq 1 ]; then
     inv_ratio=$(echo "scale=1; $java_time / $nostos_time" | bc)
     printf "  Nostos is ${GREEN}%sx faster${NC} than Java\n" "$inv_ratio"
 else
-    printf "  Nostos is ${RED}%sx slower${NC} than Java\n" "$java_ratio"
+    ratio=$(echo "scale=1; $nostos_time / $java_time" | bc)
+    printf "  Nostos is ${RED}%sx slower${NC} than Java\n" "$ratio"
 fi
 
 echo ""
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}    Summary${NC}"
 echo -e "${BLUE}========================================${NC}"
-printf "  %-12s %8.3fs\n" "Nostos:" "$nostos_time"
-printf "  %-12s %8.3fs\n" "Python:" "$python_time"
-printf "  %-12s %8.3fs\n" "Ruby:" "$ruby_time"
-printf "  %-12s %8.3fs\n" "Java:" "$java_time"
+nostos_secs=$(echo "scale=3; $nostos_time / 1000" | bc)
+python_secs=$(echo "scale=3; $python_time / 1000" | bc)
+ruby_secs=$(echo "scale=3; $ruby_time / 1000" | bc)
+java_secs=$(echo "scale=3; $java_time / 1000" | bc)
+printf "  %-12s %8.3fs\n" "Nostos:" "$nostos_secs"
+printf "  %-12s %8.3fs\n" "Python:" "$python_secs"
+printf "  %-12s %8.3fs\n" "Ruby:" "$ruby_secs"
+printf "  %-12s %8.3fs\n" "Java:" "$java_secs"
 echo ""

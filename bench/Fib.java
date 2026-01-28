@@ -6,7 +6,11 @@ public class Fib {
     }
 
     public static void main(String[] args) {
+        long start = System.nanoTime();
         long result = fib(40);
-        System.out.println(result);
+        long elapsed = (System.nanoTime() - start) / 1_000_000; // convert to ms
+
+        System.out.println("TIME:" + elapsed);
+        System.out.println("RESULT:" + result);
     }
 }

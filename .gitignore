@@ -66,3 +66,4 @@ crystal_example/
 haskell_example/
 nostos_crystal_example
 old_binaries/
+bench/*.class
