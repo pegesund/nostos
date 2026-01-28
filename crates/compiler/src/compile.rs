@@ -645,6 +645,9 @@ pub enum CompileError {
 
     #[error("trait cycle detected: {cycle}")]
     TraitCycle { cycle: String, span: Span },
+
+    #[error("import conflict: `{name}` is imported from both `{module1}` and `{module2}`")]
+    ImportConflict { name: String, module1: String, module2: String, span: Span },
 }
 
 /// Compute Levenshtein edit distance between two strings.
@@ -781,6 +784,7 @@ impl CompileError {
             CompileError::DefinitionError { span, .. } => *span,
             CompileError::MissingSupertraitImpl { span, .. } => *span,
             CompileError::TraitCycle { span, .. } => *span,
+            CompileError::ImportConflict { span, .. } => *span,
         }
     }
 
@@ -1075,6 +1079,12 @@ impl CompileError {
                     span
                 ).with_hint("supertraits cannot form a cycle")
             }
+            CompileError::ImportConflict { name, module1, module2, .. } => {
+                SourceError::compile(
+                    format!("import conflict: `{}` is imported from both `{}` and `{}`", name, module1, module2),
+                    span
+                ).with_hint(format!("use qualified name `{}.{}` or selective import to resolve the conflict", module2, name))
+            }
         }
     }
 }
@@ -1124,6 +1134,8 @@ pub struct Compiler {
     module_path: Vec<String>,
     /// Imports: local name -> fully qualified name
     imports: HashMap<String, String>,
+    /// Import sources: local name -> source module path (for conflict detection)
+    import_sources: HashMap<String, String>,
     /// Function visibility: qualified name -> Visibility
     function_visibility: HashMap<String, Visibility>,
     /// Type visibility: qualified name -> Visibility
@@ -1384,6 +1396,7 @@ impl Compiler {
             scope_depth: 0,
             module_path: Vec::new(),
             imports: HashMap::new(),
+            import_sources: HashMap::new(),
             function_visibility: HashMap::new(),
             type_visibility: HashMap::new(),
             trait_defs: HashMap::new(),
@@ -2745,6 +2758,7 @@ impl Compiler {
             scope_depth: 0,
             module_path: Vec::new(),
             imports: HashMap::new(),
+            import_sources: HashMap::new(),
             function_visibility: HashMap::new(),
             type_visibility: HashMap::new(),
             trait_defs: HashMap::new(),
@@ -21955,6 +21969,36 @@ impl Compiler {
         Ok(())
     }
 
+    /// Add an import with conflict checking.
+    /// Returns an error if the name is already imported from a different module.
+    /// Allows re-importing the same name from the same module (idempotent).
+    fn add_import_checked(
+        &mut self,
+        local_name: String,
+        qualified_name: String,
+        source_module: &str,
+        span: Span,
+    ) -> Result<(), CompileError> {
+        // Check if this name is already imported from a DIFFERENT module
+        if let Some(existing_source) = self.import_sources.get(&local_name) {
+            if existing_source != source_module {
+                // Conflict! Same name imported from two different modules
+                return Err(CompileError::ImportConflict {
+                    name: local_name,
+                    module1: existing_source.clone(),
+                    module2: source_module.to_string(),
+                    span,
+                });
+            }
+            // Same module - allow re-import (idempotent)
+        }
+
+        // Add the import
+        self.imports.insert(local_name.clone(), qualified_name);
+        self.import_sources.insert(local_name, source_module.to_string());
+        Ok(())
+    }
+
     /// Compile a use statement (import).
     fn compile_use_stmt(&mut self, use_stmt: &UseStmt) -> Result<(), CompileError> {
         // Build the module path from the use statement
@@ -22008,7 +22052,7 @@ impl Compiler {
                     let qualified_base = qualified_name.split('/').next()
                         .unwrap_or(&qualified_name)
                         .to_string();
-                    self.imports.insert(local_name, qualified_base);
+                    self.add_import_checked(local_name, qualified_base, &module_path, use_stmt.span)?;
                 }
 
                 // Also import public traits from the module
@@ -22022,7 +22066,7 @@ impl Compiler {
                     let local_name = qualified_trait.strip_prefix(&prefix)
                         .unwrap_or(qualified_trait)
                         .to_string();
-                    self.imports.insert(local_name, qualified_trait.clone());
+                    self.add_import_checked(local_name, qualified_trait.clone(), &module_path, use_stmt.span)?;
                 }
 
                 // Also import trait implementations for public traits
@@ -22051,7 +22095,7 @@ impl Compiler {
                     let local_name = qualified_type.strip_prefix(&prefix)
                         .unwrap_or(&qualified_type)
                         .to_string();
-                    self.imports.insert(local_name, qualified_type);
+                    self.add_import_checked(local_name, qualified_type, &module_path, use_stmt.span)?;
                 }
 
                 // Also import public constants from the module
@@ -22065,7 +22109,7 @@ impl Compiler {
                     let local_name = qualified_const.strip_prefix(&prefix)
                         .unwrap_or(&qualified_const)
                         .to_string();
-                    self.imports.insert(local_name, qualified_const);
+                    self.add_import_checked(local_name, qualified_const, &module_path, use_stmt.span)?;
                 }
             }
             UseImports::Named(items) => {
@@ -22074,7 +22118,7 @@ impl Compiler {
                         .map(|a| a.node.clone())
                         .unwrap_or_else(|| item.name.node.clone());
                     let qualified_name = format!("{}.{}", module_path, item.name.node);
-                    self.imports.insert(local_name, qualified_name);
+                    self.add_import_checked(local_name, qualified_name, &module_path, use_stmt.span)?;
                 }
             }
         }
