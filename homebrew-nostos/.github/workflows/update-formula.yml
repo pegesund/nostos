@@ -1,0 +1,106 @@
+name: Update Formula
+
+on:
+  repository_dispatch:
+    types: [update-formula]
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION="${{ github.event.client_payload.version }}"
+          # Remove 'v' prefix if present
+          VERSION="${VERSION#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download release checksums
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BASE_URL="https://github.com/pegesund/nostos/releases/download/v${VERSION}"
+          
+          # Download SHA256 files
+          curl -sL "${BASE_URL}/nostos-v${VERSION}-aarch64-apple-darwin.tar.gz.sha256" -o arm64-mac.sha256
+          curl -sL "${BASE_URL}/nostos-v${VERSION}-x86_64-apple-darwin.tar.gz.sha256" -o x64-mac.sha256
+          curl -sL "${BASE_URL}/nostos-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz.sha256" -o x64-linux.sha256
+          curl -sL "${BASE_URL}/nostos-v${VERSION}-aarch64-unknown-linux-gnu.tar.gz.sha256" -o arm64-linux.sha256 || echo "arm64-linux not available"
+          
+          # Extract just the hash
+          ARM64_MAC=$(cat arm64-mac.sha256 | awk '{print $1}')
+          X64_MAC=$(cat x64-mac.sha256 | awk '{print $1}')
+          X64_LINUX=$(cat x64-linux.sha256 | awk '{print $1}')
+          ARM64_LINUX=$(cat arm64-linux.sha256 2>/dev/null | awk '{print $1}' || echo "")
+          
+          echo "ARM64_MAC=$ARM64_MAC" >> $GITHUB_ENV
+          echo "X64_MAC=$X64_MAC" >> $GITHUB_ENV
+          echo "X64_LINUX=$X64_LINUX" >> $GITHUB_ENV
+          echo "ARM64_LINUX=$ARM64_LINUX" >> $GITHUB_ENV
+
+      - name: Update formula
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          
+          cat > Formula/nostos.rb << FORMULA
+          class Nostos < Formula
+            desc "Functional programming language with lightweight processes and non-blocking I/O"
+            homepage "https://github.com/pegesund/nostos"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/pegesund/nostos/releases/download/v${VERSION}/nostos-v${VERSION}-aarch64-apple-darwin.tar.gz"
+                sha256 "${ARM64_MAC}"
+              else
+                url "https://github.com/pegesund/nostos/releases/download/v${VERSION}/nostos-v${VERSION}-x86_64-apple-darwin.tar.gz"
+                sha256 "${X64_MAC}"
+              end
+            end
+
+            on_linux do
+              url "https://github.com/pegesund/nostos/releases/download/v${VERSION}/nostos-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+              sha256 "${X64_LINUX}"
+            end
+
+            def install
+              bin.install "nostos"
+              bin.install "nostos-lsp" if File.exist?("nostos-lsp")
+              
+              # Install stdlib
+              (share/"nostos"/"stdlib").install Dir["stdlib/*"] if File.directory?("stdlib")
+            end
+
+            def caveats
+              <<~EOS
+                Nostos has been installed!
+
+                To get started:
+                  nostos                    # Start the REPL
+                  nostos myfile.nos         # Run a program
+
+                The stdlib is installed at:
+                  #{share}/nostos/stdlib
+
+                VS Code extension available at:
+                  https://github.com/pegesund/nostos/tree/master/editors/vscode
+              EOS
+            end
+
+            test do
+              assert_match "42", shell_output("echo 'main() = 42' | #{bin}/nostos /dev/stdin")
+            end
+          end
+          FORMULA
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/nostos.rb
+          git commit -m "Update nostos to v${{ steps.version.outputs.version }}"
+          git push

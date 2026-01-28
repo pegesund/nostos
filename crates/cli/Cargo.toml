@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Command-line interface for running Nostos programs"
+build = "build.rs"
 
 [[bin]]
 name = "nostos"

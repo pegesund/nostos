@@ -1,0 +1,142 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14          # ARM64 (M1/M2/M3)
+            target: aarch64-apple-darwin
+            artifact_name: nostos
+            asset_name: nostos-${{ github.ref_name }}-aarch64-apple-darwin
+          - os: macos-13          # Intel
+            target: x86_64-apple-darwin
+            artifact_name: nostos
+            asset_name: nostos-${{ github.ref_name }}-x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: nostos
+            asset_name: nostos-${{ github.ref_name }}-x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: nostos.exe
+            asset_name: nostos-${{ github.ref_name }}-x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Create release directory
+        shell: bash
+        run: |
+          mkdir -p release-package
+          cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} release-package/
+          if [ -f "target/${{ matrix.target }}/release/nostos-lsp" ]; then
+            cp target/${{ matrix.target }}/release/nostos-lsp release-package/
+          fi
+          if [ -f "target/${{ matrix.target }}/release/nostos-lsp.exe" ]; then
+            cp target/${{ matrix.target }}/release/nostos-lsp.exe release-package/
+          fi
+          cp -r stdlib release-package/
+
+      - name: Create tarball (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          cd release-package
+          tar -czvf ../${{ matrix.asset_name }}.tar.gz *
+          cd ..
+          shasum -a 256 ${{ matrix.asset_name }}.tar.gz > ${{ matrix.asset_name }}.tar.gz.sha256
+
+      - name: Create zip (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path release-package/* -DestinationPath ${{ matrix.asset_name }}.zip
+          $hash = Get-FileHash ${{ matrix.asset_name }}.zip -Algorithm SHA256
+          "$($hash.Hash.ToLower())  ${{ matrix.asset_name }}.zip" | Out-File -FilePath ${{ matrix.asset_name }}.zip.sha256 -Encoding utf8
+
+      - name: Upload artifact (Unix)
+        if: matrix.os != 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: |
+            ${{ matrix.asset_name }}.tar.gz
+            ${{ matrix.asset_name }}.tar.gz.sha256
+
+      - name: Upload artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: |
+            ${{ matrix.asset_name }}.zip
+            ${{ matrix.asset_name }}.zip.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display artifacts
+        run: ls -R artifacts
+
+      - name: Collect checksums
+        run: |
+          echo "# SHA256 Checksums" > checksums.txt
+          echo "" >> checksums.txt
+          find artifacts -name "*.sha256" -exec cat {} \; >> checksums.txt
+          cat checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+          body_path: checksums.txt
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+            artifacts/**/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.ref_name, 'alpha') && !contains(github.ref_name, 'beta') && !contains(github.ref_name, 'rc') }}
+
+    steps:
+      - name: Update Homebrew formula
+        uses: peter-evans/repository-dispatch@v2
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          repository: pegesund/homebrew-nostos
+          event-type: update-formula
+          client-payload: '{"version": "${{ github.ref_name }}"}'
