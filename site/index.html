@@ -53,14 +53,11 @@
 
     <!-- Hero Section -->
     <header class="pt-32 pb-16 px-4 text-center max-w-5xl mx-auto">
-        <p class="text-lg text-slate-500 italic mb-4">In Greek, Nostos (νόστος) means a hero's homecoming or return from a long journey.</p>
-        <h1 class="text-4xl md:text-6xl font-extrabold tracking-tight mb-8">
+        <p class="text-xl text-slate-500 italic mb-4">In Greek, Nostos (νόστος) means a hero's homecoming or return from a long journey.</p>
+        <h1 class="text-5xl md:text-7xl font-extrabold tracking-tight mb-8">
             <span class="text-blue-500">Welcome Home</span> to Simple Concurrency
         </h1>
-        <p class="text-xl text-slate-400 mb-10 max-w-3xl mx-auto">
-            After wandering through callback hell, fighting with async/await, and battling race conditions—Nostos welcomes you home to a place where concurrent code is simple, readable, and just works.
-        </p>
-        <p class="text-sm text-yellow-500 mb-8">⚠️ Early Stage Software: Version 1.0 is not ready. For brave developers and early adopters only.</p>
+        <p class="text-base text-yellow-500 mb-8">⚠️ Early Stage Software: Version 1.0 is not ready. For brave developers and early adopters only.</p>
         <div class="flex justify-center gap-4">
             <a href="tutorial/01_basics.html" class="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-lg font-medium transition shadow-lg shadow-blue-500/20">
                 Start Tutorial
@@ -74,7 +71,7 @@
     <!-- Code That Reads Like Poetry -->
     <section class="px-4 pb-16">
         <div class="max-w-4xl mx-auto">
-            <h2 class="text-2xl font-bold text-center mb-8">Code That Reads Like Poetry</h2>
+            <h2 class="text-3xl font-bold text-center mb-8">Code That Reads Like Poetry</h2>
             <div class="bg-nostos-code rounded-xl overflow-hidden shadow-2xl border border-slate-800">
                 <div class="flex items-center gap-2 px-4 py-3 bg-slate-800/50 border-b border-slate-700">
                     <div class="w-3 h-3 rounded-full bg-red-500"></div>
@@ -110,8 +107,8 @@ result = users
     <!-- Pattern Matching Section -->
     <section class="px-4 pb-16">
         <div class="max-w-4xl mx-auto">
-            <h2 class="text-2xl font-bold text-center mb-4">Pattern Matching Rocks</h2>
-            <p class="text-slate-400 text-center mb-8">Describe the shape you expect, not the steps to extract it. The compiler ensures you handle every case.</p>
+            <h2 class="text-3xl font-bold text-center mb-4">Pattern Matching Rocks</h2>
+            <p class="text-lg text-slate-400 text-center mb-8">Describe the shape you expect, not the steps to extract it. The compiler ensures you handle every case.</p>
             <div class="bg-nostos-code rounded-xl overflow-hidden shadow-2xl border border-slate-800">
                 <div class="flex items-center gap-2 px-4 py-3 bg-slate-800/50 border-b border-slate-700">
                     <div class="w-3 h-3 rounded-full bg-red-500"></div>
@@ -144,8 +141,8 @@ contains(Node(_, left, right), target) =
     <!-- Non-Blocking Section -->
     <section class="px-4 pb-16">
         <div class="max-w-4xl mx-auto">
-            <h2 class="text-2xl font-bold text-center mb-4">Non-Blocking by Default</h2>
-            <p class="text-slate-400 text-center mb-8">Every I/O operation yields automatically. No <code class="text-blue-400">async</code>, no <code class="text-blue-400">await</code>, no colored functions. Your code looks synchronous but runs concurrently.</p>
+            <h2 class="text-3xl font-bold text-center mb-4">Non-Blocking by Default</h2>
+            <p class="text-lg text-slate-400 text-center mb-8">Every I/O operation yields automatically. No <code class="text-blue-400">async</code>, no <code class="text-blue-400">await</code>, no colored functions. Your code looks synchronous but runs concurrently.</p>
             <div class="bg-nostos-code rounded-xl overflow-hidden shadow-2xl border border-slate-800">
                 <div class="flex items-center gap-2 px-4 py-3 bg-slate-800/50 border-b border-slate-700">
                     <div class="w-3 h-3 rounded-full bg-red-500"></div>
@@ -170,16 +167,16 @@ main() = {
     <!-- Features Grid -->
     <section id="features" class="py-20 bg-slate-800/50">
         <div class="max-w-7xl mx-auto px-4">
-            <h2 class="text-3xl font-bold text-center mb-4">Functional First, Pragmatism Always</h2>
-            <p class="text-slate-400 text-center mb-12 max-w-2xl mx-auto">Nostos is designed to save you time. We prefer functional patterns because they're often clearer and safer, but we won't force you into contortions when a mutable variable just makes sense.</p>
+            <h2 class="text-4xl font-bold text-center mb-4">Functional First, Pragmatism Always</h2>
+            <p class="text-lg text-slate-400 text-center mb-12 max-w-2xl mx-auto">Nostos is designed to save you time. We prefer functional patterns because they're often clearer and safer, but we won't force you into contortions when a mutable variable just makes sense.</p>
             <div class="grid md:grid-cols-3 gap-8">
                 <!-- Feature 1 -->
                 <div class="p-6 bg-slate-900 rounded-xl border border-slate-800 hover:border-blue-500/50 transition duration-300">
                     <div class="w-12 h-12 bg-blue-500/10 rounded-lg flex items-center justify-center mb-4">
                         <svg class="w-6 h-6 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
                     </div>
-                    <h3 class="text-xl font-semibold mb-2">Massive Concurrency</h3>
-                    <p class="text-slate-400">Spawn hundreds of thousands of lightweight processes. Each is ~2KB overhead. Message passing beats shared memory and locks.</p>
+                    <h3 class="text-2xl font-semibold mb-2">Massive Concurrency</h3>
+                    <p class="text-base text-slate-400">Spawn hundreds of thousands of lightweight processes. Each is ~2KB overhead. Message passing beats shared memory and locks.</p>
                 </div>
 
                 <!-- Feature 2 -->
@@ -187,8 +184,8 @@ main() = {
                     <div class="w-12 h-12 bg-emerald-500/10 rounded-lg flex items-center justify-center mb-4">
                         <svg class="w-6 h-6 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                     </div>
-                    <h3 class="text-xl font-semibold mb-2">Immutable by Default</h3>
-                    <p class="text-slate-400">Data structures use structural sharing—fast and safe. Use <code class="text-emerald-400">var</code> when a mutable variable makes your intent clearer.</p>
+                    <h3 class="text-2xl font-semibold mb-2">Immutable by Default</h3>
+                    <p class="text-base text-slate-400">Data structures use structural sharing—fast and safe. Use <code class="text-emerald-400">var</code> when a mutable variable makes your intent clearer.</p>
                 </div>
 
                 <!-- Feature 3 -->
@@ -196,8 +193,8 @@ main() = {
                     <div class="w-12 h-12 bg-purple-500/10 rounded-lg flex items-center justify-center mb-4">
                         <svg class="w-6 h-6 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.384-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"></path></svg>
                     </div>
-                    <h3 class="text-xl font-semibold mb-2">Type Inference</h3>
-                    <p class="text-slate-400">Hindley-Milner inference means you rarely write types, but the compiler catches errors at compile time. Generics and traits work seamlessly.</p>
+                    <h3 class="text-2xl font-semibold mb-2">Type Inference</h3>
+                    <p class="text-base text-slate-400">Hindley-Milner inference means you rarely write types, but the compiler catches errors at compile time. Generics and traits work seamlessly.</p>
                 </div>
 
                 <!-- Feature 4 -->
@@ -205,8 +202,8 @@ main() = {
                     <div class="w-12 h-12 bg-pink-500/10 rounded-lg flex items-center justify-center mb-4">
                         <svg class="w-6 h-6 text-pink-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
                     </div>
-                    <h3 class="text-xl font-semibold mb-2">JIT Compilation</h3>
-                    <p class="text-slate-400">Register-based VM with Cranelift-powered JIT. Hot paths compile to native code. 21x faster than Python, competitive with Java.</p>
+                    <h3 class="text-2xl font-semibold mb-2">JIT Compilation</h3>
+                    <p class="text-base text-slate-400">Register-based VM with Cranelift-powered JIT. Hot paths compile to native code. 21x faster than Python, competitive with Java.</p>
                 </div>
 
                  <!-- Feature 5 -->
@@ -214,8 +211,8 @@ main() = {
                     <div class="w-12 h-12 bg-yellow-500/10 rounded-lg flex items-center justify-center mb-4">
                         <svg class="w-6 h-6 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
                     </div>
-                    <h3 class="text-xl font-semibold mb-2">Living REPL</h3>
-                    <p class="text-slate-400">Live reload, autocomplete, inline errors, state inspection. The REPL isn't just for experiments—it's your development cockpit.</p>
+                    <h3 class="text-2xl font-semibold mb-2">Living REPL</h3>
+                    <p class="text-base text-slate-400">Live reload, autocomplete, inline errors, state inspection. The REPL isn't just for experiments—it's your development cockpit.</p>
                 </div>
 
                  <!-- Feature 6 -->
@@ -223,8 +220,8 @@ main() = {
                     <div class="w-12 h-12 bg-indigo-500/10 rounded-lg flex items-center justify-center mb-4">
                         <svg class="w-6 h-6 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
                     </div>
-                    <h3 class="text-xl font-semibold mb-2">VS Code Integration</h3>
-                    <p class="text-slate-400">Real-time error checking, go to definition, smart autocomplete with type inference, integrated REPL in your editor.</p>
+                    <h3 class="text-2xl font-semibold mb-2">VS Code Integration</h3>
+                    <p class="text-base text-slate-400">Real-time error checking, go to definition, smart autocomplete with type inference, integrated REPL in your editor.</p>
                 </div>
             </div>
         </div>
@@ -233,40 +230,40 @@ main() = {
     <!-- Batteries Included -->
     <section class="py-20">
         <div class="max-w-7xl mx-auto px-4">
-            <h2 class="text-3xl font-bold text-center mb-4">Some Batteries Included</h2>
-            <p class="text-slate-400 text-center mb-12">HTTP, PostgreSQL, JSON, WebSockets—ready when you are.</p>
+            <h2 class="text-4xl font-bold text-center mb-4">Some Batteries Included</h2>
+            <p class="text-lg text-slate-400 text-center mb-12">HTTP, PostgreSQL, JSON, WebSockets—ready when you are.</p>
             <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
                 <div class="p-4 bg-slate-800 rounded-lg border border-slate-700">
                     <h4 class="font-semibold mb-2 text-blue-400">PostgreSQL</h4>
-                    <p class="text-sm text-slate-400">Typed queries, connection pooling, transactions, pgvector support</p>
+                    <p class="text-base text-slate-400">Typed queries, connection pooling, transactions, pgvector support</p>
                 </div>
                 <div class="p-4 bg-slate-800 rounded-lg border border-slate-700">
                     <h4 class="font-semibold mb-2 text-emerald-400">HTTP Server & Client</h4>
-                    <p class="text-sm text-slate-400">Production-ready networking with automatic keep-alive and TLS</p>
+                    <p class="text-base text-slate-400">Production-ready networking with automatic keep-alive and TLS</p>
                 </div>
                 <div class="p-4 bg-slate-800 rounded-lg border border-slate-700">
                     <h4 class="font-semibold mb-2 text-purple-400">WebSockets</h4>
-                    <p class="text-sm text-slate-400">Real-time bidirectional communication with TLS support</p>
+                    <p class="text-base text-slate-400">Real-time bidirectional communication with TLS support</p>
                 </div>
                 <div class="p-4 bg-slate-800 rounded-lg border border-slate-700">
                     <h4 class="font-semibold mb-2 text-pink-400">Reactive Web (RWeb)</h4>
-                    <p class="text-sm text-slate-400">Full-stack reactive apps with server-side rendering and DOM diffing</p>
+                    <p class="text-base text-slate-400">Full-stack reactive apps with server-side rendering and DOM diffing</p>
                 </div>
                 <div class="p-4 bg-slate-800 rounded-lg border border-slate-700">
                     <h4 class="font-semibold mb-2 text-yellow-400">JSON</h4>
-                    <p class="text-sm text-slate-400">Parse, generate, and transform JSON data</p>
+                    <p class="text-base text-slate-400">Parse, generate, and transform JSON data</p>
                 </div>
                 <div class="p-4 bg-slate-800 rounded-lg border border-slate-700">
                     <h4 class="font-semibold mb-2 text-indigo-400">File I/O</h4>
-                    <p class="text-sm text-slate-400">Async file operations with streaming for large files</p>
+                    <p class="text-base text-slate-400">Async file operations with streaming for large files</p>
                 </div>
                 <div class="p-4 bg-slate-800 rounded-lg border border-slate-700">
                     <h4 class="font-semibold mb-2 text-red-400">Cryptography</h4>
-                    <p class="text-sm text-slate-400">SHA-256/512, bcrypt password hashing, secure random bytes</p>
+                    <p class="text-base text-slate-400">SHA-256/512, bcrypt password hashing, secure random bytes</p>
                 </div>
                 <div class="p-4 bg-slate-800 rounded-lg border border-slate-700">
                     <h4 class="font-semibold mb-2 text-cyan-400">Regular Expressions</h4>
-                    <p class="text-sm text-slate-400">Fast pattern matching with guaranteed linear time</p>
+                    <p class="text-base text-slate-400">Fast pattern matching with guaranteed linear time</p>
                 </div>
             </div>
         </div>
@@ -275,7 +272,7 @@ main() = {
     <!-- Getting Started -->
     <section class="py-20 bg-slate-800/50">
         <div class="max-w-4xl mx-auto px-4">
-            <h2 class="text-3xl font-bold text-center mb-12">Getting Started</h2>
+            <h2 class="text-4xl font-bold text-center mb-12">Getting Started</h2>
             <div class="bg-nostos-code rounded-xl overflow-hidden shadow-2xl border border-slate-800">
                 <div class="flex items-center gap-2 px-4 py-3 bg-slate-800/50 border-b border-slate-700">
                     <div class="w-3 h-3 rounded-full bg-red-500"></div>
@@ -306,15 +303,15 @@ code --install-extension nostos-*.vsix</code></pre>
     <!-- Philosophy -->
     <section class="py-20">
         <div class="max-w-3xl mx-auto px-4 text-center">
-            <h2 class="text-3xl font-bold mb-8">Philosophy</h2>
-            <div class="space-y-4 text-slate-400">
+            <h2 class="text-4xl font-bold mb-8">Philosophy</h2>
+            <div class="space-y-4 text-lg text-slate-400">
                 <p><strong class="text-slate-200">Concurrency should be simple.</strong> Message passing between lightweight processes beats shared memory and locks.</p>
                 <p><strong class="text-slate-200">I/O should never block.</strong> Every operation yields, letting thousands of processes share a thread pool.</p>
                 <p><strong class="text-slate-200">Types should help, not hinder.</strong> Inference handles the common case; annotations clarify intent.</p>
                 <p><strong class="text-slate-200">Development should be interactive.</strong> The REPL and live reload keep you in flow.</p>
                 <p><strong class="text-slate-200">Batteries should be included.</strong> HTTP, PostgreSQL, JSON, WebSockets—ready when you are.</p>
             </div>
-            <p class="text-2xl font-bold mt-12 text-blue-400 italic">Welcome home.</p>
+            <p class="text-3xl font-bold mt-12 text-blue-400 italic">Welcome home.</p>
         </div>
     </section>
 
