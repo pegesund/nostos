@@ -6,6 +6,64 @@ After wandering through callback hell, fighting with async/await, and battling r
 
 **⚠️ Early Stage Software:** It is early days and version 1.0 is not ready. For brave developers and early adopters only.
 
+📚 **Full Tutorial:** [heynostos.tech](http://heynostos.tech)
+
+---
+
+## Installation
+
+### macOS (Homebrew)
+
+```bash
+brew tap pegesund/nostos
+brew install nostos
+```
+
+### macOS (Manual)
+
+```bash
+# Apple Silicon (M1/M2/M3/M4)
+curl -LO https://github.com/pegesund/nostos/releases/latest/download/nostos-v0.2.0-aarch64-apple-darwin.tar.gz
+tar -xzf nostos-v0.2.0-aarch64-apple-darwin.tar.gz
+
+# Intel Mac
+curl -LO https://github.com/pegesund/nostos/releases/latest/download/nostos-v0.2.0-x86_64-apple-darwin.tar.gz
+tar -xzf nostos-v0.2.0-x86_64-apple-darwin.tar.gz
+
+chmod +x nostos
+sudo mv nostos /usr/local/bin/
+
+# If macOS blocks it: xattr -d com.apple.quarantine nostos
+```
+
+### Linux
+
+```bash
+curl -LO https://github.com/pegesund/nostos/releases/latest/download/nostos-v0.2.0-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf nostos-v0.2.0-x86_64-unknown-linux-gnu.tar.gz
+chmod +x nostos
+sudo mv nostos /usr/local/bin/
+```
+
+### Windows
+
+Download from [GitHub Releases](https://github.com/pegesund/nostos/releases/latest) or:
+
+```powershell
+Invoke-WebRequest -Uri "https://github.com/pegesund/nostos/releases/latest/download/nostos-v0.2.0-x86_64-pc-windows-msvc.zip" -OutFile "nostos.zip"
+Expand-Archive -Path "nostos.zip" -DestinationPath "C:\nostos"
+# Add C:\nostos to your PATH
+```
+
+### Hello World
+
+```bash
+echo 'main() = println("Hello, Nostos!")' > hello.nos
+nostos hello.nos
+```
+
+First run extracts stdlib and builds cache (~1s). Subsequent runs: ~0.1s.
+
 ---
 
 ## What Makes Nostos Different
