@@ -1,0 +1,35 @@
+# expect: 0
+# Test map[key] get and map[key] = value set syntax
+
+main() = {
+    # Basic get
+    m = %{"a": 1, "b": 2}
+    assert_eq(m["a"], 1)
+    assert_eq(m["b"], 2)
+
+    # Set new key
+    m["c"] = 3
+    assert_eq(m["c"], 3)
+
+    # Update existing key
+    m["a"] = 10
+    assert_eq(m["a"], 10)
+
+    # Integer keys
+    n = %{1: "one", 2: "two"}
+    assert_eq(n[1], "one")
+    n[3] = "three"
+    assert_eq(n[3], "three")
+
+    # Empty map
+    e = %{}
+    e["x"] = 42
+    assert_eq(e["x"], 42)
+
+    # Immutable semantics - copy doesn't affect original variable binding
+    orig = %{"a": 1}
+    orig["b"] = 2
+    assert_eq(orig["b"], 2)
+
+    0
+}

@@ -9916,7 +9916,18 @@ impl Compiler {
                     }
                 }
 
-                // Default: use built-in Index instruction for lists/maps/strings
+                // Check for Map type - use Map.get builtin for map[key] syntax
+                if let Some(coll_type) = self.expr_type_name(coll) {
+                    if coll_type.starts_with("Map[") || coll_type == "Map" {
+                        let coll_reg = self.compile_expr_tail(coll, false)?;
+                        let idx_reg = self.compile_expr_tail(index, false)?;
+                        let dst = self.alloc_reg();
+                        self.emit_call_native(dst, "Map.get", vec![coll_reg, idx_reg].into(), line);
+                        return Ok(dst);
+                    }
+                }
+
+                // Default: use built-in Index instruction for lists/tuples/arrays
                 let coll_reg = self.compile_expr_tail(coll, false)?;
                 let idx_reg = self.compile_expr_tail(index, false)?;
                 let dst = self.alloc_reg();
@@ -16856,7 +16867,26 @@ impl Compiler {
                     }
                 }
 
-                // Default: use built-in IndexSet instruction for lists/maps
+                // Check for Map type - use Map.insert for map[key] = value syntax
+                if let Some(coll_type) = self.expr_type_name(coll) {
+                    if coll_type.starts_with("Map[") || coll_type == "Map" {
+                        let coll_reg = self.compile_expr_tail(coll, false)?;
+                        let idx_reg = self.compile_expr_tail(idx, false)?;
+                        let result_reg = self.alloc_reg();
+                        self.emit_call_native(result_reg, "Map.insert", vec![coll_reg, idx_reg, value_reg].into(), 0);
+
+                        // For variable targets, update the variable binding with the new map
+                        if let Expr::Var(ident) = coll.as_ref() {
+                            if let Some(local_info) = self.locals.get(&ident.node) {
+                                let local_reg = local_info.reg;
+                                self.chunk.emit(Instruction::Move(local_reg, result_reg), 0);
+                            }
+                        }
+                        return Ok(self.alloc_reg()); // Return unit
+                    }
+                }
+
+                // Default: use built-in IndexSet instruction for arrays
                 let coll_reg = self.compile_expr_tail(coll, false)?;
                 let idx_reg = self.compile_expr_tail(idx, false)?;
                 self.chunk.emit(Instruction::IndexSet(coll_reg, idx_reg, value_reg), 0);
