@@ -2186,6 +2186,24 @@ impl<'a> InferCtx<'a> {
                     fields: def_fields, ..
                 }) = self.env.lookup_type(&resolved_type_name).cloned()
                 {
+                    // If no fields provided and record has required fields,
+                    // treat this as a reference to the constructor function, not a construction
+                    let has_required_fields = def_fields.iter().any(|(_, _, has_default)| !has_default);
+                    if fields.is_empty() && has_required_fields {
+                        // Return constructor function type: (field_types...) -> RecordType
+                        let field_types: Vec<Type> = def_fields.iter().map(|(_, ty, _)| ty.clone()).collect();
+                        let result_ty = Type::Named {
+                            name: resolved_type_name.clone(),
+                            args: vec![],
+                        };
+                        return Ok(Type::Function(FunctionType {
+                            required_params: None,
+                            type_params: vec![],
+                            params: field_types,
+                            ret: Box::new(result_ty),
+                        }));
+                    }
+
                     let mut provided = HashMap::new();
                     let mut positional_count = 0;
                     for field in fields {
