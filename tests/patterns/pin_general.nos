@@ -1,0 +1,41 @@
+# expect: 0
+# Test pin operator (^) in general pattern matching
+
+type MyResult = MyOk { value: Int } | MyErr { msg: String }
+
+main() = {
+    # Test pin in simple match
+    expected = 42
+    result = match 42 {
+        ^expected -> 1
+        _ -> 0
+    }
+    assert_eq(1, result)
+
+    # Test pin with different value
+    result2 = match 100 {
+        ^expected -> 1
+        _ -> 0
+    }
+    assert_eq(0, result2)
+
+    # Test pin in tuple pattern
+    x = 10
+    y = 20
+    result3 = match (10, 20) {
+        (^x, ^y) -> true
+        _ -> false
+    }
+    assert(result3)
+
+    # Test pin in variant pattern
+    target_value = 42
+    ok_result = MyOk(42)
+    result4 = match ok_result {
+        MyOk(value: ^target_value) -> true
+        _ -> false
+    }
+    assert(result4)
+
+    0
+}

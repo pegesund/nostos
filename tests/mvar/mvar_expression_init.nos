@@ -1,0 +1,25 @@
+# expect: 0
+# Test mvar initialization with expressions (not just literals)
+
+compute(n: Int) = n * 10
+
+# Constant literal - no runtime init needed
+mvar x: Int = 5
+
+# Expression - requires __module_init__ at runtime
+mvar y: Int = compute(2)
+
+# Expression using both constant and computed mvar
+mvar z: Int = x + y
+
+main() = {
+    assert_eq(5, x)
+    assert_eq(20, y)
+    assert_eq(25, z)
+
+    # Verify mvars can be mutated
+    y = 100
+    assert_eq(100, y)
+
+    0
+}

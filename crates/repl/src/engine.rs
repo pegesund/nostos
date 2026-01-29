@@ -2687,6 +2687,12 @@ impl ReplEngine {
             }
         }
 
+        // Call module init functions to initialize mvars with expressions
+        for init_fn_name in self.compiler.get_module_init_functions().to_vec() {
+            // Run the init function to initialize mvars
+            let _ = self.vm.run(&init_fn_name);
+        }
+
         if self.config.enable_jit {
             let function_list = self.compiler.get_function_list();
             if let Ok(mut jit) = JitCompiler::new(JitConfig::default()) {

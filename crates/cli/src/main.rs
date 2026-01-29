@@ -1715,6 +1715,11 @@ fn run_with_async_vm(
         vm.register_mvar(name, initial_value);
     }
 
+    // Run module init functions to initialize mvars with expression values
+    for init_fn_name in compiler.get_module_init_functions() {
+        let _ = vm.run(init_fn_name);
+    }
+
     // JIT compile suitable functions (unless --no-jit was specified)
     let function_list = compiler.get_function_list();
     if enable_jit {

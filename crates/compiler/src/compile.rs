@@ -1204,6 +1204,8 @@ pub struct Compiler {
     /// Module-level mutable variables (mvars): qualified name -> MvarInfo
     /// These are thread-safe shared state with automatic RwLock
     mvars: HashMap<String, MvarInfo>,
+    /// Order in which mvars were declared (for deterministic init ordering)
+    mvar_order: Vec<String>,
     /// Compile-time constants: qualified name -> ConstInfo
     /// These are inlined at usage sites
     constants: HashMap<String, ConstInfo>,
@@ -1257,6 +1259,8 @@ pub struct Compiler {
     function_prefixes: HashSet<String>,
     /// Base function name -> all fn_ast keys with that base name (for O(1) lookups)
     fn_asts_by_base: HashMap<String, HashSet<String>>,
+    /// Module init functions that need to be called at module load time
+    module_init_functions: Vec<String>,
 }
 
 /// Information about a module-level mutable variable (mvar).
@@ -1264,6 +1268,8 @@ pub struct Compiler {
 pub struct MvarInfo {
     pub type_name: String,
     pub initial_value: MvarInitValue,
+    /// Expression for runtime initialization (when value can't be computed at compile time)
+    pub init_expr: Option<Expr>,
 }
 
 /// Information about a compile-time constant.
@@ -1425,6 +1431,7 @@ impl Compiler {
             repl_mode: false,
             prelude_functions: HashSet::new(),
             mvars: HashMap::new(),
+            mvar_order: Vec::new(),
             constants: HashMap::new(),
             fn_mvar_access: HashMap::new(),
             fn_calls: HashMap::new(),
@@ -1444,6 +1451,7 @@ impl Compiler {
             function_variants: HashMap::new(),
             function_prefixes: HashSet::new(),
             fn_asts_by_base: HashMap::new(),
+            module_init_functions: Vec::new(),
         };
 
         // Register builtin types for autocomplete
@@ -2787,6 +2795,7 @@ impl Compiler {
             repl_mode: false,
             prelude_functions: HashSet::new(),
             mvars: HashMap::new(),
+            mvar_order: Vec::new(),
             constants: HashMap::new(),
             fn_mvar_access: HashMap::new(),
             fn_calls: HashMap::new(),
@@ -2806,6 +2815,7 @@ impl Compiler {
             function_variants: HashMap::new(),
             function_prefixes: HashSet::new(),
             fn_asts_by_base: HashMap::new(),
+            module_init_functions: Vec::new(),
         }
     }
 
@@ -4157,22 +4167,104 @@ impl Compiler {
 
     /// Compile a module-level mutable variable (mvar) definition.
     /// This registers the mvar with the compiler and will set up the VM storage.
+    /// If the initial value is a compile-time constant, it's stored directly.
+    /// Otherwise, the expression is stored for runtime initialization.
     fn compile_mvar_def(&mut self, def: &MvarDef) -> Result<(), CompileError> {
         let qualified_name = self.qualify_name(&def.name.node);
         let type_name = self.type_expr_name(&def.ty);
 
-        // Evaluate the initial value (must be a compile-time constant)
-        let initial_value = self.eval_const_expr(&def.value)
-            .ok_or_else(|| CompileError::NotImplemented {
-                feature: format!("mvar initial value must be a constant literal, got: {:?}", def.value),
-                span: def.span,
-            })?;
+        // Try to evaluate as compile-time constant first
+        if let Some(initial_value) = self.eval_const_expr(&def.value) {
+            // Constant value - register directly
+            self.mvars.insert(qualified_name.clone(), MvarInfo {
+                type_name,
+                initial_value,
+                init_expr: None,
+            });
+        } else {
+            // Expression needs runtime evaluation - store for module init
+            self.mvars.insert(qualified_name.clone(), MvarInfo {
+                type_name,
+                initial_value: MvarInitValue::Unit, // Placeholder until init
+                init_expr: Some(def.value.clone()),
+            });
+        }
 
-        // Register the mvar in our tracking map
-        self.mvars.insert(qualified_name.clone(), MvarInfo {
-            type_name,
-            initial_value,
-        });
+        // Track declaration order for deterministic init ordering
+        self.mvar_order.push(qualified_name);
+
+        Ok(())
+    }
+
+    /// Generate a __module_init__ function if any mvars need runtime initialization.
+    /// This function is automatically called when the module is first loaded.
+    fn generate_module_init_if_needed(&mut self) -> Result<(), CompileError> {
+        use nostos_syntax::ast::{Binding, FnClause, FnDef, Pattern, Stmt, Visibility};
+
+        // Collect mvars that need runtime initialization, in declaration order
+        let mvars_with_exprs: Vec<(String, Expr)> = self.mvar_order.iter()
+            .filter_map(|name| {
+                self.mvars.get(name).and_then(|info| {
+                    info.init_expr.as_ref().map(|expr| (name.clone(), expr.clone()))
+                })
+            })
+            .collect();
+
+        if mvars_with_exprs.is_empty() {
+            return Ok(());
+        }
+
+        // Generate the init function body: a block that writes to each mvar
+        let mut stmts = Vec::new();
+        for (mvar_name, init_expr) in &mvars_with_exprs {
+            // Use the local name (without module prefix) for the binding pattern
+            let local_name = mvar_name.rsplit('.').next().unwrap_or(mvar_name);
+            // Create a let binding: mvar_name = init_expr
+            // The compiler will recognize this as an mvar write
+            let binding = Binding {
+                mutable: false,
+                pattern: Pattern::Var(Spanned::new(local_name.to_string(), Span::default())),
+                ty: None,
+                value: init_expr.clone(),
+                span: Span::default(),
+            };
+            stmts.push(Stmt::Let(binding));
+        }
+        // Return unit at the end
+        stmts.push(Stmt::Expr(Expr::Unit(Span::default())));
+
+        let init_body = Expr::Block(stmts, Span::default());
+
+        // Create the function definition
+        let fn_def = FnDef {
+            visibility: Visibility::Private,
+            doc: None,
+            name: Spanned::new("__module_init__".to_string(), Span::default()),
+            type_params: vec![],
+            clauses: vec![FnClause {
+                params: vec![],
+                guard: None,
+                return_type: None,
+                body: init_body,
+                span: Span::default(),
+            }],
+            span: Span::default(),
+        };
+
+        // Queue the init function for compilation
+        self.pending_functions.push((
+            fn_def,
+            self.module_path.clone(),
+            self.imports.clone(),
+            self.line_starts.clone(),
+            self.current_source.clone().unwrap_or_default(),
+            self.current_source_name.clone().unwrap_or_default(),
+        ));
+
+        // Store the init function name so the VM knows to call it
+        // Add "/" suffix for zero-param function signature
+        let qualified_init_name = format!("{}/", self.qualify_name("__module_init__"));
+        self.module_init_functions.push(qualified_init_name);
 
         Ok(())
     }
@@ -17394,6 +17486,7 @@ impl Compiler {
             self.mvars.insert(name.to_string(), MvarInfo {
                 type_name: "_".to_string(),
                 initial_value: MvarInitValue::Unit,
+                init_expr: None,
             });
         }
     }
@@ -17404,6 +17497,7 @@ impl Compiler {
         self.mvars.insert(name.to_string(), MvarInfo {
             type_name,
             initial_value,
+            init_expr: None,
         });
     }
 
@@ -17505,6 +17599,11 @@ impl Compiler {
     /// Returns a HashMap of qualified name -> MvarInfo.
     pub fn get_mvars(&self) -> &HashMap<String, MvarInfo> {
         &self.mvars
+    }
+
+    /// Get the list of module init functions that need to be called at module load time.
+    pub fn get_module_init_functions(&self) -> &[String] {
+        &self.module_init_functions
     }
 
     /// Check for potential mvar deadlocks caused by transitive blocking.
@@ -22015,7 +22114,10 @@ impl Compiler {
             }
         }
 
-        // Seventh pass: queue functions with merged clauses
+        // Generate __module_init__ function if any mvars need runtime initialization
+        self.generate_module_init_if_needed()?;
+
+        // Eighth pass: queue functions with merged clauses
         for name in &fn_order {
             let clauses = fn_clauses.get(name)
                 .expect("function in fn_order must have clauses in fn_clauses");

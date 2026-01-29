@@ -1,0 +1,33 @@
+# expect: 0
+# Test variant named field construction with field reordering
+
+type Point = Point { x: Int, y: Int }
+type Circle = Circle { radius: Int }
+type Person = Person { name: String, age: Int }
+
+main() = {
+    # Named construction with parentheses syntax - fields in order
+    p1 = Point(x: 10, y: 20)
+    assert_eq(10, p1.x)
+    assert_eq(20, p1.y)
+
+    # Reverse order with parentheses - should reorder to match definition
+    p2 = Point(y: 30, x: 40)
+    assert_eq(40, p2.x)
+    assert_eq(30, p2.y)
+
+    # Single field variant
+    c = Circle(radius: 5)
+    assert_eq(5, c.radius)
+
+    # Single field without name (positional)
+    c2 = Circle(10)
+    assert_eq(10, c2.radius)
+
+    # String field
+    person = Person(name: "Alice", age: 30)
+    assert_eq("Alice", person.name)
+    assert_eq(30, person.age)
+
+    0
+}
