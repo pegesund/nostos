@@ -27,7 +27,7 @@ items: List[Int] = [1, 2, 3]
 add(a: Int, b: Int) -> Int = a + b
 
 # Complex types
-data: Map[String, List[Int]] = #{"a": [1, 2], "b": [3, 4]}
+data: Map[String, List[Int]] = %{"a": [1, 2], "b": [3, 4]}
 ```
 
 ## Record Types
@@ -123,7 +123,7 @@ type StringMap[V] = Map[String, V]
 type Callback[T] = (T) -> ()
 
 # Using aliases
-users: StringMap[Person] = #{"alice": Person("Alice", 30)}
+users: StringMap[Person] = %{"alice": Person("Alice", 30)}
 ```
 
 ## Tuples

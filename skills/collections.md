@@ -3,20 +3,43 @@
 ## Maps (Dictionaries)
 
 ```nostos
-# Create a map with #{ }
-ages = #{"alice": 30, "bob": 25, "carol": 35}
+# Create a map with %{ }
+ages = %{"alice": 30, "bob": 25, "carol": 35}
 
 # Type annotation
-scores: Map[String, Int] = #{"math": 95, "english": 87}
+scores: Map[String, Int] = %{"math": 95, "english": 87}
 
 # Empty map
-empty: Map[String, Int] = #{}
+empty: Map[String, Int] = %{}
 ```
+
+## Map Index Syntax
+
+Maps support convenient bracket syntax for get and set:
+
+```nostos
+m = %{"name": "Alice", "age": 30}
+
+# Get value (returns value or Unit if not found)
+name = m["name"]        # "Alice"
+age = m["age"]          # 30
+
+# Set value (updates variable with new map)
+m["city"] = "Oslo"      # m now has 3 keys
+m["age"] = 31           # Update existing key
+
+# Works with any key type
+ids = %{1: "one", 2: "two"}
+ids[3] = "three"        # Add new entry
+val = ids[1]            # "one"
+```
+
+Since maps are immutable, `m["key"] = value` is equivalent to `m = Map.insert(m, "key", value)`.
 
 ## Map Operations
 
 ```nostos
-m = #{"a": 1, "b": 2, "c": 3}
+m = %{"a": 1, "b": 2, "c": 3}
 
 # Get value (returns Option)
 m.get("a")              # Some(1)
@@ -26,13 +49,13 @@ m.get("z")              # None
 m.getOrDefault("z", 0)  # 0
 
 # Insert (returns new map)
-m2 = m.insert("d", 4)   # #{"a": 1, "b": 2, "c": 3, "d": 4}
+m2 = m.insert("d", 4)   # %{"a": 1, "b": 2, "c": 3, "d": 4}
 
 # Remove (returns new map)
-m3 = m.remove("a")      # #{"b": 2, "c": 3}
+m3 = m.remove("a")      # %{"b": 2, "c": 3}
 
 # Update value
-m4 = m.update("a", x => x + 10)  # #{"a": 11, "b": 2, "c": 3}
+m4 = m.update("a", x => x + 10)  # %{"a": 11, "b": 2, "c": 3}
 
 # Check existence
 m.contains("a")         # true
@@ -46,7 +69,7 @@ m.isEmpty()             # false
 ## Iterating Maps
 
 ```nostos
-m = #{"a": 1, "b": 2, "c": 3}
+m = %{"a": 1, "b": 2, "c": 3}
 
 # Get keys as list
 m.keys()                # ["a", "b", "c"]
@@ -58,10 +81,10 @@ m.values()              # [1, 2, 3]
 m.entries()             # [("a", 1), ("b", 2), ("c", 3)]
 
 # Map over values
-m.mapValues(v => v * 2) # #{"a": 2, "b": 4, "c": 6}
+m.mapValues(v => v * 2) # %{"a": 2, "b": 4, "c": 6}
 
 # Filter entries
-m.filter((k, v) => v > 1)  # #{"b": 2, "c": 3}
+m.filter((k, v) => v > 1)  # %{"b": 2, "c": 3}
 
 # Fold
 m.fold(0, (acc, k, v) => acc + v)  # 6
@@ -70,39 +93,39 @@ m.fold(0, (acc, k, v) => acc + v)  # 6
 ## Merging Maps
 
 ```nostos
-m1 = #{"a": 1, "b": 2}
-m2 = #{"b": 20, "c": 3}
+m1 = %{"a": 1, "b": 2}
+m2 = %{"b": 20, "c": 3}
 
 # Merge (right side wins on conflict)
-m1.merge(m2)            # #{"a": 1, "b": 20, "c": 3}
+m1.merge(m2)            # %{"a": 1, "b": 20, "c": 3}
 
 # Merge with custom conflict resolution
-m1.mergeWith(m2, (v1, v2) => v1 + v2)  # #{"a": 1, "b": 22, "c": 3}
+m1.mergeWith(m2, (v1, v2) => v1 + v2)  # %{"a": 1, "b": 22, "c": 3}
 ```
 
 ## Sets
 
 ```nostos
-# Create a set with %{ }
-colors = %{"red", "green", "blue"}
+# Create a set with #{ }
+colors = #{"red", "green", "blue"}
 
 # Type annotation
-numbers: Set[Int] = %{1, 2, 3, 4, 5}
+numbers: Set[Int] = #{1, 2, 3, 4, 5}
 
 # Empty set
-empty: Set[String] = %{}
+empty: Set[String] = #{}
 ```
 
 ## Set Operations
 
 ```nostos
-s = %{1, 2, 3, 4, 5}
+s = #{1, 2, 3, 4, 5}
 
 # Add element (returns new set)
-s2 = s.insert(6)        # %{1, 2, 3, 4, 5, 6}
+s2 = s.insert(6)        # #{1, 2, 3, 4, 5, 6}
 
 # Remove element (returns new set)
-s3 = s.remove(1)        # %{2, 3, 4, 5}
+s3 = s.remove(1)        # #{2, 3, 4, 5}
 
 # Check membership
 s.contains(3)           # true
@@ -119,21 +142,21 @@ s.toList()              # [1, 2, 3, 4, 5]
 ## Set Math Operations
 
 ```nostos
-a = %{1, 2, 3, 4}
-b = %{3, 4, 5, 6}
+a = #{1, 2, 3, 4}
+b = #{3, 4, 5, 6}
 
 # Union
-a.union(b)              # %{1, 2, 3, 4, 5, 6}
+a.union(b)              # #{1, 2, 3, 4, 5, 6}
 
 # Intersection
-a.intersection(b)       # %{3, 4}
+a.intersection(b)       # #{3, 4}
 
 # Difference
-a.difference(b)         # %{1, 2}
+a.difference(b)         # #{1, 2}
 
 # Subset check
-%{1, 2}.isSubset(a)     # true
-a.isSuperset(%{1, 2})   # true
+#{1, 2}.isSubset(a)     # true
+a.isSuperset(#{1, 2})   # true
 ```
 
 ## Typed Arrays
@@ -226,16 +249,16 @@ nested = ((1, 2), (3, 4))
 
 ```nostos
 # List to Set (removes duplicates)
-[1, 2, 2, 3, 3, 3].toSet()      # %{1, 2, 3}
+[1, 2, 2, 3, 3, 3].toSet()      # #{1, 2, 3}
 
 # Set to List
-%{1, 2, 3}.toList()             # [1, 2, 3]
+#{1, 2, 3}.toList()             # [1, 2, 3]
 
 # List of pairs to Map
-[("a", 1), ("b", 2)].toMap()    # #{"a": 1, "b": 2}
+[("a", 1), ("b", 2)].toMap()    # %{"a": 1, "b": 2}
 
 # Map to list of pairs
-#{"a": 1, "b": 2}.entries()     # [("a", 1), ("b", 2)]
+%{"a": 1, "b": 2}.entries()     # [("a", 1), ("b", 2)]
 
 # List to typed array
 [1.0, 2.0, 3.0].toFloat64Array()
@@ -249,14 +272,14 @@ Float64Array.from([1.0, 2.0]).toList()
 ```nostos
 # Count occurrences
 countWords(words: List[String]) -> Map[String, Int] =
-    words.fold(#{}, (acc, word) => {
+    words.fold(%{}, (acc, word) => {
         count = acc.getOrDefault(word, 0)
         acc.insert(word, count + 1)
     })
 
 # Group by key
 groupBy(items: List[T], keyFn: T -> K) -> Map[K, List[T]] =
-    items.fold(#{}, (acc, item) => {
+    items.fold(%{}, (acc, item) => {
         key = keyFn(item)
         existing = acc.getOrDefault(key, [])
         acc.insert(key, existing ++ [item])
@@ -264,11 +287,11 @@ groupBy(items: List[T], keyFn: T -> K) -> Map[K, List[T]] =
 
 # Index lookup table
 createIndex(items: List[T], keyFn: T -> K) -> Map[K, T] =
-    items.fold(#{}, (acc, item) => acc.insert(keyFn(item), item))
+    items.fold(%{}, (acc, item) => acc.insert(keyFn(item), item))
 
 # Deduplicate while preserving order
 dedupe(items: List[T]) -> List[T] = {
-    (result, _) = items.fold(([], %{}), ((acc, seen), item) => {
+    (result, _) = items.fold(([], #{}), ((acc, seen), item) => {
         if seen.contains(item) then (acc, seen)
         else (acc ++ [item], seen.insert(item))
     })

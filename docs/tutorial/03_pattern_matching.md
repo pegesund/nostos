@@ -247,7 +247,7 @@ main() = {
 
 ## The Pin Operator (`^`)
 
-The pin operator `^` in a pattern asserts that a value must match an *existing* variable's value.
+The pin operator `^` in a pattern asserts that a value must match an *existing* variable's value. Without the pin, a variable in a pattern creates a new binding; with the pin, it constrains the match.
 
 ```nostos
 expected_status = 200
@@ -263,6 +263,40 @@ main() = {
 
     println(handle_response(response1)) # "Success: Data received"
     println(handle_response(response2)) # "Error 404: Not Found"
+}
+```
+
+The pin operator works in all pattern contexts:
+
+```nostos
+main() = {
+    x = 10
+    y = 20
+
+    # In tuple patterns
+    result = match (10, 20) {
+        (^x, ^y) -> "both match"
+        (^x, _) -> "only x matches"
+        _ -> "neither"
+    }
+    println(result)  # "both match"
+
+    # In list patterns
+    target = 42
+    found = match [1, 42, 3] {
+        [_, ^target, _] -> true
+        _ -> false
+    }
+    println(found)  # true
+
+    # Comparing two values
+    a = 5
+    b = 5
+    same = match (a, b) {
+        (v, ^v) -> true   # v binds, then ^v checks equality
+        _ -> false
+    }
+    println(same)  # true
 }
 ```
 

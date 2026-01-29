@@ -188,3 +188,37 @@ main() = {
     println(shared_count)  # 100 - no race conditions!
 }
 ```
+
+## Mvar Expression Initialization
+
+Mvars can be initialized with expressions, not just literal values. The expression is evaluated once when the module loads:
+
+```nostos
+# Initialize with function calls
+mvar connectionPool: Pool = createPool(maxConnections: 10)
+mvar startTime: Int = currentTimeMillis()
+
+# Arithmetic expressions work too
+basePort = 8000
+mvar serverPort: Int = basePort + 80
+
+# Complex initialization
+mvar config: Config = loadConfig("app.json").unwrapOr(defaultConfig())
+
+main() = {
+    println("Server started at: " ++ show(startTime))
+    println("Listening on port: " ++ show(serverPort))
+}
+```
+
+This is useful for:
+- **Connection pools** - Create once at startup, share across all requests
+- **Configuration** - Load from files or environment at module load time
+- **Computed constants** - Values that depend on other values but shouldn't change
+
+The initialization expressions run in declaration order, so later mvars can depend on earlier ones:
+
+```nostos
+mvar baseUrl: String = getEnv("API_URL").unwrapOr("http://localhost")
+mvar apiEndpoint: String = baseUrl ++ "/api/v1"  # Uses baseUrl
+```

@@ -37,6 +37,39 @@ main() = {
 }
 ```
 
+## Index Syntax for Maps
+
+Maps support convenient bracket syntax for get and set operations:
+
+```nostos
+main() = {
+    # Create a map
+    config = %{"host": "localhost", "port": 8080}
+
+    # Get value using brackets (returns value or Unit if not found)
+    host = config["host"]       # "localhost"
+    port = config["port"]       # 8080
+
+    # Set value using brackets (updates the variable with new map)
+    config["debug"] = true      # config now has 3 entries
+    config["port"] = 9000       # Update existing key
+
+    # Works with any hashable key type
+    scores = %{1: 100, 2: 85, 3: 92}
+    first_score = scores[1]     # 100
+    scores[4] = 78              # Add new entry
+
+    println(config)
+}
+```
+
+Since maps are immutable, `map["key"] = value` is equivalent to:
+```nostos
+map = Map.insert(map, "key", value)
+```
+
+The variable is updated to hold the new map; the previous map value remains unchanged if referenced elsewhere.
+
 ## Sets
 
 Sets are unordered collections of unique elements. Like Maps, elements must be hashable. They are useful for membership testing, eliminating duplicates, and performing set operations (union, intersection, difference). Sets are created using the `#{element1, element2}` syntax.

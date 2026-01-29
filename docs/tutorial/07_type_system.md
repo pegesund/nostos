@@ -58,6 +58,32 @@ main() = {
 }
 ```
 
+### Named Field Construction with Reordering
+
+When constructing records or variants with named fields, you can provide the fields in any order. The compiler automatically reorders them to match the type definition:
+
+```nostos
+type Point = { x: Int, y: Int }
+type Person = Person { name: String, age: Int, city: String }
+
+main() = {
+    # Fields in definition order
+    p1 = Point { x: 10, y: 20 }
+
+    # Fields in different order - works the same!
+    p2 = Point { y: 30, x: 40 }
+
+    # Works with variant constructors too
+    person1 = Person { name: "Alice", age: 30, city: "Oslo" }
+    person2 = Person { city: "Bergen", name: "Bob", age: 25 }  # Reordered
+
+    assert_eq(p2.x, 40)
+    assert_eq(person2.name, "Bob")
+}
+```
+
+This makes code more readable when you want to emphasize certain fields, or when copying from sources where field order differs.
+
 ### Record Update (Functional Update)
 
 Create a new record with some fields updated while copying the rest from an existing record. The original record is not modified.

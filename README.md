@@ -154,9 +154,10 @@ numbers = [1, 2, 3]
 doubled = numbers.map(x => x * 2)  # Creates new list
 filtered = numbers.filter(x => x > 1)  # Original unchanged
 
-# Immutable maps
+# Immutable maps with convenient index syntax
 config = %{"port": 8080, "host": "localhost"}
-updated = Map.insert(config, "debug", true)  # New map, config unchanged
+port = config["port"]              # Get value: 8080
+config["debug"] = true             # Set value (updates variable with new map)
 ```
 
 This prevents entire classes of bugs. No surprise mutations, no defensive copying needed.
