@@ -3033,7 +3033,10 @@ main() = {
 
 /// Test that all example files compile without LSP errors.
 /// This catches cases where the LSP reports errors that the compiler doesn't.
+/// Ignored by default - takes >60s to run all 80+ examples.
+/// Run with: cargo test --release -p nostos-lsp -- --ignored test_lsp_all_examples_compile
 #[test]
+#[ignore]
 fn test_lsp_all_examples_compile() {
     use std::process::Command;
 
