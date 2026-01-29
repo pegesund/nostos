@@ -316,11 +316,12 @@ pub fn format_stack_trace(frames: &[CallFrame]) -> String {
     for (i, frame) in frames.iter().rev().enumerate() {
         let line = frame.current_line();
         let func_name = &frame.function.name;
+        let file_name = frame.function.source_file.as_deref().unwrap_or("unknown");
 
         if line > 0 {
-            result.push_str(&format!("  {}. {} (line {})\n", i + 1, func_name, line));
+            result.push_str(&format!("  {}. {} ({}:{})\n", i + 1, func_name, file_name, line));
         } else {
-            result.push_str(&format!("  {}. {}\n", i + 1, func_name));
+            result.push_str(&format!("  {}. {} ({})\n", i + 1, func_name, file_name));
         }
     }
     result

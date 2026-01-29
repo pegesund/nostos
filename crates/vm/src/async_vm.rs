@@ -1260,7 +1260,9 @@ impl AsyncProcess {
                 Err(e) => {
                     // Try to handle exception
                     if !self.handle_exception(&e) {
-                        return Err(e);
+                        // Add stack trace before returning unhandled error
+                        let stack_trace = crate::process::format_stack_trace(&self.frames);
+                        return Err(e.with_stack_trace(stack_trace));
                     }
                 }
             }
