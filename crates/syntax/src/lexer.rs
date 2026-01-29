@@ -328,6 +328,10 @@ pub enum Token {
     ColonColon,
     #[token(":")]
     Colon,
+    #[token("..=")]
+    DotDotEq,
+    #[token("..")]
+    DotDot,
     #[token(".")]
     Dot,
     #[token("|")]
@@ -533,6 +537,8 @@ impl fmt::Display for Token {
             Token::Semicolon => write!(f, ";"),
             Token::ColonColon => write!(f, "::"),
             Token::Colon => write!(f, ":"),
+            Token::DotDotEq => write!(f, "..="),
+            Token::DotDot => write!(f, ".."),
             Token::Dot => write!(f, "."),
             Token::Pipe => write!(f, "|"),
             Token::Underscore => write!(f, "_"),

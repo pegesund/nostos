@@ -456,7 +456,7 @@ fn extract_pattern_names(pattern: &Pattern, names: &mut HashSet<String>) {
         Pattern::UInt8(_, _) | Pattern::UInt16(_, _) | Pattern::UInt32(_, _) | Pattern::UInt64(_, _) |
         Pattern::Float(_, _) | Pattern::Float32(_, _) | Pattern::Decimal(_, _) | Pattern::BigInt(_, _) |
         Pattern::String(_, _) | Pattern::Char(_, _) | Pattern::Bool(_, _) | Pattern::Unit(_) |
-        Pattern::StringCons(_, _) | Pattern::Map(_, _) | Pattern::Set(_, _) => {}
+        Pattern::StringCons(_, _) | Pattern::Map(_, _) | Pattern::Set(_, _) | Pattern::Range(_, _, _, _) => {}
     }
 }
 

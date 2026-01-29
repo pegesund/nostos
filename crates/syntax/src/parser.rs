@@ -316,6 +316,33 @@ fn pattern() -> impl Parser<Token, Pattern, Error = Simple<Token>> + Clone {
                 }
             });
 
+        // Range patterns: 1..10 (exclusive) or 1..=10 (inclusive)
+        // Helper to parse a raw (positive) integer value
+        let raw_int = filter_map(|_span, tok| match tok {
+            Token::Int(n) => Ok(n),
+            Token::HexInt(n) => Ok(n),
+            Token::BinInt(n) => Ok(n),
+            _ => Err(Simple::expected_input_found(_span, vec![], Some(tok))),
+        });
+
+        // Signed integer for ranges: can be negative (-5) or positive (5)
+        let signed_int = just(Token::Minus)
+            .ignore_then(raw_int.clone())
+            .map(|n| -n)
+            .or(raw_int.clone());
+
+        // Inclusive range: 1..=10 or -10..=0
+        let range_inclusive = signed_int.clone()
+            .then_ignore(just(Token::DotDotEq))
+            .then(signed_int.clone())
+            .map_with_span(|(start, end), span| Pattern::Range(start, end, true, to_span(span)));
+
+        // Exclusive range: 1..10 or -10..0
+        let range_exclusive = signed_int.clone()
+            .then_ignore(just(Token::DotDot))
+            .then(signed_int.clone())
+            .map_with_span(|(start, end), span| Pattern::Range(start, end, false, to_span(span)));
+
         let float = filter_map(|span, tok| match tok {
             Token::Float(s) => Ok(Pattern::Float(s.parse().unwrap_or(0.0), to_span(span))),
             Token::Float32(s) => Ok(Pattern::Float32(s.parse().unwrap_or(0.0), to_span(span))),
@@ -466,8 +493,9 @@ fn pattern() -> impl Parser<Token, Pattern, Error = Simple<Token>> + Clone {
             .map_with_span(|elems, span| Pattern::Set(elems, to_span(span)));
 
         // Base patterns (without or and without list) - used for list element patterns
+        // Order matters: ranges must come before neg_int/int to match `-10..0` before just `-10`
         // Note: neg_int must come before int to properly parse negative literals
-        let literals = choice((wildcard.clone(), bool_pat.clone(), neg_int.clone(), int.clone(), float.clone(), string.clone(), char_pat.clone())).boxed();
+        let literals = choice((wildcard.clone(), bool_pat.clone(), range_inclusive.clone(), range_exclusive.clone(), neg_int.clone(), int.clone(), float.clone(), string.clone(), char_pat.clone())).boxed();
         let base_containers = choice((unit.clone(), tuple.clone(), grouped.clone(), record.clone(), map_pat.clone(), set_pat.clone())).boxed();
         let variants_box = choice((pin.clone(), variant_positional.clone(), variant_named.clone(), variant_unit.clone(), var.clone())).boxed();
         let base_no_list = choice((literals.clone(), base_containers.clone(), variants_box.clone())).boxed();

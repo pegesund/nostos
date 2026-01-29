@@ -3196,6 +3196,12 @@ impl<'a> InferCtx<'a> {
                 }
                 Ok(())
             }
+
+            Pattern::Range(_, _, _, _) => {
+                // Range patterns match integers
+                self.unify(expected.clone(), Type::Int);
+                Ok(())
+            }
         }
     }
 

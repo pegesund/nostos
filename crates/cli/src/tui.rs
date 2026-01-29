@@ -6443,7 +6443,8 @@ fn style_input(text: &str) -> StyledString {
             Token::Eq | Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq |
             Token::LeftArrow | Token::RightArrow | Token::FatArrow | Token::Caret | Token::Dollar | Token::Question |
             Token::LParen | Token::RParen | Token::LBracket | Token::RBracket |
-            Token::LBrace | Token::RBrace | Token::Comma | Token::Semicolon | Token::Colon | Token::ColonColon | Token::Dot |
+            Token::LBrace | Token::RBrace | Token::Comma | Token::Semicolon | Token::Colon | Token::ColonColon |
+            Token::DotDot | Token::DotDotEq | Token::Dot |
             Token::Pipe | Token::Hash =>
                 Color::Rgb(255, 165, 0),
 

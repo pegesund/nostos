@@ -307,6 +307,8 @@ pub enum Pattern {
     Pin(Box<Expr>, Span),
     /// Or pattern: `0 | 1 | 2`
     Or(Vec<Pattern>, Span),
+    /// Range pattern: `1..10` (exclusive) or `1..=10` (inclusive)
+    Range(i64, i64, bool, Span),  // (start, end, inclusive, span)
 }
 
 impl Pattern {
@@ -340,6 +342,7 @@ impl Pattern {
             Pattern::Variant(_, _, s) => *s,
             Pattern::Pin(_, s) => *s,
             Pattern::Or(_, s) => *s,
+            Pattern::Range(_, _, _, s) => *s,
         }
     }
 
@@ -1464,6 +1467,7 @@ impl Pattern {
                     pat.set_file_id(file_id);
                 }
             }
+            Pattern::Range(_, _, _, s) => s.file_id = file_id,
         }
     }
 }

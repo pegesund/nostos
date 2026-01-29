@@ -1,0 +1,60 @@
+# expect: 0
+main() = {
+    # Test exclusive range (1..10 means 1 to 9)
+    x = 5
+    result1 = match x {
+        1..10 -> "digit"
+        _ -> "other"
+    }
+    assert_eq(result1, "digit")
+
+    # Test boundary - 10 should NOT match 1..10 (exclusive)
+    result2 = match 10 {
+        1..10 -> "in range"
+        _ -> "out of range"
+    }
+    assert_eq(result2, "out of range")
+
+    # Test inclusive range (1..=10 means 1 to 10)
+    result3 = match 10 {
+        1..=10 -> "in range"
+        _ -> "out of range"
+    }
+    assert_eq(result3, "in range")
+
+    # Test lower boundary
+    result4 = match 1 {
+        1..10 -> "in range"
+        _ -> "out of range"
+    }
+    assert_eq(result4, "in range")
+
+    # Test below range
+    result5 = match 0 {
+        1..10 -> "in range"
+        _ -> "out of range"
+    }
+    assert_eq(result5, "out of range")
+
+    # Test multiple ranges
+    score = 85
+    grade = match score {
+        0..60 -> "F"
+        60..70 -> "D"
+        70..80 -> "C"
+        80..90 -> "B"
+        90..=100 -> "A"
+        _ -> "Invalid"
+    }
+    assert_eq(grade, "B")
+
+    # Test negative ranges
+    neg = match -5 {
+        -10..0 -> "negative"
+        0..10 -> "positive"
+        _ -> "other"
+    }
+    assert_eq(neg, "negative")
+
+    0
+}

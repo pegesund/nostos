@@ -14951,7 +14951,7 @@ impl Compiler {
                 }
             }
             Pattern::Map(_, _) | Pattern::Or(_, _) | Pattern::Pin(_, _) |
-            Pattern::Set(_, _) | Pattern::StringCons(_, _) => {
+            Pattern::Set(_, _) | Pattern::StringCons(_, _) | Pattern::Range(_, _, _, _) => {
                 // Not handling these for now
             }
         }
@@ -15796,6 +15796,36 @@ impl Compiler {
                     // and we should only keep bindings from the first matching alternative
                     bindings.extend(sub_bindings);
                 }
+            }
+            Pattern::Range(start, end, inclusive, span) => {
+                // Range pattern: start..end (exclusive) or start..=end (inclusive)
+                // Match if scrut >= start AND scrut < end (or <= for inclusive)
+                let line = self.span_line(*span);
+
+                // Load start constant
+                let start_reg = self.alloc_reg();
+                let start_idx = self.chunk.add_constant(Value::Int64(*start));
+                self.chunk.emit(Instruction::LoadConst(start_reg, start_idx), line);
+
+                // Load end constant
+                let end_reg = self.alloc_reg();
+                let end_idx = self.chunk.add_constant(Value::Int64(*end));
+                self.chunk.emit(Instruction::LoadConst(end_reg, end_idx), line);
+
+                // Check scrut >= start
+                let ge_start = self.alloc_reg();
+                self.chunk.emit(Instruction::GeInt(ge_start, scrut_reg, start_reg), line);
+
+                // Check scrut < end (exclusive) or scrut <= end (inclusive)
+                let le_end = self.alloc_reg();
+                if *inclusive {
+                    self.chunk.emit(Instruction::LeInt(le_end, scrut_reg, end_reg), line);
+                } else {
+                    self.chunk.emit(Instruction::LtInt(le_end, scrut_reg, end_reg), line);
+                }
+
+                // Both conditions must be true
+                self.chunk.emit(Instruction::And(success_reg, ge_start, le_end), line);
             }
             _ => {
                 return Err(CompileError::NotImplemented {
