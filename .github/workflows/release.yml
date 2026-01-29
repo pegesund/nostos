@@ -17,18 +17,22 @@ jobs:
             target: aarch64-apple-darwin
             artifact_name: nostos
             asset_name: nostos-${{ github.ref_name }}-aarch64-apple-darwin
+            generic_name: nostos-aarch64-apple-darwin
           - os: macos-15          # Intel (macos-13 retired)
             target: x86_64-apple-darwin
             artifact_name: nostos
             asset_name: nostos-${{ github.ref_name }}-x86_64-apple-darwin
+            generic_name: nostos-x86_64-apple-darwin
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_name: nostos
             asset_name: nostos-${{ github.ref_name }}-x86_64-unknown-linux-gnu
+            generic_name: nostos-x86_64-unknown-linux-gnu
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: nostos.exe
             asset_name: nostos-${{ github.ref_name }}-x86_64-pc-windows-msvc
+            generic_name: nostos-x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.os }}
 
@@ -61,16 +65,21 @@ jobs:
         run: |
           cd release-package
           tar -czvf ../${{ matrix.asset_name }}.tar.gz *
+          tar -czvf ../${{ matrix.generic_name }}.tar.gz *
           cd ..
           shasum -a 256 ${{ matrix.asset_name }}.tar.gz > ${{ matrix.asset_name }}.tar.gz.sha256
+          shasum -a 256 ${{ matrix.generic_name }}.tar.gz > ${{ matrix.generic_name }}.tar.gz.sha256
 
       - name: Create zip (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           Compress-Archive -Path release-package/* -DestinationPath ${{ matrix.asset_name }}.zip
+          Copy-Item ${{ matrix.asset_name }}.zip ${{ matrix.generic_name }}.zip
           $hash = Get-FileHash ${{ matrix.asset_name }}.zip -Algorithm SHA256
           "$($hash.Hash.ToLower())  ${{ matrix.asset_name }}.zip" | Out-File -FilePath ${{ matrix.asset_name }}.zip.sha256 -Encoding utf8
+          $hash2 = Get-FileHash ${{ matrix.generic_name }}.zip -Algorithm SHA256
+          "$($hash2.Hash.ToLower())  ${{ matrix.generic_name }}.zip" | Out-File -FilePath ${{ matrix.generic_name }}.zip.sha256 -Encoding utf8
 
       - name: Upload artifact (Unix)
         if: matrix.os != 'windows-latest'
@@ -80,6 +89,8 @@ jobs:
           path: |
             ${{ matrix.asset_name }}.tar.gz
             ${{ matrix.asset_name }}.tar.gz.sha256
+            ${{ matrix.generic_name }}.tar.gz
+            ${{ matrix.generic_name }}.tar.gz.sha256
 
       - name: Upload artifact (Windows)
         if: matrix.os == 'windows-latest'
@@ -89,6 +100,8 @@ jobs:
           path: |
             ${{ matrix.asset_name }}.zip
             ${{ matrix.asset_name }}.zip.sha256
+            ${{ matrix.generic_name }}.zip
+            ${{ matrix.generic_name }}.zip.sha256
 
   build-vscode-extension:
     runs-on: ubuntu-latest

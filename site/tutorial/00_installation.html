@@ -85,18 +85,16 @@ nostos --version</code></pre>
                 <div class="bg-nostos-code rounded-xl overflow-hidden border border-slate-800 mb-4">
                     <div class="p-4">
 <pre><code class="language-bash"># For Apple Silicon (M1/M2/M3/M4)
-curl -LO https://github.com/pegesund/nostos/releases/latest/download/nostos-v0.2.1-aarch64-apple-darwin.tar.gz
-tar -xzf nostos-v0.2.1-aarch64-apple-darwin.tar.gz
+curl -LO https://github.com/pegesund/nostos/releases/latest/download/nostos-aarch64-apple-darwin.tar.gz
+tar -xzf nostos-aarch64-apple-darwin.tar.gz
 
 # For Intel Mac
-curl -LO https://github.com/pegesund/nostos/releases/latest/download/nostos-v0.2.1-x86_64-apple-darwin.tar.gz
-tar -xzf nostos-v0.2.1-x86_64-apple-darwin.tar.gz
+curl -LO https://github.com/pegesund/nostos/releases/latest/download/nostos-x86_64-apple-darwin.tar.gz
+tar -xzf nostos-x86_64-apple-darwin.tar.gz
 
-# Make executable
-chmod +x nostos
-
-# Move to a directory in your PATH
-sudo mv nostos /usr/local/bin/</code></pre>
+# Make executable and move to PATH
+chmod +x nostos nostos-lsp
+sudo mv nostos nostos-lsp /usr/local/bin/</code></pre>
                     </div>
                 </div>
 
@@ -118,16 +116,14 @@ sudo mv nostos /usr/local/bin/</code></pre>
                 <div class="bg-nostos-code rounded-xl overflow-hidden border border-slate-800 mb-4">
                     <div class="p-4">
 <pre><code class="language-bash"># Download the latest release
-curl -LO https://github.com/pegesund/nostos/releases/latest/download/nostos-v0.2.1-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/pegesund/nostos/releases/latest/download/nostos-x86_64-unknown-linux-gnu.tar.gz
 
 # Extract
-tar -xzf nostos-v0.2.1-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf nostos-x86_64-unknown-linux-gnu.tar.gz
 
-# Make executable
-chmod +x nostos
-
-# Move to a directory in your PATH
-sudo mv nostos /usr/local/bin/
+# Make executable and move to PATH
+chmod +x nostos nostos-lsp
+sudo mv nostos nostos-lsp /usr/local/bin/
 
 # Verify installation
 nostos --version</code></pre>
@@ -142,7 +138,7 @@ nostos --version</code></pre>
                 <div class="bg-nostos-code rounded-xl overflow-hidden border border-slate-800 mb-4">
                     <div class="p-4">
 <pre><code class="language-powershell"># Download with PowerShell
-Invoke-WebRequest -Uri "https://github.com/pegesund/nostos/releases/latest/download/nostos-v0.2.1-x86_64-pc-windows-msvc.zip" -OutFile "nostos.zip"
+Invoke-WebRequest -Uri "https://github.com/pegesund/nostos/releases/latest/download/nostos-x86_64-pc-windows-msvc.zip" -OutFile "nostos.zip"
 
 # Extract
 Expand-Archive -Path "nostos.zip" -DestinationPath "C:\nostos"
