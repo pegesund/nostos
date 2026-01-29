@@ -1262,6 +1262,9 @@ pub struct Compiler {
     fn_asts_by_base: HashMap<String, HashSet<String>>,
     /// Module init functions that need to be called at module load time
     module_init_functions: Vec<String>,
+    /// Top-level bindings: qualified name -> (Binding, module_path, imports)
+    /// These are compiled inline at each use site
+    top_level_bindings: HashMap<String, (Binding, Vec<String>, HashMap<String, String>)>,
 }
 
 /// Information about a module-level mutable variable (mvar).
@@ -1453,6 +1456,7 @@ impl Compiler {
             function_prefixes: HashSet::new(),
             fn_asts_by_base: HashMap::new(),
             module_init_functions: Vec::new(),
+            top_level_bindings: HashMap::new(),
         };
 
         // Register builtin types for autocomplete
@@ -2817,6 +2821,7 @@ impl Compiler {
             function_prefixes: HashSet::new(),
             fn_asts_by_base: HashMap::new(),
             module_init_functions: Vec::new(),
+            top_level_bindings: HashMap::new(),
         }
     }
 
@@ -7123,6 +7128,14 @@ impl Compiler {
                         self.current_fn_mvar_reads.insert(mvar_name);
                         return Ok(dst);
                     }
+
+                    // Check if it's a top-level binding (compile expression inline)
+                    let binding_name = self.resolve_name(name);
+                    if let Some((binding, _module_path, _imports)) = self.top_level_bindings.get(&binding_name).cloned() {
+                        // Compile the binding's expression inline at this use site
+                        return self.compile_expr_tail(&binding.value, is_tail);
+                    }
+
                     // Find similar names from locals, functions, and mvars
                     let local_names: Vec<&str> = self.locals.keys().map(|s| s.as_str()).collect();
                     let fn_names: Vec<&str> = self.functions.keys().map(|s| s.as_str()).collect();
@@ -22210,6 +22223,21 @@ impl Compiler {
         for item in items {
             if let Item::MvarDef(mvar_def) = item {
                 self.compile_mvar_def(mvar_def)?;
+            }
+        }
+
+        // Eighth pass: process top-level bindings (stored for inline compilation at use site)
+        for item in items {
+            if let Item::Binding(binding) = item {
+                // Only support simple variable patterns for now
+                if let Pattern::Var(ident) = &binding.pattern {
+                    let qualified_name = self.qualify_name(&ident.node);
+                    // Store binding with its context for later inline compilation
+                    self.top_level_bindings.insert(
+                        qualified_name,
+                        (binding.clone(), self.module_path.clone(), self.imports.clone()),
+                    );
+                }
             }
         }
 

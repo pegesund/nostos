@@ -1,0 +1,34 @@
+# expect: 0
+# Test top-level bindings with expressions (not just literals)
+
+square(x: Int) = x * x
+double(x: Int) = x * 2
+
+# Simple literal binding
+answer = 42
+
+# Function call binding
+squared = square(5)
+
+# Complex expression binding
+combined = square(3) + double(5)
+
+# String binding
+greeting = "Hello, World!"
+
+# List operations binding
+nums = [1, 2, 3]
+doubled_nums = nums.map(x => x * 2)
+
+# Binding that uses other bindings
+result = answer + squared
+
+main() = {
+    assert(answer == 42)
+    assert(squared == 25)
+    assert(combined == 19)  # 9 + 10
+    assert(greeting == "Hello, World!")
+    assert(doubled_nums == [2, 4, 6])
+    assert(result == 67)  # 42 + 25
+    0
+}
