@@ -3080,55 +3080,61 @@ impl<'a> InferCtx<'a> {
                             }
                         }
                         VariantPatternFields::Named(fields) => {
-                            // Try to get the constructor's named fields for validation
-                            let ctor_fields: Option<Vec<(String, Type)>> = if let Type::Function(f) = &ctor_ty {
-                                if let Type::Named { name: type_name, .. } = &*f.ret {
-                                    self.env.lookup_variant_named_fields(type_name, &name.node)
-                                } else {
-                                    None
+                            // Constructor should be a function from fields to the type
+                            // For named patterns, we need to unify with the return type, not the function type
+                            if let Type::Function(f) = &ctor_ty {
+                                // Unify expected with the constructor's return type
+                                self.unify(expected.clone(), (*f.ret).clone());
+
+                                // Try to get the constructor's named fields for validation
+                                let ctor_fields: Option<Vec<(String, Type)>> =
+                                    if let Type::Named { name: type_name, .. } = &*f.ret {
+                                        self.env.lookup_variant_named_fields(type_name, &name.node)
+                                    } else {
+                                        None
+                                    };
+
+                                for field in fields {
+                                    match field {
+                                        RecordPatternField::Punned(fname) => {
+                                            // Validate field name exists if we have constructor info
+                                            let field_ty = if let Some(ref ctor_fields) = ctor_fields {
+                                                if let Some((_, ty)) = ctor_fields.iter().find(|(n, _)| n == &fname.node) {
+                                                    ty.clone()
+                                                } else {
+                                                    return Err(TypeError::NoSuchField {
+                                                        ty: name.node.clone(),
+                                                        field: fname.node.clone(),
+                                                    });
+                                                }
+                                            } else {
+                                                self.fresh()
+                                            };
+                                            self.env.bind(fname.node.clone(), field_ty, false);
+                                        }
+                                        RecordPatternField::Named(fname, pat) => {
+                                            // Validate field name exists if we have constructor info
+                                            let field_ty = if let Some(ref ctor_fields) = ctor_fields {
+                                                if let Some((_, ty)) = ctor_fields.iter().find(|(n, _)| n == &fname.node) {
+                                                    ty.clone()
+                                                } else {
+                                                    return Err(TypeError::NoSuchField {
+                                                        ty: name.node.clone(),
+                                                        field: fname.node.clone(),
+                                                    });
+                                                }
+                                            } else {
+                                                self.fresh()
+                                            };
+                                            self.infer_pattern(pat, &field_ty)?;
+                                        }
+                                        RecordPatternField::Rest(_) => {}
+                                    }
                                 }
                             } else {
-                                None
-                            };
-
-                            for field in fields {
-                                match field {
-                                    RecordPatternField::Punned(fname) => {
-                                        // Validate field name exists if we have constructor info
-                                        let field_ty = if let Some(ref ctor_fields) = ctor_fields {
-                                            if let Some((_, ty)) = ctor_fields.iter().find(|(n, _)| n == &fname.node) {
-                                                ty.clone()
-                                            } else {
-                                                return Err(TypeError::NoSuchField {
-                                                    ty: name.node.clone(),
-                                                    field: fname.node.clone(),
-                                                });
-                                            }
-                                        } else {
-                                            self.fresh()
-                                        };
-                                        self.env.bind(fname.node.clone(), field_ty, false);
-                                    }
-                                    RecordPatternField::Named(fname, pat) => {
-                                        // Validate field name exists if we have constructor info
-                                        let field_ty = if let Some(ref ctor_fields) = ctor_fields {
-                                            if let Some((_, ty)) = ctor_fields.iter().find(|(n, _)| n == &fname.node) {
-                                                ty.clone()
-                                            } else {
-                                                return Err(TypeError::NoSuchField {
-                                                    ty: name.node.clone(),
-                                                    field: fname.node.clone(),
-                                                });
-                                            }
-                                        } else {
-                                            self.fresh()
-                                        };
-                                        self.infer_pattern(pat, &field_ty)?;
-                                    }
-                                    RecordPatternField::Rest(_) => {}
-                                }
+                                // Unit constructor case - unify directly
+                                self.unify(expected.clone(), ctor_ty);
                             }
-                            self.unify(expected.clone(), ctor_ty);
                         }
                     }
                     Ok(())

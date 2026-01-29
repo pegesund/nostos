@@ -3816,6 +3816,38 @@ impl Compiler {
         vec![]
     }
 
+    /// Get the field names for a variant constructor (from the original type definition).
+    /// Returns an empty Vec if the constructor is not found or doesn't have named fields.
+    fn get_constructor_field_names(&self, ctor_name: &str) -> Vec<String> {
+        // First, find which type contains this constructor
+        let mut type_names: Vec<_> = self.types.keys().collect();
+        type_names.sort();
+        for type_name in type_names {
+            if let Some(info) = self.types.get(type_name) {
+                if let TypeInfoKind::Variant { constructors } = &info.kind {
+                    for (name, _) in constructors {
+                        if name == ctor_name {
+                            // Found the type, now get field names from type_defs
+                            if let Some(type_def) = self.type_defs.get(type_name) {
+                                if let nostos_syntax::ast::TypeBody::Variant(variants) = &type_def.body {
+                                    for v in variants {
+                                        if v.name.node == ctor_name {
+                                            if let nostos_syntax::ast::VariantFields::Named(fields) = &v.fields {
+                                                return fields.iter().map(|f| f.name.node.clone()).collect();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            return vec![];
+                        }
+                    }
+                }
+            }
+        }
+        vec![]
+    }
+
     /// Get the full name of a type expression including type parameters.
     /// Check if a type name is a built-in type (primitives, collections, etc.)
     fn is_builtin_type_name(&self, name: &str) -> bool {
@@ -15230,24 +15262,57 @@ impl Compiler {
                         // Jump past field extraction if tag doesn't match
                         let skip_jump = self.chunk.emit(Instruction::JumpIfFalse(success_reg, 0), 0);
 
+                        // Get field names from type definition to map names to indices
+                        let ctor_field_names = {
+                            let qn = self.get_constructor_field_names(&qualified_ctor);
+                            if !qn.is_empty() { qn } else { self.get_constructor_field_names(&local_ctor) }
+                        };
+                        // Build name -> index map
+                        let name_to_idx: std::collections::HashMap<&str, usize> = ctor_field_names
+                            .iter()
+                            .enumerate()
+                            .map(|(i, name)| (name.as_str(), i))
+                            .collect();
+
                         for field in nfields {
                             match field {
                                 RecordPatternField::Punned(ident) => {
-                                    // {x} means bind field "x" to variable "x"
+                                    // Point(x) means bind field "x" to variable "x"
                                     let field_reg = self.alloc_reg();
-                                    let name_idx = self.chunk.add_constant(Value::String(Arc::new(ident.node.clone())));
-                                    self.chunk.emit(Instruction::GetVariantFieldByName(field_reg, scrut_reg, name_idx), 0);
-                                    // Type unknown for named fields (would need named field type lookup)
-                                    bindings.push((ident.node.clone(), field_reg, false));
+                                    if let Some(&idx) = name_to_idx.get(ident.node.as_str()) {
+                                        self.chunk.emit(Instruction::GetVariantField(field_reg, scrut_reg, idx as u8), 0);
+                                    } else {
+                                        // Fallback: field name not found, use index 0 (will likely fail at runtime)
+                                        self.chunk.emit(Instruction::GetVariantField(field_reg, scrut_reg, 0), 0);
+                                    }
+                                    // Determine if field is float type
+                                    let is_float = name_to_idx.get(ident.node.as_str())
+                                        .and_then(|&idx| field_types.get(idx))
+                                        .map(|t| matches!(t.as_str(), "Float" | "Float32" | "Float64"))
+                                        .unwrap_or(false);
+                                    bindings.push((ident.node.clone(), field_reg, is_float));
                                 }
                                 RecordPatternField::Named(ident, pat) => {
-                                    // {name: n} means bind field "name" to the result of matching pattern
+                                    // Point(x: a) means bind field "x" to the result of matching pattern
                                     let field_reg = self.alloc_reg();
-                                    let name_idx = self.chunk.add_constant(Value::String(Arc::new(ident.node.clone())));
-                                    self.chunk.emit(Instruction::GetVariantFieldByName(field_reg, scrut_reg, name_idx), 0);
+                                    if let Some(&idx) = name_to_idx.get(ident.node.as_str()) {
+                                        self.chunk.emit(Instruction::GetVariantField(field_reg, scrut_reg, idx as u8), 0);
+                                    } else {
+                                        // Fallback: field name not found
+                                        self.chunk.emit(Instruction::GetVariantField(field_reg, scrut_reg, 0), 0);
+                                    }
                                     let (sub_success, mut sub_bindings) = self.compile_pattern_test(pat, field_reg)?;
                                     // AND the sub-pattern's success with our overall success
                                     self.chunk.emit(Instruction::And(success_reg, success_reg, sub_success), 0);
+
+                                    // Update type info for float fields
+                                    let is_float = name_to_idx.get(ident.node.as_str())
+                                        .and_then(|&idx| field_types.get(idx))
+                                        .map(|t| matches!(t.as_str(), "Float" | "Float32" | "Float64"))
+                                        .unwrap_or(false);
+                                    for binding in &mut sub_bindings {
+                                        binding.2 = is_float;
+                                    }
                                     bindings.append(&mut sub_bindings);
                                 }
                                 RecordPatternField::Rest(_) => {
@@ -16957,16 +17022,22 @@ impl Compiler {
         // Check type visibility (private types cannot be used from other modules)
         self.check_type_visibility(type_name, Span::default())?;
 
+        // Compile field expressions, keeping track of names for named fields
         let mut field_regs = Vec::new();
+        let mut named_fields_map: std::collections::HashMap<String, Reg> = std::collections::HashMap::new();
+        let mut has_named_fields = false;
+
         for field in fields {
             match field {
                 RecordField::Positional(expr) => {
                     let reg = self.compile_expr_tail(expr, false)?;
                     field_regs.push(reg);
                 }
-                RecordField::Named(_, expr) => {
+                RecordField::Named(name, expr) => {
                     let reg = self.compile_expr_tail(expr, false)?;
+                    named_fields_map.insert(name.node.clone(), reg);
                     field_regs.push(reg);
+                    has_named_fields = true;
                 }
             }
         }
@@ -17008,6 +17079,23 @@ impl Compiler {
         }
 
         if is_variant_ctor {
+            // If we have named fields, reorder them to match definition order
+            if has_named_fields {
+                let ctor_name = local_type_name;
+                let def_field_names = self.get_constructor_field_names(ctor_name);
+                if !def_field_names.is_empty() {
+                    // Reorder field_regs according to definition order
+                    field_regs.clear();
+                    for def_name in &def_field_names {
+                        if let Some(&reg) = named_fields_map.get(def_name) {
+                            field_regs.push(reg);
+                        } else {
+                            // Missing field - this should be caught by type checking
+                            // For now, this will cause a runtime error
+                        }
+                    }
+                }
+            }
             let parent_type = parent_type_name.unwrap();
 
             // Check type visibility for variant constructors

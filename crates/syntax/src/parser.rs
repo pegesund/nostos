@@ -383,13 +383,32 @@ fn pattern() -> impl Parser<Token, Pattern, Error = Simple<Token>> + Clone {
                 Pattern::Variant(name, VariantPatternFields::Positional(args), to_span(span))
             });
 
-        // Variant with named fields: Circle{radius: r}
-        let variant_named = type_name()
+        // Variant with named fields using braces: Circle{radius: r}
+        let variant_named_braces = type_name()
             .then(
-                record_field
+                record_field.clone()
                     .separated_by(just(Token::Comma))
                     .allow_trailing()
                     .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+            )
+            .map_with_span(|(name, fields), span| {
+                Pattern::Variant(name, VariantPatternFields::Named(fields), to_span(span))
+            });
+
+        // Variant with named fields using parens: Point(x: a, y: b)
+        // Must have at least one colon to distinguish from positional
+        let named_field_paren = ident()
+            .then_ignore(just(Token::Colon))
+            .then(pat.clone())
+            .map(|(name, pat)| RecordPatternField::Named(name, pat));
+
+        let variant_named_parens = type_name()
+            .then(
+                named_field_paren
+                    .separated_by(just(Token::Comma))
+                    .at_least(1)
+                    .allow_trailing()
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
             .map_with_span(|(name, fields), span| {
                 Pattern::Variant(name, VariantPatternFields::Named(fields), to_span(span))
@@ -400,6 +419,9 @@ fn pattern() -> impl Parser<Token, Pattern, Error = Simple<Token>> + Clone {
             .map_with_span(|name, span| {
                 Pattern::Variant(name, VariantPatternFields::Unit, to_span(span))
             });
+
+        // Combined named variant: try parens first (Point(x: a)), then braces (Point{x: a})
+        let variant_named = variant_named_parens.or(variant_named_braces);
 
         // Single element in parens is just grouping
         let grouped = pat
