@@ -1,0 +1,18 @@
+# expect: 0
+# Test assert with custom message
+
+main() = {
+    # Single argument assert
+    assert(true)
+    assert(1 == 1)
+
+    # Two argument assert with message
+    assert(true, "this should pass")
+    assert(2 + 2 == 4, "math should work")
+
+    # Complex condition with message
+    x = 10
+    assert(x > 5 && x < 20, "x should be in range")
+
+    0
+}

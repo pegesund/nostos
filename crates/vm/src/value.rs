@@ -1599,6 +1599,8 @@ pub enum Instruction {
     Assert(Reg),
     /// Assert two values are equal
     AssertEq(Reg, Reg),
+    /// Assert value is true with custom message
+    AssertMsg(Reg, Reg),
 
     // === Module-level mutable variables (mvars) ===
     /// Acquire lock on mvar at function entry: name_idx, is_write

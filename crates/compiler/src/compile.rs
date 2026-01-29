@@ -37,6 +37,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "hash", signature: "a -> Int", doc: "Compute hash code for a value" },
     BuiltinInfo { name: "inspect", signature: "a -> String -> ()", doc: "Send a value to the inspector panel with a label" },
     BuiltinInfo { name: "assert", signature: "Bool -> ()", doc: "Assert condition is true, panic if false" },
+    BuiltinInfo { name: "assert", signature: "Bool -> String -> ()", doc: "Assert condition is true with custom message, panic if false" },
     BuiltinInfo { name: "assert_eq", signature: "a -> a -> ()", doc: "Assert two values are equal, panic if not" },
     BuiltinInfo { name: "assertType", signature: "a -> a", doc: "Compile-time type assertion: assertType[ExpectedType](expr) verifies expr has ExpectedType" },
     // panic is handled early in compile_call, not via BUILTINS dispatch
@@ -11256,6 +11257,12 @@ impl Compiler {
                         self.chunk.emit(Instruction::LoadUnit(dst), line);
                         return Ok(dst);
                     }
+                    "assert" if arg_regs.len() == 2 => {
+                        self.chunk.emit(Instruction::AssertMsg(arg_regs[0], arg_regs[1]), line);
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::LoadUnit(dst), line);
+                        return Ok(dst);
+                    }
                     "sleep" if arg_regs.len() == 1 => {
                         // sleep(ms) - sleep for N milliseconds
                         self.chunk.emit(Instruction::Sleep(arg_regs[0]), line);
@@ -14969,8 +14976,18 @@ impl Compiler {
 
         // Check for Bool type
         if scrut_type == "Bool" {
-            let has_true = arms.iter().any(|arm| matches!(&arm.pattern, Pattern::Bool(true, _)));
-            let has_false = arms.iter().any(|arm| matches!(&arm.pattern, Pattern::Bool(false, _)));
+            // Helper to check if a pattern covers a specific bool value (including inside Or patterns)
+            fn pattern_covers_bool(pattern: &Pattern, target: bool) -> bool {
+                match pattern {
+                    Pattern::Bool(b, _) => *b == target,
+                    Pattern::Or(patterns, _) => patterns.iter().any(|p| pattern_covers_bool(p, target)),
+                    Pattern::Var(_) | Pattern::Wildcard(_) => true,
+                    _ => false,
+                }
+            }
+
+            let has_true = arms.iter().any(|arm| pattern_covers_bool(&arm.pattern, true));
+            let has_false = arms.iter().any(|arm| pattern_covers_bool(&arm.pattern, false));
 
             if !has_true || !has_false {
                 let mut missing = Vec::new();

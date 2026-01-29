@@ -3227,6 +3227,21 @@ impl AsyncProcess {
                 }
             }
 
+            AssertMsg(cond, msg) => {
+                let val = reg!(cond);
+                match val {
+                    GcValue::Bool(true) => {}
+                    GcValue::Bool(false) => {
+                        let msg_val = reg!(msg);
+                        let msg_str = self.heap.display_value(&msg_val);
+                        return Err(RuntimeError::Panic(format!("Assertion failed: {}", msg_str)));
+                    }
+                    _ => {
+                        return Err(RuntimeError::Panic(format!("Assert: expected Bool, got {:?}", val)));
+                    }
+                }
+            }
+
             // === Native function calls ===
             CallNative(dst, name_idx, ref args) => {
                 let name = match get_const!(name_idx) {

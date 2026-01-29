@@ -1,0 +1,28 @@
+# expect: 0
+# Test that or-patterns are recognized as exhaustive
+
+main() = {
+    # Bool exhaustiveness with or-pattern
+    b = true
+    result = match b {
+        true | false -> "boolean"
+    }
+    assert(result == "boolean")
+
+    # Order doesn't matter
+    result2 = match false {
+        false | true -> "also boolean"
+    }
+    assert(result2 == "also boolean")
+
+    # Mixed with guards (still need catch-all)
+    n = 5
+    result3 = match n {
+        x when x < 0 -> "negative"
+        0 | 1 | 2 -> "small"
+        _ -> "other"
+    }
+    assert(result3 == "other")
+
+    0
+}
