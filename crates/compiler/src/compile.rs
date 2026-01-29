@@ -9927,6 +9927,17 @@ impl Compiler {
                     }
                 }
 
+                // Check for Set type - use Set.contains builtin for set[elem] syntax
+                if let Some(coll_type) = self.expr_type_name(coll) {
+                    if coll_type.starts_with("Set[") || coll_type == "Set" {
+                        let coll_reg = self.compile_expr_tail(coll, false)?;
+                        let idx_reg = self.compile_expr_tail(index, false)?;
+                        let dst = self.alloc_reg();
+                        self.emit_call_native(dst, "Set.contains", vec![coll_reg, idx_reg].into(), line);
+                        return Ok(dst);
+                    }
+                }
+
                 // Default: use built-in Index instruction for lists/tuples/arrays
                 let coll_reg = self.compile_expr_tail(coll, false)?;
                 let idx_reg = self.compile_expr_tail(index, false)?;

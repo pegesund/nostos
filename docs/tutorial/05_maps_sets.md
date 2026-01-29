@@ -105,3 +105,41 @@ main() = {
     println(set_with_five)
 }
 ```
+
+## Index Syntax for Sets
+
+Sets support bracket syntax for membership checking, providing a concise alternative to `.contains()`:
+
+```nostos
+main() = {
+    numbers = #{1, 2, 3, 4, 5}
+
+    # Check membership using brackets (returns Bool)
+    has_three = numbers[3]      # true
+    has_ten = numbers[10]       # false
+
+    # Use in conditions
+    if numbers[3] then {
+        println("3 is in the set")
+    }
+
+    # Combine membership checks
+    all_present = numbers[1] && numbers[2]    # true
+    any_missing = !numbers[99]                 # true
+
+    # Works with any hashable element type
+    names = #{"alice", "bob", "charlie"}
+    found = names["alice"]      # true
+    missing = names["dave"]     # false
+
+    0
+}
+```
+
+This is equivalent to `set.contains(elem)` but more readable in expressions:
+
+```nostos
+# These are equivalent:
+if set[key] then ...
+if set.contains(key) then ...
+```

@@ -139,6 +139,32 @@ s.isEmpty()             # false
 s.toList()              # [1, 2, 3, 4, 5]
 ```
 
+## Set Index Syntax
+
+Sets support bracket syntax for membership checking:
+
+```nostos
+s = #{1, 2, 3, 4, 5}
+
+# Check membership (returns Bool)
+s[3]                    # true
+s[10]                   # false
+
+# Use in conditions
+if s[3] then {
+    println("3 is in the set")
+}
+
+# Combine checks
+s[1] && !s[100]         # true
+
+# With variables
+elem = 3
+s[elem]                 # true
+```
+
+This is equivalent to `s.contains(elem)` but more concise.
+
 ## Set Math Operations
 
 ```nostos

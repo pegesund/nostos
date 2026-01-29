@@ -16,6 +16,46 @@ main() = {
 }
 ```
 
+## Default Parameter Values
+
+Parameters can have default values, making them optional when calling the function:
+
+```nostos
+# greeting has a default value
+greet(name: String, greeting: String = "Hello") = {
+    greeting ++ ", " ++ name ++ "!"
+}
+
+main() = {
+    println(greet("Alice"))           # "Hello, Alice!" (uses default)
+    println(greet("Bob", "Hi"))       # "Hi, Bob!" (overrides default)
+}
+```
+
+Multiple parameters can have defaults, and they can be of any type:
+
+```nostos
+# Multiple default parameters
+formatNumber(n: Int, prefix: String = "$", suffix: String = ".00") = {
+    prefix ++ show(n) ++ suffix
+}
+
+# Numeric defaults
+add(a: Int, b: Int = 0, c: Int = 0) = a + b + c
+
+main() = {
+    println(formatNumber(42))                # "$42.00"
+    println(formatNumber(42, "€"))           # "€42.00"
+    println(formatNumber(42, "£", " pounds")) # "£42 pounds"
+
+    println(add(1))        # 1
+    println(add(1, 2))     # 3
+    println(add(1, 2, 3))  # 6
+}
+```
+
+**Note:** Parameters with defaults must come after required parameters.
+
 ## Lambda Expressions
 
 Anonymous functions, or lambdas, are defined using the `args => body` syntax.

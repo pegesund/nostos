@@ -1,0 +1,36 @@
+# expect: 0
+# Test set[elem] contains check syntax
+
+main() = {
+    s = #{1, 2, 3}
+
+    # Test contains - returns Bool
+    assert(s[1])
+    assert(s[2])
+    assert(s[3])
+    assert(!s[4])
+    assert(!s[0])
+
+    # Test with string set
+    names = #{"alice", "bob", "charlie"}
+    assert(names["alice"])
+    assert(names["bob"])
+    assert(!names["dave"])
+
+    # Test in conditions
+    if s[2] then {
+        println("2 is in the set")
+    }
+
+    # Test with variable index
+    elem = 3
+    assert(s[elem])
+    missing = 99
+    assert(!s[missing])
+
+    # Chained check
+    result = if s[1] && !s[100] then "pass" else "fail"
+    assert(result == "pass")
+
+    0
+}
