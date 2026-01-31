@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use cranelift_codegen::ir::{AbiParam, Block, FuncRef, InstBuilder, UserFuncName, Value as CraneliftValue};
 use cranelift_codegen::ir::condcodes::{IntCC, FloatCC};
@@ -390,11 +391,11 @@ impl JitCompiler {
         self.loop_array_cache.contains_key(&(func_index, elem_type))
     }
 
-    /// Get compiled loop-based Int64Array function: fn(arr_ptr, len) -> i64
-    /// For loop-based array functions with signature (arr)
-    pub fn get_loop_int64_array_function(&self, func_index: u16) -> Option<fn(*const i64, i64) -> i64> {
+    /// Get compiled loop-based Int64Array function with safepoint: fn(arr_ptr, len, yield_flag_ptr) -> i64
+    /// Returns i64::MIN (JIT_YIELD_SENTINEL) if yielded at safepoint
+    pub fn get_loop_int64_array_function(&self, func_index: u16) -> Option<fn(*const i64, i64, *const AtomicBool) -> i64> {
         self.loop_array_cache.get(&(func_index, ArrayElementType::Int64)).map(|f| {
-            unsafe { std::mem::transmute::<*const u8, fn(*const i64, i64) -> i64>(f.code_ptr) }
+            unsafe { std::mem::transmute::<*const u8, fn(*const i64, i64, *const AtomicBool) -> i64>(f.code_ptr) }
         })
     }
 
@@ -431,11 +432,12 @@ impl JitCompiler {
         self.list_sum_cache.contains_key(&func_index)
     }
 
-    /// Get compiled list sum function: fn(data_ptr, len) -> i64
+    /// Get compiled list sum function with safepoint: fn(data_ptr, len, yield_flag_ptr) -> i64
     /// For pattern-matching list sum functions like sumPat([]) = 0; sumPat([x|xs]) = x + sumPat(xs)
-    pub fn get_list_sum_function(&self, func_index: u16) -> Option<fn(*const i64, i64) -> i64> {
+    /// Returns i64::MIN (JIT_YIELD_SENTINEL) if yielded at safepoint
+    pub fn get_list_sum_function(&self, func_index: u16) -> Option<fn(*const i64, i64, *const AtomicBool) -> i64> {
         self.list_sum_cache.get(&func_index).map(|f| {
-            unsafe { std::mem::transmute::<*const u8, fn(*const i64, i64) -> i64>(f.code_ptr) }
+            unsafe { std::mem::transmute::<*const u8, fn(*const i64, i64, *const AtomicBool) -> i64>(f.code_ptr) }
         })
     }
 
@@ -444,11 +446,12 @@ impl JitCompiler {
         self.list_sum_tr_cache.contains_key(&func_index)
     }
 
-    /// Get compiled tail-recursive list sum function: fn(data_ptr, len, acc) -> i64
+    /// Get compiled tail-recursive list sum function with safepoint: fn(data_ptr, len, acc, yield_flag_ptr) -> i64
     /// For sumTR([], acc) = acc; sumTR([x|xs], acc) = sumTR(xs, acc+x)
-    pub fn get_list_sum_tr_function(&self, func_index: u16) -> Option<fn(*const i64, i64, i64) -> i64> {
+    /// Returns i64::MIN (JIT_YIELD_SENTINEL) if yielded at safepoint
+    pub fn get_list_sum_tr_function(&self, func_index: u16) -> Option<fn(*const i64, i64, i64, *const AtomicBool) -> i64> {
         self.list_sum_tr_cache.get(&func_index).map(|f| {
-            unsafe { std::mem::transmute::<*const u8, fn(*const i64, i64, i64) -> i64>(f.code_ptr) }
+            unsafe { std::mem::transmute::<*const u8, fn(*const i64, i64, i64, *const AtomicBool) -> i64>(f.code_ptr) }
         })
     }
 
@@ -2474,11 +2477,12 @@ impl JitCompiler {
             return Ok(());
         }
 
-        // Signature: fn(data_ptr: i64, len: i64) -> i64
+        // Signature: fn(data_ptr: i64, len: i64, yield_flag_ptr: i64) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(I64)); // data_ptr
         sig.params.push(AbiParam::new(I64)); // len
-        sig.returns.push(AbiParam::new(I64)); // sum result
+        sig.params.push(AbiParam::new(I64)); // yield_flag_ptr (pointer to AtomicBool)
+        sig.returns.push(AbiParam::new(I64)); // sum result (or i64::MIN if yielded)
 
         let func_name = format!("nos_list_sum_{}", func_index);
         let func_id = self.module
@@ -2503,6 +2507,7 @@ impl JitCompiler {
             let params = builder.block_params(entry_block).to_vec();
             let data_ptr = params[0]; // pointer to i64 array
             let len = params[1];      // number of elements
+            let yield_flag_ptr = params[2]; // pointer to yield flag
 
             // Create variables for loop
             let idx_var = Variable::from_u32(0);
@@ -2519,6 +2524,7 @@ impl JitCompiler {
             let loop_header = builder.create_block();
             let loop_body = builder.create_block();
             let loop_exit = builder.create_block();
+            let yield_exit = builder.create_block(); // Safepoint exit block
 
             builder.ins().jump(loop_header, &[]);
 
@@ -2546,12 +2552,27 @@ impl JitCompiler {
             let new_idx = builder.ins().iadd_imm(idx, 1);
             builder.def_var(idx_var, new_idx);
 
-            builder.ins().jump(loop_header, &[]);
+            // Safepoint check: load yield flag and check if set
+            // The yield flag is an AtomicBool (1 byte) - load it and check
+            let yield_flag = builder.ins().load(
+                cranelift_codegen::ir::types::I8,
+                cranelift_codegen::ir::MemFlags::trusted(),
+                yield_flag_ptr,
+                0
+            );
+            let yield_flag_i64 = builder.ins().uextend(I64, yield_flag);
+            let should_yield = builder.ins().icmp_imm(IntCC::NotEqual, yield_flag_i64, 0);
+            builder.ins().brif(should_yield, yield_exit, &[], loop_header, &[]);
 
             // Loop exit: return sum
             builder.switch_to_block(loop_exit);
             let final_sum = builder.use_var(sum_var);
             builder.ins().return_(&[final_sum]);
+
+            // Yield exit: return sentinel value (i64::MIN)
+            builder.switch_to_block(yield_exit);
+            let sentinel = builder.ins().iconst(I64, i64::MIN);
+            builder.ins().return_(&[sentinel]);
 
             builder.seal_all_blocks();
             builder.finalize();
@@ -2683,12 +2704,13 @@ impl JitCompiler {
             return Ok(());
         }
 
-        // Signature: fn(data_ptr: i64, len: i64, acc: i64) -> i64
+        // Signature: fn(data_ptr: i64, len: i64, acc: i64, yield_flag_ptr: i64) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(I64)); // data_ptr
         sig.params.push(AbiParam::new(I64)); // len
         sig.params.push(AbiParam::new(I64)); // initial accumulator
-        sig.returns.push(AbiParam::new(I64)); // sum result
+        sig.params.push(AbiParam::new(I64)); // yield_flag_ptr
+        sig.returns.push(AbiParam::new(I64)); // sum result (or i64::MIN if yielded)
 
         let func_name = format!("nos_list_sum_tr_{}", func_index);
         let func_id = self.module
@@ -2712,6 +2734,7 @@ impl JitCompiler {
             let data_ptr = params[0]; // pointer to i64 array
             let len = params[1];      // number of elements
             let initial_acc = params[2]; // initial accumulator
+            let yield_flag_ptr = params[3]; // pointer to yield flag
 
             // Create variables for loop
             let idx_var = Variable::from_u32(0);
@@ -2728,6 +2751,7 @@ impl JitCompiler {
             let loop_header = builder.create_block();
             let loop_body = builder.create_block();
             let loop_exit = builder.create_block();
+            let yield_exit = builder.create_block(); // Safepoint exit block
 
             builder.ins().jump(loop_header, &[]);
 
@@ -2755,12 +2779,26 @@ impl JitCompiler {
             let new_idx = builder.ins().iadd_imm(idx, 1);
             builder.def_var(idx_var, new_idx);
 
-            builder.ins().jump(loop_header, &[]);
+            // Safepoint check: load yield flag and check if set
+            let yield_flag = builder.ins().load(
+                cranelift_codegen::ir::types::I8,
+                cranelift_codegen::ir::MemFlags::trusted(),
+                yield_flag_ptr,
+                0
+            );
+            let yield_flag_i64 = builder.ins().uextend(I64, yield_flag);
+            let should_yield = builder.ins().icmp_imm(IntCC::NotEqual, yield_flag_i64, 0);
+            builder.ins().brif(should_yield, yield_exit, &[], loop_header, &[]);
 
             // Loop exit: return sum
             builder.switch_to_block(loop_exit);
             let final_sum = builder.use_var(sum_var);
             builder.ins().return_(&[final_sum]);
+
+            // Yield exit: return sentinel value (i64::MIN)
+            builder.switch_to_block(yield_exit);
+            let sentinel = builder.ins().iconst(I64, i64::MIN);
+            builder.ins().return_(&[sentinel]);
 
             builder.seal_all_blocks();
             builder.finalize();
@@ -2785,7 +2823,7 @@ impl JitCompiler {
     }
 
     /// Compile a loop-based array processing function.
-    /// Takes (arr) in bytecode → native fn(arr_ptr, arr_len) -> result
+    /// Takes (arr) in bytecode → native fn(arr_ptr, arr_len, yield_flag_ptr) -> result
     pub fn compile_loop_array_function(
         &mut self,
         func_index: u16,
@@ -2799,11 +2837,12 @@ impl JitCompiler {
 
         let elem_cl_type = elem_type.cranelift_type();
 
-        // Signature: fn(arr_ptr: i64, arr_len: i64) -> T
+        // Signature: fn(arr_ptr: i64, arr_len: i64, yield_flag_ptr: i64) -> T
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(I64)); // arr_ptr
         sig.params.push(AbiParam::new(I64)); // arr_len
-        sig.returns.push(AbiParam::new(elem_cl_type)); // return type
+        sig.params.push(AbiParam::new(I64)); // yield_flag_ptr
+        sig.returns.push(AbiParam::new(elem_cl_type)); // return type (or i64::MIN if yielded)
 
         let func_name = format!("nos_loop_arr_{}_{}",
             if elem_type.is_float() { "f64" } else { "i64" },
@@ -2828,6 +2867,7 @@ impl JitCompiler {
             let params = builder.block_params(entry_block).to_vec();
             let arr_ptr_val = params[0]; // i64 pointer
             let arr_len_val = params[1]; // i64 length
+            let yield_flag_ptr = params[2]; // pointer to yield flag
 
             // Map bytecode registers to Cranelift variables
             // reg 0 = arr (will hold arr_ptr)
@@ -2873,6 +2913,9 @@ impl JitCompiler {
                     _ => {}
                 }
             }
+
+            // Create yield exit block for safepoint early returns
+            let yield_exit_block = builder.create_block();
 
             let mut ip = 0;
             let mut block_terminated = false;
@@ -3097,7 +3140,22 @@ impl JitCompiler {
                     Instruction::Jump(offset) => {
                         let target = (ip as i32 + *offset as i32 + 1) as usize;
                         let target_block = jump_targets[&target];
-                        builder.ins().jump(target_block, &[]);
+
+                        // Check for backward jump (loop back-edge) - insert safepoint
+                        if *offset < 0 {
+                            // Safepoint check: load yield flag and check if set
+                            let yield_flag = builder.ins().load(
+                                cranelift_codegen::ir::types::I8,
+                                cranelift_codegen::ir::MemFlags::trusted(),
+                                yield_flag_ptr,
+                                0
+                            );
+                            let yield_flag_i64 = builder.ins().uextend(I64, yield_flag);
+                            let should_yield = builder.ins().icmp_imm(IntCC::NotEqual, yield_flag_i64, 0);
+                            builder.ins().brif(should_yield, yield_exit_block, &[], target_block, &[]);
+                        } else {
+                            builder.ins().jump(target_block, &[]);
+                        }
                         block_terminated = true;
                     }
 
@@ -3132,6 +3190,11 @@ impl JitCompiler {
 
                 ip += 1;
             }
+
+            // Define yield exit block: return sentinel value (i64::MIN)
+            builder.switch_to_block(yield_exit_block);
+            let sentinel = builder.ins().iconst(I64, i64::MIN);
+            builder.ins().return_(&[sentinel]);
 
             builder.seal_all_blocks();
             builder.finalize();
@@ -3851,6 +3914,8 @@ mod tests {
 
     #[test]
     fn test_jit_loop_array_sum() {
+        use std::sync::atomic::Ordering;
+
         let config = JitConfig::default();
         let mut jit = JitCompiler::new(config).unwrap();
 
@@ -3859,18 +3924,22 @@ mod tests {
 
         let native_fn = jit.get_loop_int64_array_function(0).expect("Loop array function not compiled");
 
+        // Create a yield flag that is never set (tests run to completion)
+        let yield_flag = AtomicBool::new(false);
+        let yield_flag_ptr = &yield_flag as *const AtomicBool;
+
         // Test with various arrays
         let arr1: Vec<i64> = vec![1, 2, 3, 4, 5];
-        assert_eq!(native_fn(arr1.as_ptr(), arr1.len() as i64), 15);
+        assert_eq!(native_fn(arr1.as_ptr(), arr1.len() as i64, yield_flag_ptr), 15);
 
         let arr2: Vec<i64> = vec![10, 20, 30];
-        assert_eq!(native_fn(arr2.as_ptr(), arr2.len() as i64), 60);
+        assert_eq!(native_fn(arr2.as_ptr(), arr2.len() as i64, yield_flag_ptr), 60);
 
         let arr3: Vec<i64> = vec![];
-        assert_eq!(native_fn(arr3.as_ptr(), arr3.len() as i64), 0);
+        assert_eq!(native_fn(arr3.as_ptr(), arr3.len() as i64, yield_flag_ptr), 0);
 
         let arr4: Vec<i64> = (1..=100).collect();
-        assert_eq!(native_fn(arr4.as_ptr(), arr4.len() as i64), 5050);
+        assert_eq!(native_fn(arr4.as_ptr(), arr4.len() as i64, yield_flag_ptr), 5050);
 
         eprintln!("[JIT] Loop array sum test passed!");
     }
@@ -3885,12 +3954,16 @@ mod tests {
 
         let native_fn = jit.get_loop_int64_array_function(0).expect("Loop array function not compiled");
 
+        // Create a yield flag that is never set (tests run to completion)
+        let yield_flag = AtomicBool::new(false);
+        let yield_flag_ptr = &yield_flag as *const AtomicBool;
+
         // Create a large array
         let arr: Vec<i64> = (1..=10000).collect();
         let expected: i64 = (1..=10000).sum();
 
         let start = std::time::Instant::now();
-        let result = native_fn(arr.as_ptr(), arr.len() as i64);
+        let result = native_fn(arr.as_ptr(), arr.len() as i64, yield_flag_ptr);
         let elapsed = start.elapsed();
 
         assert_eq!(result, expected);

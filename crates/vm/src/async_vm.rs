@@ -150,7 +150,7 @@ pub enum HeldMvarLock {
 unsafe impl Send for HeldMvarLock {}
 use crate::process::{CallFrame, ExceptionHandler, ProcessState, ThreadSafeValue, ProfileData};
 use crate::value::{FunctionValue, Pid, TypeValue, RefId, RuntimeError, Value, ReactiveRecordValue, ReactiveVariantValue, VariantValue};
-use crate::shared_types::SendableValue;
+use crate::shared_types::{SendableValue, JIT_YIELD_SENTINEL};
 use crate::io_runtime::{IoRequest, IoRuntime};
 use crate::process::IoResponseValue;
 
@@ -2071,26 +2071,31 @@ impl AsyncProcess {
                                 return Ok(StepResult::Continue);
                             }
                         }
-                        // Loop array JIT
+                        // Loop array JIT with safepoint
                         let jit_fn_opt = self.shared.jit_loop_array_functions.read().unwrap().get(&func_idx_u16).copied();
                         if let Some(jit_fn) = jit_fn_opt {
                             if let GcValue::Int64Array(arr_ptr) = reg!(args[0]) {
                                 if let Some(arr) = self.heap.get_int64_array_mut(arr_ptr) {
                                     let ptr = arr.items.as_mut_ptr();
                                     let len = arr.items.len() as i64;
+                                    let yield_flag_ptr = &self.shared.interrupt as *const AtomicBool;
                                     let (result, duration) = if profiling {
                                         let start = Instant::now();
-                                        let r = jit_fn(ptr as *const i64, len);
+                                        let r = jit_fn(ptr as *const i64, len, yield_flag_ptr);
                                         (r, Some(start.elapsed()))
                                     } else {
-                                        (jit_fn(ptr as *const i64, len), None)
+                                        (jit_fn(ptr as *const i64, len, yield_flag_ptr), None)
                                     };
-                                    set_reg!(dst, GcValue::Int64(result));
-                                    if let Some(d) = duration {
-                                        let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
-                                        self.profile_jit_call(&name, d);
+                                    // Check for yield sentinel - if JIT yielded, fall through to interpreter
+                                    if result != JIT_YIELD_SENTINEL {
+                                        set_reg!(dst, GcValue::Int64(result));
+                                        if let Some(d) = duration {
+                                            let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                            self.profile_jit_call(&name, d);
+                                        }
+                                        return Ok(StepResult::Continue);
                                     }
-                                    return Ok(StepResult::Continue);
+                                    // JIT yielded at safepoint - fall through to interpreter
                                 }
                             }
                         }
@@ -2775,34 +2780,39 @@ impl AsyncProcess {
                                 return Ok(StepResult::Continue);
                             }
                         }
-                        // Loop array JIT
+                        // Loop array JIT with safepoint
                         let jit_fn_opt = self.shared.jit_loop_array_functions.read().unwrap().get(&func_idx_u16).copied();
                         if let Some(jit_fn) = jit_fn_opt {
                             if let GcValue::Int64Array(arr_ptr) = reg!(args[0]) {
                                 if let Some(arr) = self.heap.get_int64_array_mut(arr_ptr) {
                                     let ptr = arr.items.as_mut_ptr();
                                     let len = arr.items.len() as i64;
+                                    let yield_flag_ptr = &self.shared.interrupt as *const AtomicBool;
                                     let (res, duration) = if profiling {
                                         let start = Instant::now();
-                                        let r = jit_fn(ptr as *const i64, len);
+                                        let r = jit_fn(ptr as *const i64, len, yield_flag_ptr);
                                         (r, Some(start.elapsed()))
                                     } else {
-                                        (jit_fn(ptr as *const i64, len), None)
+                                        (jit_fn(ptr as *const i64, len, yield_flag_ptr), None)
                                     };
-                                    if let Some(d) = duration {
-                                        let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
-                                        self.profile_jit_call(&name, d);
+                                    // Check for yield sentinel - if JIT yielded, fall through to interpreter
+                                    if res != JIT_YIELD_SENTINEL {
+                                        if let Some(d) = duration {
+                                            let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                            self.profile_jit_call(&name, d);
+                                        }
+                                        let result = GcValue::Int64(res);
+                                        let return_reg = self.frames.last().unwrap().return_reg;
+                                        self.frames.pop();
+                                        if self.frames.is_empty() {
+                                            return Ok(StepResult::Finished(result));
+                                        } else if let Some(ret_reg) = return_reg {
+                                            let frame = self.frames.last_mut().unwrap();
+                                            frame.registers[ret_reg as usize] = result;
+                                        }
+                                        return Ok(StepResult::Continue);
                                     }
-                                    let result = GcValue::Int64(res);
-                                    let return_reg = self.frames.last().unwrap().return_reg;
-                                    self.frames.pop();
-                                    if self.frames.is_empty() {
-                                        return Ok(StepResult::Finished(result));
-                                    } else if let Some(ret_reg) = return_reg {
-                                        let frame = self.frames.last_mut().unwrap();
-                                        frame.registers[ret_reg as usize] = result;
-                                    }
-                                    return Ok(StepResult::Continue);
+                                    // JIT yielded at safepoint - fall through to interpreter
                                 }
                             }
                         }

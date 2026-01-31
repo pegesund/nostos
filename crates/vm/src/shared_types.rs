@@ -244,18 +244,24 @@ pub type JitIntFn0 = fn() -> i64;
 pub type JitIntFn2 = fn(i64, i64) -> i64;
 pub type JitIntFn3 = fn(i64, i64, i64) -> i64;
 pub type JitIntFn4 = fn(i64, i64, i64, i64) -> i64;
-pub type JitLoopArrayFn = fn(*const i64, i64) -> i64;
+/// Loop array function with safepoint: (arr_ptr, len, yield_flag_ptr) -> i64
+/// Returns i64::MIN if yielded early (safepoint triggered)
+pub type JitLoopArrayFn = fn(*const i64, i64, *const std::sync::atomic::AtomicBool) -> i64;
 /// Recursive array fill function: (arr_ptr, len, idx) -> i64 (unit)
 pub type JitArrayFillFn = fn(*const i64, i64, i64) -> i64;
 /// Recursive array sum function: (arr_ptr, len, idx, acc) -> i64
 pub type JitArraySumFn = fn(*const i64, i64, i64, i64) -> i64;
-/// List sum function: (data_ptr, len) -> i64
-/// Used for JIT-compiled list pattern matching that reduces to sum
-pub type JitListSumFn = fn(*const i64, i64) -> i64;
+/// List sum function with safepoint: (data_ptr, len, yield_flag_ptr) -> i64
+/// Returns i64::MIN if yielded early (safepoint triggered)
+pub type JitListSumFn = fn(*const i64, i64, *const std::sync::atomic::AtomicBool) -> i64;
 
-/// Tail-recursive list sum function: (data_ptr, len, initial_acc) -> i64
-/// Used for JIT-compiled tail-recursive sum: sumTR([], acc) = acc; sumTR([x|xs], acc) = sumTR(xs, acc+x)
-pub type JitListSumTrFn = fn(*const i64, i64, i64) -> i64;
+/// Tail-recursive list sum function with safepoint: (data_ptr, len, initial_acc, yield_flag_ptr) -> i64
+/// Returns i64::MIN if yielded early (safepoint triggered)
+pub type JitListSumTrFn = fn(*const i64, i64, i64, *const std::sync::atomic::AtomicBool) -> i64;
+
+/// Sentinel value returned by JIT functions when they yield at a safepoint.
+/// This value is extremely unlikely to be a valid computation result.
+pub const JIT_YIELD_SENTINEL: i64 = i64::MIN;
 
 // ============================================================================
 // Sendable types for cross-thread messaging
