@@ -429,20 +429,44 @@ main() = {
 }
 ```
 
-### Type AST Structure
+### Compile-Time Type Introspection
 
-When a template receives a type definition, the AST has this structure:
+Type decorators can access type structure at compile time using field access on the type AST:
 
-- `TypeDef { name, type_params, kind }` - The type definition
-  - `kind.Record { fields }` - Record fields as `(name, type)` pairs
-  - `kind.Variant { constructors }` - Variant constructors with their fields
-  - `kind.Alias(target)` - Type alias target
+```nostos
+template showFields(typeDef) = quote {
+    # Access type name: ~typeDef.name returns "Point" as a String
+    # Access type params: ~typeDef.typeParams returns ["T"] as a List
+    # Access fields: ~typeDef.fields returns field info as a List
+    ~typeDef
+}
+
+@showFields
+type Point = Point { x: Int, y: Int }
+```
+
+Available compile-time accessors:
+- `~typeDef.name` - The type name as a String
+- `~typeDef.typeParams` - Type parameters as a List of Strings
+- `~typeDef.fields` - For records: List of `{name, type}` records. For variants: List of `{name, fields}` records
+
+### Multi-Item Return
+
+Type decorators can return multiple items (type + functions) using the `Items` AST node:
+
+```nostos
+# Templates can return:
+# - Just the type: ~typeDef
+# - Multiple items: Items containing typeDef + generated functions
+```
+
+When a template returns a Block containing both TypeDef and FnDef nodes, all are compiled.
 
 ## Limitations
 
 - **Compile-time execution**: Templates run at compile time and cannot access runtime values.
 - **Spliced values must be valid AST**: The `~expr` splice operator only works with AST values.
 - **Recursive templates must terminate**: Infinite template recursion will hang the compiler.
-- **Single item return for types**: Type decorators currently return the (possibly modified) type. Multi-item return (type + trait impls) is planned.
+- **Quote blocks parse expressions**: Inside `quote { }`, items like function definitions must be constructed as AST values rather than using normal syntax.
 
 Templates provide a powerful way to extend the language without modifying the compiler. Use them to create domain-specific abstractions and eliminate boilerplate code.

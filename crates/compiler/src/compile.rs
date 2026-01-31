@@ -2442,11 +2442,17 @@ impl Compiler {
             }
         }
 
-        // Fourth pass (b): compile generated trait implementations from type decorators
+        // Fourth pass (b): compile generated items from type decorators
         let generated = std::mem::take(&mut self.generated_items);
         for item in &generated {
-            if let Item::TraitImpl(trait_impl) = item {
-                self.compile_trait_impl(trait_impl)?;
+            match item {
+                Item::TraitImpl(trait_impl) => {
+                    self.compile_trait_impl(trait_impl)?;
+                }
+                Item::FnDef(fn_def) => {
+                    self.compile_fn_def(fn_def)?;
+                }
+                _ => {}
             }
         }
 
@@ -3328,6 +3334,41 @@ impl Compiler {
                         }
                     }
                 }
+                AstKind::Block { stmts, result } => {
+                    // Block result: look for TypeDef and FnDef in statements
+                    let mut found_type = false;
+                    for stmt in stmts {
+                        match &stmt.kind {
+                            AstKind::TypeDef { .. } => {
+                                if !found_type {
+                                    current_type_ast = stmt.clone();
+                                    found_type = true;
+                                }
+                            }
+                            AstKind::FnDef { .. } => {
+                                // Generated function - add to items
+                                if let Some(item) = self.ast_value_to_item(stmt)? {
+                                    generated_items.push(item);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    // Also check the result expression
+                    match &result.kind {
+                        AstKind::TypeDef { .. } => {
+                            if !found_type {
+                                current_type_ast = result.as_ref().clone();
+                            }
+                        }
+                        AstKind::FnDef { .. } => {
+                            if let Some(item) = self.ast_value_to_item(result)? {
+                                generated_items.push(item);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 _ => {
                     // Just pass through the type unchanged
                 }
@@ -3675,15 +3716,98 @@ impl Compiler {
     }
 
     /// Substitute splice expressions (~param) with their AST values.
+    /// Also handles compile-time field access like ~typeDef.name and ~typeDef.fields
     fn substitute_splices_in_ast(&self, ast: &AstValue, substitutions: &HashMap<String, AstValue>) -> AstValue {
-        use value::{AstValue, AstKind};
+        use value::{AstValue, AstKind, TypeDefKind, VariantFieldsKind};
 
         let new_kind = match &ast.kind {
             // Splice - look up the variable and substitute
             AstKind::Splice(inner) => {
+                // Handle simple variable splice: ~name
                 if let AstKind::Var(name) = &inner.kind {
                     if let Some(replacement) = substitutions.get(name) {
                         return replacement.clone();
+                    }
+                }
+                // Handle field access on spliced value: ~typeDef.name, ~typeDef.fields
+                if let AstKind::FieldAccess { expr, field } = &inner.kind {
+                    if let AstKind::Var(var_name) = &expr.kind {
+                        if let Some(type_ast) = substitutions.get(var_name) {
+                            // Compile-time field access on TypeDef AST
+                            if let AstKind::TypeDef { name, type_params, kind } = &type_ast.kind {
+                                match field.as_str() {
+                                    "name" => {
+                                        // Return the type name as a string
+                                        return AstValue::new(AstKind::String(name.clone()));
+                                    }
+                                    "typeParams" => {
+                                        // Return type parameters as a list of strings
+                                        let params: Vec<AstValue> = type_params.iter()
+                                            .map(|tp| AstValue::new(AstKind::String(tp.clone())))
+                                            .collect();
+                                        return AstValue::new(AstKind::List(params));
+                                    }
+                                    "fields" => {
+                                        // Return fields as a list of {name, type} records
+                                        match kind.as_ref() {
+                                            TypeDefKind::Record { fields } => {
+                                                let field_asts: Vec<AstValue> = fields.iter()
+                                                    .map(|(fname, ftype)| {
+                                                        AstValue::new(AstKind::Record {
+                                                            fields: vec![
+                                                                ("name".to_string(), AstValue::new(AstKind::String(fname.clone()))),
+                                                                ("type".to_string(), AstValue::new(AstKind::String(ftype.clone()))),
+                                                            ],
+                                                        })
+                                                    })
+                                                    .collect();
+                                                return AstValue::new(AstKind::List(field_asts));
+                                            }
+                                            TypeDefKind::Variant { constructors } => {
+                                                // Return constructors with their fields
+                                                let ctor_asts: Vec<AstValue> = constructors.iter()
+                                                    .map(|(cname, fields_kind)| {
+                                                        let fields_ast = match fields_kind {
+                                                            VariantFieldsKind::Unit => AstValue::new(AstKind::List(vec![])),
+                                                            VariantFieldsKind::Positional(types) => {
+                                                                let type_asts: Vec<AstValue> = types.iter()
+                                                                    .map(|t| AstValue::new(AstKind::String(t.clone())))
+                                                                    .collect();
+                                                                AstValue::new(AstKind::List(type_asts))
+                                                            }
+                                                            VariantFieldsKind::Named(fields) => {
+                                                                let field_asts: Vec<AstValue> = fields.iter()
+                                                                    .map(|(fname, ftype)| {
+                                                                        AstValue::new(AstKind::Record {
+                                                                            fields: vec![
+                                                                                ("name".to_string(), AstValue::new(AstKind::String(fname.clone()))),
+                                                                                ("type".to_string(), AstValue::new(AstKind::String(ftype.clone()))),
+                                                                            ],
+                                                                        })
+                                                                    })
+                                                                    .collect();
+                                                                AstValue::new(AstKind::List(field_asts))
+                                                            }
+                                                        };
+                                                        AstValue::new(AstKind::Record {
+                                                            fields: vec![
+                                                                ("name".to_string(), AstValue::new(AstKind::String(cname.clone()))),
+                                                                ("fields".to_string(), fields_ast),
+                                                            ],
+                                                        })
+                                                    })
+                                                    .collect();
+                                                return AstValue::new(AstKind::List(ctor_asts));
+                                            }
+                                            TypeDefKind::Alias(target) => {
+                                                return AstValue::new(AstKind::String(target.clone()));
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
                     }
                 }
                 // If not found, recursively process the inner
@@ -23504,11 +23628,17 @@ impl Compiler {
             }
         }
 
-        // Fourth pass (b): compile generated trait implementations from type decorators
+        // Fourth pass (b): compile generated items from type decorators
         let generated = std::mem::take(&mut self.generated_items);
         for item in &generated {
-            if let Item::TraitImpl(trait_impl) = item {
-                self.compile_trait_impl(trait_impl)?;
+            match item {
+                Item::TraitImpl(trait_impl) => {
+                    self.compile_trait_impl(trait_impl)?;
+                }
+                Item::FnDef(fn_def) => {
+                    self.compile_fn_def(fn_def)?;
+                }
+                _ => {}
             }
         }
 

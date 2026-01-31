@@ -492,15 +492,33 @@ main() = {
 }</code></pre>
                 </div>
 
-                <h3 class="text-xl font-semibold text-white mb-3">Type AST Structure</h3>
+                <h3 class="text-xl font-semibold text-white mb-3">Compile-Time Type Introspection</h3>
+                <p class="text-slate-400 mb-4">
+                    Type decorators can access type structure at compile time using field access on the type AST:
+                </p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-6">
-                    <p class="text-slate-400 mb-2">When a template receives a type definition, the AST has this structure:</p>
+<pre><code class="language-nostos">template showFields(typeDef) = quote {
+    # Access type name: ~typeDef.name returns "Point" as a String
+    # Access type params: ~typeDef.typeParams returns ["T"] as a List
+    # Access fields: ~typeDef.fields returns field info as a List
+    ~typeDef
+}
+
+@showFields
+type Point = Point { x: Int, y: Int }</code></pre>
+                </div>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6">
+                    <p class="text-slate-400 mb-2">Available compile-time accessors:</p>
                     <ul class="list-disc list-inside text-slate-400 space-y-1 ml-4">
-                        <li><code class="text-emerald-400">TypeDef { name, type_params, kind }</code> - The type definition</li>
-                        <li class="ml-4"><code class="text-emerald-400">kind.Record { fields }</code> - Record fields as <code>(name, type)</code> pairs</li>
-                        <li class="ml-4"><code class="text-emerald-400">kind.Variant { constructors }</code> - Variant constructors with their fields</li>
-                        <li class="ml-4"><code class="text-emerald-400">kind.Alias(target)</code> - Type alias target</li>
+                        <li><code class="text-emerald-400">~typeDef.name</code> - The type name as a String</li>
+                        <li><code class="text-emerald-400">~typeDef.typeParams</code> - Type parameters as a List of Strings</li>
+                        <li><code class="text-emerald-400">~typeDef.fields</code> - For records: List of <code>{name, type}</code> records. For variants: List of <code>{name, fields}</code> records</li>
                     </ul>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Multi-Item Return</h3>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6">
+                    <p class="text-slate-400 mb-2">Type decorators can return multiple items (type + functions) using the Items AST node. When a template returns a Block containing both TypeDef and FnDef nodes, all are compiled.</p>
                 </div>
 
                 <!-- Limitations -->
@@ -510,7 +528,7 @@ main() = {
                         <li><strong class="text-slate-300">Compile-time execution:</strong> Templates run at compile time and cannot access runtime values.</li>
                         <li><strong class="text-slate-300">Spliced values must be valid AST:</strong> The <code class="text-emerald-400">~expr</code> splice operator only works with AST values.</li>
                         <li><strong class="text-slate-300">Recursive templates must terminate:</strong> Infinite template recursion will hang the compiler.</li>
-                        <li><strong class="text-slate-300">Single item return for types:</strong> Type decorators currently return the (possibly modified) type. Multi-item return (type + trait impls) is planned.</li>
+                        <li><strong class="text-slate-300">Quote blocks parse expressions:</strong> Inside <code class="text-emerald-400">quote { }</code>, items like function definitions must be constructed as AST values rather than using normal syntax.</li>
                     </ul>
                 </div>
 
