@@ -1268,6 +1268,12 @@ pub struct Compiler {
     /// Template definitions: qualified name -> FnDef
     /// Templates are compile-time functions for metaprogramming
     templates: HashMap<String, FnDef>,
+    /// Current decorator expansion context (for error messages)
+    /// Contains (decorator_name, decorator_span, template_span) when inside apply_decorators
+    current_decorator_context: Option<(String, Span, Span)>,
+    /// Functions that were decorated: function name -> Vec<(decorator_name, decorator_span, template_span)>
+    /// Used to add context to error messages in decorated functions
+    decorated_functions: HashMap<String, Vec<(String, Span, Span)>>,
 }
 
 /// Information about a module-level mutable variable (mvar).
@@ -1461,6 +1467,8 @@ impl Compiler {
             module_init_functions: Vec::new(),
             top_level_bindings: HashMap::new(),
             templates: HashMap::new(),
+            current_decorator_context: None,
+            decorated_functions: HashMap::new(),
         };
 
         // Register builtin types for autocomplete
@@ -2827,6 +2835,8 @@ impl Compiler {
             module_init_functions: Vec::new(),
             top_level_bindings: HashMap::new(),
             templates: HashMap::new(),
+            current_decorator_context: None,
+            decorated_functions: HashMap::new(),
         }
     }
 
@@ -3224,6 +3234,13 @@ impl Compiler {
                     span: decorator.span,
                 })?;
 
+            // Set decorator context for error messages
+            self.current_decorator_context = Some((
+                decorator.name.node.clone(),
+                decorator.span,
+                template.span,
+            ));
+
             // Get template parameters
             let params: Vec<String> = template.clauses[0].params.iter()
                 .filter_map(|p| match &p.pattern {
@@ -3293,6 +3310,23 @@ impl Compiler {
 
         // Clear decorators from the result (they've been applied)
         current_def.decorators = vec![];
+
+        // Clear decorator context
+        self.current_decorator_context = None;
+
+        // Store decorator info for this function (for error messages)
+        let fn_name = def.name.node.clone();
+        let decorator_infos: Vec<_> = def.decorators.iter().map(|d| {
+            let template_name = self.resolve_name(&d.name.node);
+            let template_span = self.templates.get(&template_name)
+                .map(|t| t.span)
+                .unwrap_or(d.span);
+            (d.name.node.clone(), d.span, template_span)
+        }).collect();
+        if !decorator_infos.is_empty() {
+            self.decorated_functions.insert(fn_name, decorator_infos);
+        }
+
         Ok(current_def)
     }
 
@@ -3399,11 +3433,17 @@ impl Compiler {
     }
 
     /// Convert an AstValue back to an Expr for compilation.
+    /// When inside a decorator expansion, uses the decorator span for better error messages.
     fn ast_value_to_expr(&self, ast: &AstValue) -> Result<Expr, CompileError> {
         use value::AstKind;
-        use nostos_syntax::ast::{Ident, Spanned, BinOp, UnaryOp};
+        use nostos_syntax::ast::{Ident, BinOp, UnaryOp};
 
-        let span = Span { file_id: ast.file_id, start: ast.start, end: ast.end };
+        // Use decorator span if we're inside a decorator expansion, otherwise use AST span
+        let span = if let Some((_, decorator_span, _)) = &self.current_decorator_context {
+            *decorator_span
+        } else {
+            Span { file_id: ast.file_id, start: ast.start, end: ast.end }
+        };
 
         let expr = match &ast.kind {
             AstKind::Int(n) => Expr::Int(*n, span),
@@ -6958,6 +6998,26 @@ impl Compiler {
                 _ => true,
             };
             if should_report {
+                // If this function was decorated, enhance the error with decorator context
+                if let Some(decorators) = self.decorated_functions.get(&def.name.node) {
+                    if let CompileError::TypeError { message, span } = e {
+                        let decorator_notes: Vec<String> = decorators.iter().map(|(name, _dec_span, tmpl_span)| {
+                            format!("in expansion of @{} decorator (template defined at line {})",
+                                name,
+                                self.span_line(*tmpl_span)
+                            )
+                        }).collect();
+                        let enhanced_message = format!(
+                            "{}\n  Note: this error may be caused by template expansion:\n    {}",
+                            message,
+                            decorator_notes.join("\n    ")
+                        );
+                        return Err(CompileError::TypeError {
+                            message: enhanced_message,
+                            span,
+                        });
+                    }
+                }
                 return Err(e);
             }
         }
