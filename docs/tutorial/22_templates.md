@@ -91,7 +91,8 @@ Generate accessor functions for all fields of a type:
 ```nostos
 template withGetters(typeDef) = quote {
     ~typeDef
-    ~typeDef.fields[0].fields.map(f =>
+    # For single-constructor types, .fields returns field list directly
+    ~typeDef.fields.map(f =>
         eval("get_" ++ f.name ++ "(r: " ++ ~typeDef.name ++ ") = r." ++ f.name)
     )
 }
@@ -115,12 +116,13 @@ Generate both getters and setters:
 template withAccessors(typeDef) = quote {
     ~typeDef
     # Generate getters
-    ~typeDef.fields[0].fields.map(f =>
+    ~typeDef.fields.map(f =>
         eval("get_" ++ f.name ++ "(r: " ++ ~typeDef.name ++ ") = r." ++ f.name)
     )
-    # Generate setters (return new instance)
-    ~typeDef.fields[0].fields.map(f =>
-        eval("set_" ++ f.name ++ "(r: " ++ ~typeDef.name ++ ", v: " ++ f.type ++ ") = " ++
+    # Generate setters (return new instance with just one field changed)
+    # Note: f.ty gives field type (not f.type which is a keyword)
+    ~typeDef.fields.map(f =>
+        eval("set_" ++ f.name ++ "(r: " ++ ~typeDef.name ++ ", v: " ++ f.ty ++ ") = " ++
              ~typeDef.name ++ "(" ++ f.name ++ ": v)")
     )
 }
@@ -257,13 +259,13 @@ This is useful for pre-computing values, lookup tables, or any computation that 
 
 For type decorators:
 - `~typeDef.name` - Type name as String
-- `~typeDef.fields` - Constructors (for variants) or fields (for records)
-- `~typeDef.fields[0].fields` - Fields of first constructor
+- `~typeDef.fields` - For single-constructor types like `type Point = Point { x: Int, y: Int }`,
+  returns the fields directly. For true variants with multiple constructors, returns a list of constructors.
 - `~typeDef.typeParams` - Generic type parameters
 
 Each field has:
-- `f.name` - Field name
-- `f.type` - Field type as String
+- `f.name` - Field name as String
+- `f.ty` - Field type as String (note: use `ty`, not `type` which is a keyword)
 
 ## AST Types Reference
 
