@@ -163,6 +163,311 @@ pub enum Value {
     /// GC-managed native handle (extension data with cleanup callback)
     /// Wrapped in Arc so cloning is safe and cleanup only happens once.
     NativeHandle(Arc<GcNativeHandle>),
+
+    // === Metaprogramming ===
+    /// AST value for templates and metaprogramming
+    Ast(Arc<AstValue>),
+}
+
+// ============================================================================
+// AST Value Types (for metaprogramming/templates)
+// ============================================================================
+
+/// Runtime representation of an AST node for template metaprogramming.
+/// Templates manipulate these values at compile time.
+#[derive(Debug, Clone)]
+pub struct AstValue {
+    /// The kind of AST node
+    pub kind: AstKind,
+    /// Source location (for error messages)
+    pub file_id: u32,
+    pub start: usize,
+    pub end: usize,
+}
+
+impl AstValue {
+    /// Create a new AST value with no source location
+    pub fn new(kind: AstKind) -> Self {
+        AstValue {
+            kind,
+            file_id: 0,
+            start: 0,
+            end: 0,
+        }
+    }
+
+    /// Create a new AST value with source location
+    pub fn with_span(kind: AstKind, file_id: u32, start: usize, end: usize) -> Self {
+        AstValue { kind, file_id, start, end }
+    }
+}
+
+/// The different kinds of AST nodes that can be represented at runtime.
+#[derive(Debug, Clone)]
+pub enum AstKind {
+    // === Literals ===
+    Int(i64),
+    Float(f64),
+    String(String),
+    Bool(bool),
+    Char(char),
+    Unit,
+
+    // === Identifiers ===
+    Var(String),
+
+    // === Expressions ===
+    /// Binary operation: op, left, right
+    BinOp {
+        op: String,
+        left: Box<AstValue>,
+        right: Box<AstValue>,
+    },
+    /// Unary operation: op, operand
+    UnaryOp {
+        op: String,
+        operand: Box<AstValue>,
+    },
+    /// Function call: func, args
+    Call {
+        func: Box<AstValue>,
+        args: Vec<AstValue>,
+    },
+    /// Method call: receiver.method(args)
+    MethodCall {
+        receiver: Box<AstValue>,
+        method: String,
+        args: Vec<AstValue>,
+    },
+    /// Field access: expr.field
+    FieldAccess {
+        expr: Box<AstValue>,
+        field: String,
+    },
+    /// Index access: expr[index]
+    Index {
+        expr: Box<AstValue>,
+        index: Box<AstValue>,
+    },
+    /// Lambda: |params| body
+    Lambda {
+        params: Vec<String>,
+        body: Box<AstValue>,
+    },
+    /// Block: { stmts; expr }
+    Block {
+        stmts: Vec<AstValue>,
+        result: Box<AstValue>,
+    },
+    /// If expression: if cond then else
+    If {
+        cond: Box<AstValue>,
+        then_branch: Box<AstValue>,
+        else_branch: Option<Box<AstValue>>,
+    },
+    /// Match expression: match expr { arms }
+    Match {
+        expr: Box<AstValue>,
+        arms: Vec<(AstValue, AstValue)>, // (pattern, body)
+    },
+    /// Let binding: let pattern = value
+    Let {
+        pattern: Box<AstValue>,
+        value: Box<AstValue>,
+    },
+
+    // === Collections ===
+    /// List literal: [a, b, c]
+    List(Vec<AstValue>),
+    /// Tuple literal: (a, b, c)
+    Tuple(Vec<AstValue>),
+    /// Record literal: { field1: val1, field2: val2 }
+    Record {
+        fields: Vec<(String, AstValue)>,
+    },
+    /// Map literal: %{ key: val }
+    Map {
+        entries: Vec<(AstValue, AstValue)>,
+    },
+
+    // === Patterns (for match arms) ===
+    /// Wildcard pattern: _
+    PatternWildcard,
+    /// Variable pattern: x
+    PatternVar(String),
+    /// Literal pattern: 42
+    PatternLit(Box<AstValue>),
+    /// Tuple pattern: (a, b)
+    PatternTuple(Vec<AstValue>),
+    /// List pattern: [a, b | rest]
+    PatternList {
+        elements: Vec<AstValue>,
+        rest: Option<Box<AstValue>>,
+    },
+    /// Constructor pattern: Some(x)
+    PatternConstructor {
+        name: String,
+        args: Vec<AstValue>,
+    },
+
+    // === Splice (for template expansion) ===
+    /// Splice marker: ~expr (to be replaced during template expansion)
+    Splice(Box<AstValue>),
+
+    // === Function definition (for decorators) ===
+    /// Function definition: fn name(params) = body
+    FnDef {
+        name: String,
+        params: Vec<(String, Option<String>)>, // (name, optional type)
+        body: Box<AstValue>,
+        return_type: Option<String>,
+    },
+}
+
+impl fmt::Display for AstValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.kind {
+            AstKind::Int(n) => write!(f, "{}", n),
+            AstKind::Float(n) => write!(f, "{}", n),
+            AstKind::String(s) => write!(f, "\"{}\"", s),
+            AstKind::Bool(b) => write!(f, "{}", b),
+            AstKind::Char(c) => write!(f, "'{}'", c),
+            AstKind::Unit => write!(f, "()"),
+            AstKind::Var(name) => write!(f, "{}", name),
+            AstKind::BinOp { op, left, right } => write!(f, "({} {} {})", left, op, right),
+            AstKind::UnaryOp { op, operand } => write!(f, "({}{})", op, operand),
+            AstKind::Call { func, args } => {
+                write!(f, "{}(", func)?;
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", arg)?;
+                }
+                write!(f, ")")
+            }
+            AstKind::MethodCall { receiver, method, args } => {
+                write!(f, "{}.{}(", receiver, method)?;
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", arg)?;
+                }
+                write!(f, ")")
+            }
+            AstKind::FieldAccess { expr, field } => write!(f, "{}.{}", expr, field),
+            AstKind::Index { expr, index } => write!(f, "{}[{}]", expr, index),
+            AstKind::Lambda { params, body } => {
+                write!(f, "|")?;
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", p)?;
+                }
+                write!(f, "| {}", body)
+            }
+            AstKind::Block { stmts, result } => {
+                write!(f, "{{ ")?;
+                for stmt in stmts {
+                    write!(f, "{}; ", stmt)?;
+                }
+                write!(f, "{} }}", result)
+            }
+            AstKind::If { cond, then_branch, else_branch } => {
+                write!(f, "if {} {{ {} }}", cond, then_branch)?;
+                if let Some(e) = else_branch {
+                    write!(f, " else {{ {} }}", e)?;
+                }
+                Ok(())
+            }
+            AstKind::Match { expr, arms } => {
+                write!(f, "match {} {{ ", expr)?;
+                for (pat, body) in arms {
+                    write!(f, "{} -> {}, ", pat, body)?;
+                }
+                write!(f, "}}")
+            }
+            AstKind::Let { pattern, value } => write!(f, "{} = {}", pattern, value),
+            AstKind::List(items) => {
+                write!(f, "[")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", item)?;
+                }
+                write!(f, "]")
+            }
+            AstKind::Tuple(items) => {
+                write!(f, "(")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", item)?;
+                }
+                write!(f, ")")
+            }
+            AstKind::Record { fields } => {
+                write!(f, "{{ ")?;
+                for (i, (name, val)) in fields.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}: {}", name, val)?;
+                }
+                write!(f, " }}")
+            }
+            AstKind::Map { entries } => {
+                write!(f, "%{{ ")?;
+                for (i, (k, v)) in entries.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}: {}", k, v)?;
+                }
+                write!(f, " }}")
+            }
+            AstKind::PatternWildcard => write!(f, "_"),
+            AstKind::PatternVar(name) => write!(f, "{}", name),
+            AstKind::PatternLit(lit) => write!(f, "{}", lit),
+            AstKind::PatternTuple(items) => {
+                write!(f, "(")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", item)?;
+                }
+                write!(f, ")")
+            }
+            AstKind::PatternList { elements, rest } => {
+                write!(f, "[")?;
+                for (i, item) in elements.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", item)?;
+                }
+                if let Some(r) = rest {
+                    write!(f, " | {}", r)?;
+                }
+                write!(f, "]")
+            }
+            AstKind::PatternConstructor { name, args } => {
+                write!(f, "{}", name)?;
+                if !args.is_empty() {
+                    write!(f, "(")?;
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 { write!(f, ", ")?; }
+                        write!(f, "{}", arg)?;
+                    }
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }
+            AstKind::Splice(inner) => write!(f, "~{}", inner),
+            AstKind::FnDef { name, params, body, return_type } => {
+                write!(f, "{}(", name)?;
+                for (i, (pname, pty)) in params.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", pname)?;
+                    if let Some(ty) = pty {
+                        write!(f, ": {}", ty)?;
+                    }
+                }
+                write!(f, ")")?;
+                if let Some(rt) = return_type {
+                    write!(f, ": {}", rt)?;
+                }
+                write!(f, " = {}", body)
+            }
+        }
+    }
 }
 
 /// Key type for maps and sets (must be hashable).
@@ -1752,6 +2057,7 @@ impl Value {
             Value::Type(_) => "Type",
             Value::Pointer(_) => "Pointer",
             Value::NativeHandle(_) => "NativeHandle",
+            Value::Ast(_) => "Ast",
         }
     }
 
@@ -1886,6 +2192,7 @@ impl fmt::Debug for Value {
             Value::Type(t) => write!(f, "<type {}>", t.name),
             Value::Pointer(p) => write!(f, "<ptr 0x{:x}>", p),
             Value::NativeHandle(h) => write!(f, "<native ptr=0x{:x} type={}>", h.ptr, h.type_id),
+            Value::Ast(ast) => write!(f, "<ast {}>", ast),
         }
     }
 }

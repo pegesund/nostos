@@ -157,6 +157,7 @@ impl Value {
             Value::ReactiveVariant(rv) => rv.get().map(|v| v.fields.is_empty()).unwrap_or(true),
             Value::Closure(_) => false, // Can inspect captured vars
             Value::NativeHandle(_) => true, // Native handles are leaf values
+            Value::Ast(_) => true, // AST values are opaque for inspection
         }
     }
 
@@ -290,6 +291,7 @@ impl Value {
             Value::Type(t) => format!("<type {}>", t.name),
             Value::Pointer(p) => format!("<ptr 0x{:x}>", p),
             Value::NativeHandle(h) => format!("<native type={}>", h.type_id),
+            Value::Ast(ast) => format!("<ast {}>", ast),
         }
     }
 
@@ -304,7 +306,7 @@ impl Value {
             Value::BigInt(_) | Value::Decimal(_) |
             Value::Function(_) | Value::NativeFunction(_) |
             Value::Pid(_) | Value::Ref(_) | Value::Type(_) | Value::Pointer(_) |
-            Value::NativeHandle(_) => vec![],
+            Value::NativeHandle(_) | Value::Ast(_) => vec![],
 
             // String: only has slots if long (for chunked viewing)
             Value::String(_) => vec![],

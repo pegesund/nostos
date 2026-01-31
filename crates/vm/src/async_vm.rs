@@ -8472,6 +8472,7 @@ impl AsyncProcess {
                     GcValue::NativeHandle(_) => "NativeHandle",
                     GcValue::ReactiveRecord(_) => "ReactiveRecord",
                     GcValue::ReactiveVariant(_) => "ReactiveVariant",
+                    GcValue::Ast(_) => "Ast",
                 }.to_string();
                 let str_ptr = self.heap.alloc_string(type_name);
                 set_reg!(dst, GcValue::String(str_ptr));
@@ -9920,6 +9921,13 @@ impl AsyncProcess {
                     gc_fields,
                 );
                 self.value_to_json(GcValue::Variant(var_ptr))
+            }
+            GcValue::Ast(_) => {
+                // AST values are not directly serializable to JSON
+                // Return a placeholder string representation
+                let s_ptr = self.heap.alloc_string("<Ast>".to_string());
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("String".to_string()), vec![GcValue::String(s_ptr)]);
+                Ok(GcValue::Variant(ptr))
             }
         }
     }

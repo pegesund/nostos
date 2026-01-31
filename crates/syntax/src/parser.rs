@@ -1050,15 +1050,24 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                 Expr::Spawn(kind, Box::new(func), vec![], to_span(span))
             });
 
-        // Quote expression
+        // Quote expression - quote(expr) or quote { block }
         let quote_expr = just(Token::Quote)
-            .ignore_then(expr.clone().delimited_by(just(Token::LParen), just(Token::RParen)))
+            .ignore_then(choice((
+                expr.clone().delimited_by(just(Token::LParen), just(Token::RParen)),
+                block.clone(),
+            )))
             .map_with_span(|inner, span| Expr::Quote(Box::new(inner), to_span(span)));
+
+        // Splice expression - ~expr (only valid inside quote)
+        // Uses recursive expr reference
+        let splice_expr = just(Token::Tilde)
+            .ignore_then(expr.clone())
+            .map_with_span(|inner, span| Expr::Splice(Box::new(inner), to_span(span)));
 
         // Primary expressions - split into groups to reduce type complexity
         // Skip newlines at the start of any primary expression
         let control_flow = skip_newlines().ignore_then(choice((if_expr, match_expr, try_expr, do_block, receive_expr, while_expr, for_expr, break_expr, continue_expr, return_expr))).boxed();
-        let special = skip_newlines().ignore_then(choice((spawn_expr, quote_expr, lambda))).boxed();
+        let special = skip_newlines().ignore_then(choice((spawn_expr, quote_expr, splice_expr, lambda))).boxed();
         let lit = skip_newlines().ignore_then(choice((bool_expr, int, float, string, char_expr))).boxed();
         let collections = skip_newlines().ignore_then(choice((map, set, record, unit_variant, tuple, unit, list, block))).boxed();
         let simple = skip_newlines().ignore_then(choice((grouped, wildcard, var))).boxed();
@@ -1482,6 +1491,43 @@ fn fn_def() -> impl Parser<Token, FnDef, Error = Simple<Token>> + Clone {
                 name,
                 type_params,
                 clauses: vec![clause],
+                is_template: false,
+            }
+        })
+}
+
+/// Parser for a template function definition.
+fn template_def() -> impl Parser<Token, FnDef, Error = Simple<Token>> + Clone {
+    just(Token::Template)
+        .ignore_then(ident())
+        .then(type_params())
+        .then(
+            fn_param()
+                .separated_by(just(Token::Comma))
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .then(just(Token::When).ignore_then(expr()).or_not())
+        .then(just(Token::RightArrow).ignore_then(type_expr()).or_not())
+        .then_ignore(skip_newlines())
+        .then_ignore(just(Token::Eq))
+        .then_ignore(skip_newlines())
+        .then(expr())
+        .map_with_span(|(((((name, type_params), params), guard), return_type), body), span| {
+            let clause = FnClause {
+                params,
+                guard,
+                return_type,
+                body,
+                span: to_span(span.clone()),
+            };
+            FnDef {
+                visibility: Visibility::Private, // Templates are always private
+                doc: None,
+                span: to_span(span),
+                name,
+                type_params,
+                clauses: vec![clause],
+                is_template: true,
             }
         })
 }
@@ -1928,6 +1974,7 @@ fn item() -> impl Parser<Token, Item, Error = Simple<Token>> + Clone {
             test_def().map(Item::Test),
             extern_decl().map(Item::Extern),
             use_stmt().map(Item::Use),
+            template_def().map(Item::FnDef),  // Template functions (before fn_def)
             fn_def().map(Item::FnDef),
             binding().map(Item::Binding),
         ))

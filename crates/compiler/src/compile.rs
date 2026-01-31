@@ -1265,6 +1265,9 @@ pub struct Compiler {
     /// Top-level bindings: qualified name -> (Binding, module_path, imports)
     /// These are compiled inline at each use site
     top_level_bindings: HashMap<String, (Binding, Vec<String>, HashMap<String, String>)>,
+    /// Template definitions: qualified name -> FnDef
+    /// Templates are compile-time functions for metaprogramming
+    templates: HashMap<String, FnDef>,
 }
 
 /// Information about a module-level mutable variable (mvar).
@@ -1457,6 +1460,7 @@ impl Compiler {
             fn_asts_by_base: HashMap::new(),
             module_init_functions: Vec::new(),
             top_level_bindings: HashMap::new(),
+            templates: HashMap::new(),
         };
 
         // Register builtin types for autocomplete
@@ -2822,6 +2826,7 @@ impl Compiler {
             fn_asts_by_base: HashMap::new(),
             module_init_functions: Vec::new(),
             top_level_bindings: HashMap::new(),
+            templates: HashMap::new(),
         }
     }
 
@@ -2923,6 +2928,223 @@ impl Compiler {
     /// Get the line number for a span.
     fn span_line(&self, span: Span) -> usize {
         self.offset_to_line(span.start)
+    }
+
+    /// Convert an AST expression to a runtime AstValue for metaprogramming.
+    /// This creates a representation of the AST that can be manipulated at runtime.
+    fn expr_to_ast_value(&self, expr: &Expr) -> AstValue {
+        use value::{AstValue, AstKind};
+
+        let span = expr.span();
+        let kind = match expr {
+            // Literals
+            Expr::Int(n, _) => AstKind::Int(*n),
+            Expr::Float(f, _) => AstKind::Float(*f),
+            Expr::Bool(b, _) => AstKind::Bool(*b),
+            Expr::Char(c, _) => AstKind::Char(*c),
+            Expr::Unit(_) => AstKind::Unit,
+            Expr::String(StringLit::Plain(s), _) => AstKind::String(s.clone()),
+            Expr::String(StringLit::Interpolated(parts), _) => {
+                // For interpolated strings, just join the parts for now
+                let s: String = parts.iter().map(|p| match p {
+                    StringPart::Lit(s) => s.clone(),
+                    StringPart::Expr(e) => format!("${{{:?}}}", e),
+                }).collect();
+                AstKind::String(s)
+            }
+
+            // Variable
+            Expr::Var(name) => AstKind::Var(name.node.clone()),
+
+            // Binary operations: BinOp(left, op, right, span)
+            Expr::BinOp(left, op, right, _) => AstKind::BinOp {
+                op: format!("{:?}", op),
+                left: Box::new(self.expr_to_ast_value(left)),
+                right: Box::new(self.expr_to_ast_value(right)),
+            },
+
+            // Unary operations: UnaryOp(op, operand, span)
+            Expr::UnaryOp(op, operand, _) => AstKind::UnaryOp {
+                op: format!("{:?}", op),
+                operand: Box::new(self.expr_to_ast_value(operand)),
+            },
+
+            // Function call: Call(callee, type_args, value_args, span)
+            Expr::Call(func, _type_args, args, _) => AstKind::Call {
+                func: Box::new(self.expr_to_ast_value(func)),
+                args: args.iter().map(|a| match a {
+                    CallArg::Positional(e) => self.expr_to_ast_value(e),
+                    CallArg::Named(_, e) => self.expr_to_ast_value(e),
+                }).collect(),
+            },
+
+            // Method call: MethodCall(receiver, method, args, span)
+            Expr::MethodCall(receiver, method, args, _) => AstKind::MethodCall {
+                receiver: Box::new(self.expr_to_ast_value(receiver)),
+                method: method.node.clone(),
+                args: args.iter().map(|a| match a {
+                    CallArg::Positional(e) => self.expr_to_ast_value(e),
+                    CallArg::Named(_, e) => self.expr_to_ast_value(e),
+                }).collect(),
+            },
+
+            // Field access: FieldAccess(expr, field, span)
+            Expr::FieldAccess(inner, field, _) => AstKind::FieldAccess {
+                expr: Box::new(self.expr_to_ast_value(inner)),
+                field: field.node.clone(),
+            },
+
+            // Index access: Index(expr, index, span)
+            Expr::Index(inner, index, _) => AstKind::Index {
+                expr: Box::new(self.expr_to_ast_value(inner)),
+                index: Box::new(self.expr_to_ast_value(index)),
+            },
+
+            // Lambda: Lambda(Vec<Pattern>, body, span)
+            Expr::Lambda(params, body, _) => AstKind::Lambda {
+                params: params.iter().map(|p| match p {
+                    Pattern::Var(ident) => ident.node.clone(),
+                    _ => "_".to_string(),
+                }).collect(),
+                body: Box::new(self.expr_to_ast_value(body)),
+            },
+
+            // Block: Block(Vec<Stmt>, span) - last stmt is the result
+            Expr::Block(stmts, _) => {
+                if stmts.is_empty() {
+                    AstKind::Unit
+                } else {
+                    let (init, last) = stmts.split_at(stmts.len() - 1);
+                    AstKind::Block {
+                        stmts: init.iter().map(|s| self.stmt_to_ast_value(s)).collect(),
+                        result: Box::new(self.stmt_to_ast_value(&last[0])),
+                    }
+                }
+            }
+
+            // If expression: If(cond, then, else, span) - else is required in AST
+            Expr::If(cond, then_branch, else_branch, _) => AstKind::If {
+                cond: Box::new(self.expr_to_ast_value(cond)),
+                then_branch: Box::new(self.expr_to_ast_value(then_branch)),
+                else_branch: Some(Box::new(self.expr_to_ast_value(else_branch))),
+            },
+
+            // Match expression: Match(expr, arms, span)
+            Expr::Match(scrutinee, arms, _) => AstKind::Match {
+                expr: Box::new(self.expr_to_ast_value(scrutinee)),
+                arms: arms.iter().map(|arm| {
+                    (self.pattern_to_ast_value(&arm.pattern), self.expr_to_ast_value(&arm.body))
+                }).collect(),
+            },
+
+            // List literal: List(items, spread, span)
+            Expr::List(items, _, _) => AstKind::List(
+                items.iter().map(|i| self.expr_to_ast_value(i)).collect()
+            ),
+
+            // Tuple: Tuple(items, span)
+            Expr::Tuple(items, _) => AstKind::Tuple(
+                items.iter().map(|i| self.expr_to_ast_value(i)).collect()
+            ),
+
+            // Record literal: Record(type_name, fields, span)
+            Expr::Record(type_name, fields, _) => AstKind::Record {
+                fields: fields.iter().map(|f| match f {
+                    RecordField::Named(name, value) => (name.node.clone(), self.expr_to_ast_value(value)),
+                    RecordField::Positional(value) => ("_".to_string(), self.expr_to_ast_value(value)),
+                }).collect(),
+            },
+
+            // Map literal: Map(entries, span)
+            Expr::Map(entries, _) => AstKind::Map {
+                entries: entries.iter().map(|(k, v)| {
+                    (self.expr_to_ast_value(k), self.expr_to_ast_value(v))
+                }).collect(),
+            },
+
+            // Splice (pass through for template processing)
+            Expr::Splice(inner, _) => AstKind::Splice(Box::new(self.expr_to_ast_value(inner))),
+
+            // Quote (nested quote) - just return the inner expression's AST
+            Expr::Quote(inner, _) => self.expr_to_ast_value(inner).kind,
+
+            // Everything else - represent as a variable for now
+            _ => AstKind::Var(format!("<unsupported: {:?}>", expr)),
+        };
+
+        AstValue::with_span(kind, span.file_id, span.start, span.end)
+    }
+
+    /// Convert a statement to an AstValue for metaprogramming.
+    fn stmt_to_ast_value(&self, stmt: &Stmt) -> AstValue {
+        use value::{AstValue, AstKind};
+
+        match stmt {
+            Stmt::Expr(expr) => self.expr_to_ast_value(expr),
+            Stmt::Let(binding) => AstValue::new(AstKind::Let {
+                pattern: Box::new(self.pattern_to_ast_value(&binding.pattern)),
+                value: Box::new(self.expr_to_ast_value(&binding.value)),
+            }),
+            Stmt::Assign(target, value, _) => {
+                // Convert assignment to a let-like structure
+                let target_name = match target {
+                    AssignTarget::Var(name) => name.node.clone(),
+                    _ => "_".to_string(),
+                };
+                AstValue::new(AstKind::Let {
+                    pattern: Box::new(AstValue::new(AstKind::PatternVar(target_name))),
+                    value: Box::new(self.expr_to_ast_value(value)),
+                })
+            }
+        }
+    }
+
+    /// Convert a pattern to an AstValue for metaprogramming.
+    fn pattern_to_ast_value(&self, pattern: &Pattern) -> AstValue {
+        use value::{AstValue, AstKind};
+
+        let kind = match pattern {
+            Pattern::Wildcard(_) => AstKind::PatternWildcard,
+            Pattern::Var(ident) => AstKind::PatternVar(ident.node.clone()),
+            Pattern::Int(n, _) => AstKind::PatternLit(Box::new(AstValue::new(AstKind::Int(*n)))),
+            Pattern::Float(f, _) => AstKind::PatternLit(Box::new(AstValue::new(AstKind::Float(*f)))),
+            Pattern::Bool(b, _) => AstKind::PatternLit(Box::new(AstValue::new(AstKind::Bool(*b)))),
+            Pattern::String(s, _) => AstKind::PatternLit(Box::new(AstValue::new(AstKind::String(s.clone())))),
+            Pattern::Char(c, _) => AstKind::PatternLit(Box::new(AstValue::new(AstKind::Char(*c)))),
+            Pattern::Unit(_) => AstKind::PatternLit(Box::new(AstValue::new(AstKind::Unit))),
+            Pattern::Tuple(items, _) => AstKind::PatternTuple(
+                items.iter().map(|p| self.pattern_to_ast_value(p)).collect()
+            ),
+            Pattern::List(list_pat, _) => match list_pat {
+                ListPattern::Empty => AstKind::PatternList { elements: vec![], rest: None },
+                ListPattern::Cons(elements, rest) => AstKind::PatternList {
+                    elements: elements.iter().map(|p| self.pattern_to_ast_value(p)).collect(),
+                    rest: rest.as_ref().map(|r| Box::new(self.pattern_to_ast_value(r))),
+                },
+            },
+            Pattern::Variant(name, fields, _) => {
+                let args = match fields {
+                    VariantPatternFields::Unit => vec![],
+                    VariantPatternFields::Positional(pats) => {
+                        pats.iter().map(|p| self.pattern_to_ast_value(p)).collect()
+                    }
+                    VariantPatternFields::Named(fields) => {
+                        fields.iter().filter_map(|f| match f {
+                            RecordPatternField::Named(_, p) => Some(self.pattern_to_ast_value(p)),
+                            RecordPatternField::Punned(ident) => Some(AstValue::new(AstKind::PatternVar(ident.node.clone()))),
+                            RecordPatternField::Rest(_) => None,
+                        }).collect()
+                    }
+                };
+                AstKind::PatternConstructor {
+                    name: name.node.clone(),
+                    args,
+                }
+            }
+            _ => AstKind::PatternWildcard, // Fallback for unsupported patterns
+        };
+
+        AstValue::new(kind)
     }
 
     /// Get the fully qualified name with the current module path prefix.
@@ -4269,6 +4491,7 @@ impl Compiler {
                 body: init_body,
                 span: Span::default(),
             }],
+            is_template: false,
             span: Span::default(),
         };
 
@@ -6138,6 +6361,15 @@ impl Compiler {
 
     /// Compile a function definition.
     fn compile_fn_def(&mut self, def: &FnDef) -> Result<(), CompileError> {
+        // Templates are compile-time functions - don't compile them to bytecode
+        // They will be expanded during compilation when called
+        if def.is_template {
+            // Store template for later expansion
+            let qualified_name = self.qualify_name(&def.name.node);
+            self.templates.insert(qualified_name, def.clone());
+            return Ok(());
+        }
+
         // Check if function name shadows a built-in function
         // Only check for user-defined functions (not stdlib)
         // Also skip trait method implementations (contain '.') - they're called via method syntax
@@ -10237,6 +10469,23 @@ impl Compiler {
             // Return
             Expr::Return(value, span) => {
                 self.compile_return(value.as_ref().map(|v| v.as_ref()), *span)
+            }
+
+            // Quote - convert expression to AST value at compile time
+            Expr::Quote(inner, span) => {
+                let dst = self.alloc_reg();
+                let ast_value = self.expr_to_ast_value(inner);
+                let idx = self.chunk.add_constant(Value::Ast(Arc::new(ast_value)));
+                self.chunk.emit(Instruction::LoadConst(dst, idx), self.span_line(*span));
+                Ok(dst)
+            }
+
+            // Splice - only valid inside quote, error otherwise
+            Expr::Splice(_, span) => {
+                Err(CompileError::TypeError {
+                    message: "Splice (~) can only be used inside quote".to_string(),
+                    span: *span,
+                })
             }
 
             _ => Err(CompileError::NotImplemented {
@@ -22352,6 +22601,7 @@ impl Compiler {
                 name: Spanned::new(local_name.to_string(), span),
                 type_params: fn_type_params_map.get(name).cloned().unwrap_or_default(),
                 clauses: clauses.clone(),
+                is_template: false,
                 span,
             };
             self.pending_functions.push((

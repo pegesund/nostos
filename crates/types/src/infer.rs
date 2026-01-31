@@ -2677,24 +2677,22 @@ impl<'a> InferCtx<'a> {
             }
 
             // Quote/Splice - macro-related
-            Expr::Quote(inner, _) => {
-                let _ = self.infer_expr(inner)?;
+            Expr::Quote(_inner, _) => {
+                // Quote captures code as data - don't type-check the inner expression
+                // since it may contain splices (~expr) which have different semantics
                 Ok(Type::Named {
                     name: "Expr".to_string(),
                     args: vec![],
                 })
             }
             Expr::Splice(inner, _) => {
-                let inner_ty = self.infer_expr(inner)?;
-                self.unify(
-                    inner_ty,
-                    Type::Named {
-                        name: "Expr".to_string(),
-                        args: vec![],
-                    },
-                );
-                // Result depends on context
-                Ok(self.fresh())
+                // Splice can take any expression - it will be evaluated at template expansion time
+                // The result type is Expr (it becomes part of the AST being built)
+                let _ = self.infer_expr(inner)?;
+                Ok(Type::Named {
+                    name: "Expr".to_string(),
+                    args: vec![],
+                })
             }
 
             // While loop: condition must be Bool, returns Unit

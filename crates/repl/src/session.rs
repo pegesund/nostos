@@ -841,6 +841,7 @@ mod tests {
                 body,
                 span: Span::default(),
             }],
+            is_template: false,
             span: Span::default(),
         }
     }
@@ -867,6 +868,7 @@ mod tests {
                 body,
                 span: Span::default(),
             }],
+            is_template: false,
             span: Span::default(),
         }
     }

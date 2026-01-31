@@ -229,6 +229,8 @@ pub struct FnDef {
     /// Type parameters with optional trait bounds: `[T: Hash, U]`
     pub type_params: Vec<TypeParam>,
     pub clauses: Vec<FnClause>,
+    /// Whether this is a template (compile-time) function
+    pub is_template: bool,
     pub span: Span,
 }
 

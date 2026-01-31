@@ -33,6 +33,7 @@ use nostos_extension::GcNativeHandle;
 use num_bigint::BigInt;
 
 use crate::shared_types::{SharedMap, SharedMapKey, SharedMapValue};
+use crate::value::AstValue;
 
 /// Cached inline operation for closures - avoids pattern matching on every call
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -825,6 +826,10 @@ pub enum GcValue {
     // Native handle with GC-managed cleanup.
     // Stored directly as Arc (not in heap) - Drop triggers when GcValue is dropped.
     NativeHandle(Arc<GcNativeHandle>),
+
+    // Metaprogramming - AST values for templates.
+    // Stored as Arc (not in heap) - immutable AST data.
+    Ast(Arc<AstValue>),
 }
 
 impl Default for GcValue {
@@ -966,6 +971,7 @@ impl fmt::Debug for GcValue {
             GcValue::Int64List(list) => write!(f, "Int64List[{}]", list.len()),
             GcValue::Buffer(_) => write!(f, "Buffer"),
             GcValue::NativeHandle(ptr) => write!(f, "NativeHandle({:?})", ptr),
+            GcValue::Ast(ast) => write!(f, "Ast({})", ast),
         }
     }
 }
@@ -1027,6 +1033,8 @@ impl GcValue {
             GcValue::Int64List(_) => vec![],
             // Native handle stored directly (not in heap), no GC pointers to trace
             GcValue::NativeHandle(_) => vec![],
+            // AST values are Arc-managed, no GC pointers to trace
+            GcValue::Ast(_) => vec![],
         }
     }
 
@@ -1119,6 +1127,7 @@ impl GcValue {
             GcValue::Int64List(_) => "Int64List",
             GcValue::Buffer(_) => "Buffer",
             GcValue::NativeHandle(_) => "NativeHandle",
+            GcValue::Ast(_) => "Ast",
         }
     }
 
@@ -2300,6 +2309,9 @@ impl Heap {
             GcValue::NativeHandle(h) => {
                 format!("<native ptr=0x{:x} type={}>", h.ptr, h.type_id)
             }
+            GcValue::Ast(ast) => {
+                format!("<ast {}>", ast)
+            }
         }
     }
 
@@ -2399,7 +2411,7 @@ impl Heap {
             GcValue::Closure(_, _) | GcValue::Function(_) | GcValue::NativeFunction(_) |
             GcValue::Ref(_) | GcValue::Type(_) | GcValue::Pointer(_) |
             GcValue::Int64List(_) | GcValue::Buffer(_) | GcValue::NativeHandle(_) |
-            GcValue::ReactiveRecord(_) => {
+            GcValue::ReactiveRecord(_) | GcValue::Ast(_) => {
                 return None;
             }
         })
@@ -2821,7 +2833,10 @@ impl Heap {
             // Native handles cannot be deep copied - they own unique native memory.
             // For message passing, the extension should provide a copy mechanism.
             // We share the Arc - the handle will only be freed when all refs are dropped.
-            GcValue::NativeHandle(h) => GcValue::NativeHandle(h.clone())
+            GcValue::NativeHandle(h) => GcValue::NativeHandle(h.clone()),
+
+            // AST values are immutable Arc-wrapped, just clone the Arc
+            GcValue::Ast(ast) => GcValue::Ast(ast.clone())
         }
     }
 
@@ -3067,7 +3082,9 @@ impl Heap {
                 }
             }
             // Native handle - just clone the Arc (shares ownership)
-            GcValue::NativeHandle(h) => GcValue::NativeHandle(h.clone())
+            GcValue::NativeHandle(h) => GcValue::NativeHandle(h.clone()),
+            // AST values are immutable Arc-wrapped, just clone the Arc
+            GcValue::Ast(ast) => GcValue::Ast(ast.clone())
         }
     }
 
@@ -3271,7 +3288,10 @@ impl Heap {
             Value::Pointer(p) => GcValue::Pointer(*p),
 
             // Native handle - store Arc directly (not in heap)
-            Value::NativeHandle(h) => GcValue::NativeHandle(h.clone())
+            Value::NativeHandle(h) => GcValue::NativeHandle(h.clone()),
+
+            // AST values for metaprogramming - store as Arc directly
+            Value::Ast(ast) => GcValue::Ast(ast.clone())
         }
     }
 
@@ -3488,7 +3508,9 @@ impl Heap {
             }
             // Native handle - convert to Value::NativeHandle
             // Native handle - just clone the Arc
-            GcValue::NativeHandle(h) => Value::NativeHandle(h.clone())
+            GcValue::NativeHandle(h) => Value::NativeHandle(h.clone()),
+            // AST values - convert to Value::Ast
+            GcValue::Ast(ast) => Value::Ast(ast.clone())
         }
     }
 

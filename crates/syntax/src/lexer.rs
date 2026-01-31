@@ -108,9 +108,13 @@ pub enum Token {
     #[token("test")]
     Test,
 
-    // === Introspection ===
+    // === Introspection / Metaprogramming ===
     #[token("quote")]
     Quote,
+    #[token("~")]
+    Tilde,
+    #[token("template")]
+    Template,
 
     // === Literals ===
     #[token("true")]
@@ -478,6 +482,8 @@ impl fmt::Display for Token {
             Token::From => write!(f, "from"),
             Token::Test => write!(f, "test"),
             Token::Quote => write!(f, "quote"),
+            Token::Tilde => write!(f, "~"),
+            Token::Template => write!(f, "template"),
             Token::True => write!(f, "true"),
             Token::False => write!(f, "false"),
             Token::HexInt(n) => write!(f, "0x{:x}", n),
