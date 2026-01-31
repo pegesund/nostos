@@ -3147,6 +3147,393 @@ impl Compiler {
         AstValue::new(kind)
     }
 
+    // =========================================================================
+    // Template Expansion
+    // =========================================================================
+
+    /// Expand a template call by substituting parameters and compiling the result.
+    /// Returns the expanded expression ready to be compiled.
+    fn expand_template(&self, template: &FnDef, args: &[CallArg]) -> Result<Expr, CompileError> {
+        use value::AstKind;
+
+        // Get template parameters
+        let params: Vec<String> = template.clauses[0].params.iter()
+            .filter_map(|p| match &p.pattern {
+                Pattern::Var(ident) => Some(ident.node.clone()),
+                _ => None,
+            })
+            .collect();
+
+        if params.len() != args.len() {
+            return Err(CompileError::TypeError {
+                message: format!(
+                    "template '{}' expects {} arguments but got {}",
+                    template.name.node, params.len(), args.len()
+                ),
+                span: template.name.span,
+            });
+        }
+
+        // Build parameter -> AST substitution map
+        let mut substitutions: HashMap<String, AstValue> = HashMap::new();
+        for (param, arg) in params.iter().zip(args.iter()) {
+            let arg_expr = Self::call_arg_expr(arg);
+            let ast_value = self.expr_to_ast_value(arg_expr);
+            substitutions.insert(param.clone(), ast_value);
+        }
+
+        // Get the template body
+        let body = &template.clauses[0].body;
+
+        // If the body is a quote expression, extract and expand its content
+        if let Expr::Quote(inner, _) = body {
+            // Substitute splices in the quoted expression
+            let expanded_ast = self.substitute_splices_in_ast(
+                &self.expr_to_ast_value(inner),
+                &substitutions
+            );
+            // Convert back to Expr
+            self.ast_value_to_expr(&expanded_ast)
+        } else {
+            // For non-quote bodies, just substitute variable references
+            // This is a simpler case where the template directly returns code
+            self.substitute_vars_in_expr(body, &substitutions)
+        }
+    }
+
+    /// Substitute splice expressions (~param) with their AST values.
+    fn substitute_splices_in_ast(&self, ast: &AstValue, substitutions: &HashMap<String, AstValue>) -> AstValue {
+        use value::{AstValue, AstKind};
+
+        let new_kind = match &ast.kind {
+            // Splice - look up the variable and substitute
+            AstKind::Splice(inner) => {
+                if let AstKind::Var(name) = &inner.kind {
+                    if let Some(replacement) = substitutions.get(name) {
+                        return replacement.clone();
+                    }
+                }
+                // If not found, recursively process the inner
+                AstKind::Splice(Box::new(self.substitute_splices_in_ast(inner, substitutions)))
+            }
+
+            // Recursively process all sub-expressions
+            AstKind::BinOp { op, left, right } => AstKind::BinOp {
+                op: op.clone(),
+                left: Box::new(self.substitute_splices_in_ast(left, substitutions)),
+                right: Box::new(self.substitute_splices_in_ast(right, substitutions)),
+            },
+            AstKind::UnaryOp { op, operand } => AstKind::UnaryOp {
+                op: op.clone(),
+                operand: Box::new(self.substitute_splices_in_ast(operand, substitutions)),
+            },
+            AstKind::Call { func, args } => AstKind::Call {
+                func: Box::new(self.substitute_splices_in_ast(func, substitutions)),
+                args: args.iter().map(|a| self.substitute_splices_in_ast(a, substitutions)).collect(),
+            },
+            AstKind::MethodCall { receiver, method, args } => AstKind::MethodCall {
+                receiver: Box::new(self.substitute_splices_in_ast(receiver, substitutions)),
+                method: method.clone(),
+                args: args.iter().map(|a| self.substitute_splices_in_ast(a, substitutions)).collect(),
+            },
+            AstKind::FieldAccess { expr, field } => AstKind::FieldAccess {
+                expr: Box::new(self.substitute_splices_in_ast(expr, substitutions)),
+                field: field.clone(),
+            },
+            AstKind::Index { expr, index } => AstKind::Index {
+                expr: Box::new(self.substitute_splices_in_ast(expr, substitutions)),
+                index: Box::new(self.substitute_splices_in_ast(index, substitutions)),
+            },
+            AstKind::Lambda { params, body } => AstKind::Lambda {
+                params: params.clone(),
+                body: Box::new(self.substitute_splices_in_ast(body, substitutions)),
+            },
+            AstKind::Block { stmts, result } => AstKind::Block {
+                stmts: stmts.iter().map(|s| self.substitute_splices_in_ast(s, substitutions)).collect(),
+                result: Box::new(self.substitute_splices_in_ast(result, substitutions)),
+            },
+            AstKind::If { cond, then_branch, else_branch } => AstKind::If {
+                cond: Box::new(self.substitute_splices_in_ast(cond, substitutions)),
+                then_branch: Box::new(self.substitute_splices_in_ast(then_branch, substitutions)),
+                else_branch: else_branch.as_ref().map(|e| Box::new(self.substitute_splices_in_ast(e, substitutions))),
+            },
+            AstKind::Match { expr, arms } => AstKind::Match {
+                expr: Box::new(self.substitute_splices_in_ast(expr, substitutions)),
+                arms: arms.iter().map(|(p, e)| {
+                    (self.substitute_splices_in_ast(p, substitutions),
+                     self.substitute_splices_in_ast(e, substitutions))
+                }).collect(),
+            },
+            AstKind::Let { pattern, value } => AstKind::Let {
+                pattern: Box::new(self.substitute_splices_in_ast(pattern, substitutions)),
+                value: Box::new(self.substitute_splices_in_ast(value, substitutions)),
+            },
+            AstKind::List(items) => AstKind::List(
+                items.iter().map(|i| self.substitute_splices_in_ast(i, substitutions)).collect()
+            ),
+            AstKind::Tuple(items) => AstKind::Tuple(
+                items.iter().map(|i| self.substitute_splices_in_ast(i, substitutions)).collect()
+            ),
+            AstKind::Record { fields } => AstKind::Record {
+                fields: fields.iter().map(|(n, v)| {
+                    (n.clone(), self.substitute_splices_in_ast(v, substitutions))
+                }).collect(),
+            },
+            AstKind::Map { entries } => AstKind::Map {
+                entries: entries.iter().map(|(k, v)| {
+                    (self.substitute_splices_in_ast(k, substitutions),
+                     self.substitute_splices_in_ast(v, substitutions))
+                }).collect(),
+            },
+
+            // Leaf nodes - no recursion needed
+            kind @ (AstKind::Int(_) | AstKind::Float(_) | AstKind::String(_) |
+                    AstKind::Bool(_) | AstKind::Char(_) | AstKind::Unit |
+                    AstKind::Var(_) | AstKind::PatternWildcard | AstKind::PatternVar(_) |
+                    AstKind::PatternLit(_) | AstKind::PatternTuple(_) |
+                    AstKind::PatternList { .. } | AstKind::PatternConstructor { .. } |
+                    AstKind::FnDef { .. }) => kind.clone(),
+        };
+
+        AstValue {
+            kind: new_kind,
+            file_id: ast.file_id,
+            start: ast.start,
+            end: ast.end,
+        }
+    }
+
+    /// Convert an AstValue back to an Expr for compilation.
+    fn ast_value_to_expr(&self, ast: &AstValue) -> Result<Expr, CompileError> {
+        use value::AstKind;
+        use nostos_syntax::ast::{Ident, Spanned, BinOp, UnaryOp};
+
+        let span = Span { file_id: ast.file_id, start: ast.start, end: ast.end };
+
+        let expr = match &ast.kind {
+            AstKind::Int(n) => Expr::Int(*n, span),
+            AstKind::Float(f) => Expr::Float(*f, span),
+            AstKind::String(s) => Expr::String(StringLit::Plain(s.clone()), span),
+            AstKind::Bool(b) => Expr::Bool(*b, span),
+            AstKind::Char(c) => Expr::Char(*c, span),
+            AstKind::Unit => Expr::Unit(span),
+
+            AstKind::Var(name) => Expr::Var(Ident { node: name.clone(), span }),
+
+            AstKind::BinOp { op, left, right } => {
+                let bin_op = match op.as_str() {
+                    "Add" => BinOp::Add,
+                    "Sub" => BinOp::Sub,
+                    "Mul" => BinOp::Mul,
+                    "Div" => BinOp::Div,
+                    "Mod" => BinOp::Mod,
+                    "Pow" => BinOp::Pow,
+                    "Eq" => BinOp::Eq,
+                    "NotEq" => BinOp::NotEq,
+                    "Lt" => BinOp::Lt,
+                    "LtEq" => BinOp::LtEq,
+                    "Gt" => BinOp::Gt,
+                    "GtEq" => BinOp::GtEq,
+                    "And" => BinOp::And,
+                    "Or" => BinOp::Or,
+                    "Concat" => BinOp::Concat,
+                    "Cons" => BinOp::Cons,
+                    _ => return Err(CompileError::TypeError {
+                        message: format!("unknown binary operator in template expansion: {}", op),
+                        span,
+                    }),
+                };
+                Expr::BinOp(
+                    Box::new(self.ast_value_to_expr(left)?),
+                    bin_op,
+                    Box::new(self.ast_value_to_expr(right)?),
+                    span,
+                )
+            }
+
+            AstKind::UnaryOp { op, operand } => {
+                let unary_op = match op.as_str() {
+                    "Neg" => UnaryOp::Neg,
+                    "Not" => UnaryOp::Not,
+                    _ => return Err(CompileError::TypeError {
+                        message: format!("unknown unary operator in template expansion: {}", op),
+                        span,
+                    }),
+                };
+                Expr::UnaryOp(
+                    unary_op,
+                    Box::new(self.ast_value_to_expr(operand)?),
+                    span,
+                )
+            }
+
+            AstKind::Call { func, args } => {
+                let func_expr = self.ast_value_to_expr(func)?;
+                let arg_exprs: Result<Vec<_>, _> = args.iter()
+                    .map(|a| self.ast_value_to_expr(a).map(CallArg::Positional))
+                    .collect();
+                Expr::Call(Box::new(func_expr), vec![], arg_exprs?, span)
+            }
+
+            AstKind::MethodCall { receiver, method, args } => {
+                let receiver_expr = self.ast_value_to_expr(receiver)?;
+                let arg_exprs: Result<Vec<_>, _> = args.iter()
+                    .map(|a| self.ast_value_to_expr(a).map(CallArg::Positional))
+                    .collect();
+                Expr::MethodCall(
+                    Box::new(receiver_expr),
+                    Ident { node: method.clone(), span },
+                    arg_exprs?,
+                    span,
+                )
+            }
+
+            AstKind::FieldAccess { expr, field } => {
+                Expr::FieldAccess(
+                    Box::new(self.ast_value_to_expr(expr)?),
+                    Ident { node: field.clone(), span },
+                    span,
+                )
+            }
+
+            AstKind::Index { expr, index } => {
+                Expr::Index(
+                    Box::new(self.ast_value_to_expr(expr)?),
+                    Box::new(self.ast_value_to_expr(index)?),
+                    span,
+                )
+            }
+
+            AstKind::Lambda { params, body } => {
+                let patterns: Vec<Pattern> = params.iter()
+                    .map(|p| Pattern::Var(Ident { node: p.clone(), span }))
+                    .collect();
+                Expr::Lambda(patterns, Box::new(self.ast_value_to_expr(body)?), span)
+            }
+
+            AstKind::Block { stmts, result } => {
+                let mut all_stmts: Vec<Stmt> = stmts.iter()
+                    .map(|s| self.ast_value_to_stmt(s))
+                    .collect::<Result<Vec<_>, _>>()?;
+                all_stmts.push(Stmt::Expr(self.ast_value_to_expr(result)?));
+                Expr::Block(all_stmts, span)
+            }
+
+            AstKind::If { cond, then_branch, else_branch } => {
+                let else_expr = match else_branch {
+                    Some(e) => self.ast_value_to_expr(e)?,
+                    None => Expr::Unit(span),
+                };
+                Expr::If(
+                    Box::new(self.ast_value_to_expr(cond)?),
+                    Box::new(self.ast_value_to_expr(then_branch)?),
+                    Box::new(else_expr),
+                    span,
+                )
+            }
+
+            AstKind::List(items) => {
+                let exprs: Result<Vec<_>, _> = items.iter()
+                    .map(|i| self.ast_value_to_expr(i))
+                    .collect();
+                Expr::List(exprs?, None, span)
+            }
+
+            AstKind::Tuple(items) => {
+                let exprs: Result<Vec<_>, _> = items.iter()
+                    .map(|i| self.ast_value_to_expr(i))
+                    .collect();
+                Expr::Tuple(exprs?, span)
+            }
+
+            AstKind::Let { pattern, value } => {
+                // Let becomes a block with a single binding followed by unit
+                let binding = Binding {
+                    visibility: Visibility::Private,
+                    mutable: false,
+                    pattern: self.ast_value_to_pattern(pattern)?,
+                    ty: None,
+                    value: self.ast_value_to_expr(value)?,
+                    span,
+                };
+                Expr::Block(vec![Stmt::Let(binding), Stmt::Expr(Expr::Unit(span))], span)
+            }
+
+            // Unsupported conversions
+            _ => {
+                return Err(CompileError::TypeError {
+                    message: format!("cannot convert AST node back to expression: {:?}", ast.kind),
+                    span,
+                });
+            }
+        };
+
+        Ok(expr)
+    }
+
+    /// Convert an AstValue to a Stmt.
+    fn ast_value_to_stmt(&self, ast: &AstValue) -> Result<Stmt, CompileError> {
+        use value::AstKind;
+
+        match &ast.kind {
+            AstKind::Let { pattern, value } => {
+                let span = Span { file_id: ast.file_id, start: ast.start, end: ast.end };
+                Ok(Stmt::Let(Binding {
+                    visibility: Visibility::Private,
+                    mutable: false,
+                    pattern: self.ast_value_to_pattern(pattern)?,
+                    ty: None,
+                    value: self.ast_value_to_expr(value)?,
+                    span,
+                }))
+            }
+            _ => {
+                // Treat as expression statement
+                Ok(Stmt::Expr(self.ast_value_to_expr(ast)?))
+            }
+        }
+    }
+
+    /// Convert an AstValue pattern to a Pattern.
+    fn ast_value_to_pattern(&self, ast: &AstValue) -> Result<Pattern, CompileError> {
+        use value::AstKind;
+        use nostos_syntax::ast::Ident;
+
+        let span = Span { file_id: ast.file_id, start: ast.start, end: ast.end };
+
+        match &ast.kind {
+            AstKind::PatternWildcard => Ok(Pattern::Wildcard(span)),
+            AstKind::PatternVar(name) => Ok(Pattern::Var(Ident { node: name.clone(), span })),
+            AstKind::PatternLit(inner) => {
+                match &inner.kind {
+                    AstKind::Int(n) => Ok(Pattern::Int(*n, span)),
+                    AstKind::Bool(b) => Ok(Pattern::Bool(*b, span)),
+                    AstKind::String(s) => Ok(Pattern::String(s.clone(), span)),
+                    AstKind::Char(c) => Ok(Pattern::Char(*c, span)),
+                    AstKind::Unit => Ok(Pattern::Unit(span)),
+                    _ => Err(CompileError::TypeError {
+                        message: "unsupported pattern literal in template expansion".to_string(),
+                        span,
+                    }),
+                }
+            }
+            // For variable AST nodes used as patterns, treat as pattern var
+            AstKind::Var(name) => Ok(Pattern::Var(Ident { node: name.clone(), span })),
+            _ => Err(CompileError::TypeError {
+                message: format!("cannot convert AST node to pattern: {:?}", ast.kind),
+                span,
+            }),
+        }
+    }
+
+    /// Substitute variable references with AST values in an expression.
+    /// Used for simple template bodies that don't use quote.
+    fn substitute_vars_in_expr(&self, expr: &Expr, substitutions: &HashMap<String, AstValue>) -> Result<Expr, CompileError> {
+        // For now, just return the expression unchanged
+        // Full variable substitution would require traversing and replacing Var nodes
+        Ok(expr.clone())
+    }
+
     /// Get the fully qualified name with the current module path prefix.
     fn qualify_name(&self, name: &str) -> String {
         if self.module_path.is_empty() {
@@ -11083,6 +11470,22 @@ impl Compiler {
 
         // Try to extract a qualified function name from the expression
         let maybe_qualified_name = self.extract_qualified_name(func);
+
+        // Check if this is a template call - expand at compile time
+        if let Some(ref name) = maybe_qualified_name {
+            // Try to find a template with this name
+            let qualified_name = self.resolve_name(name);
+            if let Some(template) = self.templates.get(&qualified_name).cloned() {
+                // Expand the template and compile the result
+                let expanded_expr = self.expand_template(&template, args)?;
+                return self.compile_expr_tail(&expanded_expr, is_tail);
+            }
+            // Also check unqualified name
+            if let Some(template) = self.templates.get(name).cloned() {
+                let expanded_expr = self.expand_template(&template, args)?;
+                return self.compile_expr_tail(&expanded_expr, is_tail);
+            }
+        }
 
         // Handle special built-in `throw` that compiles to the Throw instruction
         if let Some(ref name) = maybe_qualified_name {
@@ -22411,6 +22814,17 @@ impl Compiler {
             }
         }
 
+        // Pre-pass: Store template definitions BEFORE collecting regular functions
+        // Templates need to be available when compiling function bodies that call them
+        for item in items {
+            if let Item::FnDef(fn_def) = item {
+                if fn_def.is_template {
+                    let qualified_name = self.qualify_name(&fn_def.name.node);
+                    self.templates.insert(qualified_name, fn_def.clone());
+                }
+            }
+        }
+
         // Collect and merge function definitions by name AND signature BEFORE trait impls
         // This allows trait implementations to call module-level functions
         // Functions with the same name but different type signatures are different functions
@@ -22422,6 +22836,10 @@ impl Compiler {
 
         for item in items {
             if let Item::FnDef(fn_def) = item {
+                // Skip templates - they're stored above and not compiled to bytecode
+                if fn_def.is_template {
+                    continue;
+                }
                 let base_name = self.qualify_name(&fn_def.name.node);
                 // Build signature from first clause's parameter types
                 let param_types: Vec<String> = fn_def.clauses[0].params.iter()

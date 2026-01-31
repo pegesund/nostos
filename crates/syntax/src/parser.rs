@@ -1058,20 +1058,26 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
             )))
             .map_with_span(|inner, span| Expr::Quote(Box::new(inner), to_span(span)));
 
-        // Splice expression - ~expr (only valid inside quote)
-        // Uses recursive expr reference
-        let splice_expr = just(Token::Tilde)
-            .ignore_then(expr.clone())
-            .map_with_span(|inner, span| Expr::Splice(Box::new(inner), to_span(span)));
-
         // Primary expressions - split into groups to reduce type complexity
         // Skip newlines at the start of any primary expression
         let control_flow = skip_newlines().ignore_then(choice((if_expr, match_expr, try_expr, do_block, receive_expr, while_expr, for_expr, break_expr, continue_expr, return_expr))).boxed();
-        let special = skip_newlines().ignore_then(choice((spawn_expr, quote_expr, splice_expr, lambda))).boxed();
+        // Note: splice_expr is added below after primary is defined
+        let special_no_splice = skip_newlines().ignore_then(choice((spawn_expr, quote_expr, lambda))).boxed();
         let lit = skip_newlines().ignore_then(choice((bool_expr, int, float, string, char_expr))).boxed();
         let collections = skip_newlines().ignore_then(choice((map, set, record, unit_variant, tuple, unit, list, block))).boxed();
+        // Splice expression - ~atom (only valid inside quote)
+        // Splice only takes a simple expression (var, literal, or parenthesized)
+        // This ensures ~x * 2 parses as (~x) * 2, not ~(x * 2)
+        let splice_atom = choice((var.clone(), grouped.clone()));
+        let splice_expr = skip_newlines().ignore_then(
+            just(Token::Tilde)
+                .ignore_then(splice_atom)
+                .map_with_span(|inner, span| Expr::Splice(Box::new(inner), to_span(span)))
+        ).boxed();
+
         let simple = skip_newlines().ignore_then(choice((grouped, wildcard, var))).boxed();
-        let primary = choice((control_flow, special, lit, collections, simple));
+
+        let primary = choice((control_flow, special_no_splice, splice_expr, lit, collections, simple));
 
         // Postfix: function calls, method calls, field access, try operator
         // For call args, allow newlines around commas
