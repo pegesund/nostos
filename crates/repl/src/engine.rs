@@ -16472,7 +16472,8 @@ main() = getValue()
         let code = r#"
 template withGetters(typeDef) = quote {
     ~typeDef
-    ~typeDef.fields[0].fields.map(f =>
+    # For single-constructor types, .fields returns field list directly
+    ~typeDef.fields.map(f =>
         eval("get_" ++ f.name ++ "(r: " ++ ~typeDef.name ++ ") = r." ++ f.name)
     )
 }
