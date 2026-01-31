@@ -205,7 +205,9 @@ type B = B {}
 
 ## Example 9: Compile-Time Code Execution
 
-Use `comptime` to execute arbitrary Nostos code at compile time:
+Use `comptime` to execute arbitrary Nostos code at compile time. Two syntaxes are supported:
+
+### String syntax: `comptime("code")`
 
 ```nostos
 template withComputedDefault(fn, multiplier) = quote {
@@ -220,8 +222,30 @@ getValue(x: Int) = x
 main() = getValue(0)  # Returns 42
 ```
 
+### Block syntax: `comptime({ block })`
+
+```nostos
+template computed(fn, useSquare) = quote {
+    result = ~comptime({
+        base = 10
+        if ~useSquare {
+            base * base
+        } else {
+            base * 2
+        }
+    })
+    result
+}
+
+@computed(true)
+getSquare() = 0
+
+main() = getSquare()  # 10 * 10 = 100
+```
+
 The `comptime` function:
-- Takes a String containing Nostos code
+- String syntax: Takes a String that gets evaluated
+- Block syntax: Takes a block `({ ... })` that gets serialized and evaluated
 - Executes the code at compile time
 - Splices the result into the template
 

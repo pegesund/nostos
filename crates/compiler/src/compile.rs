@@ -3923,12 +3923,19 @@ impl Compiler {
                                 return AstValue::new(AstKind::Var(var_name));
                             }
                         }
-                        // Handle ~comptime("code") for compile-time code execution
-                        // Runs the code string using a fresh VM and returns the result as AST
+                        // Handle ~comptime("code") or ~comptime { block } for compile-time code execution
+                        // Runs the code using a fresh VM and returns the result as AST
                         if fn_name == "comptime" && args.len() == 1 {
                             let arg = self.substitute_splices_in_ast(&args[0], substitutions);
-                            if let Some(code_str) = self.compile_time_eval_to_string(&arg) {
-                                if let Some(result) = self.comptime_eval(&code_str) {
+                            // Try string first (for comptime("code"))
+                            let code_str = if let Some(s) = self.compile_time_eval_to_string(&arg) {
+                                Some(s)
+                            } else {
+                                // Otherwise try to serialize AST to code (for comptime { block })
+                                Self::ast_to_code_string(&arg)
+                            };
+                            if let Some(code) = code_str {
+                                if let Some(result) = self.comptime_eval(&code) {
                                     return result;
                                 }
                             }
@@ -4548,6 +4555,175 @@ impl Compiler {
             SendableMapKey::Record { .. } => return None, // Complex keys not supported
             SendableMapKey::Variant { .. } => return None, // Variant keys not supported
         }))
+    }
+
+    /// Convert an AST value to a code string.
+    /// Used for comptime { block } to serialize the block back to code.
+    fn ast_to_code_string(ast: &value::AstValue) -> Option<String> {
+        use value::AstKind;
+
+        Some(match &ast.kind {
+            // Literals
+            AstKind::Int(n) => n.to_string(),
+            AstKind::Float(f) => format!("{:?}", f), // Use debug format to preserve precision
+            AstKind::String(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+            AstKind::Bool(b) => b.to_string(),
+            AstKind::Char(c) => format!("'{}'", c),
+            AstKind::Unit => "()".to_string(),
+
+            // Identifiers
+            AstKind::Var(name) => name.clone(),
+
+            // Binary operations
+            AstKind::BinOp { op, left, right } => {
+                let l = Self::ast_to_code_string(left)?;
+                let r = Self::ast_to_code_string(right)?;
+                let op_str = match op.as_str() {
+                    "Add" => "+",
+                    "Sub" => "-",
+                    "Mul" => "*",
+                    "Div" => "/",
+                    "Mod" => "%",
+                    "Eq" => "==",
+                    "NotEq" => "!=",
+                    "Lt" => "<",
+                    "LtEq" => "<=",
+                    "Gt" => ">",
+                    "GtEq" => ">=",
+                    "And" => "&&",
+                    "Or" => "||",
+                    "Concat" => "++",
+                    _ => return None,
+                };
+                format!("({} {} {})", l, op_str, r)
+            }
+
+            // Unary operations
+            AstKind::UnaryOp { op, operand } => {
+                let o = Self::ast_to_code_string(operand)?;
+                let op_str = match op.as_str() {
+                    "Neg" => "-",
+                    "Not" => "!",
+                    _ => return None,
+                };
+                format!("({}{})", op_str, o)
+            }
+
+            // Function call
+            AstKind::Call { func, args } => {
+                let f = Self::ast_to_code_string(func)?;
+                let args_str: Option<Vec<String>> = args.iter()
+                    .map(|a| Self::ast_to_code_string(a))
+                    .collect();
+                format!("{}({})", f, args_str?.join(", "))
+            }
+
+            // Method call
+            AstKind::MethodCall { receiver, method, args } => {
+                let r = Self::ast_to_code_string(receiver)?;
+                let args_str: Option<Vec<String>> = args.iter()
+                    .map(|a| Self::ast_to_code_string(a))
+                    .collect();
+                format!("{}.{}({})", r, method, args_str?.join(", "))
+            }
+
+            // Field access
+            AstKind::FieldAccess { expr, field } => {
+                let e = Self::ast_to_code_string(expr)?;
+                format!("{}.{}", e, field)
+            }
+
+            // Index access
+            AstKind::Index { expr, index } => {
+                let e = Self::ast_to_code_string(expr)?;
+                let i = Self::ast_to_code_string(index)?;
+                format!("{}[{}]", e, i)
+            }
+
+            // Lambda
+            AstKind::Lambda { params, body } => {
+                let b = Self::ast_to_code_string(body)?;
+                if params.len() == 1 {
+                    format!("{} => {}", params[0], b)
+                } else {
+                    format!("({}) => {}", params.join(", "), b)
+                }
+            }
+
+            // Block
+            AstKind::Block { stmts, result } => {
+                let mut parts = Vec::new();
+                for stmt in stmts {
+                    parts.push(Self::ast_to_code_string(stmt)?);
+                }
+                parts.push(Self::ast_to_code_string(result)?);
+                format!("{{\n{}\n}}", parts.join("\n"))
+            }
+
+            // If expression
+            AstKind::If { cond, then_branch, else_branch } => {
+                let c = Self::ast_to_code_string(cond)?;
+                let t = Self::ast_to_code_string(then_branch)?;
+                if let Some(e) = else_branch {
+                    let e_str = Self::ast_to_code_string(e)?;
+                    format!("if {} {{ {} }} else {{ {} }}", c, t, e_str)
+                } else {
+                    format!("if {} {{ {} }}", c, t)
+                }
+            }
+
+            // Let binding
+            AstKind::Let { pattern, value } => {
+                let p = Self::ast_to_code_string(pattern)?;
+                let v = Self::ast_to_code_string(value)?;
+                format!("{} = {}", p, v)
+            }
+
+            // List
+            AstKind::List(items) => {
+                let items_str: Option<Vec<String>> = items.iter()
+                    .map(|i| Self::ast_to_code_string(i))
+                    .collect();
+                format!("[{}]", items_str?.join(", "))
+            }
+
+            // Tuple
+            AstKind::Tuple(items) => {
+                let items_str: Option<Vec<String>> = items.iter()
+                    .map(|i| Self::ast_to_code_string(i))
+                    .collect();
+                format!("({})", items_str?.join(", "))
+            }
+
+            // Record
+            AstKind::Record { fields } => {
+                let fields_str: Option<Vec<String>> = fields.iter()
+                    .map(|(name, val)| {
+                        Self::ast_to_code_string(val).map(|v| format!("{}: {}", name, v))
+                    })
+                    .collect();
+                format!("{{ {} }}", fields_str?.join(", "))
+            }
+
+            // Map
+            AstKind::Map { entries } => {
+                let entries_str: Option<Vec<String>> = entries.iter()
+                    .map(|(k, v)| {
+                        let ks = Self::ast_to_code_string(k)?;
+                        let vs = Self::ast_to_code_string(v)?;
+                        Some(format!("{}: {}", ks, vs))
+                    })
+                    .collect();
+                format!("%{{ {} }}", entries_str?.join(", "))
+            }
+
+            // Patterns - used in let bindings
+            AstKind::PatternVar(name) => name.clone(),
+            AstKind::PatternWildcard => "_".to_string(),
+
+            // For other complex AST nodes, return None
+            _ => return None,
+        })
     }
 
     /// Parse a code string into an AST value.

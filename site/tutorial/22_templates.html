@@ -302,7 +302,9 @@ type B = B {}
 
                 <!-- Example 9 -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Example 9: Compile-Time Code Execution</h2>
-                <p class="text-slate-400 mb-4">Use <code class="text-emerald-400">comptime</code> to execute arbitrary Nostos code at compile time:</p>
+                <p class="text-slate-400 mb-4">Use <code class="text-emerald-400">comptime</code> to execute arbitrary Nostos code at compile time. Two syntaxes are supported:</p>
+
+                <h3 class="text-lg font-semibold text-white mb-3">String syntax: <code class="text-emerald-400">comptime("code")</code></h3>
                 <div class="bg-nostos-code rounded-lg p-6 mb-4 border border-slate-800 overflow-x-auto">
 <pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template withComputedDefault(fn, multiplier) = quote {
     # Compute at compile time: 21 * 2 = 42
@@ -315,9 +317,31 @@ getValue(x: Int) = x
 
 main() = getValue(0)  # Returns 42</code></pre>
                 </div>
+
+                <h3 class="text-lg font-semibold text-white mb-3">Block syntax: <code class="text-emerald-400">comptime({ block })</code></h3>
+                <div class="bg-nostos-code rounded-lg p-6 mb-4 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template computed(fn, useSquare) = quote {
+    result = ~comptime({
+        base = 10
+        if ~useSquare {
+            base * base
+        } else {
+            base * 2
+        }
+    })
+    result
+}
+
+@computed(true)
+getSquare() = 0
+
+main() = getSquare()  # 10 * 10 = 100</code></pre>
+                </div>
+
                 <p class="text-slate-400 mb-4">The <code class="text-emerald-400">comptime</code> function:</p>
                 <ul class="text-slate-400 mb-4 list-disc ml-6">
-                    <li>Takes a String containing Nostos code</li>
+                    <li>String syntax: Takes a String that gets evaluated</li>
+                    <li>Block syntax: Takes a block <code class="text-emerald-400">({ ... })</code> that gets serialized and evaluated</li>
                     <li>Executes the code at compile time</li>
                     <li>Splices the result into the template</li>
                 </ul>

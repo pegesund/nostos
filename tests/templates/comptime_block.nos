@@ -1,0 +1,19 @@
+# expect: 100
+# Test comptime block syntax: comptime({ block })
+
+template computed(fn, useSquare) = quote {
+    result = ~comptime({
+        base = 10
+        if ~useSquare {
+            base * base
+        } else {
+            base * 2
+        }
+    })
+    result
+}
+
+@computed(true)
+getValue() = 0
+
+main() = getValue()  # 10 * 10 = 100
