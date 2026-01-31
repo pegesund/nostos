@@ -521,6 +521,59 @@ type Point = Point { x: Int, y: Int }</code></pre>
                     <p class="text-slate-400 mb-2">Type decorators can return multiple items (type + functions) using the Items AST node. When a template returns a Block containing both TypeDef and FnDef nodes, all are compiled.</p>
                 </div>
 
+                <!-- Compile-Time Eval -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Compile-Time Eval for Code Generation</h2>
+                <p class="text-slate-400 mb-4">
+                    The <code class="text-emerald-400">eval</code> function allows generating code from strings at compile time. This is powerful for creating functions dynamically based on type information:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6">
+<pre><code class="language-nostos"># Template that generates a getter function for each type
+template withGetter(typeDef) = quote {
+    ~typeDef
+    ~eval("getX(r: " ++ ~typeDef.name ++ ") = r.x")
+}
+
+@withGetter
+type Point = Point { x: Int, y: Int }
+
+main() = {
+    p = Point(x: 42, y: 10)
+    getX(p)  # Returns 42
+}</code></pre>
+                </div>
+                <p class="text-slate-400 mb-4">
+                    The <code class="text-emerald-400">eval</code> function:
+                </p>
+                <ol class="list-decimal list-inside text-slate-400 space-y-1 mb-6 ml-4">
+                    <li>Evaluates its argument at compile time to produce a string</li>
+                    <li>Parses that string as Nostos code</li>
+                    <li>Returns the parsed AST for inclusion in the template result</li>
+                </ol>
+                <p class="text-slate-400 mb-4">
+                    This enables generating functions with names and signatures derived from type information:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6">
+<pre><code class="language-nostos">template withSum(typeDef) = quote {
+    ~typeDef
+    ~eval("sumFields(r: " ++ ~typeDef.name ++ ") = r.x + r.y")
+}
+
+@withSum
+type Vec2 = Vec2 { x: Int, y: Int }
+
+main() = sumFields(Vec2(x: 10, y: 20))  # Returns 30</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">String Building for Eval</h3>
+                <p class="text-slate-400 mb-4">
+                    When building code strings for <code class="text-emerald-400">eval</code>, you can use:
+                </p>
+                <ul class="list-disc list-inside text-slate-400 space-y-1 mb-6 ml-4">
+                    <li>String concatenation: <code class="text-emerald-400">"a" ++ "b"</code></li>
+                    <li>Type introspection: <code class="text-emerald-400">~typeDef.name</code>, <code class="text-emerald-400">~typeDef.fields</code></li>
+                    <li>Field access on records from <code class="text-emerald-400">~typeDef.fields</code></li>
+                </ul>
+
                 <!-- Limitations -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Limitations</h2>
                 <div class="bg-gradient-to-r from-yellow-900/20 to-orange-900/20 rounded-lg p-6 mb-6 border border-yellow-800/30">
@@ -528,7 +581,7 @@ type Point = Point { x: Int, y: Int }</code></pre>
                         <li><strong class="text-slate-300">Compile-time execution:</strong> Templates run at compile time and cannot access runtime values.</li>
                         <li><strong class="text-slate-300">Spliced values must be valid AST:</strong> The <code class="text-emerald-400">~expr</code> splice operator only works with AST values.</li>
                         <li><strong class="text-slate-300">Recursive templates must terminate:</strong> Infinite template recursion will hang the compiler.</li>
-                        <li><strong class="text-slate-300">Quote blocks parse expressions:</strong> Inside <code class="text-emerald-400">quote { }</code>, items like function definitions must be constructed as AST values rather than using normal syntax.</li>
+                        <li><strong class="text-slate-300">Eval strings must be valid code:</strong> The string passed to <code class="text-emerald-400">eval</code> must be valid Nostos syntax.</li>
                     </ul>
                 </div>
 
