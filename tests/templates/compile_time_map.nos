@@ -1,12 +1,12 @@
 # expect: 30
 # Test compile-time map for generating multiple functions
-# Note: type Point = Point {...} is a variant with one constructor
-# typeDef.fields returns constructors, typeDef.fields[0].fields returns actual fields
+# For single-constructor types (type Point = Point {...}), .fields returns
+# the fields directly, not a list of constructors
 
 template withGetters(typeDef) = quote {
     ~typeDef
-    # Get the first constructor's fields (for single-constructor types like Point)
-    ~typeDef.fields[0].fields.map(f => eval("get_" ++ f.name ++ "(r: " ++ ~typeDef.name ++ ") = r." ++ f.name))
+    # Generate a getter for each field
+    ~typeDef.fields.map(f => eval("get_" ++ f.name ++ "(r: " ++ ~typeDef.name ++ ") = r." ++ f.name))
 }
 
 @withGetters

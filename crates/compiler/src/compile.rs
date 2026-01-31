@@ -3961,6 +3961,29 @@ impl Compiler {
                     }
                 }
 
+                // Handle ~typeDef.fields.map(...) for compile-time iteration
+                if let AstKind::MethodCall { receiver, method, args } = &inner.kind {
+                    if method == "map" && args.len() == 1 {
+                        // First evaluate the receiver (e.g., typeDef.fields)
+                        let evaluated_receiver = self.compile_time_eval_to_ast_with_subs(receiver, substitutions);
+                        if let AstKind::List(items) = &evaluated_receiver.kind {
+                            if let AstKind::Lambda { params, body } = &args[0].kind {
+                                if params.len() == 1 {
+                                    let param_name = &params[0];
+                                    let mapped_items: Vec<AstValue> = items.iter()
+                                        .map(|item| {
+                                            let mut local_subs = substitutions.clone();
+                                            local_subs.insert(param_name.clone(), item.clone());
+                                            self.substitute_splices_in_ast(body, &local_subs)
+                                        })
+                                        .collect();
+                                    return AstValue::new(AstKind::Items(mapped_items));
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // General handler for nested expressions like ~typeDef.fields[0].name
                 // Evaluate the inner expression with substitutions to resolve variables
                 let evaluated = self.compile_time_eval_to_ast_with_subs(inner, substitutions);
@@ -4090,6 +4113,23 @@ impl Compiler {
                                         return AstValue::new(AstKind::List(field_asts));
                                     }
                                     TypeDefKind::Variant { constructors } => {
+                                        // For single-constructor variants with named fields,
+                                        // return the fields directly for convenience
+                                        if constructors.len() == 1 {
+                                            if let (_, VariantFieldsKind::Named(fields)) = &constructors[0] {
+                                                let field_asts: Vec<AstValue> = fields.iter()
+                                                    .map(|(fname, ftype)| AstValue::new(AstKind::Record {
+                                                        type_name: None,
+                                                        fields: vec![
+                                                            ("name".to_string(), AstValue::new(AstKind::String(fname.clone()))),
+                                                            ("ty".to_string(), AstValue::new(AstKind::String(ftype.clone()))),
+                                                        ],
+                                                    }))
+                                                    .collect();
+                                                return AstValue::new(AstKind::List(field_asts));
+                                            }
+                                        }
+                                        // For true variants, return constructors list
                                         let ctor_asts: Vec<AstValue> = constructors.iter()
                                             .map(|(cname, fields_kind)| {
                                                 let fields_ast = match fields_kind {
