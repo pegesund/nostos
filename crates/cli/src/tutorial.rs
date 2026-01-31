@@ -122,6 +122,11 @@ pub static CHAPTERS: &[Chapter] = &[
         title: "Mutability",
         content: include_str!("../../../docs/tutorial/21_mutability.md"),
     },
+    Chapter {
+        number: 22,
+        title: "Templates & Metaprogramming",
+        content: include_str!("../../../docs/tutorial/22_templates.md"),
+    },
 ];
 
 /// Get the total number of chapters

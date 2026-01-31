@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Templates & Metaprogramming - Nostos Tutorial</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <style>
+        .hljs-operator {
+            color: #e06c75;
+        }
+        .hljs-function {
+            color: #e5c07b;
+        }
+    </style>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nostos: {
+                            dark: '#0f172a',
+                            primary: '#3b82f6',
+                            accent: '#10b981',
+                            code: '#1e293b'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        html, body { max-width: 100vw; overflow-x: hidden; }
+        pre { max-width: 100%; overflow-x: auto; white-space: pre; }
+        code { word-break: break-word; }
+        p, li, h1, h2, h3, h4 { word-wrap: break-word; overflow-wrap: break-word; }
+        .prose { max-width: 100%; }
+        article, main, .content { max-width: 100%; overflow-x: hidden; }
+        * { box-sizing: border-box; }
+        @media (max-width: 768px) {
+            .flex-1 { min-width: 0; }
+            pre { font-size: 12px; }
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-200 font-sans antialiased overflow-x-hidden">
+
+    <!-- Navbar -->
+    <nav class="border-b border-slate-800 bg-slate-900/80 backdrop-blur fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center">
+                    <button id="mobile-menu-btn" class="md:hidden text-slate-300 hover:text-white mr-3">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+                        </svg>
+                    </button>
+                    <a href="../index.html" class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Nostos</a>
+                    <span class="ml-4 text-slate-400 border-l border-slate-700 pl-4 text-sm font-medium hidden sm:inline">Tutorial</span>
+                </div>
+                <div class="hidden md:flex space-x-6">
+                    <a href="../index.html" class="text-slate-400 hover:text-white transition">Home</a>
+                    <a href="https://github.com/pegesund/nostos" class="text-slate-400 hover:text-white transition">GitHub</a>
+                </div>
+            </div>
+        </div>
+        <div id="mobile-menu" class="hidden md:hidden border-t border-slate-800 bg-slate-900">
+            <div class="px-4 py-3 space-y-2">
+                <a href="../index.html" class="block text-slate-300 hover:text-white transition py-2">Home</a>
+                <a href="https://github.com/pegesund/nostos" class="block text-slate-300 hover:text-white transition py-2">GitHub</a>
+                <div class="border-t border-slate-700 pt-3 mt-3">
+                    <div class="text-xs text-slate-500 uppercase font-semibold mb-2">Chapters</div>
+                    <div id="mobile-chapters"></div>
+                </div>
+            </div>
+        </div>
+    </nav>
+    <script>
+        document.getElementById('mobile-menu-btn').addEventListener('click', function() {
+            document.getElementById('mobile-menu').classList.toggle('hidden');
+        });
+    </script>
+
+    <div class="pt-16 flex min-h-screen">
+
+        <!-- Sidebar -->
+        <aside id="tutorial-sidebar" class="w-64 fixed top-16 h-[calc(100vh-4rem)] border-r border-slate-800 bg-slate-900 overflow-y-auto hidden md:block pb-8">
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 md:ml-64 p-8 max-w-4xl">
+            <div class="mb-12">
+                <h1 class="text-4xl font-bold text-white mb-6">Templates & Metaprogramming</h1>
+                <p class="text-lg text-slate-400 leading-relaxed mb-8">
+                    Nostos provides a compile-time metaprogramming system based on templates. Templates are functions that manipulate code as data, enabling powerful abstractions like decorators, code generation, and domain-specific languages.
+                </p>
+
+                <!-- Core Concepts -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Core Concepts</h2>
+                <p class="text-slate-400 mb-4">The template system has three key components:</p>
+                <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
+                    <ul class="text-slate-400 space-y-2">
+                        <li><code class="text-blue-400">quote</code> - Capture code as AST (Abstract Syntax Tree) data</li>
+                        <li><code class="text-blue-400">~</code> (splice) - Insert AST values back into code</li>
+                        <li><code class="text-blue-400">template</code> - Compile-time functions that transform code</li>
+                    </ul>
+                </div>
+
+                <!-- Quote -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Quote: Capturing Code as Data</h2>
+                <p class="text-slate-400 mb-4">The <code>quote</code> keyword captures an expression as an AST value instead of evaluating it.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">main() = {
+    # Capture the expression "1 + 2" as data
+    ast = quote(1 + 2)
+    println(ast)  # Prints the AST representation
+
+    # Quote works with any expression
+    complex = quote(x.map(y => y * 2).filter(z => z > 10))
+    println(complex)
+}</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Block Quote Syntax</h3>
+                <p class="text-slate-400 mb-4">For multi-line expressions, use the block form:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">main() = {
+    ast = quote {
+        x = 10
+        y = 20
+        x + y
+    }
+    println(ast)
+}</code></pre>
+                </div>
+
+                <!-- Splice -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Splice: Inserting AST Values</h2>
+                <p class="text-slate-400 mb-4">The <code>~</code> operator (splice) inserts an AST value into quoted code:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">main() = {
+    # Create an AST for a number
+    num = quote(42)
+
+    # Splice it into a larger expression
+    expr = quote(~num * 2)
+    # expr represents: 42 * 2
+
+    println(expr)
+}</code></pre>
+                </div>
+
+                <!-- Template Functions -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Template Functions</h2>
+                <p class="text-slate-400 mb-4">Templates are compile-time functions declared with the <code>template</code> keyword. They receive AST values and return transformed AST.</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos"># A template that wraps an expression to double its result
+template double(body) = quote {
+    result = ~body
+    result * 2
+}
+
+# Use the template directly
+main() = {
+    value = double(21)  # Expands to: result = 21; result * 2
+    println(value)      # 42
+}</code></pre>
+                </div>
+
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <h4 class="text-sm font-semibold text-slate-300 mb-2">How Templates Work</h4>
+                    <ol class="text-slate-400 text-sm space-y-1 list-decimal list-inside">
+                        <li>When a template is called, arguments are converted to AST values</li>
+                        <li>The template body executes at compile time</li>
+                        <li>Splices substitute the argument AST into the quoted result</li>
+                        <li>The resulting AST replaces the template call in the compiled code</li>
+                    </ol>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Templates with Multiple Parameters</h3>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos"># Template that creates a range check
+template inRange(value, min, max) = quote {
+    v = ~value
+    v >= ~min && v <= ~max
+}
+
+main() = {
+    x = 50
+    if inRange(x, 0, 100) {
+        println("In range!")
+    }
+}</code></pre>
+                </div>
+
+                <!-- Decorators -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Decorators</h2>
+                <p class="text-slate-400 mb-4">Decorators are a convenient syntax for applying templates to function definitions. Use <code>@decorator</code> before a function:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template double(body) = quote {
+    result = ~body
+    result * 2
+}
+
+@double
+getValue() = 21
+
+main() = getValue()  # Returns 42</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Decorators with Arguments</h3>
+                <p class="text-slate-400 mb-4">Decorators can take additional arguments after the implicit body parameter:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos"># Multiply result by a factor
+template multiply(body, factor) = quote {
+    result = ~body
+    result * ~factor
+}
+
+# Add a fixed amount
+template add(body, amount) = quote {
+    result = ~body
+    result + ~amount
+}
+
+@add(35)
+@multiply(10)
+compute() = 7  # 7 * 10 = 70, then + 35 = 105
+
+main() = compute()  # Returns 105</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Multiple Decorators</h3>
+                <p class="text-slate-400 mb-4">When stacking decorators, they apply bottom-up (innermost first):</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template double(body) = quote {
+    result = ~body
+    result * 2
+}
+
+template triple(body) = quote {
+    result = ~body
+    result * 3
+}
+
+# Applied as: triple(double(7))
+# First double: 7 * 2 = 14
+# Then triple: 14 * 3 = 42
+@triple
+@double
+getValue() = 7
+
+main() = getValue()  # 42</code></pre>
+                </div>
+
+                <!-- Practical Examples -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Practical Examples</h2>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Logging Decorator</h3>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template logged(body) = quote {
+    println("Function called")
+    result = ~body
+    println("Function returned")
+    result
+}
+
+@logged
+add(a: Int, b: Int) = a + b
+
+main() = {
+    result = add(1, 2)
+    println(result)
+}
+# Output:
+# Function called
+# Function returned
+# 3</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Timing Decorator</h3>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template timed(body) = quote {
+    start = Time.now()
+    result = ~body
+    elapsed = Time.now() - start
+    println("Elapsed: " ++ elapsed.toString() ++ "ms")
+    result
+}
+
+@timed
+slowComputation() = {
+    # Simulate work
+    sum = 0
+    i = 0
+    while i < 1000000 {
+        sum = sum + i
+        i = i + 1
+    }
+    sum
+}
+
+main() = slowComputation()</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Default Value Decorator</h3>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template withDefault(body, default) = quote {
+    result = ~body
+    if result == () { ~default } else { result }
+}
+
+@withDefault(0)
+parseNumber(s: String) = {
+    # Returns () on parse failure
+    Int.parse(s)
+}
+
+main() = {
+    println(parseNumber("42"))    # 42
+    println(parseNumber("abc"))   # 0 (default)
+}</code></pre>
+                </div>
+
+                <!-- AST Types -->
+                <h2 class="text-2xl font-semibold text-white mb-4">AST Types</h2>
+                <p class="text-slate-400 mb-4">When working with templates, the AST values have these kinds:</p>
+                <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
+                    <ul class="text-slate-400 space-y-1 text-sm">
+                        <li><strong>Literals:</strong> Int, Float, String, Bool, Char, Unit</li>
+                        <li><strong>Variables:</strong> Var(name)</li>
+                        <li><strong>Operations:</strong> BinOp, UnaryOp</li>
+                        <li><strong>Calls:</strong> Call, MethodCall</li>
+                        <li><strong>Access:</strong> FieldAccess, Index</li>
+                        <li><strong>Structures:</strong> Lambda, Block, If, Match</li>
+                        <li><strong>Collections:</strong> List, Tuple, Record, Map</li>
+                        <li><strong>Patterns:</strong> PatternVar, PatternLit, PatternConstructor</li>
+                        <li><strong>Definitions:</strong> FnDef, Let</li>
+                    </ul>
+                </div>
+
+                <!-- Best Practices -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Best Practices</h2>
+                <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
+                    <ol class="text-slate-400 space-y-2 list-decimal list-inside">
+                        <li><strong>Keep templates simple</strong> - Complex logic is harder to debug at compile time</li>
+                        <li><strong>Use meaningful names</strong> - Template parameters should describe their role</li>
+                        <li><strong>Document behavior</strong> - Explain what transformation the template performs</li>
+                        <li><strong>Test templates</strong> - Create test cases for each template</li>
+                        <li><strong>Prefer composition</strong> - Build complex behavior from simple templates</li>
+                    </ol>
+                </div>
+
+                <!-- Comparison -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Comparison with Other Languages</h2>
+                <div class="overflow-x-auto mb-8">
+                    <table class="min-w-full bg-slate-800/50 rounded-lg border border-slate-700">
+                        <thead>
+                            <tr class="border-b border-slate-700">
+                                <th class="px-4 py-2 text-left text-slate-300">Feature</th>
+                                <th class="px-4 py-2 text-left text-slate-300">Nostos</th>
+                                <th class="px-4 py-2 text-left text-slate-300">Rust</th>
+                                <th class="px-4 py-2 text-left text-slate-300">Lisp</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-slate-400">
+                            <tr class="border-b border-slate-700">
+                                <td class="px-4 py-2">Syntax</td>
+                                <td class="px-4 py-2"><code>template</code>, <code>quote</code>, <code>~</code></td>
+                                <td class="px-4 py-2"><code>macro_rules!</code>, proc macros</td>
+                                <td class="px-4 py-2"><code>defmacro</code>, <code>'</code>, <code>,</code></td>
+                            </tr>
+                            <tr class="border-b border-slate-700">
+                                <td class="px-4 py-2">Hygiene</td>
+                                <td class="px-4 py-2">Automatic</td>
+                                <td class="px-4 py-2">Manual</td>
+                                <td class="px-4 py-2">Manual</td>
+                            </tr>
+                            <tr class="border-b border-slate-700">
+                                <td class="px-4 py-2">Phase</td>
+                                <td class="px-4 py-2">Compile-time</td>
+                                <td class="px-4 py-2">Compile-time</td>
+                                <td class="px-4 py-2">Various</td>
+                            </tr>
+                            <tr>
+                                <td class="px-4 py-2">AST Access</td>
+                                <td class="px-4 py-2">Direct</td>
+                                <td class="px-4 py-2">TokenStream</td>
+                                <td class="px-4 py-2">S-expressions</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Limitations -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Limitations</h2>
+                <div class="bg-gradient-to-r from-yellow-900/20 to-orange-900/20 rounded-lg p-6 mb-8 border border-yellow-800/30">
+                    <ul class="list-disc list-inside text-slate-400 space-y-1">
+                        <li>Templates execute at compile time, not runtime</li>
+                        <li>Spliced values must be valid AST</li>
+                        <li>Templates cannot access runtime values</li>
+                        <li>Recursive templates must terminate</li>
+                    </ul>
+                </div>
+
+                <p class="text-slate-400 mb-8">
+                    Templates provide a powerful way to extend the language without modifying the compiler. Use them to create domain-specific abstractions and eliminate boilerplate code.
+                </p>
+
+                <!-- Navigation -->
+                <div class="mt-12 pt-8 border-t border-slate-800 flex justify-between">
+                    <a href="21_mutability.html" class="text-blue-400 hover:text-blue-300 transition">&larr; Previous: Mutability</a>
+                    <a href="23_complete_web_app.html" class="text-blue-400 hover:text-blue-300 transition">Next: Complete Web App &rarr;</a>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../js/nostos-highlight.js"></script>
+    <script src="../js/tutorial-sidebar.js"></script>
+    <script>hljs.highlightAll();</script>
+
+</body>
+</html>

@@ -31,5 +31,6 @@ Welcome to the Nostos programming language tutorial! Use the arrow keys to navig
 19. **Debugging & Profiling** - REPL commands, :profile, :debug
 20. **HTML Templating** - Functional HTML generation
 21. **Mutability** - var bindings, persistent data structures
+22. **Templates & Metaprogramming** - quote, splice, decorators
 
 Press **Right arrow** to begin with Language Basics.
