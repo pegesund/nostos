@@ -161,8 +161,8 @@
                 <p class="text-slate-400 mb-4">Templates are compile-time functions declared with the <code>template</code> keyword. They receive AST values and return transformed AST.</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre style="max-width:100%;overflow-x:auto"><code class="language-nostos"># A template that wraps an expression to double its result
-template double(body) = quote {
-    result = ~body
+template double(fn) = quote {
+    result = ~fn.body
     result * 2
 }
 
@@ -201,10 +201,10 @@ main() = {
 
                 <!-- Decorators -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Decorators</h2>
-                <p class="text-slate-400 mb-4">Decorators are a convenient syntax for applying templates to function definitions. Use <code>@decorator</code> before a function:</p>
+                <p class="text-slate-400 mb-4">Decorators are a convenient syntax for applying templates to function definitions. Use <code>@decorator</code> before a function. The decorator receives the full function definition:</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template double(body) = quote {
-    result = ~body
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template double(fn) = quote {
+    result = ~fn.body
     result * 2
 }
 
@@ -214,18 +214,30 @@ getValue() = 21
 main() = getValue()  # Returns 42</code></pre>
                 </div>
 
+                <!-- Function Introspection -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Function Introspection</h2>
+                <p class="text-slate-400 mb-4">Function decorators receive the full function definition and can access its parts:</p>
+                <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
+                    <ul class="text-slate-400 space-y-2">
+                        <li><code class="text-emerald-400">~fn.name</code> - Function name as String</li>
+                        <li><code class="text-emerald-400">~fn.params</code> - List of {name, type} records</li>
+                        <li><code class="text-emerald-400">~fn.body</code> - Function body AST</li>
+                        <li><code class="text-emerald-400">~fn.returnType</code> - Return type as String (empty if not specified)</li>
+                    </ul>
+                </div>
+
                 <h3 class="text-xl font-semibold text-white mb-3">Decorators with Arguments</h3>
-                <p class="text-slate-400 mb-4">Decorators can take additional arguments after the implicit body parameter:</p>
+                <p class="text-slate-400 mb-4">Decorators can take additional arguments after the implicit function parameter:</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
 <pre style="max-width:100%;overflow-x:auto"><code class="language-nostos"># Multiply result by a factor
-template multiply(body, factor) = quote {
-    result = ~body
+template multiply(fn, factor) = quote {
+    result = ~fn.body
     result * ~factor
 }
 
 # Add a fixed amount
-template add(body, amount) = quote {
-    result = ~body
+template add(fn, amount) = quote {
+    result = ~fn.body
     result + ~amount
 }
 
@@ -239,13 +251,13 @@ main() = compute()  # Returns 105</code></pre>
                 <h3 class="text-xl font-semibold text-white mb-3">Multiple Decorators</h3>
                 <p class="text-slate-400 mb-4">When stacking decorators, they apply bottom-up (innermost first):</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template double(body) = quote {
-    result = ~body
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template double(fn) = quote {
+    result = ~fn.body
     result * 2
 }
 
-template triple(body) = quote {
-    result = ~body
+template triple(fn) = quote {
+    result = ~fn.body
     result * 3
 }
 
@@ -259,14 +271,125 @@ getValue() = 7
 main() = getValue()  # 42</code></pre>
                 </div>
 
+                <!-- Type Decorators -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Type Decorators</h2>
+                <p class="text-slate-400 mb-4">
+                    Templates can also be applied to type definitions using the <code class="text-emerald-400">@decorator</code> syntax:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos"># Template that receives a type definition
+template traced(typeDef) = quote {
+    ~typeDef  # Return the type unchanged
+}
+
+@traced
+type Point = Point { x: Int, y: Int }</code></pre>
+                </div>
+
+                <h3 class="text-xl font-semibold text-white mb-3">Type Introspection</h3>
+                <p class="text-slate-400 mb-4">Type decorators can access type structure at compile time:</p>
+                <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
+                    <ul class="text-slate-400 space-y-2">
+                        <li><code class="text-emerald-400">~typeDef.name</code> - The type name as a String</li>
+                        <li><code class="text-emerald-400">~typeDef.typeParams</code> - Type parameters as a List of Strings</li>
+                        <li><code class="text-emerald-400">~typeDef.fields</code> - For records: List of {name, type} records. For variants: List of {name, fields} records</li>
+                        <li><code class="text-emerald-400">~typeDef.fields[0].fields</code> - Fields of the first constructor (for variant types)</li>
+                    </ul>
+                </div>
+
+                <!-- Compile-Time Eval -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Compile-Time Eval for Code Generation</h2>
+                <p class="text-slate-400 mb-4">
+                    The <code class="text-emerald-400">eval</code> function allows generating code from strings at compile time:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos"># Template that generates a getter function
+template withGetter(typeDef) = quote {
+    ~typeDef
+    ~eval("getX(r: " ++ ~typeDef.name ++ ") = r.x")
+}
+
+@withGetter
+type Point = Point { x: Int, y: Int }
+
+main() = {
+    p = Point(x: 42, y: 10)
+    getX(p)  # Returns 42
+}</code></pre>
+                </div>
+
+                <!-- Compile-Time Iteration -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Compile-Time Iteration</h2>
+                <p class="text-slate-400 mb-4">
+                    Use <code class="text-emerald-400">.map()</code> to generate multiple items from a list:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos"># Generate getter functions for all fields
+template withGetters(typeDef) = quote {
+    ~typeDef
+    ~typeDef.fields[0].fields.map(f => eval("get_" ++ f.name ++ "(r: " ++ ~typeDef.name ++ ") = r." ++ f.name))
+}
+
+@withGetters
+type Point = Point { x: Int, y: Int }
+# Generates: get_x(r: Point) and get_y(r: Point)
+
+main() = {
+    p = Point(x: 10, y: 20)
+    get_x(p) + get_y(p)  # 30
+}</code></pre>
+                </div>
+
+                <!-- Compile-Time Conditionals -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Compile-Time Conditionals</h2>
+                <p class="text-slate-400 mb-4">
+                    Use <code class="text-emerald-400">~if</code> for conditional code generation:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template maybeDouble(fn, shouldDouble) = quote {
+    result = ~fn.body
+    ~if ~shouldDouble { quote(result * 2) } else { quote(result) }
+}
+
+@maybeDouble(true)
+getValue() = 21  # Returns 42
+
+@maybeDouble(false)
+getOther() = 100  # Returns 100
+
+main() = getValue() + getOther()  # 142</code></pre>
+                </div>
+
+                <!-- Gensym -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Gensym: Unique Identifiers</h2>
+                <p class="text-slate-400 mb-4">
+                    Use <code class="text-emerald-400">~gensym("prefix")</code> to generate unique identifier names:
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-6 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos"># Generate a uniquely-named helper function
+template genFunc(typeDef) = quote {
+    ~typeDef
+    ~eval(~gensym("helper") ++ "() = 42")
+}
+
+@genFunc
+type Point = Point { x: Int, y: Int }
+# Generates: helper_0() = 42
+
+main() = helper_0()</code></pre>
+                </div>
+                <p class="text-slate-400 mb-4">
+                    Each call to <code class="text-emerald-400">gensym</code> produces a unique string like "prefix_0", "prefix_1", etc. This helps avoid naming collisions in generated code.
+                </p>
+
                 <!-- Practical Examples -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Practical Examples</h2>
 
                 <h3 class="text-xl font-semibold text-white mb-3">Logging Decorator</h3>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template logged(body) = quote {
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template logged(fn) = quote {
     println("Function called")
-    result = ~body
+    result = ~fn.body
     println("Function returned")
     result
 }
@@ -286,9 +409,9 @@ main() = {
 
                 <h3 class="text-xl font-semibold text-white mb-3">Timing Decorator</h3>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template timed(body) = quote {
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template timed(fn) = quote {
     start = Time.now()
-    result = ~body
+    result = ~fn.body
     elapsed = Time.now() - start
     println("Elapsed: " ++ elapsed.toString() ++ "ms")
     result
@@ -311,8 +434,8 @@ main() = slowComputation()</code></pre>
 
                 <h3 class="text-xl font-semibold text-white mb-3">Default Value Decorator</h3>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template withDefault(body, default) = quote {
-    result = ~body
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template withDefault(fn, default) = quote {
+    result = ~fn.body
     if result == () { ~default } else { result }
 }
 
@@ -330,18 +453,56 @@ main() = {
 
                 <!-- AST Types -->
                 <h2 class="text-2xl font-semibold text-white mb-4">AST Types</h2>
-                <p class="text-slate-400 mb-4">When working with templates, the AST values have these kinds:</p>
+                <p class="text-slate-400 mb-4">When working with templates, AST values have these kinds:</p>
                 <div class="bg-slate-800/50 rounded-lg p-6 mb-8 border border-slate-700">
-                    <ul class="text-slate-400 space-y-1 text-sm">
-                        <li><strong>Literals:</strong> Int, Float, String, Bool, Char, Unit</li>
-                        <li><strong>Variables:</strong> Var(name)</li>
-                        <li><strong>Operations:</strong> BinOp, UnaryOp</li>
-                        <li><strong>Calls:</strong> Call, MethodCall</li>
-                        <li><strong>Access:</strong> FieldAccess, Index</li>
-                        <li><strong>Structures:</strong> Lambda, Block, If, Match</li>
-                        <li><strong>Collections:</strong> List, Tuple, Record, Map</li>
-                        <li><strong>Patterns:</strong> PatternVar, PatternLit, PatternConstructor</li>
-                        <li><strong>Definitions:</strong> FnDef, Let</li>
+                    <h4 class="text-sm font-semibold text-slate-300 mb-2">Literals</h4>
+                    <p class="text-slate-400 text-sm mb-4"><code>Int</code>, <code>Float</code>, <code>String</code>, <code>Bool</code>, <code>Char</code>, <code>Unit</code></p>
+
+                    <h4 class="text-sm font-semibold text-slate-300 mb-2">Identifiers</h4>
+                    <p class="text-slate-400 text-sm mb-4"><code>Var</code> - variable reference</p>
+
+                    <h4 class="text-sm font-semibold text-slate-300 mb-2">Expressions</h4>
+                    <ul class="text-slate-400 text-sm space-y-1 mb-4">
+                        <li><code>BinOp</code> - binary operations (+, -, *, /, ++, etc.)</li>
+                        <li><code>UnaryOp</code> - unary operations (-, !)</li>
+                        <li><code>Call</code> - function calls</li>
+                        <li><code>MethodCall</code> - method calls (receiver.method(args))</li>
+                        <li><code>FieldAccess</code> - field access (expr.field)</li>
+                        <li><code>Index</code> - index access (expr[index])</li>
+                        <li><code>Lambda</code> - lambda expressions (|params| body)</li>
+                        <li><code>Block</code> - blocks ({ stmts; result })</li>
+                        <li><code>If</code> - conditionals</li>
+                        <li><code>Match</code> - pattern matching</li>
+                        <li><code>Let</code> - let bindings</li>
+                    </ul>
+
+                    <h4 class="text-sm font-semibold text-slate-300 mb-2">Collections</h4>
+                    <ul class="text-slate-400 text-sm space-y-1 mb-4">
+                        <li><code>List</code> - list literals [a, b, c]</li>
+                        <li><code>Tuple</code> - tuple literals (a, b, c)</li>
+                        <li><code>Record</code> - record literals { field: value }</li>
+                        <li><code>Map</code> - map literals %{ key: value }</li>
+                    </ul>
+
+                    <h4 class="text-sm font-semibold text-slate-300 mb-2">Patterns</h4>
+                    <ul class="text-slate-400 text-sm space-y-1 mb-4">
+                        <li><code>PatternWildcard</code> - wildcard (_)</li>
+                        <li><code>PatternVar</code> - variable pattern</li>
+                        <li><code>PatternLit</code> - literal pattern</li>
+                        <li><code>PatternTuple</code> - tuple pattern</li>
+                        <li><code>PatternList</code> - list pattern with optional rest</li>
+                        <li><code>PatternConstructor</code> - constructor pattern</li>
+                    </ul>
+
+                    <h4 class="text-sm font-semibold text-slate-300 mb-2">Template-specific</h4>
+                    <p class="text-slate-400 text-sm mb-4"><code>Splice</code> - splice marker (~expr)</p>
+
+                    <h4 class="text-sm font-semibold text-slate-300 mb-2">Definitions</h4>
+                    <ul class="text-slate-400 text-sm space-y-1">
+                        <li><code>FnDef</code> - function definition</li>
+                        <li><code>TypeDef</code> - type definition (Record, Variant, or Alias)</li>
+                        <li><code>TraitImpl</code> - trait implementation</li>
+                        <li><code>Items</code> - multiple top-level items</li>
                     </ul>
                 </div>
 
@@ -362,30 +523,16 @@ main() = {
                     </ol>
                 </div>
 
-                <h3 class="text-xl font-semibold text-white mb-3">Common Template Errors</h3>
-                <p class="text-slate-400 mb-2"><strong>Type mismatch in template body:</strong></p>
-                <div class="bg-nostos-code rounded-lg p-6 mb-4 border border-slate-800 overflow-x-auto">
-<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template addString(body) = quote {
-    result = ~body
-    result + "hello"  # Error if body returns Int!
-}
-
-@addString
-getValue() = 42  # Returns Int, can't add String</code></pre>
-                </div>
-
-                <p class="text-slate-400 mb-2"><strong>Missing decorator arguments:</strong></p>
-                <div class="bg-nostos-code rounded-lg p-6 mb-4 border border-slate-800 overflow-x-auto">
-<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template multiply(body, factor) = quote { ~body * ~factor }
-
-@multiply  # Error: expects 1 argument
-foo() = 10</code></pre>
-                </div>
-
-                <p class="text-slate-400 mb-2"><strong>Undefined template:</strong></p>
-                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">@nonexistent  # Error: decorator template 'nonexistent' not found
-bar() = 42</code></pre>
+                <!-- Limitations -->
+                <h2 class="text-2xl font-semibold text-white mb-4">Limitations</h2>
+                <div class="bg-gradient-to-r from-yellow-900/20 to-orange-900/20 rounded-lg p-6 mb-6 border border-yellow-800/30">
+                    <ul class="list-disc list-inside text-slate-400 space-y-2">
+                        <li><strong class="text-slate-300">Compile-time execution:</strong> Templates run at compile time and cannot access runtime values.</li>
+                        <li><strong class="text-slate-300">Spliced values must be valid AST:</strong> The <code class="text-emerald-400">~expr</code> splice operator only works with AST values.</li>
+                        <li><strong class="text-slate-300">Recursive templates must terminate:</strong> Infinite template recursion will hang the compiler.</li>
+                        <li><strong class="text-slate-300">Eval strings must be valid code:</strong> The string passed to <code class="text-emerald-400">eval</code> must be valid Nostos syntax.</li>
+                        <li><strong class="text-slate-300">Gensym in patterns:</strong> <code class="text-emerald-400">~gensym()</code> cannot be used directly in binding patterns; use with <code class="text-emerald-400">eval</code> instead.</li>
+                    </ul>
                 </div>
 
                 <!-- Best Practices -->
@@ -398,191 +545,6 @@ bar() = 42</code></pre>
                         <li><strong>Test templates</strong> - Create test cases for each template</li>
                         <li><strong>Prefer composition</strong> - Build complex behavior from simple templates</li>
                     </ol>
-                </div>
-
-                <!-- Comparison -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Comparison with Other Languages</h2>
-                <div class="overflow-x-auto mb-8">
-                    <table class="min-w-full bg-slate-800/50 rounded-lg border border-slate-700">
-                        <thead>
-                            <tr class="border-b border-slate-700">
-                                <th class="px-4 py-2 text-left text-slate-300">Feature</th>
-                                <th class="px-4 py-2 text-left text-slate-300">Nostos</th>
-                                <th class="px-4 py-2 text-left text-slate-300">Rust</th>
-                                <th class="px-4 py-2 text-left text-slate-300">Lisp</th>
-                            </tr>
-                        </thead>
-                        <tbody class="text-slate-400">
-                            <tr class="border-b border-slate-700">
-                                <td class="px-4 py-2">Syntax</td>
-                                <td class="px-4 py-2"><code>template</code>, <code>quote</code>, <code>~</code></td>
-                                <td class="px-4 py-2"><code>macro_rules!</code>, proc macros</td>
-                                <td class="px-4 py-2"><code>defmacro</code>, <code>'</code>, <code>,</code></td>
-                            </tr>
-                            <tr class="border-b border-slate-700">
-                                <td class="px-4 py-2">Hygiene</td>
-                                <td class="px-4 py-2">Automatic</td>
-                                <td class="px-4 py-2">Manual</td>
-                                <td class="px-4 py-2">Manual</td>
-                            </tr>
-                            <tr class="border-b border-slate-700">
-                                <td class="px-4 py-2">Phase</td>
-                                <td class="px-4 py-2">Compile-time</td>
-                                <td class="px-4 py-2">Compile-time</td>
-                                <td class="px-4 py-2">Various</td>
-                            </tr>
-                            <tr>
-                                <td class="px-4 py-2">AST Access</td>
-                                <td class="px-4 py-2">Direct</td>
-                                <td class="px-4 py-2">TokenStream</td>
-                                <td class="px-4 py-2">S-expressions</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-
-                <!-- Type Decorators -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Type Decorators</h2>
-                <p class="text-slate-400 mb-4">
-                    Templates can also be applied to type definitions using the <code class="text-emerald-400">@decorator</code> syntax:
-                </p>
-                <div class="bg-nostos-code rounded-lg p-6 mb-6">
-<pre><code class="language-nostos"># Template that receives a type definition
-template traced(typeDef) = quote {
-    ~typeDef  # Return the type unchanged
-}
-
-@traced
-type Point = Point { x: Int, y: Int }</code></pre>
-                </div>
-
-                <h3 class="text-xl font-semibold text-white mb-3">How Type Decorators Work</h3>
-                <div class="bg-nostos-code rounded-lg p-6 mb-6">
-                    <ol class="list-decimal list-inside text-slate-400 space-y-2">
-                        <li>The template receives the type definition as an AST value</li>
-                        <li>The template body can inspect or transform the type</li>
-                        <li>The result replaces the original type definition</li>
-                    </ol>
-                </div>
-
-                <h3 class="text-xl font-semibold text-white mb-3">Building a Derive System</h3>
-                <p class="text-slate-400 mb-4">
-                    You can use type decorators combined with <code class="text-emerald-400">typeInfo</code> to implement auto-deriving:
-                </p>
-                <div class="bg-nostos-code rounded-lg p-6 mb-6">
-<pre><code class="language-nostos"># Template that adds a custom toString function
-template withShow(typeDef) = quote {
-    ~typeDef
-}
-
-@withShow
-type Person = Person { name: String, age: Int }
-
-# At runtime, use typeInfo to reflect on the type
-personToString(p: Person) = {
-    info = typeInfo("Person")
-    constructors = Map.get(info, "constructors")
-    # Build string from field values...
-    "Person(" ++ p.name ++ ", " ++ p.age.toString() ++ ")"
-}
-
-main() = {
-    p = Person(name: "Alice", age: 30)
-    println(personToString(p))  # Person(Alice, 30)
-}</code></pre>
-                </div>
-
-                <h3 class="text-xl font-semibold text-white mb-3">Compile-Time Type Introspection</h3>
-                <p class="text-slate-400 mb-4">
-                    Type decorators can access type structure at compile time using field access on the type AST:
-                </p>
-                <div class="bg-nostos-code rounded-lg p-6 mb-6">
-<pre><code class="language-nostos">template showFields(typeDef) = quote {
-    # Access type name: ~typeDef.name returns "Point" as a String
-    # Access type params: ~typeDef.typeParams returns ["T"] as a List
-    # Access fields: ~typeDef.fields returns field info as a List
-    ~typeDef
-}
-
-@showFields
-type Point = Point { x: Int, y: Int }</code></pre>
-                </div>
-                <div class="bg-nostos-code rounded-lg p-6 mb-6">
-                    <p class="text-slate-400 mb-2">Available compile-time accessors:</p>
-                    <ul class="list-disc list-inside text-slate-400 space-y-1 ml-4">
-                        <li><code class="text-emerald-400">~typeDef.name</code> - The type name as a String</li>
-                        <li><code class="text-emerald-400">~typeDef.typeParams</code> - Type parameters as a List of Strings</li>
-                        <li><code class="text-emerald-400">~typeDef.fields</code> - For records: List of <code>{name, type}</code> records. For variants: List of <code>{name, fields}</code> records</li>
-                    </ul>
-                </div>
-
-                <h3 class="text-xl font-semibold text-white mb-3">Multi-Item Return</h3>
-                <div class="bg-nostos-code rounded-lg p-6 mb-6">
-                    <p class="text-slate-400 mb-2">Type decorators can return multiple items (type + functions) using the Items AST node. When a template returns a Block containing both TypeDef and FnDef nodes, all are compiled.</p>
-                </div>
-
-                <!-- Compile-Time Eval -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Compile-Time Eval for Code Generation</h2>
-                <p class="text-slate-400 mb-4">
-                    The <code class="text-emerald-400">eval</code> function allows generating code from strings at compile time. This is powerful for creating functions dynamically based on type information:
-                </p>
-                <div class="bg-nostos-code rounded-lg p-6 mb-6">
-<pre><code class="language-nostos"># Template that generates a getter function for each type
-template withGetter(typeDef) = quote {
-    ~typeDef
-    ~eval("getX(r: " ++ ~typeDef.name ++ ") = r.x")
-}
-
-@withGetter
-type Point = Point { x: Int, y: Int }
-
-main() = {
-    p = Point(x: 42, y: 10)
-    getX(p)  # Returns 42
-}</code></pre>
-                </div>
-                <p class="text-slate-400 mb-4">
-                    The <code class="text-emerald-400">eval</code> function:
-                </p>
-                <ol class="list-decimal list-inside text-slate-400 space-y-1 mb-6 ml-4">
-                    <li>Evaluates its argument at compile time to produce a string</li>
-                    <li>Parses that string as Nostos code</li>
-                    <li>Returns the parsed AST for inclusion in the template result</li>
-                </ol>
-                <p class="text-slate-400 mb-4">
-                    This enables generating functions with names and signatures derived from type information:
-                </p>
-                <div class="bg-nostos-code rounded-lg p-6 mb-6">
-<pre><code class="language-nostos">template withSum(typeDef) = quote {
-    ~typeDef
-    ~eval("sumFields(r: " ++ ~typeDef.name ++ ") = r.x + r.y")
-}
-
-@withSum
-type Vec2 = Vec2 { x: Int, y: Int }
-
-main() = sumFields(Vec2(x: 10, y: 20))  # Returns 30</code></pre>
-                </div>
-
-                <h3 class="text-xl font-semibold text-white mb-3">String Building for Eval</h3>
-                <p class="text-slate-400 mb-4">
-                    When building code strings for <code class="text-emerald-400">eval</code>, you can use:
-                </p>
-                <ul class="list-disc list-inside text-slate-400 space-y-1 mb-6 ml-4">
-                    <li>String concatenation: <code class="text-emerald-400">"a" ++ "b"</code></li>
-                    <li>Type introspection: <code class="text-emerald-400">~typeDef.name</code>, <code class="text-emerald-400">~typeDef.fields</code></li>
-                    <li>Field access on records from <code class="text-emerald-400">~typeDef.fields</code></li>
-                </ul>
-
-                <!-- Limitations -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Limitations</h2>
-                <div class="bg-gradient-to-r from-yellow-900/20 to-orange-900/20 rounded-lg p-6 mb-6 border border-yellow-800/30">
-                    <ul class="list-disc list-inside text-slate-400 space-y-2">
-                        <li><strong class="text-slate-300">Compile-time execution:</strong> Templates run at compile time and cannot access runtime values.</li>
-                        <li><strong class="text-slate-300">Spliced values must be valid AST:</strong> The <code class="text-emerald-400">~expr</code> splice operator only works with AST values.</li>
-                        <li><strong class="text-slate-300">Recursive templates must terminate:</strong> Infinite template recursion will hang the compiler.</li>
-                        <li><strong class="text-slate-300">Eval strings must be valid code:</strong> The string passed to <code class="text-emerald-400">eval</code> must be valid Nostos syntax.</li>
-                    </ul>
                 </div>
 
                 <p class="text-slate-400 mb-8">
