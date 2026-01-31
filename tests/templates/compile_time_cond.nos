@@ -1,0 +1,17 @@
+# expect: 142
+# Test compile-time conditionals in templates
+
+template maybeDouble(fn, shouldDouble) = quote {
+    result = ~fn.body
+    ~if ~shouldDouble { quote(result * 2) } else { quote(result) }
+}
+
+@maybeDouble(true)
+getValue() = 21
+
+@maybeDouble(false)
+getOther() = 100
+
+main() = {
+    getValue() + getOther()  # 42 + 100 = 142
+}

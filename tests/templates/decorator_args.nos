@@ -2,14 +2,14 @@
 # expect: 105
 
 # Multiply result by given factor
-template multiply(body, factor) = quote {
-    result = ~body
+template multiply(fn, factor) = quote {
+    result = ~fn.body
     result * ~factor
 }
 
 # Add a fixed amount to result
-template add(body, amount) = quote {
-    result = ~body
+template add(fn, amount) = quote {
+    result = ~fn.body
     result + ~amount
 }
 

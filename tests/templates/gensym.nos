@@ -1,0 +1,14 @@
+# expect: 42
+# Test gensym for unique identifier generation in code generation
+
+template genFunc(typeDef) = quote {
+    ~typeDef
+    # Generate a uniquely-named helper function using gensym
+    ~eval(~gensym("helper") ++ "() = 42")
+}
+
+@genFunc
+type Point = Point { x: Int, y: Int }
+
+# The generated function will be helper_0() (first gensym call)
+main() = helper_0()

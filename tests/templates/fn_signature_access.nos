@@ -1,0 +1,14 @@
+# expect: 3
+# Test function decorator access to full signature
+
+# A decorator that wraps the function and accesses its metadata
+template traced(fn) = quote {
+    # We can access ~fn.name, ~fn.params, ~fn.body, ~fn.returnType
+    # For this test, just verify the function works correctly
+    ~fn.body
+}
+
+@traced
+add(a: Int, b: Int) -> Int = a + b
+
+main() = add(1, 2)

@@ -2,8 +2,9 @@
 # expect: 42
 
 # Define a simple decorator template that doubles the result
-template double(body) = quote {
-    result = ~body
+# Note: fn decorator receives the full function, use ~fn.body to access body
+template double(fn) = quote {
+    result = ~fn.body
     result * 2
 }
 

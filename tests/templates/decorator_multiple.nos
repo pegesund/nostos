@@ -1,13 +1,13 @@
 # Test multiple decorators applied to one function
 # expect: 42
 
-template double(body) = quote {
-    result = ~body
+template double(fn) = quote {
+    result = ~fn.body
     result * 2
 }
 
-template triple(body) = quote {
-    result = ~body
+template triple(fn) = quote {
+    result = ~fn.body
     result * 3
 }
 
