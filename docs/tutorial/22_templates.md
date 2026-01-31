@@ -135,11 +135,36 @@ main() = {
 }
 ```
 
-## Example 6: Validation Decorator
+## Example 6: Validation Decorators
 
-Add input validation to a function:
+Add runtime validation to functions:
 
 ```nostos
+# Runtime validation - checks parameter at runtime
+template nonNegative(fn) = quote {
+    param = ~fn.params[0].name
+    if param < 0 {
+        panic("Value must be non-negative")
+    }
+    ~fn.body
+}
+
+@nonNegative
+sqrt(n: Int) = {
+    # Body only runs if n >= 0
+    n  # placeholder for actual sqrt
+}
+
+main() = {
+    println(sqrt(16))   # Works: 16
+    println(sqrt(-1))   # Panics: "Value must be non-negative"
+}
+```
+
+Compile-time conditional validation:
+
+```nostos
+# Compile-time check - generates different code based on flag
 template validated(fn, check, errorMsg) = quote {
     ~if ~check {
         quote { ~fn.body }
@@ -148,12 +173,15 @@ template validated(fn, check, errorMsg) = quote {
     }
 }
 
-template nonNegative(fn) = quote {
-    # Check first parameter is >= 0
-    if ~fn.params[0].name < 0 {
-        panic("Value must be non-negative")
-    }
-    ~fn.body
+@validated(true, "Feature disabled")
+enabledFeature() = "This works"
+
+@validated(false, "Feature disabled")
+disabledFeature() = "Never runs"
+
+main() = {
+    println(enabledFeature())   # Works: "This works"
+    println(disabledFeature())  # Panics: "Feature disabled"
 }
 ```
 

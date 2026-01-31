@@ -235,10 +235,33 @@ main() = {
                 </div>
 
                 <!-- Example 6 -->
-                <h2 class="text-2xl font-semibold text-white mb-4">Example 6: Validation Decorator</h2>
-                <p class="text-slate-400 mb-4">Add input validation to a function:</p>
+                <h2 class="text-2xl font-semibold text-white mb-4">Example 6: Validation Decorators</h2>
+                <p class="text-slate-400 mb-4">Add runtime validation to functions:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-4 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos"># Runtime validation - checks parameter at runtime
+template nonNegative(fn) = quote {
+    param = ~fn.params[0].name
+    if param < 0 {
+        panic("Value must be non-negative")
+    }
+    ~fn.body
+}
+
+@nonNegative
+sqrt(n: Int) = {
+    # Body only runs if n >= 0
+    n  # placeholder for actual sqrt
+}
+
+main() = {
+    println(sqrt(16))   # Works: 16
+    println(sqrt(-1))   # Panics: "Value must be non-negative"
+}</code></pre>
+                </div>
+                <p class="text-slate-400 mb-4">Compile-time conditional validation:</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
-<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template validated(fn, check, errorMsg) = quote {
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos"># Compile-time check - generates different code based on flag
+template validated(fn, check, errorMsg) = quote {
     ~if ~check {
         quote { ~fn.body }
     } else {
@@ -246,12 +269,15 @@ main() = {
     }
 }
 
-template nonNegative(fn) = quote {
-    # Check first parameter is >= 0
-    if ~fn.params[0].name < 0 {
-        panic("Value must be non-negative")
-    }
-    ~fn.body
+@validated(true, "Feature disabled")
+enabledFeature() = "This works"
+
+@validated(false, "Feature disabled")
+disabledFeature() = "Never runs"
+
+main() = {
+    println(enabledFeature())   # Works: "This works"
+    println(disabledFeature())  # Panics: "Feature disabled"
 }</code></pre>
                 </div>
 
