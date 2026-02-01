@@ -58,7 +58,7 @@ jobs:
           if [ -f "target/${{ matrix.target }}/release/nostos-lsp.exe" ]; then
             cp target/${{ matrix.target }}/release/nostos-lsp.exe release-package/
           fi
-          cp -r stdlib release-package/
+          # Note: stdlib is embedded in the executable at build time (see crates/cli/build.rs)
 
       - name: Create tarball (Unix)
         if: matrix.os != 'windows-latest'
