@@ -359,6 +359,68 @@ main() = {
 </code></pre>
                 </div>
 
+                <!-- The Pin Operator -->
+                <h2 class="text-2xl font-semibold text-white mb-4">The Pin Operator (<code>^</code>)</h2>
+                <p class="text-slate-400 mb-4">
+                    The pin operator <code>^</code> in a pattern asserts that a value must match an <em>existing</em> variable's value.
+                    Without the pin, a variable in a pattern creates a new binding; with the pin, it constrains the match.
+                </p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">expected_status = 200
+
+handle_response(response) = match response {
+    { status: ^expected_status, body: data } -> "Success: " ++ data
+    { status: s, body: data } -> "Error " ++ show(s) ++ ": " ++ data
+}
+
+main() = {
+    response1 = { status: 200, body: "Data received" }
+    response2 = { status: 404, body: "Not Found" }
+
+    println(handle_response(response1)) # "Success: Data received"
+    println(handle_response(response2)) # "Error 404: Not Found"
+}</code></pre>
+                </div>
+
+                <p class="text-slate-400 mb-4">The pin operator works in all pattern contexts:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-8 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">main() = {
+    x = 10
+    y = 20
+
+    # In tuple patterns
+    result = match (10, 20) {
+        (^x, ^y) -> "both match"
+        (^x, _) -> "only x matches"
+        _ -> "neither"
+    }
+    println(result)  # "both match"
+
+    # In list patterns
+    target = 42
+    found = match [1, 42, 3] {
+        [_, ^target, _] -> true
+        _ -> false
+    }
+    println(found)  # true
+
+    # Comparing two values - v binds, then ^v checks equality
+    a = 5
+    b = 5
+    same = match (a, b) {
+        (v, ^v) -> true
+        _ -> false
+    }
+    println(same)  # true
+}</code></pre>
+                </div>
+
+                <div class="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mb-8">
+                    <p class="text-blue-300 text-sm">
+                        <strong>Tip:</strong> The pin operator is inspired by Elixir/Erlang. Use it when you want to match against a known value stored in a variable, rather than creating a new binding.
+                    </p>
+                </div>
+
                 <!-- Variable Constraints -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Variable Constraints in Patterns</h2>
                 <p class="text-slate-400 mb-4">

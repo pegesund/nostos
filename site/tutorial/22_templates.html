@@ -170,8 +170,8 @@ fib(n: Int) -> Int = {
     if n < 2 {
         n
     } else {
-        if Map.contains(cache, n) {
-            Map.get(cache, n)
+        if cache.contains(n) {
+            cache.get(n)
         } else {
             result = fib(n - 1) + fib(n - 2)
             cache.update(c => Map.insert(c, n, result))
@@ -190,7 +190,7 @@ main() = {
                     <h4 class="text-sm font-semibold text-slate-300 mb-2">Key points:</h4>
                     <ul class="text-slate-400 text-sm space-y-1">
                         <li>• <code class="text-emerald-400">mvar cache: Map[Int, Int] = %{}</code> - Thread-safe mutable cache</li>
-                        <li>• <code class="text-emerald-400">Map.contains(cache, n)</code> - Check if value is cached</li>
+                        <li>• <code class="text-emerald-400">cache.contains(n)</code> - UFC style: check if value is cached</li>
                         <li>• <code class="text-emerald-400">cache.update(c => ...)</code> - Atomic read-modify-write</li>
                     </ul>
                 </div>

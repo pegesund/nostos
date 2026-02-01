@@ -8,8 +8,8 @@ fib(n: Int) -> Int = {
     if n < 2 {
         n
     } else {
-        if Map.contains(cache, n) {
-            Map.get(cache, n)
+        if cache.contains(n) {
+            cache.get(n)
         } else {
             result = fib(n - 1) + fib(n - 2)
             cache.update(c => Map.insert(c, n, result))
