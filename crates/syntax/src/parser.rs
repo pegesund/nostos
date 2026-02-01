@@ -1575,9 +1575,14 @@ fn decorated_fn_def() -> impl Parser<Token, FnDef, Error = Simple<Token>> + Clon
 
 /// Parser for variant fields.
 fn variant_fields() -> impl Parser<Token, VariantFields, Error = Simple<Token>> + Clone {
-    let positional = type_expr()
-        .separated_by(just(Token::Comma))
+    let nl = just(Token::Newline).repeated();
+    let comma_sep = nl.clone().ignore_then(just(Token::Comma)).then_ignore(nl.clone());
+
+    let positional = nl.clone()
+        .ignore_then(type_expr())
+        .separated_by(comma_sep.clone())
         .at_least(1)
+        .then_ignore(nl.clone())
         .delimited_by(just(Token::LParen), just(Token::RParen))
         .map(VariantFields::Positional);
 
@@ -1592,9 +1597,11 @@ fn variant_fields() -> impl Parser<Token, VariantFields, Error = Simple<Token>> 
             ty,
         });
 
-    let named = field
-        .separated_by(just(Token::Comma))
+    let named = nl.clone()
+        .ignore_then(field)
+        .separated_by(comma_sep)
         .allow_trailing()
+        .then_ignore(nl.clone())
         .delimited_by(just(Token::LBrace), just(Token::RBrace))
         .map(VariantFields::Named);
 
@@ -1606,6 +1613,7 @@ fn variant_fields() -> impl Parser<Token, VariantFields, Error = Simple<Token>> 
 /// Parser for type body (record, variant, alias, or empty).
 fn type_body() -> impl Parser<Token, TypeBody, Error = Simple<Token>> + Clone {
     let nl = just(Token::Newline).repeated();
+    let comma_sep = nl.clone().ignore_then(just(Token::Comma)).then_ignore(nl.clone());
 
     let field = just(Token::Private)
         .or_not()
@@ -1618,9 +1626,11 @@ fn type_body() -> impl Parser<Token, TypeBody, Error = Simple<Token>> + Clone {
             ty,
         });
 
-    let record = field
-        .separated_by(just(Token::Comma))
+    let record = nl.clone()
+        .ignore_then(field)
+        .separated_by(comma_sep)
         .allow_trailing()
+        .then_ignore(nl.clone())
         .delimited_by(just(Token::LBrace), just(Token::RBrace))
         .map(TypeBody::Record);
 
@@ -1889,9 +1899,12 @@ fn trait_impl() -> impl Parser<Token, TraitImpl, Error = Simple<Token>> + Clone 
 /// Parser for use statement.
 /// Supports three syntaxes:
 /// 1. `use module.path.*` - import all public functions
-/// 2. `use module.path.{name1, name2}` - import multiple names
+/// 2. `use module.path.{name1, name2}` - import multiple names (can be multi-line)
 /// 3. `use module.path.name` or `use module.path.name as alias` - import single name
 fn use_stmt() -> impl Parser<Token, UseStmt, Error = Simple<Token>> + Clone {
+    let nl = just(Token::Newline).repeated();
+    let comma_sep = nl.clone().ignore_then(just(Token::Comma)).then_ignore(nl.clone());
+
     let use_item = any_ident()
         .then(
             just(Token::LowerIdent("as".to_string()))
@@ -1900,8 +1913,11 @@ fn use_stmt() -> impl Parser<Token, UseStmt, Error = Simple<Token>> + Clone {
         )
         .map(|(name, alias)| UseItem { name, alias });
 
-    let braced_imports = use_item
-        .separated_by(just(Token::Comma))
+    let braced_imports = nl.clone()
+        .ignore_then(use_item)
+        .separated_by(comma_sep)
+        .allow_trailing()
+        .then_ignore(nl.clone())
         .delimited_by(just(Token::LBrace), just(Token::RBrace))
         .map(UseImports::Named);
 
