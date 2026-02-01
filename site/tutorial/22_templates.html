@@ -151,10 +151,11 @@ main() = add(1, 2)
                     <h4 class="text-sm font-semibold text-slate-300 mb-2">Available fields:</h4>
                     <ul class="text-slate-400 text-sm space-y-1">
                         <li><code class="text-emerald-400">~fn.name</code> - Function name as String</li>
-                        <li><code class="text-emerald-400">~fn.params</code> - List of {name, type} records</li>
+                        <li><code class="text-emerald-400">~fn.params</code> - List of Maps with keys: <code>"name"</code>, <code>"type"</code>, <code>"ty"</code> (all Strings)</li>
                         <li><code class="text-emerald-400">~fn.body</code> - Function body AST</li>
                         <li><code class="text-emerald-400">~fn.returnType</code> - Return type as String</li>
                     </ul>
+                    <p class="text-slate-500 text-sm mt-2">Note: For parameters, both <code>p.get("type")</code> and <code>p.get("ty")</code> return the type string.</p>
                 </div>
 
                 <!-- Example 3 -->
@@ -267,7 +268,42 @@ experimentalFeature() = "Never runs"
 main() = betaFeature()  # Works: "Beta feature is active!"
 # experimentalFeature() would panic: "Experimental feature disabled"</code></pre>
                 </div>
-                <p class="text-slate-400 mb-8">This pattern is useful for feature flags, debug-only code paths, and platform-specific implementations.</p>
+                <p class="text-slate-400 mb-4">This pattern is useful for feature flags, debug-only code paths, and platform-specific implementations.</p>
+
+                <!-- Compile-Time Arithmetic -->
+                <h3 class="text-lg font-semibold text-white mb-3">Compile-Time Arithmetic and Comparisons</h3>
+                <p class="text-slate-400 mb-4">Template arguments support arithmetic and comparison operations that evaluate at compile time:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-4 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template multiply(fn, factor) = quote {
+    ~fn.body * ~factor
+}
+
+@multiply(2 + 3)  # factor evaluates to 5 at compile time
+getValue() = 10
+
+main() = getValue()  # Returns 50</code></pre>
+                </div>
+                <p class="text-slate-400 mb-4">Comparisons also work at compile time:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-4 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template maybeDouble(fn, threshold) = quote {
+    ~if ~threshold > 10 then ~fn.body * 2 else ~fn.body
+}
+
+@maybeDouble(15)  # 15 > 10, so body is doubled
+getValue() = 21
+
+@maybeDouble(5)   # 5 <= 10, so body unchanged
+getOther() = 21
+
+main() = getValue() + getOther()  # 42 + 21 = 63</code></pre>
+                </div>
+                <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
+                    <h4 class="text-sm font-semibold text-slate-300 mb-2">Supported compile-time operations:</h4>
+                    <ul class="text-slate-400 text-sm space-y-1">
+                        <li>Arithmetic: <code class="text-emerald-400">+</code>, <code class="text-emerald-400">-</code>, <code class="text-emerald-400">*</code>, <code class="text-emerald-400">/</code>, <code class="text-emerald-400">%</code></li>
+                        <li>Comparisons: <code class="text-emerald-400">==</code>, <code class="text-emerald-400">!=</code>, <code class="text-emerald-400">&lt;</code>, <code class="text-emerald-400">&lt;=</code>, <code class="text-emerald-400">&gt;</code>, <code class="text-emerald-400">&gt;=</code></li>
+                    </ul>
+                </div>
 
                 <!-- Example 7 -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Example 7: Runtime Parameter Validation</h2>
@@ -309,7 +345,21 @@ type B = B {}
 # Generates: temp_0_helper() and temp_1_helper()
 # No naming collision!</code></pre>
                 </div>
-                <p class="text-slate-400 mb-8">Each call to <code class="text-emerald-400">gensym</code> produces a unique string like "prefix_0", "prefix_1", etc.</p>
+                <p class="text-slate-400 mb-4">Each call to <code class="text-emerald-400">gensym</code> produces a unique string like "prefix_0", "prefix_1", etc.</p>
+
+                <h3 class="text-lg font-semibold text-white mb-3">Gensym with Variable Bindings</h3>
+                <p class="text-slate-400 mb-4">You can use <code class="text-emerald-400">gensym</code> inside <code class="text-emerald-400">eval</code> to generate unique variable bindings:</p>
+                <div class="bg-nostos-code rounded-lg p-6 mb-4 border border-slate-800 overflow-x-auto">
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos">template wrapValue(fn) = quote {
+    ~eval(~gensym("v") ++ " = 42")
+}
+
+@wrapValue
+getValue() = 0  # Original body replaced
+
+main() = getValue()  # Returns 42</code></pre>
+                </div>
+                <p class="text-slate-400 mb-8">This generates code like <code>v_0 = 42</code> and returns the bound value. This is useful for creating temporary variables in generated code without risking name collisions with user code.</p>
 
                 <!-- Example 9 -->
                 <h2 class="text-2xl font-semibold text-white mb-4">Example 9: Compile-Time Code Execution</h2>
@@ -371,7 +421,7 @@ main() = getSquare()  # 10 * 10 = 100</code></pre>
                     <p class="text-slate-400 mt-4">Each field has:</p>
                     <ul class="text-slate-400 space-y-1">
                         <li><code class="text-emerald-400">f.name</code> - Field name</li>
-                        <li><code class="text-emerald-400">f.type</code> - Field type as String</li>
+                        <li><code class="text-emerald-400">f.type</code> or <code class="text-emerald-400">f.ty</code> - Field type as String (both work)</li>
                     </ul>
                 </div>
 

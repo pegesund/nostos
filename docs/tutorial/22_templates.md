@@ -50,9 +50,11 @@ main() = add(10, 20)
 
 Available function metadata:
 - `~fn.name` - Function name as String
-- `~fn.params` - List of {name, type} records
+- `~fn.params` - List of Maps with keys: `"name"` (String), `"type"` (String), `"ty"` (String)
 - `~fn.body` - Function body AST
 - `~fn.returnType` - Return type as String
+
+Note: For parameters, both `p.get("type")` and `p.get("ty")` return the type string. The `"ty"` key exists for consistency with type field access.
 
 ## Example 3: Parameter Validation
 
@@ -159,6 +161,41 @@ getOther() = 100
 main() = getValue() + getOther()  # 42 + 100 = 142
 ```
 
+### Compile-Time Arithmetic and Comparisons
+
+Template arguments support arithmetic and comparison operations that evaluate at compile time:
+
+```nostos
+template multiply(fn, factor) = quote {
+    ~fn.body * ~factor
+}
+
+@multiply(2 + 3)  # factor evaluates to 5 at compile time
+getValue() = 10
+
+main() = getValue()  # Returns 50
+```
+
+Comparisons also work at compile time:
+
+```nostos
+template maybeDouble(fn, threshold) = quote {
+    ~if ~threshold > 10 then ~fn.body * 2 else ~fn.body
+}
+
+@maybeDouble(15)  # 15 > 10, so body is doubled
+getValue() = 21
+
+@maybeDouble(5)   # 5 <= 10, so body unchanged
+getOther() = 21
+
+main() = getValue() + getOther()  # 42 + 21 = 63
+```
+
+Supported compile-time operations:
+- Arithmetic: `+`, `-`, `*`, `/`, `%`
+- Comparisons: `==`, `!=`, `<`, `<=`, `>`, `>=`
+
 ## Example 8: Feature Flags
 
 Enable/disable features at compile time:
@@ -183,7 +220,7 @@ main() = betaFeature()  # "Active!"
 
 ## Example 9: Unique Names with Gensym
 
-Avoid naming collisions with `gensym`:
+Avoid naming collisions with `gensym`. The `gensym` function generates unique identifiers that increment for each call:
 
 ```nostos
 template withHelper(typeDef) = quote {
@@ -200,6 +237,23 @@ type B = B {}
 # Generates: helper_0() and helper_1()
 main() = helper_0() + helper_1()  # 84
 ```
+
+### Gensym with Variable Bindings
+
+You can use `gensym` inside `eval` to generate unique variable bindings:
+
+```nostos
+template wrapValue(fn) = quote {
+    ~eval(~gensym("v") ++ " = 42")
+}
+
+@wrapValue
+getValue() = 0  # Original body replaced
+
+main() = getValue()  # Returns 42
+```
+
+This generates code like `v_0 = 42` and returns the bound value. This is useful for creating temporary variables in generated code without risking name collisions with user code.
 
 ## Example 10: Compile-Time Computation
 
@@ -333,11 +387,21 @@ For type decorators:
 | `~expr` | Splice AST value | `~fn.body` |
 | `eval("code")` | Parse and compile string as code | `eval("foo() = 42")` |
 | `param(n)` | Reference n-th function parameter | `param(0)` → first parameter as variable |
-| `toVar(string)` | Convert string to variable reference | `toVar(fn.params[0].name)` |
+| `toVar(string)` | Convert string to variable reference | `toVar(fn.params[0].get("name"))` |
 | `gensym("prefix")` | Generate unique identifier | `gensym("temp")` → `"temp_0"` |
 | `comptime("code")` | Execute code at compile time | `comptime("1 + 2")` → `3` |
 | `comptime({ block })` | Execute block at compile time | `comptime({ if x { 1 } else { 2 } })` |
 | `try { } catch { }` | Exception handling in generated code | `try { ~fn.body } catch { _ -> fallback }` |
+
+### Compile-Time Operations
+
+These operations evaluate at compile time when used in template arguments:
+
+| Operation | Example | Result |
+|-----------|---------|--------|
+| Arithmetic | `@multiply(2 + 3)` | `factor` = 5 |
+| Comparison | `~if ~n > 10` | Boolean at compile time |
+| String concat | `~gensym("x") ++ "_val"` | `"x_0_val"` |
 
 ## Best Practices
 
