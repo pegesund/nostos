@@ -888,6 +888,8 @@ fn try_load_stdlib_from_cache(
     if visit_dirs(stdlib_path, &mut stdlib_files).is_err() {
         return None;
     }
+    // Sort for consistent ordering across platforms
+    stdlib_files.sort();
 
     // Check if all modules have valid cache
     let mut all_valid = true;
@@ -1044,6 +1046,8 @@ fn build_stdlib_cache_internal(stdlib_path: &std::path::Path, verbose: bool) -> 
     if let Err(e) = visit_dirs(stdlib_path, &mut stdlib_files) {
         return Err(format!("Error scanning stdlib: {}", e));
     }
+    // Sort for consistent ordering across platforms
+    stdlib_files.sort();
 
     if verbose {
         eprintln!("Found {} stdlib files", stdlib_files.len());
@@ -3025,6 +3029,9 @@ fn main() -> ExitCode {
     if let Some(stdlib_path) = stdlib_path_opt {
         let mut stdlib_files = Vec::new();
         visit_dirs(&stdlib_path, &mut stdlib_files).ok();
+        // Sort files to ensure consistent compilation order across all platforms
+        // This ensures dependencies are compiled before dependents (e.g., rhtml_session before rhttp_server)
+        stdlib_files.sort();
 
         // Try to load stdlib from cache
         let cache_result = try_load_stdlib_from_cache(&mut compiler, &stdlib_path);
