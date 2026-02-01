@@ -12465,6 +12465,14 @@ impl AsyncVM {
                         let idx = rng.gen_range(0..items.len());
                         Ok(items[idx].clone())
                     }
+                    GcValue::Int64List(list) => {
+                        if list.is_empty() {
+                            return Err(RuntimeError::Panic("Cannot choose from empty list".to_string()));
+                        }
+                        let mut rng = rand::thread_rng();
+                        let idx = rng.gen_range(0..list.len());
+                        Ok(GcValue::Int64(list.get(idx).unwrap()))
+                    }
                     _ => Err(RuntimeError::TypeError { expected: "List".to_string(), found: "other".to_string() })
                 }
             }),
@@ -12481,6 +12489,12 @@ impl AsyncVM {
                         let mut rng = rand::thread_rng();
                         items.shuffle(&mut rng);
                         Ok(GcValue::List(heap.make_list(items)))
+                    }
+                    GcValue::Int64List(list) => {
+                        let mut items: Vec<i64> = list.iter().collect();
+                        let mut rng = rand::thread_rng();
+                        items.shuffle(&mut rng);
+                        Ok(GcValue::Int64List(GcInt64List::from_vec(items)))
                     }
                     _ => Err(RuntimeError::TypeError { expected: "List".to_string(), found: "other".to_string() })
                 }
