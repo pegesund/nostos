@@ -1,17 +1,26 @@
 # expect: 102334155
-# Memoization decorator - demonstrates template-based caching with full UFC
-# The @memoize decorator wraps fib with automatic cache lookup
+# Memoization decorator with cache helper functions
+# Demonstrates: templates, UFC with mvars, thread-safe caching
 
-mvar fibCache: Map[Int, Int] = %{}
+# Thread-safe cache using mvar (handles concurrent access automatically)
+mvar cache: Map[Int, Int] = %{}
 
+# Cache helper functions using UFC
+getCache(key: Int) -> Int =
+    if cache.contains(key) { cache.get(key) } else { 0 }
+
+setCache(key: Int, value: Int) -> Int = {
+    cache.update(c => c.insert(key, value))
+    value
+}
+
+hasCache(key: Int) -> Bool = cache.contains(key)
+
+# The memoize decorator uses the cache functions
 template memoize(fn) = quote {
-    if fibCache.contains(~toVar(fn.params[0].name)) {
-        fibCache.get(~toVar(fn.params[0].name))
-    } else {
-        result = ~fn.body
-        fibCache.update(c => c.insert(~toVar(fn.params[0].name), result))
-        result
-    }
+    key = ~toVar(fn.params[0].name)
+    if hasCache(key) { getCache(key) }
+    else { setCache(key, ~fn.body) }
 }
 
 @memoize

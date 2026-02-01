@@ -161,18 +161,25 @@ main() = add(1, 2)
                 <h2 class="text-2xl font-semibold text-white mb-4">Example 3: Memoization Decorator</h2>
                 <p class="text-slate-400 mb-4">A <code class="text-emerald-400">@memoize</code> decorator that automatically caches function results:</p>
                 <div class="bg-nostos-code rounded-lg p-6 mb-4 border border-slate-800 overflow-x-auto">
-<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos"># Memoization decorator - caches results based on first parameter
+<pre style="max-width:100%;overflow-x:auto"><code class="language-nostos"># Thread-safe cache using mvar (handles concurrent access automatically)
+mvar cache: Map[Int, Int] = %{}
 
-mvar fibCache: Map[Int, Int] = %{}
+# Cache helper functions using UFC
+getCache(key: Int) -> Int =
+    if cache.contains(key) { cache.get(key) } else { 0 }
 
+setCache(key: Int, value: Int) -> Int = {
+    cache.update(c => c.insert(key, value))
+    value
+}
+
+hasCache(key: Int) -> Bool = cache.contains(key)
+
+# The memoize decorator uses the cache functions
 template memoize(fn) = quote {
-    if fibCache.contains(~toVar(fn.params[0].name)) {
-        fibCache.get(~toVar(fn.params[0].name))
-    } else {
-        result = ~fn.body
-        fibCache.update(c => c.insert(~toVar(fn.params[0].name), result))
-        result
-    }
+    key = ~toVar(fn.params[0].name)
+    if hasCache(key) { getCache(key) }
+    else { setCache(key, ~fn.body) }
 }
 
 @memoize
@@ -183,10 +190,10 @@ main() = fib(40)  # Returns 102334155 instantly</code></pre>
                 <div class="bg-slate-800/50 rounded-lg p-4 mb-8 border border-slate-700">
                     <h4 class="text-sm font-semibold text-slate-300 mb-2">Key points:</h4>
                     <ul class="text-slate-400 text-sm space-y-1">
-                        <li>• <code class="text-emerald-400">~toVar(fn.params[0].name)</code> - Reference the first parameter as a variable</li>
-                        <li>• <code class="text-emerald-400">~fn.body</code> - Splice in the original function body</li>
-                        <li>• <code class="text-emerald-400">fibCache.contains()</code>, <code class="text-emerald-400">fibCache.get()</code> - UFC works with mvars in templates</li>
-                        <li>• <code class="text-emerald-400">c.insert()</code> - UFC works inside mvar.update lambda</li>
+                        <li>• <code class="text-emerald-400">mvar cache</code> - Thread-safe mutable state (concurrent access handled automatically)</li>
+                        <li>• <code class="text-emerald-400">cache.contains()</code>, <code class="text-emerald-400">cache.get()</code> - UFC works with mvars</li>
+                        <li>• <code class="text-emerald-400">cache.update(c => c.insert(...))</code> - Atomic read-modify-write with UFC in lambda</li>
+                        <li>• <code class="text-emerald-400">~toVar(fn.params[0].name)</code> - Reference function parameter as variable</li>
                     </ul>
                 </div>
 
