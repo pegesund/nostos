@@ -33,4 +33,8 @@ Welcome to the Nostos programming language tutorial! Use the arrow keys to navig
 21. **Mutability** - var bindings, persistent data structures
 22. **Templates & Metaprogramming** - quote, splice, decorators
 
+## Quick Reference
+
+- **Cheat Sheet** - One-page summary of all tutorial concepts (chapter 99)
+
 Press **Right arrow** to begin with Language Basics.
