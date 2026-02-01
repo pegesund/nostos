@@ -2517,35 +2517,101 @@ impl Compiler {
         use std::sync::atomic::AtomicU32;
         use nostos_syntax::ast::Item;
 
-        // Collect and merge function definitions by name AND signature
+        // Phase 1: Group function definitions by BASE name only (without signature)
+        // This allows clauses with different type annotations to be merged together
+        let mut fn_defs_by_base: std::collections::HashMap<String, Vec<&FnDef>> = std::collections::HashMap::new();
+        let mut base_order: Vec<String> = Vec::new();
+
+        for item in items {
+            if let Item::FnDef(fn_def) = item {
+                let base_name = self.qualify_name(&fn_def.name.node);
+                if !fn_defs_by_base.contains_key(&base_name) {
+                    base_order.push(base_name.clone());
+                }
+                fn_defs_by_base.entry(base_name).or_default().push(fn_def);
+            }
+        }
+
+        // Phase 2: For each base name, compute unified signature and collect clauses
         let mut fn_clauses: std::collections::HashMap<String, Vec<FnClause>> = std::collections::HashMap::new();
         let mut fn_order: Vec<String> = Vec::new();
         let mut fn_spans: std::collections::HashMap<String, Span> = std::collections::HashMap::new();
         let mut fn_visibility: std::collections::HashMap<String, Visibility> = std::collections::HashMap::new();
 
-        // Collect functions from items
-        for item in items {
-            if let Item::FnDef(fn_def) = item {
-                let base_name = self.qualify_name(&fn_def.name.node);
-                let param_types: Vec<String> = fn_def.clauses[0].params.iter()
-                    .map(|p| p.ty.as_ref()
-                        .map(|t| self.type_expr_to_string(t))
-                        .unwrap_or_else(|| "_".to_string()))
-                    .collect();
-                let signature = param_types.join(",");
-                let qualified_name = format!("{}/{}", base_name, signature);
+        for base_name in &base_order {
+            let defs = fn_defs_by_base.get(base_name).unwrap();
 
-                if !fn_clauses.contains_key(&qualified_name) {
-                    fn_order.push(qualified_name.clone());
-                    fn_spans.insert(qualified_name.clone(), fn_def.span);
-                    fn_visibility.insert(qualified_name.clone(), fn_def.visibility);
-                } else {
-                    if let Some(existing_span) = fn_spans.get_mut(&qualified_name) {
-                        existing_span.end = fn_def.span.end;
+            // Collect all clauses from all defs with this base name
+            let all_clauses: Vec<FnClause> = defs.iter()
+                .flat_map(|d| d.clauses.iter().cloned())
+                .collect();
+
+            if all_clauses.is_empty() {
+                continue;
+            }
+
+            // Compute unified signature: for each param position, use first explicit type found
+            let arity = all_clauses[0].params.len();
+            let mut param_types: Vec<String> = vec!["_".to_string(); arity];
+
+            for clause in &all_clauses {
+                for (i, param) in clause.params.iter().enumerate() {
+                    if param_types[i] == "_" {
+                        if let Some(ty) = &param.ty {
+                            param_types[i] = self.type_expr_to_string(ty);
+                        }
                     }
                 }
-                fn_clauses.entry(qualified_name).or_default().extend(fn_def.clauses.iter().cloned());
             }
+
+            let signature = param_types.join(",");
+            let qualified_name = format!("{}/{}", base_name, signature);
+
+            // Get span (from first to last def)
+            let first_span = defs.first().unwrap().span;
+            let last_span = defs.last().unwrap().span;
+            let merged_span = Span::new(first_span.start, last_span.end);
+
+            // Use visibility from first def
+            let visibility = defs.first().unwrap().visibility;
+
+            // Sort clauses by specificity: literals before variables
+            // This ensures pattern matching tries specific patterns first
+            let mut sorted_clauses = all_clauses;
+            sorted_clauses.sort_by(|a, b| {
+                // Compare first param pattern specificity (most common case)
+                // More specific patterns (literals) should come first
+                fn pattern_specificity(p: &Pattern) -> i32 {
+                    match p {
+                        // Literals are most specific
+                        Pattern::Int(_, _) | Pattern::Int8(_, _) | Pattern::Int16(_, _) |
+                        Pattern::Int32(_, _) | Pattern::UInt8(_, _) | Pattern::UInt16(_, _) |
+                        Pattern::UInt32(_, _) | Pattern::UInt64(_, _) | Pattern::Float(_, _) |
+                        Pattern::Float32(_, _) | Pattern::BigInt(_, _) | Pattern::Decimal(_, _) |
+                        Pattern::Char(_, _) | Pattern::Bool(_, _) | Pattern::String(_, _) |
+                        Pattern::Unit(_) => 0,
+                        // Variant/constructor patterns
+                        Pattern::Variant(_, _, _) | Pattern::List(_, _) |
+                        Pattern::Tuple(_, _) | Pattern::Record(_, _) => 1,
+                        // Wildcard and variable are least specific
+                        Pattern::Wildcard(_) | Pattern::Var(_) => 2,
+                        // Other patterns
+                        _ => 1,
+                    }
+                }
+                if !a.params.is_empty() && !b.params.is_empty() {
+                    let spec_a = pattern_specificity(&a.params[0].pattern);
+                    let spec_b = pattern_specificity(&b.params[0].pattern);
+                    spec_a.cmp(&spec_b)
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            });
+
+            fn_order.push(qualified_name.clone());
+            fn_spans.insert(qualified_name.clone(), merged_span);
+            fn_visibility.insert(qualified_name.clone(), visibility);
+            fn_clauses.insert(qualified_name, sorted_clauses);
         }
 
         // Forward declare all collected functions
@@ -2555,13 +2621,22 @@ impl Compiler {
             let arity = clauses[0].params.len();
             let full_name = name.clone();
 
-            let param_types: Vec<String> = clauses[0].params.iter()
-                .map(|p| p.ty.as_ref()
-                    .map(|ty| self.type_expr_to_string(ty))
-                    .unwrap_or_else(|| "?".to_string()))
-                .collect();
+            // Extract param types from ALL clauses for type inference
+            let mut param_types: Vec<String> = vec!["?".to_string(); arity];
+            for clause in clauses {
+                for (i, param) in clause.params.iter().enumerate() {
+                    if param_types[i] == "?" {
+                        if let Some(ty) = &param.ty {
+                            param_types[i] = self.type_expr_to_string(ty);
+                        }
+                    }
+                }
+            }
 
-            let return_type = clauses[0].return_type.as_ref()
+            // Extract return type from clauses - prefer first explicit one found
+            let return_type = clauses.iter()
+                .filter_map(|c| c.return_type.as_ref())
+                .next()
                 .map(|ty| self.type_expr_to_string(ty));
 
             let should_insert = match self.functions.get(&full_name) {
@@ -3619,15 +3694,17 @@ impl Compiler {
     /// Apply decorators to a function definition.
     /// Decorators are applied bottom-up (last decorator is applied first).
     /// Each decorator template receives the function body as an AST and returns a transformed body.
-    fn apply_decorators(&mut self, def: &FnDef) -> Result<FnDef, CompileError> {
+    /// Returns the modified function and any additional generated functions.
+    fn apply_decorators(&mut self, def: &FnDef) -> Result<(FnDef, Vec<FnDef>), CompileError> {
         #[allow(unused)]
         use value::AstKind;
 
         if def.decorators.is_empty() {
-            return Ok(def.clone());
+            return Ok((def.clone(), vec![]));
         }
 
         let mut current_def = def.clone();
+        let mut generated_fns: Vec<FnDef> = Vec::new();
 
         // Apply decorators bottom-up (reverse order)
         for decorator in def.decorators.iter().rev() {
@@ -3714,18 +3791,20 @@ impl Compiler {
                 }
 
                 // Expand the template body for this clause
-                let new_body = if let Expr::Quote(inner, _) = template_body {
+                let (new_body, mut clause_generated_fns) = if let Expr::Quote(inner, _) = template_body {
                     // Substitute splices in the quoted expression
                     let expanded_ast = self.substitute_splices_in_ast(
                         &self.expr_to_ast_value(inner),
                         &substitutions
                     );
-                    // Convert back to Expr
-                    self.ast_value_to_expr(&expanded_ast)?
+                    // Extract body expression and any generated functions
+                    self.extract_body_and_generated_fns(&expanded_ast, decorator)?
                 } else {
                     // For non-quote bodies, substitute variable references
-                    self.substitute_vars_in_expr(template_body, &substitutions)?
+                    (self.substitute_vars_in_expr(template_body, &substitutions)?, vec![])
                 };
+
+                generated_fns.append(&mut clause_generated_fns);
 
                 // Create transformed clause
                 let mut new_clause = clause.clone();
@@ -3755,7 +3834,145 @@ impl Compiler {
             self.decorated_functions.insert(fn_name, decorator_infos);
         }
 
-        Ok(current_def)
+        Ok((current_def, generated_fns))
+    }
+
+    /// Extract the body expression and any generated function definitions from an expanded AST.
+    /// Handles AstKind::Items containing both expressions and FnDefs.
+    fn extract_body_and_generated_fns(&self, ast: &AstValue, decorator: &Decorator) -> Result<(Expr, Vec<FnDef>), CompileError> {
+        use value::AstKind;
+
+        match &ast.kind {
+            // Items: extract FnDefs and find the body expression
+            AstKind::Items(items) => {
+                let mut generated_fns = Vec::new();
+                let mut body_expr = None;
+
+                for item in items {
+                    match &item.kind {
+                        AstKind::FnDef { name, params, body, return_type } => {
+                            // Convert AstValue FnDef to syntax FnDef
+                            if let Some(fn_def) = self.ast_fndef_to_fndef(item)? {
+                                generated_fns.push(fn_def);
+                            }
+                        }
+                        _ => {
+                            // Non-FnDef items are potential body expressions
+                            // The last one will be used as the body
+                            body_expr = Some(self.ast_value_to_expr(item)?);
+                        }
+                    }
+                }
+
+                if let Some(body) = body_expr {
+                    Ok((body, generated_fns))
+                } else if !generated_fns.is_empty() {
+                    // No body expression found, but we have generated functions
+                    // This is an error - decorator must provide a body
+                    Err(CompileError::TypeError {
+                        message: format!(
+                            "decorator @{} generates functions but doesn't provide a function body expression",
+                            decorator.name.node
+                        ),
+                        span: decorator.span,
+                    })
+                } else {
+                    Err(CompileError::TypeError {
+                        message: format!(
+                            "decorator @{} expanded to empty Items",
+                            decorator.name.node
+                        ),
+                        span: decorator.span,
+                    })
+                }
+            }
+
+            // Block: extract FnDefs from statements and use result as body
+            AstKind::Block { stmts, result } => {
+                let mut generated_fns = Vec::new();
+
+                // Extract FnDefs from statements
+                for stmt in stmts {
+                    if let AstKind::FnDef { .. } = &stmt.kind {
+                        if let Some(fn_def) = self.ast_fndef_to_fndef(stmt)? {
+                            generated_fns.push(fn_def);
+                        }
+                    }
+                    // Ignore non-FnDef statements (they would be side effects, not supported)
+                }
+
+                // Use the result as the body
+                let body = self.ast_value_to_expr(result)?;
+                Ok((body, generated_fns))
+            }
+
+            // Single FnDef without a body expression is an error
+            AstKind::FnDef { .. } => {
+                Err(CompileError::TypeError {
+                    message: format!(
+                        "decorator @{} returned a function definition instead of an expression. \
+                        To generate additional functions, wrap them in a block with the body expression last.",
+                        decorator.name.node
+                    ),
+                    span: decorator.span,
+                })
+            }
+
+            // Normal expression - no generated functions
+            _ => {
+                let body = self.ast_value_to_expr(ast)?;
+                Ok((body, vec![]))
+            }
+        }
+    }
+
+    /// Convert an AstKind::FnDef to a syntax FnDef
+    fn ast_fndef_to_fndef(&self, ast: &AstValue) -> Result<Option<FnDef>, CompileError> {
+        use value::AstKind;
+
+        if let AstKind::FnDef { name, params, body, return_type } = &ast.kind {
+            // Convert params
+            let fn_params: Vec<FnParam> = params.iter()
+                .map(|(pname, ptype)| {
+                    FnParam {
+                        pattern: Pattern::Var(Ident {
+                            node: pname.clone(),
+                            span: Span::default(),
+                        }),
+                        ty: ptype.as_ref().map(|t| self.string_to_type_expr(t)),
+                        default: None,
+                    }
+                })
+                .collect();
+
+            // Convert body
+            let body_expr = self.ast_value_to_expr(body)?;
+
+            // Convert return type
+            let ret_type = return_type.as_ref().map(|t| self.string_to_type_expr(t));
+
+            Ok(Some(FnDef {
+                visibility: Visibility::Private,
+                doc: None,
+                decorators: vec![],
+                name: Ident {
+                    node: name.clone(),
+                    span: Span::default(),
+                },
+                type_params: vec![],
+                clauses: vec![FnClause {
+                    params: fn_params,
+                    guard: None,
+                    body: body_expr,
+                    return_type: ret_type,
+                    span: Span::default(),
+                }],
+                is_template: false,
+                span: Span::default(),
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Substitute splice expressions (~param) with their AST values.
@@ -3989,6 +4206,28 @@ impl Compiler {
                             if let Some(code) = code_str {
                                 if let Some(result) = self.comptime_eval(&code) {
                                     return result;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Handle ~list.join(sep) for compile-time string building
+                // Supports chains like ~fn.params.map(p => p.name).join(", ")
+                if let AstKind::MethodCall { receiver, method, args } = &inner.kind {
+                    if method == "join" && args.len() == 1 {
+                        // Evaluate the receiver to get a list (handles map chains)
+                        if let Some(items) = self.compile_time_eval_to_list_with_subs(receiver, substitutions) {
+                            // Get the separator string
+                            let sep_ast = self.substitute_splices_in_ast(&args[0], substitutions);
+                            if let Some(separator) = self.compile_time_eval_to_string(&sep_ast) {
+                                // Convert each item to string and join
+                                let strings: Option<Vec<String>> = items.iter()
+                                    .map(|item| self.compile_time_eval_to_string(item))
+                                    .collect();
+                                if let Some(strs) = strings {
+                                    let result = strs.join(&separator);
+                                    return AstValue::new(AstKind::String(result));
                                 }
                             }
                         }
@@ -4437,8 +4676,11 @@ impl Compiler {
             }
 
             // List.join for building strings from lists
+            // Supports chained calls like: fn.params.map(p => p.name).join(", ")
             AstKind::MethodCall { receiver, method, args } if method == "join" && args.len() == 1 => {
-                if let AstKind::List(items) = &receiver.kind {
+                // First evaluate the receiver to get the list (handles map().join() chains)
+                let evaluated_receiver = self.compile_time_eval_to_list(receiver);
+                if let Some(items) = evaluated_receiver {
                     let separator = self.compile_time_eval_to_string(&args[0])?;
                     let strings: Option<Vec<String>> = items.iter()
                         .map(|item| self.compile_time_eval_to_string(item))
@@ -4449,26 +4691,153 @@ impl Compiler {
                 }
             }
 
-            // List.map for transforming lists
+            // List.map - evaluate and convert result to string if possible
             AstKind::MethodCall { receiver, method, args } if method == "map" && args.len() == 1 => {
-                if let AstKind::List(items) = &receiver.kind {
-                    if let AstKind::Lambda { params, body } = &args[0].kind {
-                        if params.len() == 1 {
-                            let param_name = &params[0];
-                            let mapped: Option<Vec<AstValue>> = items.iter()
-                                .map(|item| {
-                                    // Substitute the parameter in the body
-                                    let mut subs = HashMap::new();
-                                    subs.insert(param_name.clone(), item.clone());
-                                    Some(self.substitute_splices_in_ast(body, &subs))
-                                })
-                                .collect();
-                            if let Some(mapped_items) = mapped {
-                                return Some(format!("{:?}", mapped_items)); // Simplified
-                            }
-                        }
+                // Evaluate the map and try to convert to string (for cases like map().toString())
+                if let Some(items) = self.compile_time_eval_to_list(ast) {
+                    // Join with empty string as fallback
+                    let strings: Option<Vec<String>> = items.iter()
+                        .map(|item| self.compile_time_eval_to_string(item))
+                        .collect();
+                    strings.map(|strs| strs.join(""))
+                } else {
+                    None
+                }
+            }
+
+            _ => None,
+        }
+    }
+
+    /// Evaluate an AST value at compile time to produce a List.
+    /// Handles method chains like fn.params.map(p => p.name).
+    fn compile_time_eval_to_list(&self, ast: &AstValue) -> Option<Vec<AstValue>> {
+        use value::AstKind;
+
+        match &ast.kind {
+            // Direct list
+            AstKind::List(items) => Some(items.clone()),
+
+            // List.map - transform each item
+            AstKind::MethodCall { receiver, method, args } if method == "map" && args.len() == 1 => {
+                // First get the source list
+                let source_items = self.compile_time_eval_to_list(receiver)?;
+
+                if let AstKind::Lambda { params, body } = &args[0].kind {
+                    if params.len() == 1 {
+                        let param_name = &params[0];
+                        let mapped_items: Vec<AstValue> = source_items.iter()
+                            .map(|item| {
+                                let mut subs = HashMap::new();
+                                subs.insert(param_name.clone(), item.clone());
+                                self.substitute_splices_in_ast(body, &subs)
+                            })
+                            .collect();
+                        return Some(mapped_items);
                     }
                 }
+                None
+            }
+
+            // Field access that might return a list (e.g., fn.params, typeDef.fields)
+            AstKind::FieldAccess { expr, field } => {
+                let evaluated = self.compile_time_eval_to_ast(expr);
+
+                // FnDef.params returns list of parameter records
+                if let AstKind::FnDef { params, .. } = &evaluated.kind {
+                    if field == "params" {
+                        let param_asts: Vec<AstValue> = params.iter()
+                            .map(|(pname, ptype)| AstValue::new(AstKind::Record {
+                                type_name: None,
+                                fields: vec![
+                                    ("name".to_string(), AstValue::new(AstKind::String(pname.clone()))),
+                                    ("ty".to_string(), AstValue::new(AstKind::String(
+                                        ptype.clone().unwrap_or_default()
+                                    ))),
+                                ],
+                            }))
+                            .collect();
+                        return Some(param_asts);
+                    }
+                }
+
+                // TypeDef.fields, etc. - delegate to compile_time_eval_to_ast
+                if let AstKind::List(items) = &evaluated.kind {
+                    return Some(items.clone());
+                }
+
+                None
+            }
+
+            _ => None,
+        }
+    }
+
+    /// Evaluate an AST value at compile time to produce a List, with substitutions.
+    /// Handles method chains like fn.params.map(p => p.name) where fn comes from substitutions.
+    fn compile_time_eval_to_list_with_subs(&self, ast: &AstValue, substitutions: &HashMap<String, AstValue>) -> Option<Vec<AstValue>> {
+        use value::AstKind;
+
+        match &ast.kind {
+            // Direct list
+            AstKind::List(items) => Some(items.clone()),
+
+            // Variable lookup from substitutions
+            AstKind::Var(name) => {
+                if let Some(replacement) = substitutions.get(name) {
+                    return self.compile_time_eval_to_list_with_subs(replacement, substitutions);
+                }
+                None
+            }
+
+            // List.map - transform each item
+            AstKind::MethodCall { receiver, method, args } if method == "map" && args.len() == 1 => {
+                // First get the source list
+                let source_items = self.compile_time_eval_to_list_with_subs(receiver, substitutions)?;
+
+                if let AstKind::Lambda { params, body } = &args[0].kind {
+                    if params.len() == 1 {
+                        let param_name = &params[0];
+                        let mapped_items: Vec<AstValue> = source_items.iter()
+                            .map(|item| {
+                                let mut subs = substitutions.clone();
+                                subs.insert(param_name.clone(), item.clone());
+                                self.substitute_splices_in_ast(body, &subs)
+                            })
+                            .collect();
+                        return Some(mapped_items);
+                    }
+                }
+                None
+            }
+
+            // Field access that might return a list (e.g., fn.params, typeDef.fields)
+            AstKind::FieldAccess { expr, field } => {
+                let evaluated = self.compile_time_eval_to_ast_with_subs(expr, substitutions);
+
+                // FnDef.params returns list of parameter records
+                if let AstKind::FnDef { params, .. } = &evaluated.kind {
+                    if field == "params" {
+                        let param_asts: Vec<AstValue> = params.iter()
+                            .map(|(pname, ptype)| AstValue::new(AstKind::Record {
+                                type_name: None,
+                                fields: vec![
+                                    ("name".to_string(), AstValue::new(AstKind::String(pname.clone()))),
+                                    ("ty".to_string(), AstValue::new(AstKind::String(
+                                        ptype.clone().unwrap_or_default()
+                                    ))),
+                                ],
+                            }))
+                            .collect();
+                        return Some(param_asts);
+                    }
+                }
+
+                // TypeDef.fields, etc. - check if result is a list
+                if let AstKind::List(items) = &evaluated.kind {
+                    return Some(items.clone());
+                }
+
                 None
             }
 
@@ -8599,12 +8968,17 @@ impl Compiler {
         }
 
         // Apply decorators if present (transforms the function before compilation)
-        let def = if !def.decorators.is_empty() {
+        let (def, generated_fns) = if !def.decorators.is_empty() {
             self.apply_decorators(def)?
         } else {
-            def.clone()
+            (def.clone(), vec![])
         };
         let def = &def;
+
+        // Compile any functions generated by decorators
+        for gen_fn in generated_fns {
+            self.compile_fn_def(&gen_fn)?;
+        }
 
         // Check if function name shadows a built-in function
         // Only check for user-defined functions (not stdlib)
@@ -8740,12 +9114,28 @@ impl Compiler {
 
         // Use qualified name with type signature to support function overloading
         // Format: name/type1,type2,... where untyped params use "_"
+        // IMPORTANT: Combine type info from ALL clauses to handle cases like:
+        //   factorial(0) = 1           # no type
+        //   factorial(n: Int) = ...    # has type
+        // Both should resolve to factorial/Int
         let base_name = self.qualify_name(&def.name.node);
-        let param_types: Vec<String> = def.clauses[0].params.iter()
-            .map(|p| p.ty.as_ref()
-                .map(|t| self.type_expr_to_string(t))
-                .unwrap_or_else(|| "_".to_string()))
-            .collect();
+        let arity = def.clauses[0].params.len();
+        let mut param_types: Vec<String> = vec!["_".to_string(); arity];
+
+        // Collect types from all clauses
+        for clause in &def.clauses {
+            for (i, param) in clause.params.iter().enumerate() {
+                if let Some(ty) = &param.ty {
+                    let ty_str = self.type_expr_to_string(ty);
+                    if param_types[i] == "_" {
+                        param_types[i] = ty_str;
+                    }
+                    // Note: we could check for conflicting types here, but for now
+                    // we just use the first non-"_" type we find
+                }
+            }
+        }
+
         let signature = param_types.join(",");
         let name = format!("{}/{}", base_name, signature);
 
@@ -24725,15 +25115,10 @@ impl Compiler {
             }
         }
 
-        // Collect and merge function definitions by name AND signature BEFORE trait impls
-        // This allows trait implementations to call module-level functions
-        // Functions with the same name but different type signatures are different functions
-        let mut fn_clauses: std::collections::HashMap<String, Vec<FnClause>> = std::collections::HashMap::new();
-        let mut fn_order: Vec<String> = Vec::new();
-        let mut fn_spans: std::collections::HashMap<String, Span> = std::collections::HashMap::new();
-        let mut fn_visibility: std::collections::HashMap<String, Visibility> = std::collections::HashMap::new();
-        let mut fn_type_params_map: std::collections::HashMap<String, Vec<TypeParam>> = std::collections::HashMap::new();
-        let mut fn_decorators: std::collections::HashMap<String, Vec<Decorator>> = std::collections::HashMap::new();
+        // Phase 1: Group function definitions by BASE name only (without signature)
+        // This allows clauses with different type annotations to be merged together
+        let mut fn_defs_by_base: std::collections::HashMap<String, Vec<&FnDef>> = std::collections::HashMap::new();
+        let mut base_order: Vec<String> = Vec::new();
 
         for item in items {
             if let Item::FnDef(fn_def) = item {
@@ -24742,30 +25127,97 @@ impl Compiler {
                     continue;
                 }
                 let base_name = self.qualify_name(&fn_def.name.node);
-                // Build signature from first clause's parameter types
-                let param_types: Vec<String> = fn_def.clauses[0].params.iter()
-                    .map(|p| p.ty.as_ref()
-                        .map(|t| self.type_expr_to_string(t))
-                        .unwrap_or_else(|| "_".to_string()))
-                    .collect();
-                let signature = param_types.join(",");
-                let qualified_name = format!("{}/{}", base_name, signature);
+                if !fn_defs_by_base.contains_key(&base_name) {
+                    base_order.push(base_name.clone());
+                }
+                fn_defs_by_base.entry(base_name).or_default().push(fn_def);
+            }
+        }
 
-                if !fn_clauses.contains_key(&qualified_name) {
-                    fn_order.push(qualified_name.clone());
-                    fn_spans.insert(qualified_name.clone(), fn_def.span);
-                    // Use visibility, type_params, and decorators from first definition
-                    fn_visibility.insert(qualified_name.clone(), fn_def.visibility);
-                    fn_type_params_map.insert(qualified_name.clone(), fn_def.type_params.clone());
-                    fn_decorators.insert(qualified_name.clone(), fn_def.decorators.clone());
-                } else {
-                    // Merge spans to cover all clauses (from first to last definition)
-                    if let Some(existing_span) = fn_spans.get_mut(&qualified_name) {
-                        existing_span.end = fn_def.span.end;
+        // Phase 2: For each base name, compute unified signature and collect clauses
+        let mut fn_clauses: std::collections::HashMap<String, Vec<FnClause>> = std::collections::HashMap::new();
+        let mut fn_order: Vec<String> = Vec::new();
+        let mut fn_spans: std::collections::HashMap<String, Span> = std::collections::HashMap::new();
+        let mut fn_visibility: std::collections::HashMap<String, Visibility> = std::collections::HashMap::new();
+        let mut fn_type_params_map: std::collections::HashMap<String, Vec<TypeParam>> = std::collections::HashMap::new();
+        let mut fn_decorators: std::collections::HashMap<String, Vec<Decorator>> = std::collections::HashMap::new();
+
+        for base_name in &base_order {
+            let defs = fn_defs_by_base.get(base_name).unwrap();
+
+            // Collect all clauses from all defs with this base name
+            let all_clauses: Vec<FnClause> = defs.iter()
+                .flat_map(|d| d.clauses.iter().cloned())
+                .collect();
+
+            if all_clauses.is_empty() {
+                continue;
+            }
+
+            // Compute unified signature: for each param position, use first explicit type found
+            let arity = all_clauses[0].params.len();
+            let mut param_types: Vec<String> = vec!["_".to_string(); arity];
+
+            for clause in &all_clauses {
+                for (i, param) in clause.params.iter().enumerate() {
+                    if param_types[i] == "_" {
+                        if let Some(ty) = &param.ty {
+                            param_types[i] = self.type_expr_to_string(ty);
+                        }
                     }
                 }
-                fn_clauses.entry(qualified_name).or_default().extend(fn_def.clauses.iter().cloned());
             }
+
+            let signature = param_types.join(",");
+            let qualified_name = format!("{}/{}", base_name, signature);
+
+            // Get span (from first to last def)
+            let first_span = defs.first().unwrap().span;
+            let last_span = defs.last().unwrap().span;
+            let merged_span = Span::new(first_span.start, last_span.end);
+
+            // Use visibility, type_params, and decorators from first def
+            // Sort clauses by specificity: literals before variables
+            // This ensures pattern matching tries specific patterns first
+            let mut sorted_clauses = all_clauses;
+            sorted_clauses.sort_by(|a, b| {
+                // Compare first param pattern specificity (most common case)
+                // More specific patterns (literals) should come first
+                fn pattern_specificity(p: &Pattern) -> i32 {
+                    match p {
+                        // Literals are most specific
+                        Pattern::Int(_, _) | Pattern::Int8(_, _) | Pattern::Int16(_, _) |
+                        Pattern::Int32(_, _) | Pattern::UInt8(_, _) | Pattern::UInt16(_, _) |
+                        Pattern::UInt32(_, _) | Pattern::UInt64(_, _) | Pattern::Float(_, _) |
+                        Pattern::Float32(_, _) | Pattern::BigInt(_, _) | Pattern::Decimal(_, _) |
+                        Pattern::Char(_, _) | Pattern::Bool(_, _) | Pattern::String(_, _) |
+                        Pattern::Unit(_) => 0,
+                        // Variant/constructor patterns
+                        Pattern::Variant(_, _, _) | Pattern::List(_, _) |
+                        Pattern::Tuple(_, _) | Pattern::Record(_, _) => 1,
+                        // Wildcard and variable are least specific
+                        Pattern::Wildcard(_) | Pattern::Var(_) => 2,
+                        // Other patterns
+                        _ => 1,
+                    }
+                }
+                if !a.params.is_empty() && !b.params.is_empty() {
+                    let spec_a = pattern_specificity(&a.params[0].pattern);
+                    let spec_b = pattern_specificity(&b.params[0].pattern);
+                    spec_a.cmp(&spec_b)
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            });
+
+            let first_def = defs.first().unwrap();
+
+            fn_order.push(qualified_name.clone());
+            fn_spans.insert(qualified_name.clone(), merged_span);
+            fn_visibility.insert(qualified_name.clone(), first_def.visibility);
+            fn_type_params_map.insert(qualified_name.clone(), first_def.type_params.clone());
+            fn_decorators.insert(qualified_name.clone(), first_def.decorators.clone());
+            fn_clauses.insert(qualified_name, sorted_clauses);
         }
 
         // Forward declare all functions BEFORE trait impls (so trait impls can call them)
@@ -24778,16 +25230,23 @@ impl Compiler {
             // name already includes signature from collection phase (e.g., "greet/Int")
             let full_name = name.clone();
 
-            // Extract param types from the first clause for type inference
+            // Extract param types from ALL clauses for type inference
             // Use "?" for untyped params (will be resolved by HM inference)
-            let param_types: Vec<String> = clauses[0].params.iter()
-                .map(|p| p.ty.as_ref()
-                    .map(|ty| self.type_expr_to_string(ty))
-                    .unwrap_or_else(|| "?".to_string()))
-                .collect();
+            let mut param_types: Vec<String> = vec!["?".to_string(); arity];
+            for clause in clauses {
+                for (i, param) in clause.params.iter().enumerate() {
+                    if param_types[i] == "?" {
+                        if let Some(ty) = &param.ty {
+                            param_types[i] = self.type_expr_to_string(ty);
+                        }
+                    }
+                }
+            }
 
-            // Extract return type from the first clause if available
-            let return_type = clauses[0].return_type.as_ref()
+            // Extract return type from clauses - prefer first explicit one found
+            let return_type = clauses.iter()
+                .filter_map(|c| c.return_type.as_ref())
+                .next()
                 .map(|ty| self.type_expr_to_string(ty));
 
             // Insert a placeholder function for forward reference
