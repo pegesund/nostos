@@ -6326,21 +6326,6 @@ type Pair[A, B] = { first: A, second: B }
 type Either[L, R] = Left(L) | Right(R)
 ```
 
-## Type Aliases
-
-```nostos
-# Simple alias
-type UserId = Int
-type Email = String
-
-# Generic alias
-type StringMap[V] = Map[String, V]
-type Callback[T] = (T) -> ()
-
-# Using aliases
-users: StringMap[Person] = %{"alice": Person("Alice", 30)}
-```
-
 ## Tuples
 
 ```nostos

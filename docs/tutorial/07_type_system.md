@@ -132,25 +132,6 @@ main() = {
 }
 ```
 
-### Type Aliases
-
-Type aliases provide alternative names for existing types, improving readability without creating a new distinct type.
-
-```nostos
-type UserMap = Map[String, String] # Alias for a map of String to String
-type Milliseconds = Int
-
-# Now you can use Milliseconds for better clarity
-sleep(duration: Milliseconds) = {
-    # ... implementation ...
-}
-
-main() = {
-    config_map: UserMap = %{"host": "localhost", "port": "8080"}
-    sleep(1000) # Represents 1000 milliseconds
-}
-```
-
 ## Generics
 
 Nostos supports generics, allowing you to write functions and types that work with any type, or types constrained by traits, without sacrificing type safety.

@@ -50,10 +50,6 @@ map(f: a -> b, xs: List[a]) -> List[b] = ...
 
 // Explicit type application (rarely needed)
 identity@Int(42)
-
-// Type aliases
-type Point = (Float, Float)
-type Result[T] = Ok(T) | Err(String)
 ```
 
 ## 3. Type Inference Algorithm
@@ -435,10 +431,6 @@ first(pair: (a, b)) -> a = ...
 
 // Generic types
 map(f: a -> b, xs: List[a]) -> List[b] = ...
-
-// Type aliases
-type Point = (Float, Float)
-type Maybe[T] = Some(T) | None
 ```
 
 ## 9. Current Implementation Status (December 2024)

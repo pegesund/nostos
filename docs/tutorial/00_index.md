@@ -16,7 +16,7 @@ Welcome to the Nostos programming language tutorial! Use the arrow keys to navig
 4. **Lists & Tuples** - Collections, list operations, ranges
 5. **Maps & Sets** - Key-value maps, sets, immutable operations
 6. **Typed Arrays** - Float32Array, Float64Array, Int64Array for performance
-7. **Type System** - Records, variants, generics, type aliases
+7. **Type System** - Records, variants, generics
 8. **Traits** - Defining and implementing traits
 9. **Builtin Traits** - Show, Eq, Ord, Default, Hash, Serialize
 10. **Trait Bounds** - Constraining generic types with traits
