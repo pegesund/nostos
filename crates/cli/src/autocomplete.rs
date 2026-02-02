@@ -178,11 +178,9 @@ pub fn extract_module_from_editor_name(name: &str) -> Option<String> {
             .and_then(|f| f.strip_suffix(".nos"))
             .filter(|m| !m.is_empty())
             .map(|s| s.to_string())
-    } else if let Some(dot_pos) = name.rfind('.') {
-        // Qualified name like "utils.bar" -> extract module "utils"
-        Some(name[..dot_pos].to_string())
     } else {
-        None
+        // Qualified name like "utils.bar" -> extract module "utils"
+        name.rfind('.').map(|dot_pos| name[..dot_pos].to_string())
     }
 }
 

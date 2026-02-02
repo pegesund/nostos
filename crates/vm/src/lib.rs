@@ -13,7 +13,6 @@
 #![allow(clippy::inconsistent_digit_grouping)]
 #![allow(clippy::ptr_arg)]
 #![allow(clippy::create_dir)]
-#![allow(clippy::iter_cloned_collect)]
 #![allow(clippy::unnecessary_map_or)]
 #![allow(clippy::if_same_then_else)]
 #![allow(clippy::repeat_vec_with_capacity)]
@@ -22,8 +21,6 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![allow(unused_imports)]
-#![allow(clippy::map_clone)]
-#![allow(clippy::suspicious_open_options)]
 #![allow(clippy::format_collect)]
 #![allow(clippy::approx_constant)]
 //! - JIT compilation with Cranelift

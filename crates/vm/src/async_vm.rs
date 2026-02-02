@@ -965,15 +965,13 @@ impl AsyncProcess {
 
                             // If at a Return instruction, show the return value
                             if frame_index == 0 {
-                                if let Some(instr) = frame.function.code.code.get(frame.ip) {
-                                    if let crate::value::Instruction::Return(src) = instr {
-                                        if let Some(val) = frame.registers.get(*src as usize) {
-                                            variables.push((
-                                                "(return value)".to_string(),
-                                                format!("{:?}", val),
-                                                "return".to_string()
-                                            ));
-                                        }
+                                if let Some(crate::value::Instruction::Return(src)) = frame.function.code.code.get(frame.ip) {
+                                    if let Some(val) = frame.registers.get(*src as usize) {
+                                        variables.push((
+                                            "(return value)".to_string(),
+                                            format!("{:?}", val),
+                                            "return".to_string()
+                                        ));
                                     }
                                 }
                             }
@@ -3597,10 +3595,8 @@ impl AsyncProcess {
                         let old_value = rec.get_field(idx);
 
                         // Check if old value was a reactive record (need to remove parent ref)
-                        if let Some(ref ov) = old_value {
-                            if let Value::ReactiveRecord(old_child) = ov {
-                                old_child.remove_parent(Arc::as_ptr(&rec));
-                            }
+                        if let Some(Value::ReactiveRecord(old_child)) = old_value.as_ref() {
+                            old_child.remove_parent(Arc::as_ptr(&rec));
                         }
 
                         // Set the new value

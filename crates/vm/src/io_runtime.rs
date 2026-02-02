@@ -915,6 +915,7 @@ impl IoRuntime {
                             .read(true)
                             .write(true)
                             .create(true)
+                            .truncate(false)
                             .open(&path)
                             .await,
                     };
@@ -3367,6 +3368,7 @@ impl IoRuntime {
                 .read(true)
                 .write(true)
                 .create(true)
+                .truncate(false)
                 .open(path)
                 .await,
         };
