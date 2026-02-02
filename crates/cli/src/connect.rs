@@ -1,6 +1,5 @@
 //! REPL Connect Client - connect to a running TUI REPL server
 #![allow(unused_imports)]
-#![allow(clippy::manual_pattern_char_comparison)]
 //!
 //! Usage: `nostos connect -p <port>`
 //!
