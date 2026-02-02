@@ -1,6 +1,5 @@
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::clone_on_copy)]
-#![allow(clippy::manual_div_ceil)]
 
 use cursive::event::{Event, EventResult, Key};
 use cursive::theme::{Color, ColorStyle, Style};

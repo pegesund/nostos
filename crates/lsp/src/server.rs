@@ -7,7 +7,6 @@
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::clone_on_copy)]
 #![allow(clippy::unnecessary_map_or)]
-#![allow(clippy::manual_pattern_char_comparison)]
 #![allow(clippy::needless_borrows_for_generic_args)]
 
 use std::path::PathBuf;
