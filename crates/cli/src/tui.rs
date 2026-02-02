@@ -14,7 +14,6 @@
 #![allow(clippy::manual_pattern_char_comparison)]
 #![allow(clippy::manual_div_ceil)]
 #![allow(clippy::needless_borrows_for_generic_args)]
-#![allow(clippy::needless_lifetimes)]
 #![allow(suspicious_double_ref_op)]
 
 use cursive::Cursive;
