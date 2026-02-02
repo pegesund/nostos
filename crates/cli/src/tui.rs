@@ -7,7 +7,6 @@
 #![allow(clippy::while_let_loop)]
 #![allow(clippy::field_reassign_with_default)]
 #![allow(clippy::clone_on_copy)]
-#![allow(clippy::useless_format)]
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::single_match)]
 #![allow(clippy::unnecessary_map_or)]
@@ -4208,7 +4207,7 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                 match compile_result {
                     Ok(output) => {
                         // Compilation succeeded - save to disk
-                        debug_log(&format!("Compilation OK, saving to disk"));
+                        debug_log("Compilation OK, saving to disk");
                         let save_result = engine.save_group_source(&name_for_save, &content);
 
                         match save_result {
@@ -4560,7 +4559,7 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                 match compile_result {
                     Ok(_output) => {
                         // Compilation succeeded - save to disk
-                        debug_log(&format!("Ctrl+O: Compilation OK, saving to disk"));
+                        debug_log("Ctrl+O: Compilation OK, saving to disk");
                         let save_result = engine.save_group_source(&name_for_compile, &content);
 
                         match save_result {

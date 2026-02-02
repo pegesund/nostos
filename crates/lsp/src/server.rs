@@ -10,7 +10,6 @@
 #![allow(clippy::unnecessary_map_or)]
 #![allow(clippy::manual_strip)]
 #![allow(clippy::question_mark)]
-#![allow(clippy::useless_format)]
 #![allow(clippy::manual_pattern_char_comparison)]
 #![allow(clippy::writeln_empty_string)]
 #![allow(clippy::needless_borrows_for_generic_args)]
@@ -2338,7 +2337,7 @@ impl NostosLanguageServer {
 
             // Build a fake "before_dot" to recursively infer the receiver's type
             // We need to find where receiver_var is defined as a lambda param
-            let receiver_before_dot = format!("{}", receiver_var);
+            let receiver_before_dot = receiver_var.to_string();
 
             // Recursively infer the type of the receiver
             Self::infer_lambda_param_type_recursive(

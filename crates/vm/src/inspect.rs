@@ -632,7 +632,7 @@ impl Inspector {
         // Check for cycle
         if let Some(id) = child.identity() {
             if self.visited.contains(&id) {
-                return Err(format!("Cycle detected: already visited this value"));
+                return Err("Cycle detected: already visited this value".to_string());
             }
             self.visited.insert(id);
         }
