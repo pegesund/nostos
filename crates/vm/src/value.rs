@@ -1,6 +1,5 @@
 //! Value representation for the Nostos VM.
 #![allow(clippy::type_complexity)]
-#![allow(clippy::single_match)]
 //!
 //! Design goals:
 //! - JIT-friendly: values can be unboxed in hot paths

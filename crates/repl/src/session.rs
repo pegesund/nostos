@@ -1,5 +1,4 @@
 //! REPL session management with transactional semantics.
-#![allow(clippy::manual_map)]
 #![allow(clippy::collapsible_if)]
 //!
 //! The session is always in a valid, runnable state. Changes that would

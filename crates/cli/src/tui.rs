@@ -8,13 +8,11 @@
 #![allow(clippy::field_reassign_with_default)]
 #![allow(clippy::clone_on_copy)]
 #![allow(clippy::collapsible_if)]
-#![allow(clippy::single_match)]
 #![allow(clippy::unnecessary_map_or)]
 #![allow(clippy::match_result_ok)]
 #![allow(clippy::or_fun_call)]
 #![allow(clippy::manual_pattern_char_comparison)]
 #![allow(clippy::manual_div_ceil)]
-#![allow(clippy::collapsible_match)]
 #![allow(clippy::needless_borrows_for_generic_args)]
 #![allow(clippy::needless_lifetimes)]
 #![allow(suspicious_double_ref_op)]
@@ -4418,8 +4416,7 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
             let mut engine = engine_compile.borrow_mut();
 
             // Check if this is file-mode (file:path)
-            if name_for_compile.starts_with("file:") {
-                let file_path = &name_for_compile[5..];
+            if let Some(file_path) = name_for_compile.strip_prefix("file:") {
                 debug_log(&format!("Ctrl+O file mode: {}", file_path));
 
                 // First save the file to disk

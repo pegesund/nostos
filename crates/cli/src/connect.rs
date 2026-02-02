@@ -690,9 +690,9 @@ fn print_client_help() {
 
 /// Parse user input into command and arguments
 fn parse_input(line: &str) -> (String, String) {
-    if line.starts_with(':') {
+    if let Some(rest) = line.strip_prefix(':') {
         // Command
-        let parts: Vec<&str> = line[1..].splitn(2, ' ').collect();
+        let parts: Vec<&str> = rest.splitn(2, ' ').collect();
         let cmd = parts[0].to_string();
         let args = if parts.len() > 1 { parts[1].to_string() } else { String::new() };
         (cmd, args)

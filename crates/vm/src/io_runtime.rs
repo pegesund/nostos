@@ -2699,14 +2699,11 @@ impl IoRuntime {
                                     r#"return document.querySelector("{}") !== null"#,
                                     selector.replace('"', r#"\""#)
                                 );
-                                match driver.execute(&script, vec![]).await {
-                                    Ok(result) => {
-                                        if result.json().as_bool().unwrap_or(false) {
-                                            let _ = response.send(Ok(IoResponseValue::Bool(true)));
-                                            return;
-                                        }
+                                if let Ok(result) = driver.execute(&script, vec![]).await {
+                                    if result.json().as_bool().unwrap_or(false) {
+                                        let _ = response.send(Ok(IoResponseValue::Bool(true)));
+                                        return;
                                     }
-                                    Err(_) => {}
                                 }
 
                                 if start.elapsed() >= timeout {

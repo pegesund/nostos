@@ -1,7 +1,6 @@
 //! Process abstraction for Erlang-style concurrency.
 #![allow(clippy::type_complexity)]
 #![allow(clippy::redundant_closure)]
-#![allow(clippy::manual_map)]
 //!
 //! Each process has:
 //! - Its own heap (GC isolation)

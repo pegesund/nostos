@@ -2,7 +2,6 @@
 #![allow(clippy::type_complexity)]
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::clone_on_copy)]
-#![allow(clippy::collapsible_match)]
 #![allow(clippy::only_used_in_recursion)]
 //!
 //! Each process runs as a tokio task, enabling:
@@ -14768,9 +14767,8 @@ impl AsyncVM {
                         // Match and extract params
                         let mut params: Vec<GcValue> = vec![];
                         for (path_seg, pattern_seg) in path_segs.iter().zip(pattern_segs.iter()) {
-                            if pattern_seg.starts_with(':') {
+                            if let Some(param_name) = pattern_seg.strip_prefix(':') {
                                 // This is a param - extract the name (without the colon)
-                                let param_name = &pattern_seg[1..];
                                 // Create tuple (param_name, path_seg)
                                 let key = GcValue::String(heap.alloc_string(param_name.to_string()));
                                 let val = GcValue::String(heap.alloc_string(path_seg.to_string()));

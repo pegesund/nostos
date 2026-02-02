@@ -1,5 +1,4 @@
 //! Autocomplete engine for REPL and Editor
-#![allow(clippy::manual_map)]
 #![allow(clippy::only_used_in_recursion)]
 #![allow(dead_code)]
 //!

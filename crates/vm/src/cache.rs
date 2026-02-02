@@ -229,11 +229,7 @@ impl CachedValue {
             Value::Function(f) => {
                 // If it's a lambda (anonymous function), cache it inline
                 if f.name == "<lambda>" || f.name.contains(".<lambda>") {
-                    if let Some(cached_fn) = function_to_cached(f) {
-                        Some(CachedValue::InlineFunction(Box::new(cached_fn)))
-                    } else {
-                        None
-                    }
+                    function_to_cached(f).map(|cached_fn| CachedValue::InlineFunction(Box::new(cached_fn)))
                 } else {
                     Some(CachedValue::FunctionRef(f.name.clone()))
                 }
