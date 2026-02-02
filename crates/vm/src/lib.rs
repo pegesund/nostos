@@ -5,7 +5,6 @@
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::clone_on_copy)]
 #![allow(clippy::needless_borrow)]
-#![allow(clippy::useless_format)]
 #![allow(clippy::only_used_in_recursion)]
 #![allow(clippy::collapsible_match)]
 #![allow(clippy::single_match)]

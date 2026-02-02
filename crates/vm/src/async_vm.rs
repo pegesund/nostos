@@ -3,7 +3,6 @@
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::clone_on_copy)]
 #![allow(clippy::collapsible_match)]
-#![allow(clippy::useless_format)]
 #![allow(clippy::only_used_in_recursion)]
 //!
 //! Each process runs as a tokio task, enabling:
@@ -797,7 +796,7 @@ impl AsyncProcess {
                     return true;
                 }
                 if current_line > 0 && current_line != self.debug_last_line {
-                    Self::debug_log(&format!("  -> line changed, pausing"));
+                    Self::debug_log("  -> line changed, pausing");
                     self.debug_last_line = current_line;
                     self.step_mode = StepMode::Paused;
                     return true;
@@ -2709,7 +2708,7 @@ impl AsyncProcess {
                     let sender_ptr = sender as *const _ as usize;
                     Self::debug_log(&format!("[Println] sender_ptr={:#x}, sending: {}", sender_ptr, s));
                     match sender.send(s.clone()) {
-                        Ok(()) => Self::debug_log(&format!("[Println] send OK")),
+                        Ok(()) => Self::debug_log("[Println] send OK"),
                         Err(e) => Self::debug_log(&format!("[Println] send FAILED: {:?}", e)),
                     }
                 } else {
@@ -3315,7 +3314,7 @@ impl AsyncProcess {
                 let result = if let Some(ref ext_mgr) = *extensions_guard {
                     ext_mgr.call(&name, &arg_values, nostos_extension::Pid(self.pid.0))
                 } else {
-                    Err(format!("No extension manager configured"))
+                    Err("No extension manager configured".to_string())
                 };
                 drop(extensions_guard);
 
@@ -3347,7 +3346,7 @@ impl AsyncProcess {
                 let result = if let Some(ref ext_mgr) = *extensions_guard {
                     ext_mgr.call_by_index(*ext_idx, &arg_values, nostos_extension::Pid(self.pid.0))
                 } else {
-                    Err(format!("No extension manager configured"))
+                    Err("No extension manager configured".to_string())
                 };
                 drop(extensions_guard);
 

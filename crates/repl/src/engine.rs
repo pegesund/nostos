@@ -4,7 +4,6 @@
 #![allow(unused_variables)]
 #![allow(clippy::type_complexity)]
 #![allow(clippy::manual_strip)]
-#![allow(clippy::useless_format)]
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::clone_on_copy)]
 #![allow(clippy::result_large_err)]
@@ -572,7 +571,7 @@ impl ReplEngine {
                             mvars.insert(name.clone(), Arc::new(std::sync::RwLock::new(safe_val)));
                             return Ok(format!("{} = {}", name, result.display()));
                         }
-                        Err(e) => return Err(format!("{}", e)),
+                        Err(e) => return Err(e.to_string()),
                     }
                 } else {
                     code.to_string()
@@ -776,7 +775,7 @@ impl ReplEngine {
                     Ok(result) => {
                         Ok(result.display())
                     }
-                    Err(e) => Err(format!("{}", e)),
+                    Err(e) => Err(e.to_string()),
                 }
             }
         });
@@ -985,7 +984,7 @@ impl ReplEngine {
         if !errors.is_empty() {
             let source_errors = parse_errors_to_source_errors(&errors);
             let error_msgs: Vec<String> = source_errors.iter().map(|e| {
-                format!("{}", e.message)
+                e.message.to_string()
             }).collect();
             return Err(format!("Parse errors in extension {}: {}", ext_name, error_msgs.join(", ")));
         }
@@ -9128,7 +9127,7 @@ impl ReplEngine {
 
         // Verify that __profile_main__ was compiled
         if eval_compiler.get_function("__profile_main__/").is_none() {
-            return Err(format!("Failed to compile expression. Function may not exist or has wrong arity."));
+            return Err("Failed to compile expression. Function may not exist or has wrong arity.".to_string());
         }
 
         // Create AsyncVM with profiling enabled and JIT
