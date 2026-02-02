@@ -11,7 +11,6 @@
 #![allow(clippy::clone_on_copy)]
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::collapsible_else_if)]
-#![allow(clippy::const_is_empty)]
 #![allow(clippy::needless_borrows_for_generic_args)]
 #![allow(clippy::useless_vec)]
 #![allow(clippy::manual_strip)]
@@ -808,9 +807,7 @@ fn ensure_stdlib_extracted() -> Option<PathBuf> {
     }
 
     // Write CORE_MODULES
-    if !EMBEDDED_CORE_MODULES.is_empty() {
-        fs::write(stdlib_dir.join("CORE_MODULES"), EMBEDDED_CORE_MODULES).ok()?;
-    }
+    fs::write(stdlib_dir.join("CORE_MODULES"), EMBEDDED_CORE_MODULES).ok()?;
 
     // Write version file
     fs::write(&version_file, STDLIB_VERSION).ok()?;
