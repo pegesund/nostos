@@ -6,12 +6,9 @@
 #![allow(unused_assignments)]
 #![allow(clippy::type_complexity)]
 #![allow(clippy::result_large_err)]
-#![allow(clippy::too_many_arguments)]
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::clone_on_copy)]
 #![allow(clippy::collapsible_if)]
-#![allow(clippy::collapsible_else_if)]
-#![allow(clippy::needless_borrows_for_generic_args)]
 //!
 //! Note: We use the system allocator (not mimalloc) to ensure compatibility
 //! with native extensions, which also use the system allocator. Using different

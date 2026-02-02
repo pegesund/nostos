@@ -7,7 +7,6 @@
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::clone_on_copy)]
 #![allow(clippy::unnecessary_map_or)]
-#![allow(clippy::needless_borrows_for_generic_args)]
 
 use std::path::PathBuf;
 use std::sync::Mutex;

@@ -7,7 +7,6 @@
 #![allow(clippy::clone_on_copy)]
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::unnecessary_map_or)]
-#![allow(clippy::needless_borrows_for_generic_args)]
 #![allow(suspicious_double_ref_op)]
 
 use cursive::Cursive;
