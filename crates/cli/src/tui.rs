@@ -14,8 +14,6 @@
 #![allow(clippy::or_fun_call)]
 #![allow(clippy::manual_pattern_char_comparison)]
 #![allow(clippy::manual_div_ceil)]
-#![allow(clippy::redundant_pattern_matching)]
-#![allow(clippy::manual_strip)]
 #![allow(clippy::collapsible_match)]
 #![allow(clippy::needless_borrows_for_generic_args)]
 #![allow(clippy::needless_lifetimes)]

@@ -13,8 +13,6 @@
 #![allow(clippy::collapsible_else_if)]
 #![allow(clippy::needless_borrows_for_generic_args)]
 #![allow(clippy::useless_vec)]
-#![allow(clippy::manual_strip)]
-#![allow(clippy::redundant_pattern_matching)]
 //!
 //! Note: We use the system allocator (not mimalloc) to ensure compatibility
 //! with native extensions, which also use the system allocator. Using different
