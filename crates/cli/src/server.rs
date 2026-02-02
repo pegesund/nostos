@@ -1,6 +1,5 @@
 //! REPL Server - allows remote connections to the TUI REPL
 #![allow(unused_imports)]
-#![allow(clippy::while_let_on_iterator)]
 //!
 //! When `nostos repl --serve <port>` is used, the TUI also listens on a TCP port
 //! for JSON commands from remote clients (e.g., `nostos connect -p <port>`).
@@ -134,7 +133,7 @@ fn split_json_pairs(json: &str) -> Vec<(String, String)> {
         chars.next(); // consume opening quote
 
         let mut key = String::new();
-        while let Some(c) = chars.next() {
+        for c in chars.by_ref() {
             if c == '"' {
                 break;
             }
