@@ -9,12 +9,7 @@
 #![allow(clippy::unnecessary_map_or)]
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::nonminimal_bool)]
-#![allow(clippy::needless_option_as_deref)]
-#![allow(clippy::unnecessary_cast)]
-#![allow(clippy::unnecessary_get_then_check)]
-#![allow(clippy::redundant_guards)]
 #![allow(clippy::if_same_then_else)]
-#![allow(clippy::comparison_chain)]
 #![allow(dead_code)]
 #![allow(unused_variables)]
 //!
