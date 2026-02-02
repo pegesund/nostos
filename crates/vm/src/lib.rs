@@ -19,7 +19,6 @@
 #![allow(clippy::iter_cloned_collect)]
 #![allow(clippy::unnecessary_map_or)]
 #![allow(clippy::if_same_then_else)]
-#![allow(clippy::manual_strip)]
 #![allow(clippy::repeat_vec_with_capacity)]
 #![allow(clippy::missing_safety_doc)]
 #![allow(clippy::unwrap_or_default)]
