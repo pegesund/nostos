@@ -1,8 +1,4 @@
 //! Async VM implementation using Tokio.
-#![allow(clippy::type_complexity)]
-#![allow(clippy::redundant_closure)]
-#![allow(clippy::clone_on_copy)]
-#![allow(clippy::only_used_in_recursion)]
 //!
 //! Each process runs as a tokio task, enabling:
 //! - Natural async/await for blocking operations (mvar locks, receive, I/O)

@@ -1,5 +1,4 @@
 //! Type inference for Nostos.
-#![allow(clippy::approx_constant)]
 //!
 //! Implements Hindley-Milner type inference with extensions for:
 //! - Records (structural typing)

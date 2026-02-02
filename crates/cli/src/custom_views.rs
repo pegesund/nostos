@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 #![allow(unused_imports)]
 
 use cursive::event::{Event, EventResult, Key};

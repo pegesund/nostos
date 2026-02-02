@@ -2,13 +2,6 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 #![allow(unused_variables)]
-#![allow(clippy::type_complexity)]
-#![allow(clippy::collapsible_if)]
-#![allow(clippy::clone_on_copy)]
-#![allow(clippy::redundant_closure)]
-#![allow(clippy::needless_borrow)]
-#![allow(clippy::only_used_in_recursion)]
-#![allow(clippy::ptr_arg)]
 #![allow(unused_must_use)]
 
 use std::collections::{HashMap, HashSet, BTreeSet};

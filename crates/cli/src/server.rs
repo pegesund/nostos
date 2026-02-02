@@ -1,4 +1,5 @@
 //! REPL Server - allows remote connections to the TUI REPL
+#![allow(dead_code)]
 #![allow(unused_imports)]
 //!
 //! When `nostos repl --serve <port>` is used, the TUI also listens on a TCP port

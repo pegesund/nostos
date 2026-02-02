@@ -1,9 +1,4 @@
 //! AST to Bytecode compiler.
-#![allow(clippy::type_complexity)]
-#![allow(clippy::clone_on_copy)]
-#![allow(clippy::only_used_in_recursion)]
-#![allow(clippy::redundant_closure)]
-#![allow(clippy::collapsible_if)]
 #![allow(dead_code)]
 #![allow(unused_variables)]
 //!

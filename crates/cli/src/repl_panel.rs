@@ -1,7 +1,6 @@
 //! Interactive REPL panel with syntax highlighting and autocomplete
-#![allow(unused_imports)]
 #![allow(dead_code)]
-#![allow(clippy::clone_on_copy)]
+#![allow(unused_imports)]
 //!
 //! Provides a notebook-style REPL where each input/output pair is displayed
 //! in a scrollable view with syntax highlighting.

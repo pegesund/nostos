@@ -1,6 +1,3 @@
-#![allow(clippy::collapsible_if)]
-#![allow(clippy::clone_on_copy)]
-
 use cursive::event::{Event, EventResult, Key};
 use cursive::theme::{Color, ColorStyle, Style};
 use cursive::view::{View, CannotFocus};

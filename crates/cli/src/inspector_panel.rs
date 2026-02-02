@@ -1,6 +1,6 @@
 //! Inspector panel with tabbed value browsing for the TUI.
+#![allow(dead_code)]
 #![allow(unused_imports)]
-#![allow(clippy::only_used_in_recursion)]
 
 use cursive::event::{Event, EventResult, Key};
 use cursive::theme::{Color, ColorStyle};

@@ -1,7 +1,5 @@
 //! Async IO Runtime for Nostos
 #![allow(dead_code)]
-#![allow(clippy::type_complexity)]
-#![allow(clippy::redundant_closure)]
 //!
 //! Provides non-blocking IO operations (file, HTTP, etc.) that integrate
 //! with the process scheduler. Processes can initiate IO operations and

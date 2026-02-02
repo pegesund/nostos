@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 // REPL Test Framework
 //
 // Systematically tests that all language constructs work in the REPL environment.

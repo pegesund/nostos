@@ -1,17 +1,8 @@
 //! Nostos Virtual Machine
 //!
 //! A register-based bytecode VM designed for:
-#![allow(clippy::type_complexity)]
-#![allow(clippy::redundant_closure)]
-#![allow(clippy::clone_on_copy)]
-#![allow(clippy::needless_borrow)]
-#![allow(clippy::only_used_in_recursion)]
-#![allow(clippy::ptr_arg)]
-#![allow(dead_code)]
 #![allow(unused_variables)]
 #![allow(unused_imports)]
-#![allow(clippy::format_collect)]
-#![allow(clippy::approx_constant)]
 //! - JIT compilation with Cranelift
 //! - Tail call optimization
 //! - REPL/interactive use

@@ -1,12 +1,8 @@
 //! TUI implementation for Nostos
-#![allow(unused_imports)]
 #![allow(dead_code)]
+#![allow(unused_imports)]
 #![allow(unused_variables)]
 #![allow(unused_mut)]
-#![allow(clippy::type_complexity)]
-#![allow(clippy::clone_on_copy)]
-#![allow(clippy::collapsible_if)]
-#![allow(suspicious_double_ref_op)]
 
 use cursive::Cursive;
 use cursive::traits::*;
@@ -3710,7 +3706,7 @@ fn show_nostlet_picker(s: &mut Cursive, engine: Rc<RefCell<ReplEngine>>) {
     // Get list of nostlets
     let nostlets = engine.borrow().get_nostlets()
         .iter()
-        .map(|n| n.clone().clone())
+        .map(|n| (**n).clone())
         .collect::<Vec<_>>();
 
     // Create select view with nostlets and built-in panels

@@ -1,13 +1,9 @@
 //! Nostos CLI - Command-line interface for running Nostos programs.
-#![allow(unused_imports)]
 #![allow(dead_code)]
+#![allow(unused_imports)]
 #![allow(unused_variables)]
 #![allow(unused_mut)]
 #![allow(unused_assignments)]
-#![allow(clippy::type_complexity)]
-#![allow(clippy::redundant_closure)]
-#![allow(clippy::clone_on_copy)]
-#![allow(clippy::collapsible_if)]
 //!
 //! Note: We use the system allocator (not mimalloc) to ensure compatibility
 //! with native extensions, which also use the system allocator. Using different

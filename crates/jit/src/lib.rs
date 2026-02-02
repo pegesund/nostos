@@ -1,7 +1,5 @@
 //! JIT Compiler for Nostos
 #![allow(unused_imports)]
-#![allow(clippy::type_complexity)]
-#![allow(clippy::collapsible_if)]
 #![allow(unreachable_patterns)]
 //!
 //! Tiered compilation strategy:

@@ -1,6 +1,4 @@
 //! Shared types for cross-thread communication and shared data structures.
-#![allow(clippy::type_complexity)]
-#![allow(clippy::redundant_closure)]
 //!
 //! These types are designed to be thread-safe and can be shared between
 //! the GC heap (GcValue) and cross-thread messaging (ThreadSafeValue).
