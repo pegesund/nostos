@@ -30,6 +30,7 @@
 #![allow(clippy::map_clone)]
 #![allow(clippy::suspicious_open_options)]
 #![allow(clippy::format_collect)]
+#![allow(clippy::approx_constant)]
 //! - JIT compilation with Cranelift
 //! - Tail call optimization
 //! - REPL/interactive use
