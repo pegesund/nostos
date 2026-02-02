@@ -1,8 +1,5 @@
 //! Garbage Collector for Nostos
 #![allow(clippy::clone_on_copy)]
-#![allow(clippy::derivable_impls)]
-#![allow(clippy::new_without_default)]
-#![allow(clippy::inherent_to_string)]
 #![allow(clippy::only_used_in_recursion)]
 //!
 //! A simple mark-and-sweep garbage collector designed for:
@@ -762,9 +759,10 @@ impl Clone for GcNativeFn {
 ///
 /// This mirrors the Value enum but uses GcPtr for heap objects.
 /// Immediate values are stored inline.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub enum GcValue {
     // Immediate values (no GC needed)
+    #[default]
     Unit,
     Bool(bool),
     Char(char),
@@ -835,12 +833,6 @@ pub enum GcValue {
     // Metaprogramming - AST values for templates.
     // Stored as Arc (not in heap) - immutable AST data.
     Ast(Arc<AstValue>),
-}
-
-impl Default for GcValue {
-    fn default() -> Self {
-        GcValue::Unit
-    }
 }
 
 // GcValue is safe to Send between threads:

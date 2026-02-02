@@ -1,5 +1,4 @@
 //! Erlang-style process supervision.
-#![allow(clippy::derivable_impls)]
 //!
 //! Supervisors manage child processes and restart them according to
 //! a configurable strategy when they fail.
@@ -28,9 +27,10 @@ use crate::scheduler::Scheduler;
 use crate::value::{FunctionValue, Pid, RefId};
 
 /// Strategy for restarting children when one fails.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RestartStrategy {
     /// Restart only the failed child
+    #[default]
     OneForOne,
     /// Restart all children if one fails
     OneForAll,
@@ -38,27 +38,16 @@ pub enum RestartStrategy {
     RestForOne,
 }
 
-impl Default for RestartStrategy {
-    fn default() -> Self {
-        RestartStrategy::OneForOne
-    }
-}
-
 /// When to restart a child process.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RestartType {
     /// Always restart, regardless of exit reason
+    #[default]
     Permanent,
     /// Restart only if exit was abnormal (not Normal)
     Transient,
     /// Never restart
     Temporary,
-}
-
-impl Default for RestartType {
-    fn default() -> Self {
-        RestartType::Permanent
-    }
 }
 
 /// Specification for a supervised child process.
