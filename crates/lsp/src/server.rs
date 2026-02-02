@@ -1,7 +1,7 @@
 #![allow(dead_code)]
+#![allow(clippy::needless_borrow)]
 #![allow(clippy::ptr_arg)]
 #![allow(clippy::type_complexity)]
-#![allow(clippy::needless_borrow)]
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::match_result_ok)]
 #![allow(clippy::map_entry)]

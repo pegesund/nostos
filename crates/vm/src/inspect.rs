@@ -1,5 +1,4 @@
 //! Value inspection API for interactive browsing.
-#![allow(clippy::needless_borrow)]
 //!
 //! This module provides a uniform way to inspect values, supporting:
 //! - Navigation into nested structures via "slots"

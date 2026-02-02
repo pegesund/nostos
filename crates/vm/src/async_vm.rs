@@ -7301,7 +7301,7 @@ impl AsyncProcess {
                             .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".into()))?;
                         let mut pg_params = Vec::new();
                         for item in &tuple.items {
-                            let param = self.gc_value_to_pg_param(item)?;
+                            let param = self.gc_value_to_pg_param(&item)?;
                             pg_params.push(param);
                         }
                         pg_params
@@ -7376,7 +7376,7 @@ impl AsyncProcess {
                             .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".into()))?;
                         let mut pg_params = Vec::new();
                         for item in &tuple.items {
-                            let param = self.gc_value_to_pg_param(item)?;
+                            let param = self.gc_value_to_pg_param(&item)?;
                             pg_params.push(param);
                         }
                         pg_params
@@ -7614,7 +7614,7 @@ impl AsyncProcess {
                             .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".into()))?;
                         let mut pg_params = Vec::new();
                         for item in &tuple.items {
-                            let param = self.gc_value_to_pg_param(item)?;
+                            let param = self.gc_value_to_pg_param(&item)?;
                             pg_params.push(param);
                         }
                         pg_params
@@ -7688,7 +7688,7 @@ impl AsyncProcess {
                             .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".into()))?;
                         let mut pg_params = Vec::new();
                         for item in &tuple.items {
-                            let param = self.gc_value_to_pg_param(item)?;
+                            let param = self.gc_value_to_pg_param(&item)?;
                             pg_params.push(param);
                         }
                         pg_params
