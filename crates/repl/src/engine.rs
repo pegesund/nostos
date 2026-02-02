@@ -8,7 +8,6 @@
 #![allow(clippy::result_large_err)]
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::map_entry)]
-#![allow(clippy::into_iter_on_ref)]
 #![allow(clippy::unnecessary_map_or)]
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::needless_borrow)]
@@ -16,7 +15,6 @@
 #![allow(clippy::unwrap_or_default)]
 #![allow(clippy::if_same_then_else)]
 #![allow(clippy::ptr_arg)]
-#![allow(clippy::unnecessary_to_owned)]
 #![allow(unused_must_use)]
 
 use std::collections::{HashMap, HashSet, BTreeSet};

@@ -2968,7 +2968,7 @@ fn main() -> ExitCode {
         };
 
         // Find the shared library (.so on Linux, .dylib on macOS)
-        let lib_candidates = vec![
+        let lib_candidates = [
             ext_dir.join("target").join("release").join(format!("lib{}.so", ext_name.replace("-", "_"))),
             ext_dir.join("target").join("release").join(format!("libnostos_{}.so", ext_name)),
             ext_dir.join("target").join("release").join(format!("lib{}.dylib", ext_name.replace("-", "_"))),
