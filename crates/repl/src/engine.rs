@@ -4868,6 +4868,20 @@ impl ReplEngine {
             }
         }
 
+        // Two-pass compilation for cross-module imports:
+        // Pass 1: Parse all files and register forward declarations (function/type names)
+        // Pass 2: Compile all modules (use statements can now resolve cross-module references)
+
+        // Storage for parsed modules
+        struct ParsedModule {
+            module: nostos_syntax::ast::Module,
+            components: Vec<String>,
+            source: String,
+            file_path: PathBuf,
+        }
+        let mut parsed_modules: Vec<ParsedModule> = Vec::new();
+
+        // Pass 1: Parse all files and register forward declarations
         for file_path in &source_files {
             let source = fs::read_to_string(file_path)
                 .map_err(|e| format!("Failed to read {}: {}", file_path.display(), e))?;
@@ -4898,6 +4912,31 @@ impl ReplEngine {
                     }
                 }
 
+                // Register forward declarations before any compilation
+                // This ensures all exports are known when use statements are processed
+                if let Err(e) = self.compiler.register_module_forward_declarations(&module, components.clone()) {
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
+                        use std::io::Write;
+                        let _ = writeln!(f, "load_directory: forward declaration error for {:?}: {}", file_path, e);
+                    }
+                }
+
+                parsed_modules.push(ParsedModule {
+                    module,
+                    components,
+                    source,
+                    file_path: file_path.clone(),
+                });
+            }
+        }
+
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
+            use std::io::Write;
+            let _ = writeln!(f, "load_directory: Pass 1 complete - registered {} modules", parsed_modules.len());
+        }
+
+        // Pass 2: Compile all modules (forward declarations already registered)
+        for ParsedModule { module, components, source, file_path } in parsed_modules {
                 // Build module prefix for call graph
                 let prefix = if components.is_empty() {
                     String::new()
@@ -5161,7 +5200,6 @@ impl ReplEngine {
                     };
                     self.module_sources.insert(module_path_str, file_path.clone());
                 }
-            }
         }
 
         // Store source manager before compilation so we can still read sources on error

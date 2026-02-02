@@ -3274,7 +3274,21 @@ fn main() -> ExitCode {
     };
 
     // Process each file (skip if loaded from cache)
+    // Two-pass compilation for cross-module imports:
+    // Pass 1: Parse all files and register forward declarations (function/type names)
+    // Pass 2: Compile all modules (use statements can now resolve cross-module references)
     if !project_cache_used {
+        // Storage for parsed modules
+        struct ParsedProjectModule {
+            module: nostos_syntax::ast::Module,
+            module_path: Vec<String>,
+            source: String,
+            source_hash: String,
+            path: std::path::PathBuf,
+        }
+        let mut parsed_modules: Vec<ParsedProjectModule> = Vec::new();
+
+        // Pass 1: Parse all files and register forward declarations
         for path in &source_files {
             let source = match fs::read_to_string(path) {
                 Ok(s) => s,
@@ -3321,6 +3335,24 @@ fn main() -> ExitCode {
                 vec![]
             };
 
+            // Register forward declarations before any compilation
+            // This ensures all exports are known when use statements are processed
+            if let Err(e) = compiler.register_module_forward_declarations(&module, module_path.clone()) {
+                eprintln!("Error registering forward declarations for '{}': {}", path.display(), e);
+                return ExitCode::FAILURE;
+            }
+
+            parsed_modules.push(ParsedProjectModule {
+                module,
+                module_path,
+                source,
+                source_hash,
+                path: path.clone(),
+            });
+        }
+
+        // Pass 2: Compile all modules (forward declarations already registered)
+        for ParsedProjectModule { module, module_path, source, source_hash, path } in parsed_modules {
             // Track for caching (for directory projects)
             if input_path.is_dir() {
                 let module_name = module_path.join(".");
