@@ -1,4 +1,5 @@
 //! Nostos Extension API
+#![allow(clippy::approx_constant)]
 //!
 //! This crate provides the API for building native Nostos extensions.
 //! Extensions are compiled as dynamic libraries (.so/.dylib/.dll) and
