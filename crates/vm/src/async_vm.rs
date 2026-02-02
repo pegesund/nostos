@@ -8734,7 +8734,7 @@ impl AsyncProcess {
 
             RenderStackCurrent(dst) => {
                 let current = self.reactive_context.render_stack.last()
-                    .map(|s| s.clone())
+                    .cloned()
                     .unwrap_or_default();
                 let str_ptr = self.heap.alloc_string(current);
                 set_reg!(dst, GcValue::String(str_ptr));
