@@ -4,7 +4,6 @@
 #![allow(clippy::type_complexity)]
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::clone_on_copy)]
-#![allow(clippy::get_first)]
 #![allow(clippy::needless_borrow)]
 #![allow(clippy::useless_format)]
 #![allow(clippy::only_used_in_recursion)]

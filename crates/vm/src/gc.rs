@@ -1,6 +1,5 @@
 //! Garbage Collector for Nostos
 #![allow(clippy::clone_on_copy)]
-#![allow(clippy::get_first)]
 #![allow(clippy::derivable_impls)]
 #![allow(clippy::new_without_default)]
 #![allow(clippy::inherent_to_string)]

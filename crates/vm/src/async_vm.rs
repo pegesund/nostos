@@ -14870,14 +14870,14 @@ impl AsyncVM {
                                 match var.constructor.as_str() {
                                     "Null" => Ok(serde_json::Value::Null),
                                     "Bool" => {
-                                        if let Some(GcValue::Bool(b)) = var.fields.get(0) {
+                                        if let Some(GcValue::Bool(b)) = var.fields.first() {
                                             Ok(serde_json::Value::Bool(*b))
                                         } else {
                                             Err(RuntimeError::Panic("Invalid Bool variant".to_string()))
                                         }
                                     }
                                     "Number" => {
-                                        if let Some(GcValue::Float64(f)) = var.fields.get(0) {
+                                        if let Some(GcValue::Float64(f)) = var.fields.first() {
                                             Ok(serde_json::Value::Number(
                                                 serde_json::Number::from_f64(*f)
                                                     .unwrap_or_else(|| serde_json::Number::from(0))
@@ -14887,7 +14887,7 @@ impl AsyncVM {
                                         }
                                     }
                                     "String" => {
-                                        if let Some(GcValue::String(s_ptr)) = var.fields.get(0) {
+                                        if let Some(GcValue::String(s_ptr)) = var.fields.first() {
                                             if let Some(s) = heap.get_string(*s_ptr) {
                                                 Ok(serde_json::Value::String(s.data.clone()))
                                             } else {
@@ -14898,7 +14898,7 @@ impl AsyncVM {
                                         }
                                     }
                                     "Array" => {
-                                        if let Some(GcValue::List(list)) = var.fields.get(0) {
+                                        if let Some(GcValue::List(list)) = var.fields.first() {
                                             let items: Result<Vec<serde_json::Value>, _> = list.items()
                                                 .iter()
                                                 .map(|v| nostos_to_serde(v, heap))
@@ -14909,7 +14909,7 @@ impl AsyncVM {
                                         }
                                     }
                                     "Object" => {
-                                        if let Some(GcValue::List(list)) = var.fields.get(0) {
+                                        if let Some(GcValue::List(list)) = var.fields.first() {
                                             let mut map = serde_json::Map::new();
                                             for item in list.items() {
                                                 if let GcValue::Tuple(t_ptr) = item {

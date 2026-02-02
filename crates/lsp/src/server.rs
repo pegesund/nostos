@@ -3,7 +3,6 @@
 #![allow(clippy::type_complexity)]
 #![allow(clippy::needless_borrow)]
 #![allow(clippy::collapsible_if)]
-#![allow(clippy::get_first)]
 #![allow(clippy::match_result_ok)]
 #![allow(clippy::map_entry)]
 #![allow(clippy::redundant_closure)]
@@ -1158,7 +1157,7 @@ impl LanguageServer for NostosLanguageServer {
             "nostos.replComplete" => {
                 // Get completions for REPL input
                 // Expects arguments: [text, cursorPosition]
-                let text = params.arguments.get(0)
+                let text = params.arguments.first()
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 let cursor_pos = params.arguments.get(1)
