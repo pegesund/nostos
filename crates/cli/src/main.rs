@@ -13,7 +13,6 @@
 #![allow(clippy::collapsible_else_if)]
 #![allow(clippy::const_is_empty)]
 #![allow(clippy::needless_borrows_for_generic_args)]
-#![allow(clippy::single_char_add_str)]
 #![allow(clippy::useless_vec)]
 #![allow(clippy::manual_strip)]
 #![allow(clippy::redundant_pattern_matching)]
@@ -1393,7 +1392,7 @@ fn format_error_json(error: &RuntimeError, file_path: &str) -> String {
     }
 
     json.push_str("  ]\n");
-    json.push_str("}");
+    json.push('}');
     json
 }
 
