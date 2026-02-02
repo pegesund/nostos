@@ -798,7 +798,7 @@ fn extract_json_field(json: &str, field: &str) -> String {
             return rest[1..end].to_string();
         }
         // Numeric value
-        let end = rest.find(|c| c == ',' || c == '}').unwrap_or(rest.len());
+        let end = rest.find([',', '}']).unwrap_or(rest.len());
         return rest[..end].to_string();
     }
     String::new()

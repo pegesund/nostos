@@ -10,7 +10,6 @@
 #![allow(clippy::ptr_arg)]
 #![allow(clippy::unnecessary_map_or)]
 #![allow(clippy::if_same_then_else)]
-#![allow(clippy::unwrap_or_default)]
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![allow(unused_imports)]
