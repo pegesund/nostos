@@ -2873,7 +2873,7 @@ fn main() -> ExitCode {
     let search_dir = if input_path.is_dir() {
         std::fs::canonicalize(input_path).unwrap_or_else(|_| input_path.to_path_buf())
     } else {
-        let parent = input_path.parent().unwrap_or(std::path::Path::new("."));
+        let parent = input_path.parent().unwrap_or_else(|| std::path::Path::new("."));
         std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf())
     };
 
@@ -2905,7 +2905,7 @@ fn main() -> ExitCode {
         }
 
         // Also load extensions from new [dependencies] section (extension = true)
-        let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+        let config_dir = config_path.parent().unwrap_or_else(|| std::path::Path::new("."));
         if let Ok(manifest) = nostos_packages::PackageManager::load_manifest(config_dir) {
             let pkg_manager = nostos_packages::PackageManager::new();
             for (name, dep) in &manifest.dependencies {
@@ -3018,7 +3018,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     } else {
-        project_root = input_path.parent().unwrap_or(std::path::Path::new("."));
+        project_root = input_path.parent().unwrap_or_else(|| std::path::Path::new("."));
         source_files.push(input_path.to_path_buf());
     }
 

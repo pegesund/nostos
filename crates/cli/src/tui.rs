@@ -10,7 +10,6 @@
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::unnecessary_map_or)]
 #![allow(clippy::match_result_ok)]
-#![allow(clippy::or_fun_call)]
 #![allow(clippy::manual_pattern_char_comparison)]
 #![allow(clippy::manual_div_ceil)]
 #![allow(clippy::needless_borrows_for_generic_args)]

@@ -1115,7 +1115,8 @@ impl CodeEditor {
                 if let Some(dot_pos) = func.rfind('.') {
                     let func_module = &func[..dot_pos];
                     if func_module == module {
-                        let short_name = func[dot_pos + 1..].split('/').next().unwrap_or(&func[dot_pos + 1..]);
+                        let func_suffix = &func[dot_pos + 1..];
+                        let short_name = func_suffix.split('/').next().unwrap_or(func_suffix);
                         // Get the base function name (without signature) for signature lookup
                         let base_name = format!("{}.{}", func_module, short_name);
                         let label = if let Some(sig) = source.get_function_signature(&func) {

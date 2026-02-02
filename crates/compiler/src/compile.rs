@@ -19030,7 +19030,7 @@ impl Compiler {
         // Determine type from explicit annotation or infer from value
         let explicit_type = binding.ty.as_ref().map(|t| self.type_expr_name(t));
         let inferred_type = self.expr_type_name(&binding.value);
-        let value_type = explicit_type.clone().or(inferred_type.clone());
+        let value_type = explicit_type.clone().or_else(|| inferred_type.clone());
 
         // Type annotation validation: if explicit type is provided and we can infer the value type,
         // check that they are compatible. Only check primitive type mismatches to avoid
@@ -23172,7 +23172,7 @@ impl Compiler {
             let base_name = fn_name.split('/').next().unwrap_or(fn_name);
             let in_current_module = current_module_prefix.as_ref()
                 .map(|prefix| base_name.starts_with(prefix))
-                .unwrap_or(base_name.rfind('.').is_none());
+                .unwrap_or_else(|| base_name.rfind('.').is_none());
 
             if !in_current_module {
                 let local_name = base_name.rsplit('.').next().unwrap_or(base_name);
@@ -23187,7 +23187,7 @@ impl Compiler {
             let base_name = fn_name.split('/').next().unwrap_or(fn_name);
             let in_current_module = current_module_prefix.as_ref()
                 .map(|prefix| base_name.starts_with(prefix))
-                .unwrap_or(base_name.rfind('.').is_none());
+                .unwrap_or_else(|| base_name.rfind('.').is_none());
 
             if !in_current_module {
                 if let Some(dot_pos) = base_name.rfind('.') {
@@ -23216,7 +23216,7 @@ impl Compiler {
             let base_name = fn_name.split('/').next().unwrap_or(fn_name);
             let in_current_module = current_module_prefix.as_ref()
                 .map(|prefix| base_name.starts_with(prefix))
-                .unwrap_or(base_name.rfind('.').is_none());
+                .unwrap_or_else(|| base_name.rfind('.').is_none());
 
             if in_current_module {
                 let local_name = base_name.rsplit('.').next().unwrap_or(base_name);
@@ -23229,7 +23229,7 @@ impl Compiler {
             let base_name = fn_name.split('/').next().unwrap_or(fn_name);
             let in_current_module = current_module_prefix.as_ref()
                 .map(|prefix| base_name.starts_with(prefix))
-                .unwrap_or(base_name.rfind('.').is_none());
+                .unwrap_or_else(|| base_name.rfind('.').is_none());
 
             if in_current_module {
                 if let Some(dot_pos) = base_name.rfind('.') {
