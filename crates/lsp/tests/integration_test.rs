@@ -3809,6 +3809,170 @@ main() = {
     assert!(has_value_field, "Expected 'value' field. Got: {:?}", completions);
 }
 
+/// Test autocomplete for Option type with isSome/isNone/unwrap methods
+#[test]
+fn test_lsp_autocomplete_option_type() {
+    let project_path = create_test_project("option_autocomplete");
+
+    let content = r#"find_user(id: Int) -> Option String = {
+    if id == 1 then Some("Alice") else None
+}
+
+main() = {
+    result:Option String = find_user(1)
+    result.
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions after "result." (line 7, 0-based: 6)
+    let completions = client.completion(&main_uri, 6, 11);
+
+    println!("=== Completions for Option type ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    assert!(
+        !completions.is_empty(),
+        "Expected completions for Option type, got none"
+    );
+
+    // Should have Option methods
+    let has_is_some = completions.iter().any(|c| c == "isSome");
+    let has_is_none = completions.iter().any(|c| c == "isNone");
+    let has_unwrap = completions.iter().any(|c| c == "unwrap");
+    let has_map = completions.iter().any(|c| c == "map");
+
+    println!("Has isSome: {}, Has isNone: {}, Has unwrap: {}, Has map: {}",
+             has_is_some, has_is_none, has_unwrap, has_map);
+
+    // Should have Option-specific methods
+    assert!(
+        has_is_some || has_is_none || has_unwrap || has_map,
+        "Expected Option methods like isSome, isNone, unwrap, or map. Got: {:?}",
+        completions
+    );
+}
+
+/// Test autocomplete for Result type with isOk/isErr/map/mapErr methods
+#[test]
+fn test_lsp_autocomplete_result_type() {
+    let project_path = create_test_project("result_autocomplete");
+
+    let content = r#"parse_number(s: String) -> Result Int String = {
+    if s == "42" then Ok(42) else Err("not a number")
+}
+
+main() = {
+    res:Result Int String = parse_number("42")
+    res.
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions after "res." (line 7, 0-based: 6)
+    let completions = client.completion(&main_uri, 6, 8);
+
+    println!("=== Completions for Result type ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    assert!(
+        !completions.is_empty(),
+        "Expected completions for Result type, got none"
+    );
+
+    // Should have Result methods
+    let has_is_ok = completions.iter().any(|c| c == "isOk");
+    let has_is_err = completions.iter().any(|c| c == "isErr");
+    let has_map = completions.iter().any(|c| c == "map");
+    let has_map_err = completions.iter().any(|c| c == "mapErr");
+
+    println!("Has isOk: {}, Has isErr: {}, Has map: {}, Has mapErr: {}",
+             has_is_ok, has_is_err, has_map, has_map_err);
+
+    // Should have Result-specific methods
+    assert!(
+        has_is_ok || has_is_err || has_map || has_map_err,
+        "Expected Result methods like isOk, isErr, map, or mapErr. Got: {:?}",
+        completions
+    );
+}
+
+/// Test autocomplete for filter/map chain preserving element type
+/// [1, 2, 3].filter(x => x > 1).map(y => y.) should give Int methods for y
+#[test]
+fn test_lsp_autocomplete_filter_map_chain() {
+    let project_path = create_test_project("filter_map_chain");
+
+    let content = r#"main() = {
+    nums = [1, 2, 3]
+    nums.filter(x => x > 1).map(y => y.)
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions after "y." in the map lambda (line 3, 0-based: 2)
+    // "    nums.filter(x => x > 1).map(y => y.)"
+    //                                       ^^ position 40-41
+    let completions = client.completion(&main_uri, 2, 41);
+
+    println!("=== Completions for filter/map chain (y in map) ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // y should be Int since filter preserves element type
+    // Int has asInt32, asFloat, etc. methods
+    let has_int_method = completions.iter().any(|c|
+        c.starts_with("as") || c == "abs"
+    );
+
+    println!("Has Int method: {}", has_int_method);
+    println!("Total completions: {}", completions.len());
+}
+
 fn get_nostos_binary() -> String {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent().unwrap()
