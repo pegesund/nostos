@@ -8,7 +8,7 @@ This document tracks discovered type inference issues in the Nostos language.
 |---|-------|--------|----------|
 | 1 | Unknown type in method error messages | Open | Low |
 | 2 | zipWith wrong arg order: runtime vs compile error | Open | Medium |
-| 3 | Misleading "if/else branches" error for numeric type mismatches | Open | Low |
+| 3 | Misleading "if/else branches" error for numeric type mismatches | **Fixed** | Low |
 | 4 | sortBy wrong function arity: runtime vs compile error | **Fixed** | High |
 | 5 | **Lambdas silently ignore extra arguments** | **Fixed** | **Critical** |
 
@@ -87,19 +87,14 @@ main() = {
 }
 ```
 
-**Expected**: Clear error like "type mismatch: expected Int32, found Int"
+**Status**: FIXED
 
-**Actual**: "if and else branches have incompatible types: Int32 vs Int"
+**Fix**: The error message conversion in `convert_type_error` was using `if_branch_type_mismatch` as a generic fallback for all type mismatches. Changed to use a generic "type mismatch" error message instead.
 
-**Also fails**:
-```nostos
-main() = {
-    x: Int32 = 42  # Assigning Int literal to Int32 variable
-    x
-}
+**Now produces**:
 ```
-
-**Impact**: Confusing error messages make debugging harder.
+Error: type mismatch: expected `Int32`, found `Int`
+```
 
 ---
 
@@ -217,4 +212,4 @@ Test files are in `/tmp/infer_tests/` for reproduction.
 
 ---
 
-*Last updated: Iteration 3 - Fixed Issues #4 and #5 (lambda arity checking). Issue #2 root cause identified but requires deeper fix for generic function type parameter propagation.*
+*Last updated: Iteration 4 - Fixed Issues #3, #4, and #5. Issue #2 root cause identified but requires deeper fix for generic function type parameter propagation.*

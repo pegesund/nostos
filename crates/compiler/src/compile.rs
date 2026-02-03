@@ -920,9 +920,12 @@ impl CompileError {
                         return SourceError::list_type_mismatch(type1, type2, span);
                     }
 
-                    // Generic if branch mismatch - but skip if tuple involved (defer to runtime)
+                    // Generic type mismatch - but skip if tuple involved (defer to runtime)
                     if !is_tuple(type1) && !is_tuple(type2) {
-                        return SourceError::if_branch_type_mismatch(type1, type2, span);
+                        return SourceError::compile(
+                            format!("type mismatch: expected `{}`, found `{}`", type1, type2),
+                            span,
+                        ).with_hint("ensure all expressions have compatible types");
                     }
                 }
             }
