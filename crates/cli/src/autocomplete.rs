@@ -949,6 +949,29 @@ impl Autocomplete {
             vec![
                 ("length", "() -> Int", "Get the number of elements in the tuple"),
             ]
+        } else if base_type == "Option" || base_type.starts_with("Option ") || base_type.starts_with("Option[") {
+            vec![
+                ("isSome", "() -> Bool", "Check if this is Some"),
+                ("isNone", "() -> Bool", "Check if this is None"),
+                ("unwrap", "() -> a", "Get the value or panic if None"),
+                ("unwrapOr", "(default) -> a", "Get the value or return default if None"),
+                ("map", "(f) -> Option", "Apply function to value if Some"),
+                ("flatMap", "(f) -> Option", "Apply function returning Option if Some"),
+                ("filter", "(pred) -> Option", "Return None if predicate fails"),
+                ("getOrElse", "(f) -> a", "Get value or compute default"),
+            ]
+        } else if base_type == "Result" || base_type.starts_with("Result ") || base_type.starts_with("Result[") {
+            vec![
+                ("isOk", "() -> Bool", "Check if this is Ok"),
+                ("isErr", "() -> Bool", "Check if this is Err"),
+                ("unwrap", "() -> a", "Get the value or panic if Err"),
+                ("unwrapOr", "(default) -> a", "Get the value or return default if Err"),
+                ("unwrapErr", "() -> e", "Get the error or panic if Ok"),
+                ("map", "(f) -> Result", "Apply function to value if Ok"),
+                ("mapErr", "(f) -> Result", "Apply function to error if Err"),
+                ("flatMap", "(f) -> Result", "Apply function returning Result if Ok"),
+                ("getOrElse", "(f) -> a", "Get value or compute from error"),
+            ]
         } else if base_type == "Float64Array" {
             vec![
                 ("fromList", "(List Float) -> Float64Array", "Create array from a list of floats"),
@@ -1448,6 +1471,27 @@ impl Autocomplete {
                 "insert" | "remove" | "union" | "intersection" | "difference" |
                 "symmetricDifference" => Some(type_name.to_string()),
                 "toList" => Some("List".to_string()),
+                _ => None,
+            };
+        }
+
+        // Option methods
+        if type_name == "Option" || type_name.starts_with("Option ") || type_name.starts_with("Option[") {
+            return match method_name {
+                "isSome" | "isNone" => Some("Bool".to_string()),
+                "map" | "flatMap" => Some(type_name.to_string()),
+                // unwrap and unwrapOr return the inner type, but we can't easily extract it
+                // Return "a" as placeholder - the actual type depends on the Option's type parameter
+                _ => None,
+            };
+        }
+
+        // Result methods
+        if type_name == "Result" || type_name.starts_with("Result ") || type_name.starts_with("Result[") {
+            return match method_name {
+                "isOk" | "isErr" => Some("Bool".to_string()),
+                "map" | "mapErr" => Some(type_name.to_string()),
+                // unwrap and unwrapOr return the inner type
                 _ => None,
             };
         }
@@ -3688,6 +3732,177 @@ mod tests {
         assert!(!Autocomplete::is_numeric_type("Bool"));
         assert!(!Autocomplete::is_numeric_type("List"));
         assert!(!Autocomplete::is_numeric_type("Map"));
+    }
+
+    #[test]
+    fn test_option_type_autocomplete() {
+        // Test that Option type gets autocomplete suggestions
+        let source = MockSource::new()
+            .with_variables(&["maybe_value"])
+            .with_variable_type("maybe_value", "Option Int");
+
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "maybe_value".to_string(),
+            prefix: "".to_string(),
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        println!("Option completions: {:?}", items.iter().map(|i| &i.text).collect::<Vec<_>>());
+
+        // Should have Option-specific methods
+        assert!(!items.is_empty(), "Option should have completions");
+        assert!(items.iter().any(|i| i.text == "isSome"), "Option should have isSome method");
+        assert!(items.iter().any(|i| i.text == "isNone"), "Option should have isNone method");
+        assert!(items.iter().any(|i| i.text == "unwrap"), "Option should have unwrap method");
+        assert!(items.iter().any(|i| i.text == "unwrapOr"), "Option should have unwrapOr method");
+        assert!(items.iter().any(|i| i.text == "map"), "Option should have map method");
+    }
+
+    #[test]
+    fn test_result_type_autocomplete() {
+        // Test that Result type gets autocomplete suggestions
+        let source = MockSource::new()
+            .with_variables(&["result"])
+            .with_variable_type("result", "Result Int String");
+
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "result".to_string(),
+            prefix: "".to_string(),
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        println!("Result completions: {:?}", items.iter().map(|i| &i.text).collect::<Vec<_>>());
+
+        // Should have Result-specific methods
+        assert!(!items.is_empty(), "Result should have completions");
+        assert!(items.iter().any(|i| i.text == "isOk"), "Result should have isOk method");
+        assert!(items.iter().any(|i| i.text == "isErr"), "Result should have isErr method");
+        assert!(items.iter().any(|i| i.text == "unwrap"), "Result should have unwrap method");
+        assert!(items.iter().any(|i| i.text == "map"), "Result should have map method");
+        assert!(items.iter().any(|i| i.text == "mapErr"), "Result should have mapErr method");
+    }
+
+    #[test]
+    fn test_option_method_chain_type() {
+        // Test that Option.isSome() returns Bool for further chaining
+        // Test that the method return type is tracked correctly
+        let ret = Autocomplete::get_method_return_type("Option Int", "isSome");
+        assert_eq!(ret, Some("Bool".to_string()), "isSome should return Bool");
+
+        let ret = Autocomplete::get_method_return_type("Option Int", "map");
+        assert_eq!(ret, Some("Option Int".to_string()), "map should return Option");
+    }
+
+    #[test]
+    fn test_result_method_chain_type() {
+        // Test that Result method return types work
+        let ret = Autocomplete::get_method_return_type("Result Int String", "isOk");
+        assert_eq!(ret, Some("Bool".to_string()), "isOk should return Bool");
+
+        let ret = Autocomplete::get_method_return_type("Result Int String", "map");
+        assert_eq!(ret, Some("Result Int String".to_string()), "map should return Result");
+
+        let ret = Autocomplete::get_method_return_type("Result Int String", "mapErr");
+        assert_eq!(ret, Some("Result Int String".to_string()), "mapErr should return Result");
+    }
+
+    #[test]
+    fn test_option_with_bracket_syntax() {
+        // Test Option[Int] syntax (alternative to Option Int)
+        let source = MockSource::new()
+            .with_variables(&["opt"])
+            .with_variable_type("opt", "Option[Int]");
+
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "opt".to_string(),
+            prefix: "is".to_string(),
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        println!("Option[Int] completions with 'is' prefix: {:?}", items.iter().map(|i| &i.text).collect::<Vec<_>>());
+
+        // Should have isSome and isNone with bracket syntax
+        assert!(items.iter().any(|i| i.text == "isSome"), "Option[Int] should have isSome");
+        assert!(items.iter().any(|i| i.text == "isNone"), "Option[Int] should have isNone");
+    }
+
+    #[test]
+    fn test_nested_generic_type_autocomplete() {
+        // Test List[Option Int] - nested generics
+        let source = MockSource::new()
+            .with_variables(&["list_opts"])
+            .with_variable_type("list_opts", "List[Option Int]");
+
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "list_opts".to_string(),
+            prefix: "".to_string(),
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        println!("List[Option Int] completions: {:?}", items.iter().map(|i| &i.text).collect::<Vec<_>>());
+
+        // Should have List methods (map, filter, etc.)
+        assert!(items.iter().any(|i| i.text == "map"), "List[Option Int] should have map");
+        assert!(items.iter().any(|i| i.text == "filter"), "List[Option Int] should have filter");
+        assert!(items.iter().any(|i| i.text == "head"), "List[Option Int] should have head");
+    }
+
+    #[test]
+    fn test_map_with_generic_type() {
+        // Test Map[String, Int] gets correct methods
+        let source = MockSource::new()
+            .with_variables(&["ages"])
+            .with_variable_type("ages", "Map[String, Int]");
+
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "ages".to_string(),
+            prefix: "".to_string(),
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        println!("Map[String, Int] completions: {:?}", items.iter().map(|i| &i.text).collect::<Vec<_>>());
+
+        // Should have Map methods
+        assert!(items.iter().any(|i| i.text == "get"), "Map should have get");
+        assert!(items.iter().any(|i| i.text == "insert"), "Map should have insert");
+        assert!(items.iter().any(|i| i.text == "keys"), "Map should have keys");
+        assert!(items.iter().any(|i| i.text == "values"), "Map should have values");
+        assert!(items.iter().any(|i| i.text == "size"), "Map should have size");
+    }
+
+    #[test]
+    fn test_set_with_generic_type() {
+        // Test Set[String] gets correct methods
+        let source = MockSource::new()
+            .with_variables(&["names"])
+            .with_variable_type("names", "Set[String]");
+
+        let ac = Autocomplete::new();
+
+        let ctx = CompletionContext::FieldAccess {
+            receiver: "names".to_string(),
+            prefix: "".to_string(),
+        };
+        let items = ac.get_completions(&ctx, &source);
+
+        println!("Set[String] completions: {:?}", items.iter().map(|i| &i.text).collect::<Vec<_>>());
+
+        // Should have Set methods
+        assert!(items.iter().any(|i| i.text == "contains"), "Set should have contains");
+        assert!(items.iter().any(|i| i.text == "insert"), "Set should have insert");
+        assert!(items.iter().any(|i| i.text == "union"), "Set should have union");
+        assert!(items.iter().any(|i| i.text == "intersection"), "Set should have intersection");
+        assert!(items.iter().any(|i| i.text == "toList"), "Set should have toList");
     }
 
 }
