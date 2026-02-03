@@ -1117,9 +1117,14 @@ impl LanguageServer for NostosLanguageServer {
         // Extract local variable bindings from the document (lines before cursor)
         let engine_guard = self.engine.lock().unwrap();
         let engine_ref = engine_guard.as_ref();
-        let local_vars = Self::extract_local_bindings(&content, line_num, engine_ref);
+        let mut local_vars = Self::extract_local_bindings(&content, line_num, engine_ref);
         drop(engine_guard);
         eprintln!("Local vars: {:?}", local_vars);
+
+        // Extract lambda parameters visible at the current position and add them to local_vars
+        // This allows field access on lambda params like `people.map(p => p.age.)`
+        Self::extract_lambda_params_to_local_vars(prefix, &mut local_vars);
+        eprintln!("Local vars after lambda params: {:?}", local_vars);
 
         // Determine completion context
         let items = if let Some(dot_pos) = prefix.rfind('.') {
@@ -1999,6 +2004,17 @@ impl NostosLanguageServer {
             "Int".to_string()
         } else if first_trimmed.parse::<f64>().is_ok() {
             "Float".to_string()
+        } else if first_trimmed.chars().next().map_or(false, |c| c.is_uppercase()) {
+            // Record/variant constructor: Person(name: "Alice") or Ok(42)
+            // Extract the type/constructor name (before parenthesis)
+            let name: String = first_trimmed.chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !name.is_empty() {
+                name
+            } else {
+                return Some("List".to_string());
+            }
         } else {
             // Unknown element type
             return Some("List".to_string());
@@ -2025,6 +2041,96 @@ impl NostosLanguageServer {
         }
 
         Some(inner[..end_pos].to_string())
+    }
+
+    /// Extract all visible lambda parameters from the prefix and add them to local_vars
+    /// This enables field access completion on lambda params like `people.map(p => p.age.)`
+    fn extract_lambda_params_to_local_vars(
+        prefix: &str,
+        local_vars: &mut std::collections::HashMap<String, String>,
+    ) {
+        // Find all lambda patterns: "param =>" or "(param1, param2) =>"
+        // For each lambda, infer the param type from the receiver
+
+        let log = |msg: &str| {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
+                let _ = writeln!(f, "LAMBDA_EXTRACT: {}", msg);
+            }
+        };
+
+        log(&format!("prefix='{}'", prefix));
+
+        // Look for all "identifier =>" patterns
+        let mut pos = 0;
+        let chars: Vec<char> = prefix.chars().collect();
+
+        while pos < chars.len() {
+            // Find "=>" pattern
+            if pos + 1 < chars.len() && chars[pos] == '=' && chars[pos + 1] == '>' {
+                // Found "=>", now find the parameter(s) before it
+                let arrow_pos = pos;
+
+                // Go back to find the parameter name(s)
+                // Skip whitespace before =>
+                let mut param_end = arrow_pos;
+                while param_end > 0 && chars[param_end - 1].is_whitespace() {
+                    param_end -= 1;
+                }
+
+                // Find parameter name (alphanumeric or underscore)
+                let mut param_start = param_end;
+                while param_start > 0 && (chars[param_start - 1].is_alphanumeric() || chars[param_start - 1] == '_') {
+                    param_start -= 1;
+                }
+
+                if param_start < param_end {
+                    let param_name: String = chars[param_start..param_end].iter().collect();
+
+                    // Skip if already in local_vars (real variable takes precedence)
+                    if !local_vars.contains_key(&param_name) {
+                        log(&format!("Found lambda param: '{}' at position {}", param_name, param_start));
+
+                        // Find the opening paren before this parameter
+                        let mut paren_pos = param_start;
+                        while paren_pos > 0 && chars[paren_pos - 1] != '(' {
+                            paren_pos -= 1;
+                        }
+
+                        if paren_pos > 0 {
+                            // Found '(', now find the method name and receiver before it
+                            let before_paren: String = chars[..paren_pos - 1].iter().collect();
+                            let before_paren = before_paren.trim_end();
+
+                            log(&format!("before_paren='{}'", before_paren));
+
+                            // Find the last '.' to get method name and receiver
+                            if let Some(dot_pos) = before_paren.rfind('.') {
+                                let method_name = before_paren[dot_pos + 1..].trim();
+                                let receiver_expr = before_paren[..dot_pos].trim();
+
+                                log(&format!("method='{}', receiver_expr='{}'", method_name, receiver_expr));
+
+                                // Infer receiver type
+                                if let Some(receiver_type) = Self::infer_method_chain_type(receiver_expr, local_vars) {
+                                    log(&format!("receiver_type='{}'", receiver_type));
+
+                                    // Infer lambda param type from receiver type and method
+                                    if let Some(param_type) = Self::infer_lambda_param_type_for_method(&receiver_type, method_name) {
+                                        log(&format!("Adding {} => {} to local_vars", param_name, param_type));
+                                        local_vars.insert(param_name, param_type);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                pos += 2; // Skip the "=>"
+            } else {
+                pos += 1;
+            }
+        }
     }
 
     /// Infer the type of a lambda parameter from context

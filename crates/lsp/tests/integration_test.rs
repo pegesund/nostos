@@ -4156,6 +4156,101 @@ fn test_lsp_autocomplete_option_map_lambda() {
     println!("Total completions: {}", completions.len());
 }
 
+/// Test autocomplete for record field access in lambda
+/// people.map(p => p.age.) should give Int methods for age
+#[test]
+fn test_lsp_autocomplete_record_field_in_lambda() {
+    let project_path = create_test_project("record_field_lambda");
+
+    let content = r#"type Person = Person { name: String, age: Int }
+
+main() = {
+    people = [Person(name: "Alice", age: 30)]
+    people.map(p => p.age.)
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions after "p.age." (line 5, 0-based: 4)
+    // "    people.map(p => p.age.)"
+    //                           ^^ position 26
+    let completions = client.completion(&main_uri, 4, 27);
+
+    println!("=== Completions for record field in lambda (p.age.) ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // age should be Int
+    let has_int_method = completions.iter().any(|c|
+        c.starts_with("as") || c == "abs"
+    );
+
+    println!("Has Int method: {}", has_int_method);
+    println!("Total completions: {}", completions.len());
+    // Note: This test documents current behavior - record field access in lambdas
+}
+
+/// Test autocomplete for chained filter with record field access
+/// people.filter(p => p.age > 20).map(x => x.name.) should give String methods
+#[test]
+fn test_lsp_autocomplete_chained_filter_record() {
+    let project_path = create_test_project("chained_filter_record");
+
+    let content = r#"type Person = Person { name: String, age: Int }
+
+main() = {
+    people = [Person(name: "Alice", age: 30)]
+    people.filter(p => p.age > 20).map(x => x.name.)
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions after "x.name." (line 5, 0-based: 4)
+    // "    people.filter(p => p.age > 20).map(x => x.name.)"
+    //                                                    ^^ position 52
+    let completions = client.completion(&main_uri, 4, 53);
+
+    println!("=== Completions for chained filter with record field access ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // name should be String
+    let has_string_method = completions.iter().any(|c|
+        c == "length" || c == "chars" || c == "toUpper" || c == "trim"
+    );
+
+    println!("Has String method: {}", has_string_method);
+    println!("Total completions: {}", completions.len());
+}
+
 fn get_nostos_binary() -> String {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent().unwrap()
