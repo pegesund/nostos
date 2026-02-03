@@ -8,6 +8,8 @@ This document tracks discovered type inference issues in the Nostos language.
 |---|-------|--------|----------|
 | 1 | Unknown type in method error messages | Open | Low |
 | 2 | zipWith wrong arg order: runtime vs compile error | Open | Medium |
+| 3 | Misleading "if/else branches" error for numeric type mismatches | Open | Low |
+| 4 | sortBy wrong function arity: runtime vs compile error | Open | High |
 
 ## Discovered Issues
 
@@ -61,6 +63,67 @@ main() = {
 
 ---
 
+### Issue 3: Misleading "if/else branches" error for numeric type mismatches
+
+**Severity**: Low (UX issue)
+
+**Description**: When there's a type mismatch between Int and Int32 (or Float and Float32), the error message incorrectly mentions "if and else branches" even when no if/else exists in the code.
+
+**Reproduction**:
+```nostos
+doubleThem(x: Int32, y: Int32) -> Int32 = x + y
+
+main() = {
+    # Pass Int instead of Int32
+    result = doubleThem(5, 10)
+    0
+}
+```
+
+**Expected**: Clear error like "type mismatch: expected Int32, found Int"
+
+**Actual**: "if and else branches have incompatible types: Int32 vs Int"
+
+**Also fails**:
+```nostos
+main() = {
+    x: Int32 = 42  # Assigning Int literal to Int32 variable
+    x
+}
+```
+
+**Impact**: Confusing error messages make debugging harder.
+
+---
+
+### Issue 4: sortBy with wrong function arity causes runtime error instead of compile error
+
+**Severity**: High (type safety violation)
+
+**Description**: Passing a unary function `T -> Int` to `sortBy` which expects a binary comparator `(T, T) -> Int` causes a runtime error instead of a compile-time type error.
+
+**Reproduction**:
+```nostos
+main() = {
+    nums = [(1, "a"), (3, "c"), (2, "b")]
+
+    # Wrong: passing key extractor instead of comparator
+    # sortBy expects (T, T) -> Int, we pass T -> Int
+    result = nums.sortBy((n, _) => n)
+
+    println(show(result))
+    0
+}
+```
+
+**Expected**: Compile-time error about function type mismatch
+
+**Actual**: Runtime error: "Panic: LtInt: expected Int64"
+
+**Impact**: This is a **type safety hole** - incorrect code compiles and only fails at runtime.
+
+---
+
 ## Test Cases
 
 Test files are in `/tmp/infer_tests/` for reproduction.
@@ -93,10 +156,32 @@ Test files are in `/tmp/infer_tests/` for reproduction.
 - 31_option_inference.nos - Option type inference
 - 32_fold_type_propagation.nos - Fold accumulator types
 - 33_zipWith_inference.nos - zipWith with correct arg order
+- 35_higher_kinded.nos - Different container types with map
+- 38_conversions.nos - Type conversion methods (asInt32, asFloat32)
+- 39_annotated_function_param.nos - Annotated function parameters
+- 41_trait_bound.nos - Trait bound checking (Ord)
+- 42_function_type_inference.nos - Higher-order function types
+- 43_continuation_style.nos - CPS style type inference
+- 44_partially_applied_method.nos - Methods in lambda
+- 45_eta_expansion.nos - Function references
+- 46c_generic_function.nos - Top-level generic polymorphism
+- 48_list_of_functions.nos - List of compatible functions
+- 49_mixed_function_list.nos - List of incompatible functions (correctly errors)
+- 50_mutual_type_constraint.nos - Multiple trait requirements
+- 51_existential_like.nos - Show trait abstraction
+- 52_record_update.nos - Record copy/update pattern
+- 53_double_generic.nos - Two independent type params
+- 54_constrained_return.nos - Return type from usage
+- 57b_gadt_like.nos - Recursive variant evaluation
+- 58_flatten_nested.nos - Nested list flattening
+- 59_flatMap_inference.nos - flatMap type inference
 
 ### Known Limitations (not bugs):
 - 15_polymorphic_recursion.nos - Polymorphic recursion requires explicit types (HM limitation)
 - 30_recursive_lambda.nos - Local recursive lambdas need Y combinator (no `let rec`)
+- 46_generic_function_value.nos - Storing generic function loses polymorphism (value restriction)
+- 55_shadowing.nos - No variable shadowing in nested blocks (language design choice)
+- 56_type_alias.nos - No type aliases (language limitation)
 
 ---
 
