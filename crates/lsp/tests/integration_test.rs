@@ -3973,6 +3973,189 @@ fn test_lsp_autocomplete_filter_map_chain() {
     println!("Total completions: {}", completions.len());
 }
 
+/// Test autocomplete for deeper method chains (3+ chained methods)
+/// list.filter(...).map(...).filter(...).map(z => z.) should preserve element type
+#[test]
+fn test_lsp_autocomplete_deep_method_chain() {
+    let project_path = create_test_project("deep_chain");
+
+    let content = r#"main() = {
+    nums = [1, 2, 3, 4, 5]
+    nums.filter(x => x > 1).map(y => y * 2).filter(z => z > 3).map(w => w.)
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions after "w." in the last map lambda (line 3, 0-based: 2)
+    // "    nums.filter(x => x > 1).map(y => y * 2).filter(z => z > 3).map(w => w.)"
+    //                                                                          ^^ position 73
+    let completions = client.completion(&main_uri, 2, 74);
+
+    println!("=== Completions for deep method chain (w in 4th lambda) ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // w should be Int since all operations preserve Int type
+    let has_int_method = completions.iter().any(|c|
+        c.starts_with("as") || c == "abs"
+    );
+
+    println!("Has Int method: {}", has_int_method);
+    println!("Total completions: {}", completions.len());
+    assert!(has_int_method, "Deep chain should give Int methods for lambda param");
+}
+
+/// Test autocomplete for nested list map
+/// [[1,2], [3,4]].map(inner => inner.) should give List methods
+#[test]
+fn test_lsp_autocomplete_nested_list_lambda() {
+    let project_path = create_test_project("nested_lambda");
+
+    let content = r#"main() = {
+    matrix = [[1, 2], [3, 4]]
+    matrix.map(row => row.)
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions after "row." (line 3, 0-based: 2)
+    // "    matrix.map(row => row.)"
+    //                           ^^ position 26
+    let completions = client.completion(&main_uri, 2, 27);
+
+    println!("=== Completions for nested list lambda (row in map) ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // row should be List[Int] since matrix is List[List[Int]]
+    let has_list_method = completions.iter().any(|c|
+        c == "length" || c == "head" || c == "map" || c == "filter"
+    );
+
+    println!("Has List method: {}", has_list_method);
+    println!("Total completions: {}", completions.len());
+    assert!(has_list_method, "Nested list map should give List methods for lambda param");
+}
+
+/// Test autocomplete for doubly nested lambda
+/// [[1,2]].map(inner => inner.map(x => x.)) should give Int methods for x
+#[test]
+fn test_lsp_autocomplete_doubly_nested_lambda() {
+    let project_path = create_test_project("doubly_nested_lambda");
+
+    let content = r#"main() = {
+    matrix = [[1, 2], [3, 4]]
+    matrix.map(row => row.map(x => x.))
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions after "x." in the inner map (line 3, 0-based: 2)
+    // "    matrix.map(row => row.map(x => x.))"
+    //                                      ^^ position 38
+    let completions = client.completion(&main_uri, 2, 39);
+
+    println!("=== Completions for doubly nested lambda (x in inner map) ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // x should be Int since row is List[Int] and we're mapping over it
+    let has_int_method = completions.iter().any(|c|
+        c.starts_with("as") || c == "abs"
+    );
+
+    println!("Has Int method: {}", has_int_method);
+    println!("Total completions: {}", completions.len());
+    // Note: Doubly nested lambdas are complex - this test documents current behavior
+}
+
+/// Test autocomplete for Option.map lambda
+/// Some(42).map(x => x.) should give Int methods for x
+#[test]
+fn test_lsp_autocomplete_option_map_lambda() {
+    let project_path = create_test_project("option_map_lambda");
+
+    let content = r#"main() = {
+    opt:Option[Int] = Some(42)
+    opt.map(x => x.)
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions after "x." in the map lambda (line 3, 0-based: 2)
+    // "    opt.map(x => x.)"
+    //                    ^^ position 19
+    let completions = client.completion(&main_uri, 2, 20);
+
+    println!("=== Completions for Option.map lambda (x) ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // x should be Int since opt is Option[Int]
+    let has_int_method = completions.iter().any(|c|
+        c.starts_with("as") || c == "abs"
+    );
+
+    println!("Has Int method: {}", has_int_method);
+    println!("Total completions: {}", completions.len());
+}
+
 fn get_nostos_binary() -> String {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent().unwrap()

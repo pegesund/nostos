@@ -2170,7 +2170,9 @@ impl NostosLanguageServer {
 
         // For Option methods
         if receiver_type.starts_with("Option") || receiver_type == "Option" {
-            let inner_type = if receiver_type.starts_with("Option ") {
+            let inner_type = if receiver_type.starts_with("Option[") && receiver_type.ends_with(']') {
+                receiver_type[7..receiver_type.len()-1].to_string() // Extract from Option[X]
+            } else if receiver_type.starts_with("Option ") {
                 receiver_type.strip_prefix("Option ")?.to_string()
             } else {
                 "a".to_string() // Generic
@@ -2184,9 +2186,35 @@ impl NostosLanguageServer {
 
         // For Result methods
         if receiver_type.starts_with("Result") || receiver_type == "Result" {
+            // Extract Ok and Err types from Result[Ok, Err]
+            let (ok_type, err_type) = if receiver_type.starts_with("Result[") && receiver_type.ends_with(']') {
+                let inner = &receiver_type[7..receiver_type.len()-1];
+                // Find comma separating Ok and Err types (handle nested types)
+                let mut depth = 0;
+                let mut comma_pos = None;
+                for (i, c) in inner.chars().enumerate() {
+                    match c {
+                        '[' | '(' | '{' => depth += 1,
+                        ']' | ')' | '}' => depth -= 1,
+                        ',' if depth == 0 => {
+                            comma_pos = Some(i);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(pos) = comma_pos {
+                    (inner[..pos].trim().to_string(), inner[pos+1..].trim().to_string())
+                } else {
+                    ("a".to_string(), "e".to_string())
+                }
+            } else {
+                ("a".to_string(), "e".to_string())
+            };
+
             match method_name {
-                "map" => return Some("a".to_string()), // Ok value
-                "mapErr" => return Some("e".to_string()), // Err value
+                "map" => return Some(ok_type),
+                "mapErr" => return Some(err_type),
                 _ => {}
             }
         }
@@ -2544,7 +2572,15 @@ impl NostosLanguageServer {
         }
 
         if base_end == 0 {
-            // No method call found
+            // No method call found - just a simple variable or literal
+            // Try to look it up in local_vars or infer from syntax
+            if trimmed.starts_with('[') {
+                return Self::infer_list_type(trimmed);
+            } else if trimmed.starts_with('"') {
+                return Some("String".to_string());
+            } else if let Some(ty) = local_vars.get(trimmed) {
+                return Some(ty.clone());
+            }
             return None;
         }
 
