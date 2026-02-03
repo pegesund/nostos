@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Debug panel for the TUI - shows call stack, locals, and debug controls.
 
 use cursive::event::{Event, EventResult, Key};
@@ -44,6 +43,7 @@ pub enum DebugState {
         line: usize,
     },
     /// Running (not paused)
+    #[allow(dead_code)]
     Running,
     /// Execution finished
     Finished {
@@ -106,11 +106,13 @@ impl DebugPanel {
     }
 
     /// Remove a breakpoint
+    #[allow(dead_code)]
     pub fn remove_breakpoint(&mut self, function: &str) {
         self.breakpoints.remove(function);
     }
 
     /// Check if we have any breakpoints set
+    #[allow(dead_code)]
     pub fn has_breakpoints(&self) -> bool {
         !self.breakpoints.is_empty()
     }
@@ -121,6 +123,7 @@ impl DebugPanel {
     }
 
     /// Clear all debug state
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.state = DebugState::Idle;
         self.stack.clear();
@@ -151,6 +154,7 @@ impl DebugPanel {
     }
 
     /// Update state when running
+    #[allow(dead_code)]
     pub fn on_running(&mut self) {
         self.state = DebugState::Running;
     }

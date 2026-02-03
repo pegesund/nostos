@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! NostosPanel - A Cursive view that renders content from Nostos code
 //!
 //! This allows parts of the TUI to be written in Nostos itself.
@@ -14,6 +13,7 @@ use std::collections::HashMap;
 
 /// View description returned from Nostos code
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum ViewDesc {
     /// Simple text content
     Text(String),
@@ -34,12 +34,14 @@ pub struct NostosPanel {
     /// Name of the Nostos function that handles key events (receives key name as string)
     key_handler_fn: String,
     /// Map of key events to Nostos handler function names (unused for now)
+    #[allow(dead_code)]
     key_handlers: HashMap<String, String>,
     /// Cached rendered content
     cached_content: String,
     /// Whether we need to re-render
     needs_refresh: bool,
     /// Panel title
+    #[allow(dead_code)]
     title: String,
 }
 
@@ -71,12 +73,14 @@ impl NostosPanel {
     /// # Arguments
     /// * `key` - Key description (e.g., "up", "down", "enter", "a", "ctrl+k")
     /// * `handler_fn` - Name of the Nostos function to call
+    #[allow(dead_code)]
     pub fn on_key(mut self, key: &str, handler_fn: &str) -> Self {
         self.key_handlers.insert(key.to_string(), handler_fn.to_string());
         self
     }
 
     /// Add multiple key handlers
+    #[allow(dead_code)]
     pub fn with_handlers(mut self, handlers: Vec<(&str, &str)>) -> Self {
         for (key, handler) in handlers {
             self.key_handlers.insert(key.to_string(), handler.to_string());
@@ -101,6 +105,7 @@ impl NostosPanel {
     }
 
     /// Call a Nostos handler function
+    #[allow(dead_code)]
     fn call_handler(&mut self, handler_fn: &str) -> bool {
         let result = self.engine.borrow_mut().eval(&format!("{}()", handler_fn));
         match result {

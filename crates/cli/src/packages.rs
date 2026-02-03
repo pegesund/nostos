@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Package management for Nostos extensions.
 //!
 //! Handles fetching, building, and loading extensions from GitHub repositories.
@@ -38,6 +37,7 @@ pub struct ExtensionResult {
 #[derive(Debug)]
 pub enum PackageError {
     IoError(std::io::Error),
+    #[allow(dead_code)]
     TomlError(String),
     GitError(String),
     BuildError(String),

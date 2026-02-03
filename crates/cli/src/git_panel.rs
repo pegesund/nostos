@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Git history panel for the TUI - shows commit history and diffs for definitions/modules.
 
 use cursive::event::{Event, EventResult, Key};
@@ -15,6 +14,7 @@ pub enum HistoryTarget {
     /// History for a single definition
     Definition(String),
     /// History for an entire module
+    #[allow(dead_code)]
     Module(String),
 }
 
@@ -90,6 +90,7 @@ impl GitHistoryPanel {
     }
 
     /// Set the commits to display
+    #[allow(dead_code)]
     pub fn set_commits(&mut self, commits: Vec<CommitInfo>) {
         self.commits = commits;
         self.selected_index = 0;
