@@ -4251,6 +4251,97 @@ main() = {
     println!("Total completions: {}", completions.len());
 }
 
+/// Test autocomplete for tuple element access
+/// (42, "hello").0. should give Int methods
+#[test]
+fn test_lsp_autocomplete_tuple_element() {
+    let project_path = create_test_project("tuple_element");
+
+    let content = r#"main() = {
+    t = (42, "hello", true)
+    t.0.
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions after "t.0." (line 3, 0-based: 2)
+    // "    t.0."
+    //         ^^ position 7
+    let completions = client.completion(&main_uri, 2, 8);
+
+    println!("=== Completions for tuple element access (t.0.) ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // t.0 should be Int (first element of tuple)
+    let has_int_method = completions.iter().any(|c|
+        c.starts_with("as") || c == "abs"
+    );
+
+    println!("Has Int method: {}", has_int_method);
+    println!("Total completions: {}", completions.len());
+    // Note: This test documents current behavior for tuple element access
+}
+
+/// Test autocomplete for Result.map lambda
+/// Result[Int, String].map(x => x.) should give Int methods for x
+#[test]
+fn test_lsp_autocomplete_result_map_lambda() {
+    let project_path = create_test_project("result_map_lambda");
+
+    let content = r#"main() = {
+    r:Result[Int, String] = Ok(42)
+    r.map(x => x.)
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&get_lsp_binary());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Request completions after "x." in the map lambda (line 3, 0-based: 2)
+    // "    r.map(x => x.)"
+    //                  ^^ position 17
+    let completions = client.completion(&main_uri, 2, 18);
+
+    println!("=== Completions for Result.map lambda (x) ===");
+    for c in &completions {
+        println!("  {}", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // x should be Int (Ok type of Result[Int, String])
+    let has_int_method = completions.iter().any(|c|
+        c.starts_with("as") || c == "abs"
+    );
+
+    println!("Has Int method: {}", has_int_method);
+    println!("Total completions: {}", completions.len());
+}
+
 fn get_nostos_binary() -> String {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent().unwrap()
