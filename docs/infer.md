@@ -10,6 +10,7 @@ This document tracks discovered type inference issues in the Nostos language.
 | 2 | zipWith wrong arg order: runtime vs compile error | Open | Medium |
 | 3 | Misleading "if/else branches" error for numeric type mismatches | Open | Low |
 | 4 | sortBy wrong function arity: runtime vs compile error | Open | High |
+| 5 | **Lambdas silently ignore extra arguments** | Open | **Critical** |
 
 ## Discovered Issues
 
@@ -120,7 +121,51 @@ main() = {
 
 **Actual**: Runtime error: "Panic: LtInt: expected Int64"
 
-**Impact**: This is a **type safety hole** - incorrect code compiles and only fails at runtime.
+**Root Cause**: See Issue #5 - lambdas ignore extra arguments
+
+---
+
+### Issue 5: Lambdas silently ignore extra arguments
+
+**Severity**: CRITICAL (fundamental type safety violation)
+
+**Description**: Lambdas accept any number of arguments and silently ignore extras. This completely breaks function arity checking for lambdas.
+
+**Reproduction**:
+```nostos
+main() = {
+    f = x => x * 2
+
+    # Too many args - should error, but returns 10!
+    result = f(5, 10, 15)
+    println(show(result))  # prints 10
+    0
+}
+```
+
+**More examples**:
+```nostos
+# This helper expects a 2-arg function
+apply2(f) = f(1, 2)
+
+main() = {
+    # Pass 1-arg lambda - should error but returns 10
+    result = apply2(x => x * 10)
+    println(show(result))  # prints 10
+    0
+}
+```
+
+**Expected**: Compile-time or at minimum runtime error about wrong number of arguments
+
+**Actual**: Extra arguments silently ignored, computation proceeds with wrong semantics
+
+**Impact**: This is the root cause of Issues #2 and #4. It makes the type system fundamentally unsound for higher-order functions because:
+1. Function arity is not enforced for lambdas
+2. Passing wrong-arity functions compiles and runs (with wrong behavior)
+3. No way to catch "passed 1-arg function where 2-arg was expected"
+
+**Note**: Named functions DO have proper arity checking. Only lambdas are affected.
 
 ---
 
@@ -175,6 +220,8 @@ Test files are in `/tmp/infer_tests/` for reproduction.
 - 57b_gadt_like.nos - Recursive variant evaluation
 - 58_flatten_nested.nos - Nested list flattening
 - 59_flatMap_inference.nos - flatMap type inference
+- 62_extra_args.nos - Named function arity check (works correctly)
+- 65_fun_arity.nos - Named function too few args (works correctly)
 
 ### Known Limitations (not bugs):
 - 15_polymorphic_recursion.nos - Polymorphic recursion requires explicit types (HM limitation)
@@ -185,4 +232,4 @@ Test files are in `/tmp/infer_tests/` for reproduction.
 
 ---
 
-*Last updated: Iteration 1*
+*Last updated: Iteration 1 - Found critical lambda arity issue*
