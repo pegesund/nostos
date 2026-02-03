@@ -8794,23 +8794,25 @@ impl Compiler {
         }
 
         // Check if type_name is a type parameter with trait bounds that provide this method
+        // Strip the " (type parameter)" suffix if present (added by expr_type_name for error messages)
+        let type_name_clean = type_name.strip_suffix(" (type parameter)").unwrap_or(type_name);
         for type_param in &self.current_fn_type_params {
-            if type_param.name.node == type_name {
+            if type_param.name.node == type_name_clean {
                 for constraint in &type_param.constraints {
                     let trait_name = &constraint.node;
                     // Check if this trait has the method
                     if let Some(trait_info) = self.trait_defs.get(trait_name) {
                         if trait_info.methods.iter().any(|m| m.name == method_name) {
-                            // Return a placeholder name using the type parameter
+                            // Return a placeholder name using the type parameter (cleaned)
                             // During monomorphization, this will be resolved to the concrete type's method
-                            return Some(format!("{}.{}.{}", type_name, trait_name, method_name));
+                            return Some(format!("{}.{}.{}", type_name_clean, trait_name, method_name));
                         }
                     }
                     // Also try with qualified trait name (in case trait is from another module)
                     let qualified_trait = self.qualify_name(trait_name);
                     if let Some(trait_info) = self.trait_defs.get(&qualified_trait) {
                         if trait_info.methods.iter().any(|m| m.name == method_name) {
-                            return Some(format!("{}.{}.{}", type_name, qualified_trait, method_name));
+                            return Some(format!("{}.{}.{}", type_name_clean, qualified_trait, method_name));
                         }
                     }
                 }
@@ -8858,15 +8860,17 @@ impl Compiler {
 
     /// Check if a type name is a type parameter in the current function.
     fn is_current_type_param(&self, type_name: &str) -> bool {
+        // Strip the " (type parameter)" suffix if present (added by expr_type_name for error messages)
+        let type_name_clean = type_name.strip_suffix(" (type parameter)").unwrap_or(type_name);
         // Check if it's an explicit type param of the current function
-        if self.current_fn_type_params.iter().any(|tp| tp.name.node == type_name) {
+        if self.current_fn_type_params.iter().any(|tp| tp.name.node == type_name_clean) {
             return true;
         }
         // Also check for single uppercase letters that aren't known types
         // These are likely type parameters from outer generic functions (e.g., in lambdas)
-        if type_name.len() == 1 && type_name.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false) {
+        if type_name_clean.len() == 1 && type_name_clean.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false) {
             // It's a single uppercase letter - check if it's NOT a known type
-            if !self.types.contains_key(type_name) {
+            if !self.types.contains_key(type_name_clean) {
                 return true;
             }
         }
@@ -15448,6 +15452,10 @@ impl Compiler {
                 return Some(format!("{} (polymorphic)", letter));
             }
             if let nostos_types::Type::TypeParam(name) = ty {
+                // Check if we have a type binding for this type parameter (during monomorphization)
+                if let Some(concrete_type) = self.current_type_bindings.get(name) {
+                    return Some(concrete_type.clone());
+                }
                 return Some(format!("{} (type parameter)", name));
             }
             // Leaked type parameter - fall through to pattern-based inference
@@ -22658,6 +22666,50 @@ impl Compiler {
                 // Only add if there isn't already an alias
                 if !env.type_aliases.contains_key(short_name) {
                     env.add_type_alias(short_name.to_string(), type_name.clone());
+                }
+            }
+        }
+
+        // Register user-defined traits in the type environment
+        // This enables trait method lookup when receiver is a type variable with trait bounds
+        for (trait_name, trait_info) in &self.trait_defs {
+            let methods: Vec<nostos_types::TraitMethod> = trait_info.methods.iter()
+                .map(|m| {
+                    // For trait methods, the first parameter is "self" of type Self (the implementing type)
+                    // Other params need to be parsed from return_type (we don't store full param types yet)
+                    let mut params = vec![
+                        ("self".to_string(), nostos_types::Type::TypeParam("Self".to_string()))
+                    ];
+                    // Add placeholder params for additional arguments
+                    for i in 1..m.param_count {
+                        params.push((format!("arg{}", i), nostos_types::Type::TypeParam(format!("T{}", i))));
+                    }
+                    nostos_types::TraitMethod {
+                        name: m.name.clone(),
+                        params,
+                        ret: if m.return_type.is_empty() || m.return_type == "_" {
+                            nostos_types::Type::TypeParam("R".to_string())
+                        } else {
+                            self.type_name_to_type(&m.return_type)
+                        },
+                    }
+                })
+                .collect();
+
+            env.traits.insert(trait_name.clone(), nostos_types::TraitDef {
+                name: trait_name.clone(),
+                supertraits: trait_info.super_traits.clone(),
+                required: methods,
+                defaults: vec![],
+            });
+
+            // Also register without module prefix for lookup
+            if let Some(dot_pos) = trait_name.rfind('.') {
+                let short_name = &trait_name[dot_pos + 1..];
+                if !env.traits.contains_key(short_name) {
+                    if let Some(trait_def) = env.traits.get(trait_name).cloned() {
+                        env.traits.insert(short_name.to_string(), trait_def);
+                    }
                 }
             }
         }

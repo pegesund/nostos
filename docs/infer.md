@@ -11,7 +11,7 @@ This document tracks discovered type inference issues in the Nostos language.
 | 3 | Misleading "if/else branches" error for numeric type mismatches | **Fixed** | Low |
 | 4 | sortBy wrong function arity: runtime vs compile error | **Fixed** | High |
 | 5 | **Lambdas silently ignore extra arguments** | **Fixed** | **Critical** |
-| 6 | Trait bounds not propagated into lambdas | Open | High |
+| 6 | Trait bounds not propagated into lambdas | **Partially Fixed** | High |
 
 ## Discovered Issues
 
@@ -184,11 +184,11 @@ main() = {
 
 **Severity**: High
 
-**Status**: Open
+**Status**: **Partially Fixed** (basic case works, some edge cases remain)
 
 **Description**: When a function has a type parameter with a trait bound (e.g., `T: Sizeable`), lambdas within that function cannot call trait methods on values of type `T`. The type checker sees `T` as an unconstrained type parameter within the lambda body.
 
-**Reproduction**:
+**Reproduction (now works)**:
 ```nostos
 trait Sizeable
     size(self) -> Int
@@ -203,32 +203,40 @@ end
 # This works - direct call
 direct(item: Box) = item.size()
 
-# This fails - trait method in lambda
+# This now works! - trait method in lambda
 inLambda[T: Sizeable](item: T) -> Int =
     ((x) => x.size())(item)
 
 main() = {
     b = Box(2, 3)
-    inLambda(b)  # Error: no method `size` found for type `T (type parameter)`
+    inLambda(b)  # Returns 6
 }
 ```
 
-**Expected**: Should compile and return 6 (2 * 3)
+**Fix Details**:
 
-**Actual**: Compile error: "no method `size` found for type `T (type parameter)`"
+1. **Type inference phase** (infer.rs):
+   - Added `current_type_param_constraints` to track trait bounds for type parameters in scope
+   - When unifying with a TypeParam, propagate constraints to fresh type variables
+   - In `check_pending_method_calls`, look up trait methods when receiver is a type variable with bounds
+   - Register user-defined traits in the TypeEnv for lookup
 
-**Impact**: Many stdlib higher-order functions like `map`, `filter`, `fold` etc. cannot be used with trait-bounded type parameters. This affects ~28 tests in `tests/type_inference/trait_*.nos`.
+2. **Compilation phase** (compile.rs):
+   - Register traits from `trait_defs` into `env.traits` in `try_hm_inference`
+   - Fixed `find_trait_method` to strip `" (type parameter)"` suffix when matching
+   - Fixed `is_current_type_param` to strip the suffix as well
+   - When `expr_type_name` returns a TypeParam, check `current_type_bindings` for concrete type during monomorphization
 
-**Root Cause Analysis**: When a lambda is created, its parameter type is a fresh type variable that gets unified with the argument type. However, the trait bounds associated with the outer function's type parameter `T` are not propagated to this fresh variable. The inference context doesn't track that `x` in the lambda should inherit the `Sizeable` bound from `T`.
+3. **Monomorphization path**:
+   - When a polymorphic function is called with concrete types, `current_type_bindings` maps type params to concrete types
+   - `expr_type_name` now uses these bindings to return concrete types during monomorphization
 
-**Partial Fix Implemented**: Added `current_type_param_constraints` to InferCtx to track trait constraints for type parameters in scope. When unifying with a TypeParam, the constraints are now propagated to the fresh type variable.
+**Now passing**: All `tests/type_inference/trait_closure_*.nos` tests (8 tests)
 
-**Remaining Work**: Method resolution in both `check_pending_method_calls` (infer.rs) and `compile_method_call` (compile.rs) needs to:
-1. Check if receiver is a type variable with trait bounds
-2. Look up the trait definition to find the method
-3. Use the trait method's signature for type checking
-
-This is a significant fix touching multiple files. The infrastructure for constraint propagation is in place.
+**Remaining edge cases**: Some complex scenarios like:
+- Nested records with trait methods (e.g., `items.head().level2.level3.triple()`)
+- Deeply nested lambdas calling trait methods
+- Some stdlib interactions with trait bounds (dropWhile, takeWhile, partition)
 
 ---
 
@@ -297,4 +305,4 @@ Test files are in `/tmp/infer_tests/` for reproduction.
 
 ---
 
-*Last updated: Iteration 7 - Fixed Issue #2, discovered Issue #6 (trait bounds not propagated into lambdas). 5 of 6 issues fixed.*
+*Last updated: Iteration 8 - Partially fixed Issue #6 (trait bounds propagation into lambdas). Basic cases now work, all trait_closure_* tests pass. 5.5 of 6 issues fixed.*

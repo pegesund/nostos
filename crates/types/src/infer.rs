@@ -1054,6 +1054,43 @@ impl<'a> InferCtx<'a> {
                 // Type is still not resolved to a concrete name
                 // Check for known methods on resolved primitive types
                 let resolved = self.env.apply_subst(&call.receiver_ty);
+
+                // Check if the receiver is a type variable with trait bounds
+                // If so, look up the method in those traits
+                if let Type::Var(var_id) = &resolved {
+                    let bounds = self.get_trait_bounds(*var_id);
+                    let mut found_in_trait = false;
+
+                    for trait_name in bounds {
+                        // Look up the trait definition
+                        if let Some(trait_def) = self.env.traits.get(trait_name).cloned() {
+                            // Check if the trait provides this method
+                            let method_opt = trait_def.required.iter()
+                                .chain(trait_def.defaults.iter())
+                                .find(|m| m.name == call.method_name);
+
+                            if let Some(method) = method_opt {
+                                // Found the method in a trait bound!
+                                // Unify the return type
+                                let mut ret_type = method.ret.clone();
+                                // Replace Self type param with the receiver type
+                                if let Type::TypeParam(ref name) = ret_type {
+                                    if name == "Self" {
+                                        ret_type = resolved.clone();
+                                    }
+                                }
+                                self.unify_types(&call.ret_ty, &ret_type)?;
+                                found_in_trait = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if found_in_trait {
+                        continue; // Method found in trait, move to next pending call
+                    }
+                }
+
                 let list_only_methods = [
                     "length", "len", "head", "tail", "init", "last", "nth",
                     "push", "pop", "get", "set", "slice", "concat", "reverse", "sort",
