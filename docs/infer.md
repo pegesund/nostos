@@ -6,7 +6,7 @@ This document tracks discovered type inference issues in the Nostos language.
 
 | # | Issue | Status | Severity |
 |---|-------|--------|----------|
-| 1 | Unknown type in method error messages | Open | Low |
+| 1 | Unknown type in method error messages | **Fixed** | Low |
 | 2 | zipWith wrong arg order: runtime vs compile error | Open | Medium |
 | 3 | Misleading "if/else branches" error for numeric type mismatches | **Fixed** | Low |
 | 4 | sortBy wrong function arity: runtime vs compile error | **Fixed** | High |
@@ -16,9 +16,11 @@ This document tracks discovered type inference issues in the Nostos language.
 
 ### Issue 1: "unknown" type in deferred method error messages
 
+**Status**: FIXED
+
 **Severity**: Low (UX issue)
 
-**Description**: When a method doesn't exist on a type that was inferred through a type variable, the error says `type 'unknown'` instead of showing the actual resolved type.
+**Description**: When a method doesn't exist on a type that was inferred through a type variable, the error previously said `type 'unknown'` which was uninformative.
 
 **Reproduction**:
 ```nostos
@@ -33,11 +35,23 @@ main() = {
 }
 ```
 
-**Expected**: Error should say "no method `nonexistent` found for type `List[Int]`"
+**Previous behavior**: Error said "no method `nonexistent` found for type `unknown`"
 
-**Actual**: Error says "no method `nonexistent` found for type `unknown`"
+**Fix**: Improved error messages for polymorphic types. When the type is a type variable (polymorphic), we now:
+1. Show that the type is polymorphic with a type variable name
+2. Explain that the concrete type is not known at this point
+3. Suggest adding type annotations to constrain the type
 
-**Impact**: Makes debugging harder when working with generic/higher-order code.
+**Now produces**:
+```
+Error: no method `nonexistent` found for polymorphic type
+       the receiver has type `y` which is a type variable - its concrete type is not known at this point
+
+Help: consider adding a type annotation to constrain the type, e.g., `x: List[Int] = f()`
+Note: polymorphic functions have type variables that are only known when called
+```
+
+**Technical note**: The original expectation was to show `List[Int]`, but this is technically incorrect. Within the body of `process`, the type of `x` IS a type variable - it's only resolved to `List[Int]` at the call site. The new error message correctly reflects this and provides helpful guidance.
 
 ---
 
@@ -45,11 +59,17 @@ main() = {
 
 **Severity**: Medium
 
+**Status**: ROOT CAUSE IDENTIFIED (requires cache fix)
+
 **Description**: Calling `zipWith(f, xs, ys)` instead of `zipWith(xs, ys, f)` causes a runtime error ("Length: unsupported type") instead of a compile-time type mismatch error.
 
-**Root Cause**: Generic functions like `zipWith[T, U, V](xs: List[T], ys: List[U], f: (T, U) -> V)` have their type parameters stored as `Named { name: "T" }` or `TypeParam("T")`. When instantiating these functions, the type parameters should be replaced with fresh type variables. However, when `type_params` is not properly propagated through the type system, the replacement doesn't happen, and `List[T]` (where T is unresolved) can incorrectly unify with a function type.
+**Root Cause**: Two separate issues identified:
 
-**Partial fix applied**: The lambda arity checking (Issue #5) is now working. However, the case where a Function is passed where a `List[T]` is expected (with T being a type parameter) still goes undetected.
+1. **Stdlib Cache Issue (PRIMARY)**: When stdlib loads from the bytecode cache (`~/.nostos/cache/stdlib/`), function signatures are NOT registered with their `type_params`. The cache stores compiled bytecode but doesn't store/restore the type parameter information needed for HM type inference. This means `instantiate_function` can't properly freshen type variables like `T`, `U`, `V` in generic signatures like `List[T]`.
+
+2. **Type Param Propagation**: When `type_params` is empty in FunctionType, `freshen_type` can't replace `TypeParam("T")` or `Named { name: "T", args: [] }` with fresh type variables, so `List[T]` incorrectly unifies with a function type.
+
+**Fix Required**: Modify `try_load_stdlib_from_cache` in `crates/cli/src/main.rs` to also register function signatures with type_params into `pending_fn_signatures`. Currently, only the compiled bytecode is loaded, but type signatures for HM inference are missing.
 
 **Reproduction**:
 ```nostos
@@ -212,4 +232,14 @@ Test files are in `/tmp/infer_tests/` for reproduction.
 
 ---
 
-*Last updated: Iteration 4 - Fixed Issues #3, #4, and #5. Issue #2 root cause identified but requires deeper fix for generic function type parameter propagation.*
+## Known Stdlib Issues
+
+### json.nos: convertNumber function missing type annotation
+
+The `convertNumber(n, typeName)` function in `stdlib/json.nos` doesn't have a type annotation for `n`. With stricter type checking, calling `n.asInt64()` on a polymorphic type now correctly fails at compile time. This was previously undetected because the stdlib was loaded from cache (bypassing type inference).
+
+**Fix needed**: Add type annotation `n: Float` or use a trait constraint.
+
+---
+
+*Last updated: Iteration 5 - Fixed Issue #1 (improved error messages for polymorphic types). Issues #1, #3, #4, #5 now fixed. Issue #2 root cause identified: stdlib cache doesn't preserve type_params for HM inference.*

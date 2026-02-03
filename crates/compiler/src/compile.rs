@@ -805,6 +805,12 @@ impl CompileError {
 
         // Parse "no method `X` found for type `Y`" pattern (from UFCS method calls)
         if message.starts_with("no method `") {
+            // Check if this is for a polymorphic type
+            if message.contains("polymorphic type") {
+                return SourceError::compile(message.to_string(), span)
+                    .with_hint("consider adding a type annotation to constrain the type, e.g., `x: List[Int] = f()`")
+                    .with_note("polymorphic functions have type variables that are only known when called");
+            }
             // Already a good message format, just add context
             return SourceError::compile(message.to_string(), span)
                 .with_hint("available methods depend on the type; check the type's documentation")
@@ -13041,11 +13047,23 @@ impl Compiler {
                         let receiver_type = self.expr_type_name(obj)
                             .unwrap_or_else(|| "unknown".to_string());
 
-                        // Find similar methods for typo suggestions
-                        let available_methods = get_methods_for_type(&receiver_type);
+                        // Check if this is a polymorphic type (type variable)
+                        let is_polymorphic = receiver_type.contains("(polymorphic)");
+
+                        // Find similar methods for typo suggestions (only if type is concrete)
+                        let available_methods = if is_polymorphic {
+                            vec![]
+                        } else {
+                            get_methods_for_type(&receiver_type)
+                        };
                         let similar = find_similar_names(&name, &available_methods, 3);
 
-                        let message = if !similar.is_empty() {
+                        let message = if is_polymorphic {
+                            format!(
+                                "no method `{}` found for polymorphic type\n       the receiver has type `{}` which is a type variable - its concrete type is not known at this point",
+                                name, receiver_type.replace(" (polymorphic)", "")
+                            )
+                        } else if !similar.is_empty() {
                             format!(
                                 "no method `{}` found for type `{}`\n       did you mean: {}?",
                                 name, receiver_type,
@@ -15399,6 +15417,16 @@ impl Compiler {
             // fall through to pattern-based type inference which will give the correct type.
             if self.is_type_structurally_resolved(ty) {
                 return Some(ty.display());
+            }
+            // For unresolved type variables, show a user-friendly polymorphic type name
+            // This is better than falling through to "unknown" in error messages
+            if let nostos_types::Type::Var(id) = ty {
+                // Convert var ID to a letter: 0->a, 1->b, etc.
+                let letter = (b'a' + (*id as u8 % 26)) as char;
+                return Some(format!("{} (polymorphic)", letter));
+            }
+            if let nostos_types::Type::TypeParam(name) = ty {
+                return Some(format!("{} (type parameter)", name));
             }
             // Leaked type parameter - fall through to pattern-based inference
         }
@@ -19038,6 +19066,7 @@ impl Compiler {
         let explicit_type = binding.ty.as_ref().map(|t| self.type_expr_name(t));
         let inferred_type = self.expr_type_name(&binding.value);
         let value_type = explicit_type.clone().or_else(|| inferred_type.clone());
+
 
         // Type annotation validation: if explicit type is provided and we can infer the value type,
         // check that they are compatible. Only check primitive type mismatches to avoid
