@@ -83,7 +83,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "sort", signature: "[a] -> [a]", doc: "Sort a list in ascending order" },
     BuiltinInfo { name: "map", signature: "[a] -> (a -> b) -> [b]", doc: "Apply function to each element" },
     BuiltinInfo { name: "filter", signature: "[a] -> (a -> Bool) -> [a]", doc: "Keep elements that satisfy predicate" },
-    BuiltinInfo { name: "fold", signature: "[a] -> b -> (b -> a -> b) -> b", doc: "Reduce list to single value (left fold)" },
+    BuiltinInfo { name: "fold", signature: "[a] -> b -> ((b, a) -> b) -> b", doc: "Reduce list to single value (left fold)" },
     BuiltinInfo { name: "any", signature: "[a] -> (a -> Bool) -> Bool", doc: "True if any element satisfies predicate" },
     BuiltinInfo { name: "all", signature: "[a] -> (a -> Bool) -> Bool", doc: "True if all elements satisfy predicate" },
     BuiltinInfo { name: "find", signature: "[a] -> (a -> Bool) -> Option a", doc: "Find first element satisfying predicate" },
@@ -105,14 +105,14 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "sum", signature: "[a] -> a", doc: "Sum of all elements" },
     BuiltinInfo { name: "product", signature: "[a] -> a", doc: "Product of all elements" },
     BuiltinInfo { name: "indexOf", signature: "[a] -> a -> Option Int", doc: "Find index of first matching element" },
-    BuiltinInfo { name: "sortBy", signature: "[a] -> (a -> a -> Int) -> [a]", doc: "Sort list using comparator function" },
+    BuiltinInfo { name: "sortBy", signature: "[a] -> ((a, a) -> Int) -> [a]", doc: "Sort list using comparator function" },
     BuiltinInfo { name: "intersperse", signature: "[a] -> a -> [a]", doc: "Insert element between all elements" },
     BuiltinInfo { name: "spanList", signature: "[a] -> (a -> Bool) -> ([a], [a])", doc: "Split at first element not satisfying predicate" },
     BuiltinInfo { name: "groupBy", signature: "[a] -> (a -> k) -> [[a]]", doc: "Group consecutive elements by key function" },
     BuiltinInfo { name: "transpose", signature: "[[a]] -> [[a]]", doc: "Transpose list of lists (rows become columns)" },
-    BuiltinInfo { name: "pairwise", signature: "[a] -> (a -> a -> b) -> [b]", doc: "Apply function to pairs of adjacent elements" },
+    BuiltinInfo { name: "pairwise", signature: "[a] -> ((a, a) -> b) -> [b]", doc: "Apply function to pairs of adjacent elements" },
     BuiltinInfo { name: "isSorted", signature: "[a] -> Bool", doc: "Check if list is sorted in ascending order" },
-    BuiltinInfo { name: "isSortedBy", signature: "[a] -> (a -> a -> Int) -> Bool", doc: "Check if list is sorted by comparator" },
+    BuiltinInfo { name: "isSortedBy", signature: "[a] -> ((a, a) -> Int) -> Bool", doc: "Check if list is sorted by comparator" },
 
     // === Typed Arrays ===
     BuiltinInfo { name: "newInt64Array", signature: "Int -> Int64Array", doc: "Create a new Int64 array of given size" },
@@ -1637,10 +1637,18 @@ impl Compiler {
                 };
                 let qualified_fn_name = format!("{}{}", fn_name, arity_suffix);
 
+                // Convert AST type params to types module TypeParams
+                let type_params: Vec<nostos_types::TypeParam> = fn_def.type_params.iter()
+                    .map(|tp| nostos_types::TypeParam {
+                        name: tp.name.node.clone(),
+                        constraints: tp.constraints.iter().map(|c| c.node.clone()).collect(),
+                    })
+                    .collect();
+
                 self.pending_fn_signatures.insert(
                     qualified_fn_name,
                     nostos_types::FunctionType { required_params,
-                        type_params: vec![],
+                        type_params,
                         params: param_types,
                         ret: Box::new(ret_ty),
                     },
@@ -1768,11 +1776,9 @@ impl Compiler {
 
             // Register already-compiled stdlib functions
             for (fn_name, fn_val) in &self.functions {
-                if fn_val.signature.is_some() {
-                    if let Some(sig) = fn_val.signature.as_ref() {
-                        if let Some(fn_type) = self.parse_signature_string(sig) {
-                            env.insert_function(fn_name.clone(), fn_type);
-                        }
+                if let Some(sig) = fn_val.signature.as_ref() {
+                    if let Some(fn_type) = self.parse_signature_string(sig) {
+                        env.insert_function(fn_name.clone(), fn_type);
                     }
                 }
             }
@@ -2239,8 +2245,9 @@ impl Compiler {
                         // DISABLED: This filter was hiding legitimate type errors like 5 + "hello"
                         // The trait method issues are now handled in infer.rs check_pending_method_calls
                         let is_overload_confusion = false;
-                        // Check for type variable errors (List[?N] vs Function)
-                        let is_type_var_confusion = message.contains("List[?") && message.contains("->");
+                        // DISABLED: This was incorrectly hiding legitimate type errors like
+                        // passing a function where a List was expected
+                        let is_type_var_confusion = false;
                         // DISABLED: These filters were incorrectly hiding legitimate type errors
                         // like List[Int] vs Int and Point vs Int
                         let is_list_primitive_confusion = false;
@@ -2880,12 +2887,20 @@ impl Compiler {
             };
             let qualified_fn_name = format!("{}{}", base_name, arity_suffix);
 
+            // Convert AST type params to types module TypeParams
+            let type_params: Vec<nostos_types::TypeParam> = def.type_params.iter()
+                .map(|tp| nostos_types::TypeParam {
+                    name: tp.name.node.clone(),
+                    constraints: tp.constraints.iter().map(|c| c.node.clone()).collect(),
+                })
+                .collect();
+
             // Register in pending_fn_signatures for type checking
             self.pending_fn_signatures.insert(
                 qualified_fn_name,
                 FunctionType {
                     required_params,
-                    type_params: vec![],
+                    type_params,
                     params: param_types,
                     ret: Box::new(ret_ty),
                 },

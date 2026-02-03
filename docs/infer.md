@@ -9,8 +9,8 @@ This document tracks discovered type inference issues in the Nostos language.
 | 1 | Unknown type in method error messages | Open | Low |
 | 2 | zipWith wrong arg order: runtime vs compile error | Open | Medium |
 | 3 | Misleading "if/else branches" error for numeric type mismatches | Open | Low |
-| 4 | sortBy wrong function arity: runtime vs compile error | Open | High |
-| 5 | **Lambdas silently ignore extra arguments** | Open | **Critical** |
+| 4 | sortBy wrong function arity: runtime vs compile error | **Fixed** | High |
+| 5 | **Lambdas silently ignore extra arguments** | **Fixed** | **Critical** |
 
 ## Discovered Issues
 
@@ -47,6 +47,10 @@ main() = {
 
 **Description**: Calling `zipWith(f, xs, ys)` instead of `zipWith(xs, ys, f)` causes a runtime error ("Length: unsupported type") instead of a compile-time type mismatch error.
 
+**Root Cause**: Generic functions like `zipWith[T, U, V](xs: List[T], ys: List[U], f: (T, U) -> V)` have their type parameters stored as `Named { name: "T" }` or `TypeParam("T")`. When instantiating these functions, the type parameters should be replaced with fresh type variables. However, when `type_params` is not properly propagated through the type system, the replacement doesn't happen, and `List[T]` (where T is unresolved) can incorrectly unify with a function type.
+
+**Partial fix applied**: The lambda arity checking (Issue #5) is now working. However, the case where a Function is passed where a `List[T]` is expected (with T being a type parameter) still goes undetected.
+
 **Reproduction**:
 ```nostos
 main() = {
@@ -61,6 +65,8 @@ main() = {
 **Actual**: Runtime error: "Panic: Length: unsupported type"
 
 **Impact**: Type errors slip through to runtime, violating type safety guarantees.
+
+**Technical details**: The `instantiate_function` in `infer.rs` creates `param_subst` from `func_ty.type_params`. When type_params is properly populated, TypeParam/Named type parameters inside List get replaced with fresh vars. When type_params is empty (due to various code paths not preserving it), the replacement doesn't happen and unification between List[T] and Function succeeds (because the element T is never constrained).
 
 ---
 
@@ -99,73 +105,52 @@ main() = {
 
 ### Issue 4: sortBy with wrong function arity causes runtime error instead of compile error
 
+**Status**: FIXED
+
 **Severity**: High (type safety violation)
 
 **Description**: Passing a unary function `T -> Int` to `sortBy` which expects a binary comparator `(T, T) -> Int` causes a runtime error instead of a compile-time type error.
 
-**Reproduction**:
-```nostos
-main() = {
-    nums = [(1, "a"), (3, "c"), (2, "b")]
+**Fix**: Fixed BUILTIN signatures that used curried function syntax `(a -> a -> Int)` instead of multi-param syntax `((a, a) -> Int)`. The curried syntax was being parsed as a 1-param function returning a function, causing arity mismatches to go undetected. Fixed signatures for: sortBy, fold, pairwise, isSortedBy.
 
-    # Wrong: passing key extractor instead of comparator
-    # sortBy expects (T, T) -> Int, we pass T -> Int
-    result = nums.sortBy((n, _) => n)
-
-    println(show(result))
-    0
-}
+**Now produces compile error**:
 ```
-
-**Expected**: Compile-time error about function type mismatch
-
-**Actual**: Runtime error: "Panic: LtInt: expected Int64"
-
-**Root Cause**: See Issue #5 - lambdas ignore extra arguments
+Error: Wrong number of arguments: expected 2, found 1
+```
 
 ---
 
 ### Issue 5: Lambdas silently ignore extra arguments
 
+**Status**: FIXED
+
 **Severity**: CRITICAL (fundamental type safety violation)
 
 **Description**: Lambdas accept any number of arguments and silently ignore extras. This completely breaks function arity checking for lambdas.
 
-**Reproduction**:
+**Fix**: Fixed the `unify_types` function in `crates/types/src/infer.rs` to enforce strict arity checking on function types. Previously, when `required_params` was `None`, the code was lenient about arity mismatches. Now it correctly requires all parameters when `required_params` is `None`.
+
+**Reproduction (now fails correctly)**:
 ```nostos
 main() = {
     f = x => x * 2
-
-    # Too many args - should error, but returns 10!
-    result = f(5, 10, 15)
-    println(show(result))  # prints 10
+    result = f(5, 10, 15)  # Now: compile error about arity
     0
 }
 ```
 
-**More examples**:
+Also fixed passing wrong-arity lambdas to higher-order functions:
 ```nostos
-# This helper expects a 2-arg function
-apply2(f) = f(1, 2)
-
 main() = {
-    # Pass 1-arg lambda - should error but returns 10
-    result = apply2(x => x * 10)
-    println(show(result))  # prints 10
+    nums = [3, 1, 2]
+    result = nums.sortBy(x => x)  # Now: compile error - expected 2 params, found 1
     0
 }
 ```
 
-**Expected**: Compile-time or at minimum runtime error about wrong number of arguments
-
-**Actual**: Extra arguments silently ignored, computation proceeds with wrong semantics
-
-**Impact**: This is the root cause of Issues #2 and #4. It makes the type system fundamentally unsound for higher-order functions because:
-1. Function arity is not enforced for lambdas
-2. Passing wrong-arity functions compiles and runs (with wrong behavior)
-3. No way to catch "passed 1-arg function where 2-arg was expected"
-
-**Note**: Named functions DO have proper arity checking. Only lambdas are affected.
+**Root cause**: Two separate issues were fixed:
+1. `unify_types` was too lenient on function arity when `required_params` was `None`
+2. BUILTIN signatures used curried function syntax which the parser interpreted as 1-param functions
 
 ---
 
@@ -232,4 +217,4 @@ Test files are in `/tmp/infer_tests/` for reproduction.
 
 ---
 
-*Last updated: Iteration 1 - Found critical lambda arity issue*
+*Last updated: Iteration 3 - Fixed Issues #4 and #5 (lambda arity checking). Issue #2 root cause identified but requires deeper fix for generic function type parameter propagation.*

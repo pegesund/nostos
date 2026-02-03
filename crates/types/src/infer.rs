@@ -919,9 +919,11 @@ impl<'a> InferCtx<'a> {
                     // registered with "Type." prefix to avoid eager unification at call site.
                     // Here (post-inference), we can safely do full type checking.
                     match type_name.as_str() {
-                        "List" => self.env.functions.get(&call.method_name).cloned().filter(|ft| {
-                            matches!(ft.params.first(), Some(Type::List(_)))
-                        }),
+                        "List" => {
+                            self.env.functions.get(&call.method_name).cloned().filter(|ft| {
+                                matches!(ft.params.first(), Some(Type::List(_)))
+                            })
+                        }
                         "Map" => self.env.functions.get(&call.method_name).cloned().filter(|ft| {
                             matches!(ft.params.first(), Some(Type::Map(_, _)))
                         }),
@@ -1565,16 +1567,12 @@ impl<'a> InferCtx<'a> {
                 let provided = func_with_less.params.len();
 
                 // Allow the call if provided args are between min_required and max_params
+                // When required_params is None, ALL params are required (no defaults)
                 if provided < min_required || provided > max_params {
-                    // But if required_params is None on the larger function, it might just
-                    // be an HM inference function without complete info - be lenient
-                    if func_with_more.required_params.is_some() || provided > max_params {
-                        return Err(TypeError::ArityMismatch {
-                            expected: min_required,
-                            found: provided,
-                        });
-                    }
-                    // Otherwise, allow it - the compiler will catch real errors
+                    return Err(TypeError::ArityMismatch {
+                        expected: min_required,
+                        found: provided,
+                    });
                 }
 
                 // Unify the params that were provided
@@ -3528,11 +3526,20 @@ impl<'a> InferCtx<'a> {
             .count();
         let has_defaults = required_count < func.clauses[0].params.len();
 
+        // Convert AST type params to types module TypeParams
+        // This allows instantiate_function to properly replace TypeParam("T") with fresh vars
+        let type_params: Vec<crate::TypeParam> = func.type_params.iter()
+            .map(|tp| crate::TypeParam {
+                name: tp.name.node.clone(),
+                constraints: tp.constraints.iter().map(|c| c.node.clone()).collect(),
+            })
+            .collect();
+
         // Note: Type variables in param_types/ret_ty will be resolved after solve()
         // is called in check_module - see the post-processing step there
 
         let func_ty = FunctionType {
-            type_params: vec![],
+            type_params,
             params: param_types,
             ret: Box::new(ret_ty),
             required_params: if has_defaults { Some(required_count) } else { None },
