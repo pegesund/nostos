@@ -2118,39 +2118,13 @@ impl NostosLanguageServer {
 
         log(&format!("receiver_expr='{}', method='{}'", receiver_expr, method_name));
 
-        // Extract the receiver variable name (the last identifier)
-        let receiver_var = receiver_expr
-            .split(|c: char| !c.is_alphanumeric() && c != '_')
-            .filter(|s| !s.is_empty())
-            .last()
-            .unwrap_or(receiver_expr);
+        // Try to infer the receiver type - this could be:
+        // 1. A simple variable: "nums" -> look up in local_vars
+        // 2. A method chain: "nums.filter(x => x > 1)" -> track through methods
+        // 3. A literal: "[1, 2, 3]" -> infer from syntax
+        let receiver_type = Self::infer_method_chain_type(receiver_expr, local_vars);
 
-        log(&format!("receiver_var='{}'", receiver_var));
-
-        // Try to get receiver type from local_vars first
-        let receiver_type = if let Some(t) = local_vars.get(receiver_var) {
-            log(&format!("Found receiver_var '{}' in local_vars: {}", receiver_var, t));
-            Some(t.clone())
-        } else if let Some(t) = Self::infer_literal_type(receiver_expr) {
-            log(&format!("Inferred literal type for '{}': {}", receiver_expr, t));
-            Some(t)
-        } else {
-            // receiver_var is NOT in local_vars - it might be a lambda param itself!
-            // Check if receiver_var appears as a lambda parameter earlier in the prefix
-            log(&format!("receiver_var '{}' not found, checking if it's a lambda param", receiver_var));
-
-            // Build a fake "before_dot" to recursively infer the receiver's type
-            // We need to find where receiver_var is defined as a lambda param
-            let receiver_before_dot = receiver_var.to_string();
-
-            // Recursively infer the type of the receiver
-            Self::infer_lambda_param_type_recursive(
-                before_paren,  // Look in the context before this call
-                &receiver_before_dot,
-                local_vars,
-                depth + 1
-            )
-        };
+        log(&format!("inferred receiver_type: {:?}", receiver_type));
 
         let receiver_type = receiver_type?;
         log(&format!("receiver_type='{}'", receiver_type));
