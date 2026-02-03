@@ -4108,7 +4108,7 @@ fn test_lsp_autocomplete_doubly_nested_lambda() {
 
     println!("Has Int method: {}", has_int_method);
     println!("Total completions: {}", completions.len());
-    // Note: Doubly nested lambdas are complex - this test documents current behavior
+    assert!(has_int_method, "Doubly nested lambda x should have Int methods");
 }
 
 /// Test autocomplete for Option.map lambda
@@ -4294,7 +4294,7 @@ fn test_lsp_autocomplete_tuple_element() {
 
     println!("Has Int method: {}", has_int_method);
     println!("Total completions: {}", completions.len());
-    // Note: This test documents current behavior for tuple element access
+    assert!(has_int_method, "Tuple element t.0 should give Int methods");
 }
 
 /// Test autocomplete for Result.map lambda
