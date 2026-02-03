@@ -113,6 +113,12 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "pairwise", signature: "[a] -> ((a, a) -> b) -> [b]", doc: "Apply function to pairs of adjacent elements" },
     BuiltinInfo { name: "isSorted", signature: "[a] -> Bool", doc: "Check if list is sorted in ascending order" },
     BuiltinInfo { name: "isSortedBy", signature: "[a] -> ((a, a) -> Int) -> Bool", doc: "Check if list is sorted by comparator" },
+    BuiltinInfo { name: "takeWhile", signature: "[a] -> (a -> Bool) -> [a]", doc: "Take elements while predicate is true" },
+    BuiltinInfo { name: "dropWhile", signature: "[a] -> (a -> Bool) -> [a]", doc: "Drop elements while predicate is true" },
+    BuiltinInfo { name: "partition", signature: "[a] -> (a -> Bool) -> ([a], [a])", doc: "Split list by predicate into (matching, non-matching)" },
+    BuiltinInfo { name: "flatMap", signature: "[a] -> (a -> [b]) -> [b]", doc: "Map and flatten results" },
+    BuiltinInfo { name: "zipWith", signature: "[a] -> [b] -> ((a, b) -> c) -> [c]", doc: "Combine two lists element-wise using function" },
+    BuiltinInfo { name: "enumerate", signature: "[a] -> [(Int, a)]", doc: "Pair each element with its index" },
 
     // === Typed Arrays ===
     BuiltinInfo { name: "newInt64Array", signature: "Int -> Int64Array", doc: "Create a new Int64 array of given size" },
@@ -16583,14 +16589,56 @@ impl Compiler {
                     if matches {
                         // Return the return type of this clause
                         if let Some(ref ret_type) = clause.return_type {
-                            let ret_type_name = self.type_expr_name(ret_type);
+                            // Use type_expr_to_string_with_bindings to substitute type parameters
+                            // from current_type_bindings (e.g., T -> Num during monomorphization)
+                            let ret_type_name = self.type_expr_to_string_with_bindings(ret_type);
+
+                            // Build a local type param map by matching param types against arg types
+                            // This handles cases like map[T, U](list: List[T], f: (T) -> U) -> List[U]
+                            let mut local_type_map: HashMap<String, String> = HashMap::new();
+                            for (i, param) in clause.params.iter().enumerate() {
+                                if i < arg_types.len() {
+                                    if let (Some(ref param_ty), Some(ref arg_type)) = (&param.ty, &arg_types[i]) {
+                                        // Extract type bindings from matching param type against arg type
+                                        Self::extract_type_bindings(param_ty, arg_type, &mut local_type_map);
+                                    }
+                                }
+                            }
+
+                            // For functions like map[T, U](list: List[T], f: (T) -> U) -> List[U],
+                            // if U is unbound but T is bound, and both appear in container types,
+                            // assume U = T. This handles lambdas like (x) => x.method() where method returns Self.
+                            if !def.type_params.is_empty() {
+                                let type_params: Vec<String> = def.type_params.iter()
+                                    .map(|tp| tp.name.node.clone())
+                                    .collect();
+
+                                // Check if return type has unbound type params
+                                for tp in &type_params {
+                                    if !local_type_map.contains_key(tp) && !self.current_type_bindings.contains_key(tp) {
+                                        // Unbound type param - try to infer from a bound one
+                                        // For map-like functions, if the return is List[U] and we know List[T] -> T=Num,
+                                        // then U is likely also Num (lambda returns same type)
+                                        if let Some(first_bound) = local_type_map.values().next() {
+                                            local_type_map.insert(tp.clone(), first_bound.clone());
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Apply the local type map to the return type
+                            let mut final_ret_type = ret_type_name;
+                            for (param, concrete) in &local_type_map {
+                                final_ret_type = Self::substitute_single_type_param(&final_ret_type, param, concrete);
+                            }
+
                             // If return type is a type parameter, try to substitute it
-                            if is_type_param(&ret_type_name) {
+                            if is_type_param(&final_ret_type) {
                                 // Find which parameter has this type parameter and get the actual type
                                 for (i, param) in clause.params.iter().enumerate() {
                                     if let Some(ref param_ty) = param.ty {
-                                        let param_type_name = self.type_expr_name(param_ty);
-                                        if param_type_name == ret_type_name && i < arg_types.len() {
+                                        let param_type_name = self.type_expr_to_string_with_bindings(param_ty);
+                                        if param_type_name == final_ret_type && i < arg_types.len() {
                                             if let Some(ref arg_type) = arg_types[i] {
                                                 return Some(arg_type.clone());
                                             }
@@ -16598,7 +16646,7 @@ impl Compiler {
                                     }
                                 }
                             }
-                            return Some(ret_type_name);
+                            return Some(final_ret_type);
                         }
                         // No explicit return type - try to infer from body
                         if let Some(inferred) = self.infer_type_from_expr(&clause.body) {
@@ -16613,7 +16661,73 @@ impl Compiler {
             }
         }
 
-        // Fall back to the original behavior - only when no matching clause was found at all
+        // Fall back: try to use BUILTIN signature to substitute type params in return type
+        // This is critical for stdlib functions like map which aren't in fn_asts
+        if let Some(sig) = Self::get_builtin_signature(fn_name)
+            .or_else(|| Self::get_builtin_signature(&resolved))
+        {
+            let parts = Self::split_signature_by_arrow(sig);
+            if parts.len() > 1 {
+                let ret_part = parts.last().unwrap();
+                let param_parts = &parts[..parts.len() - 1];
+
+                // Build type param map by matching arg types against builtin param types
+                // First, substitute current_type_bindings into arg types so that
+                // e.g., List[T] becomes List[Num] before matching against List[a]
+                let mut type_map: HashMap<String, String> = HashMap::new();
+                for (i, param_sig) in param_parts.iter().enumerate() {
+                    if i < arg_types.len() {
+                        if let Some(ref arg_type) = arg_types[i] {
+                            let substituted_arg = self.substitute_type_params_in_string(arg_type);
+                            let param_type_expr = Self::parse_signature_type(param_sig);
+                            Self::extract_type_bindings(&param_type_expr, &substituted_arg, &mut type_map);
+                        }
+                    }
+                }
+
+                // Also include current_type_bindings for any params not yet mapped
+                for (k, v) in &self.current_type_bindings {
+                    if !type_map.contains_key(k) {
+                        type_map.insert(k.clone(), v.clone());
+                    }
+                }
+
+                // For unbound type params, try to infer from bound ones
+                // This handles the case where lambda return type (b) matches input type (a)
+                // e.g., map with (x) => x.triple() where triple returns Self
+                let ret_type_expr = Self::parse_signature_type(ret_part);
+                let mut ret_type_str = self.type_expr_name(&ret_type_expr);
+
+                // Collect all type param names in return type
+                let mut unbound_params: Vec<String> = Vec::new();
+                for c in ret_type_str.chars() {
+                    if c.is_ascii_lowercase() && !type_map.contains_key(&c.to_string()) {
+                        let param_name = c.to_string();
+                        if !unbound_params.contains(&param_name) {
+                            unbound_params.push(param_name);
+                        }
+                    }
+                }
+
+                // For unbound params, use heuristic: assume same as first bound param
+                if !unbound_params.is_empty() {
+                    if let Some(first_bound_val) = type_map.values().next().cloned() {
+                        for up in &unbound_params {
+                            type_map.insert(up.clone(), first_bound_val.clone());
+                        }
+                    }
+                }
+
+                // Apply substitutions
+                for (param, concrete) in &type_map {
+                    ret_type_str = Self::substitute_single_type_param(&ret_type_str, param, concrete);
+                }
+
+                return Some(ret_type_str);
+            }
+        }
+
+        // Final fallback - use stored return type as-is
         self.get_function_return_type(fn_name)
             .or_else(|| self.get_function_return_type(&resolved))
     }
@@ -17004,6 +17118,7 @@ impl Compiler {
             if let Some(TypeExpr::Function(param_types, _)) = expected_type {
                 // Extract concrete type names from expected parameter types
                 // If a type is a type parameter (like "a"), try to substitute it using current_type_bindings
+                // or accept it as-is if it's one of the current function's type params (for trait method resolution)
                 let concrete_param_types: Vec<Option<String>> = param_types.iter()
                     .map(|t| {
                         if let Some(type_name) = self.type_expr_to_type_name(t) {
@@ -17012,6 +17127,18 @@ impl Compiler {
                             // Type parameter - try to substitute from current_type_bindings
                             if let TypeExpr::Name(ident) = t {
                                 self.current_type_bindings.get(&ident.node).cloned()
+                                    .or_else(|| {
+                                        // If it's one of the current function's type params,
+                                        // use it as-is. This allows trait method resolution
+                                        // in lambdas: the lambda param gets type T, and UFCS
+                                        // dispatch recognizes T as a type param with trait bounds,
+                                        // triggering monomorphization.
+                                        if self.current_fn_type_params.iter().any(|tp| tp.name.node == ident.node) {
+                                            Some(ident.node.clone())
+                                        } else {
+                                            None
+                                        }
+                                    })
                             } else {
                                 None
                             }
@@ -17521,8 +17648,13 @@ impl Compiler {
                 let name = &ident.node;
                 // Check if this is a type parameter (single letter)
                 if Self::is_type_param_name(name) {
-                    // Only map if the concrete type is actually concrete (not another type param)
-                    if !Self::is_type_param_name(concrete_type) {
+                    // Map if the concrete type is concrete (not another type param),
+                    // OR if the concrete type is an uppercase type param (user function type param
+                    // like T, U - distinct from lowercase builtin signature params like a, b)
+                    let is_concrete = !Self::is_type_param_name(concrete_type);
+                    let is_uppercase_type_param = Self::is_type_param_name(concrete_type)
+                        && concrete_type.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+                    if is_concrete || is_uppercase_type_param {
                         map.insert(name.clone(), concrete_type.to_string());
                     }
                 }
@@ -17641,6 +17773,43 @@ impl Compiler {
             if result == *param {
                 result = concrete.clone();
             }
+        }
+
+        result
+    }
+
+    /// Substitute a single type parameter in a type string.
+    /// For example, "List[U]" with param="U", concrete="Num" becomes "List[Num]".
+    fn substitute_single_type_param(type_str: &str, param: &str, concrete: &str) -> String {
+        let mut result = type_str.to_string();
+
+        let patterns = [
+            // Simple bracketed types: [T], [T, U], etc.
+            (format!("[{}]", param), format!("[{}]", concrete)),
+            (format!("[{},", param), format!("[{},", concrete)),
+            (format!("[{} ", param), format!("[{} ", concrete)),
+            (format!(", {}]", param), format!(", {}]", concrete)),
+            (format!(" {}]", param), format!(" {}]", concrete)),
+            (format!(", {}, ", param), format!(", {}, ", concrete)),
+            // Tuple types: (T), (T, T), etc.
+            (format!("({})", param), format!("({})", concrete)),
+            (format!("({},", param), format!("({},", concrete)),
+            (format!("({} ", param), format!("({} ", concrete)),
+            (format!(", {})", param), format!(", {})", concrete)),
+            (format!(" {})", param), format!(" {})", concrete)),
+            // Nested: [(T, T)], etc.
+            (format!("[({})", param), format!("[({})", concrete)),
+            (format!("[({}]", param), format!("[({}]", concrete)),
+            (format!("[({},", param), format!("[({},", concrete)),
+        ];
+
+        for (pattern, replacement) in &patterns {
+            result = result.replace(pattern, replacement);
+        }
+
+        // Also handle standalone type parameter (whole string is just "T")
+        if result == param {
+            result = concrete.to_string();
         }
 
         result
@@ -19096,6 +19265,7 @@ impl Compiler {
         let explicit_type = binding.ty.as_ref().map(|t| self.type_expr_name(t));
         let inferred_type = self.expr_type_name(&binding.value);
         let value_type = explicit_type.clone().or_else(|| inferred_type.clone());
+
 
 
         // Type annotation validation: if explicit type is provided and we can infer the value type,

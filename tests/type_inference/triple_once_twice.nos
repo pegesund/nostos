@@ -1,0 +1,24 @@
+# expect: 9
+# Test calling a generic function that uses map+trait twice from main
+
+trait Tripler
+    triple(self) -> Self
+end
+
+type Num = Num(Int)
+
+Num: Tripler
+    triple(self) = match self { Num(n) -> Num(n * 3) }
+end
+
+tripleOnce[T: Tripler](items: List[T]) -> List[T] = {
+    first = map(items, (x) => x.triple())
+    first
+}
+
+main() = {
+    nums = [Num(1)]
+    r1 = tripleOnce(nums)
+    r2 = tripleOnce(r1)
+    match r2.head() { Num(v) -> v }
+}

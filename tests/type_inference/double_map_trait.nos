@@ -1,0 +1,25 @@
+# expect: 9
+# Test that second map call with trait method works correctly
+# Previously failed because map's return type List[U] wasn't substituted properly
+
+trait Tripler
+    triple(self) -> Self
+end
+
+type Num = Num(Int)
+
+Num: Tripler
+    triple(self) = match self { Num(n) -> Num(n * 3) }
+end
+
+tripleAllTwice[T: Tripler](items: List[T]) -> List[T] = {
+    first = map(items, (x) => x.triple())
+    second = map(first, (y) => y.triple())
+    second
+}
+
+main() = {
+    nums = [Num(1)]
+    r = tripleAllTwice(nums)
+    match r.head() { Num(v) -> v }
+}
