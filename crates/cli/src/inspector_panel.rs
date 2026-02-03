@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Inspector panel with tabbed value browsing for the TUI.
 
 
@@ -701,11 +700,13 @@ impl InspectorPanel {
     }
 
     /// Get the number of tabs
+    #[allow(dead_code)]
     pub fn tab_count(&self) -> usize {
         self.tabs.len()
     }
 
     /// Check if empty
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.tabs.is_empty()
     }

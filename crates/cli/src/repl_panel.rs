@@ -1,6 +1,4 @@
-#![allow(dead_code)]
 //! Interactive REPL panel with syntax highlighting and autocomplete
-
 //!
 //! Provides a notebook-style REPL where each input/output pair is displayed
 //! in a scrollable view with syntax highlighting.
@@ -609,6 +607,7 @@ impl ReplPanel {
     }
 
     /// Check if we have an active debug session
+    #[allow(dead_code)]
     pub fn has_debug_session(&self) -> bool {
         let has = self.debug_session.is_some();
         debug_log(&format!("[has_debug_session] repl_id={}, has_session={}, self_ptr={:p}", self.instance_id, has, self as *const _));
@@ -664,6 +663,7 @@ impl ReplPanel {
     }
 
     /// Check if an evaluation is in progress
+    #[allow(dead_code)]
     pub fn is_eval_in_progress(&self) -> bool {
         self.eval_in_progress
     }
@@ -1761,6 +1761,7 @@ impl ReplPanel {
         result
     }
 
+    #[allow(dead_code)]
     pub fn get_instance_id(&self) -> usize {
         self.instance_id
     }

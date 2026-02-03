@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use cursive::event::{Event, EventResult, Key};
 use cursive::theme::{Color, ColorStyle, Style};
 use cursive::view::{View, CannotFocus};
@@ -26,6 +25,7 @@ pub enum CompileStatus {
     /// Compile error (type error, etc.)
     CompileError(String),
     /// Currently checking (for async in future)
+    #[allow(dead_code)]
     Checking,
 }
 
@@ -645,6 +645,7 @@ impl CodeEditor {
     }
 
     /// Check if enough time has passed for a full compile (500ms)
+    #[allow(dead_code)]
     pub fn maybe_full_compile(&mut self) {
         if let Some(last_edit) = self.last_edit_time {
             if last_edit.elapsed().as_millis() > 500 && self.needs_full_compile {
@@ -669,6 +670,7 @@ impl CodeEditor {
     }
 
     /// Check if editor is in read-only mode
+    #[allow(dead_code)]
     pub fn is_read_only(&self) -> bool {
         self.read_only
     }
@@ -719,6 +721,7 @@ impl CodeEditor {
     }
 
     /// Set the content of the editor
+    #[allow(dead_code)]
     pub fn set_content(&mut self, text: &str) {
         self.content = text.lines().map(String::from).collect();
         if self.content.is_empty() {

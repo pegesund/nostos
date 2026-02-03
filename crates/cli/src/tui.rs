@@ -1,6 +1,4 @@
-#![allow(dead_code)]
 //! TUI implementation for Nostos
-
 
 use cursive::Cursive;
 use cursive::traits::*;
@@ -272,13 +270,14 @@ mod nomouse_backend {
     use cursive::Vec2;
     use std::io::{self, BufWriter, Stdout, Write};
 
+    #[allow(dead_code)]
     pub struct NoMouseBackend {
         writer: BufWriter<Stdout>,
-        #[allow(dead_code)]
         current_style: theme::ColorPair,
     }
 
     impl NoMouseBackend {
+        #[allow(dead_code)]
         pub fn init() -> io::Result<Box<dyn Backend>> {
             terminal::enable_raw_mode()?;
             let mut stdout = io::stdout();

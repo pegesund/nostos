@@ -1,6 +1,4 @@
-#![allow(dead_code)]
 //! Autocomplete engine for REPL and Editor
-
 //!
 //! Provides completion candidates based on:
 //! - Function names
@@ -566,6 +564,7 @@ impl Autocomplete {
     }
 
     /// Complete a general identifier
+    #[allow(dead_code)]
     fn complete_identifier(
         &self,
         prefix: &str,
@@ -1612,6 +1611,7 @@ impl Autocomplete {
     }
 
     /// Apply a completion: returns the text to insert and cursor adjustment
+    #[allow(dead_code)]
     pub fn apply_completion(
         &self,
         _context: &CompletionContext,
