@@ -2107,7 +2107,14 @@ impl NostosLanguageServer {
                             // Find the last '.' to get method name and receiver
                             if let Some(dot_pos) = before_paren.rfind('.') {
                                 let method_name = before_paren[dot_pos + 1..].trim();
-                                let receiver_expr = before_paren[..dot_pos].trim();
+                                let mut receiver_expr = before_paren[..dot_pos].trim();
+
+                                // For nested lambdas, the receiver might contain a lambda expression
+                                // like "matrix.map(row => row" - we need just "row" (the part after =>)
+                                if let Some(arrow_idx) = receiver_expr.rfind("=>") {
+                                    receiver_expr = receiver_expr[arrow_idx + 2..].trim();
+                                    log(&format!("Extracted inner receiver from lambda: '{}'", receiver_expr));
+                                }
 
                                 log(&format!("method='{}', receiver_expr='{}'", method_name, receiver_expr));
 
