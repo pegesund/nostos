@@ -1723,18 +1723,17 @@ impl AsyncProcess {
 
             // === Type conversions ===
             IntToFloat(dst, src) => {
-                let result = match reg!(src) {
-                    GcValue::Int64(v) => GcValue::Float64(v as f64),
-                    GcValue::Int32(v) => GcValue::Float64(v as f64),
-                    GcValue::Float64(v) => GcValue::Float64(v),
-                    GcValue::Float32(v) => GcValue::Float64(v as f64),
+                let result = match reg_ref!(src) {
+                    GcValue::Int64(v) => GcValue::Float64(*v as f64),
+                    GcValue::Int32(v) => GcValue::Float64(*v as f64),
+                    GcValue::Float64(v) => GcValue::Float64(*v),
+                    GcValue::Float32(v) => GcValue::Float64(*v as f64),
                     _ => return Err(RuntimeError::Panic("IntToFloat: expected numeric".into())),
                 };
                 set_reg!(dst, result);
             }
             FloatToInt(dst, src) => {
-                let val = reg!(src);
-                let result = match &val {
+                let result = match reg_ref!(src) {
                     GcValue::Int8(v) => GcValue::Int64(*v as i64),
                     GcValue::Int16(v) => GcValue::Int64(*v as i64),
                     GcValue::Int32(v) => GcValue::Int64(*v as i64),
@@ -1760,23 +1759,22 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             ToBigInt(dst, src) => {
-                let result = match reg!(src) {
+                let result = match reg_ref!(src) {
                     GcValue::Int64(v) => {
-                        let bi = num_bigint::BigInt::from(v);
+                        let bi = num_bigint::BigInt::from(*v);
                         GcValue::BigInt(self.heap.alloc_bigint(bi))
                     }
                     GcValue::Int32(v) => {
-                        let bi = num_bigint::BigInt::from(v);
+                        let bi = num_bigint::BigInt::from(*v);
                         GcValue::BigInt(self.heap.alloc_bigint(bi))
                     }
-                    GcValue::BigInt(_) => reg!(src), // Already a BigInt
+                    GcValue::BigInt(ptr) => GcValue::BigInt(*ptr), // Already a BigInt, just copy ptr
                     _ => return Err(RuntimeError::Panic("ToBigInt: expected integer".into())),
                 };
                 set_reg!(dst, result);
             }
             ToInt8(dst, src) => {
-                let val = reg!(src);
-                let result = match &val {
+                let result = match reg_ref!(src) {
                     GcValue::Int8(v) => GcValue::Int8(*v),
                     GcValue::Int16(v) => GcValue::Int8(*v as i8),
                     GcValue::Int32(v) => GcValue::Int8(*v as i8),
@@ -1792,8 +1790,7 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             ToInt16(dst, src) => {
-                let val = reg!(src);
-                let result = match &val {
+                let result = match reg_ref!(src) {
                     GcValue::Int8(v) => GcValue::Int16(*v as i16),
                     GcValue::Int16(v) => GcValue::Int16(*v),
                     GcValue::Int32(v) => GcValue::Int16(*v as i16),
@@ -1809,8 +1806,7 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             ToInt32(dst, src) => {
-                let val = reg!(src);
-                let result = match &val {
+                let result = match reg_ref!(src) {
                     GcValue::Int8(v) => GcValue::Int32(*v as i32),
                     GcValue::Int16(v) => GcValue::Int32(*v as i32),
                     GcValue::Int32(v) => GcValue::Int32(*v),
@@ -1826,8 +1822,7 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             ToUInt8(dst, src) => {
-                let val = reg!(src);
-                let result = match &val {
+                let result = match reg_ref!(src) {
                     GcValue::Int8(v) => GcValue::UInt8(*v as u8),
                     GcValue::Int16(v) => GcValue::UInt8(*v as u8),
                     GcValue::Int32(v) => GcValue::UInt8(*v as u8),
@@ -1843,8 +1838,7 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             ToUInt16(dst, src) => {
-                let val = reg!(src);
-                let result = match &val {
+                let result = match reg_ref!(src) {
                     GcValue::Int8(v) => GcValue::UInt16(*v as u16),
                     GcValue::Int16(v) => GcValue::UInt16(*v as u16),
                     GcValue::Int32(v) => GcValue::UInt16(*v as u16),
@@ -1860,8 +1854,7 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             ToUInt32(dst, src) => {
-                let val = reg!(src);
-                let result = match &val {
+                let result = match reg_ref!(src) {
                     GcValue::Int8(v) => GcValue::UInt32(*v as u32),
                     GcValue::Int16(v) => GcValue::UInt32(*v as u32),
                     GcValue::Int32(v) => GcValue::UInt32(*v as u32),
@@ -1877,8 +1870,7 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             ToUInt64(dst, src) => {
-                let val = reg!(src);
-                let result = match &val {
+                let result = match reg_ref!(src) {
                     GcValue::Int8(v) => GcValue::UInt64(*v as u64),
                     GcValue::Int16(v) => GcValue::UInt64(*v as u64),
                     GcValue::Int32(v) => GcValue::UInt64(*v as u64),
@@ -1894,8 +1886,7 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             ToFloat32(dst, src) => {
-                let val = reg!(src);
-                let result = match &val {
+                let result = match reg_ref!(src) {
                     GcValue::Int8(v) => GcValue::Float32(*v as f32),
                     GcValue::Int16(v) => GcValue::Float32(*v as f32),
                     GcValue::Int32(v) => GcValue::Float32(*v as f32),
@@ -3056,41 +3047,38 @@ impl AsyncProcess {
             }
 
             GeInt(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("GeInt: expected Int64".into())) };
-                let vb = match reg!(b) { GcValue::Int64(n) => n, _ => return Err(RuntimeError::Panic("GeInt: expected Int64".into())) };
+                let va = match reg_ref!(a) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("GeInt: expected Int64".into())) };
+                let vb = match reg_ref!(b) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("GeInt: expected Int64".into())) };
                 set_reg!(dst, GcValue::Bool(va >= vb));
             }
 
             // === Boolean operations ===
             And(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Bool(b) => b, _ => return Err(RuntimeError::Panic("And: expected Bool".into())) };
-                let vb = match reg!(b) { GcValue::Bool(b) => b, _ => return Err(RuntimeError::Panic("And: expected Bool".into())) };
+                let va = match reg_ref!(a) { GcValue::Bool(b) => *b, _ => return Err(RuntimeError::Panic("And: expected Bool".into())) };
+                let vb = match reg_ref!(b) { GcValue::Bool(b) => *b, _ => return Err(RuntimeError::Panic("And: expected Bool".into())) };
                 set_reg!(dst, GcValue::Bool(va && vb));
             }
             Or(dst, a, b) => {
-                let va = match reg!(a) { GcValue::Bool(b) => b, _ => return Err(RuntimeError::Panic("Or: expected Bool".into())) };
-                let vb = match reg!(b) { GcValue::Bool(b) => b, _ => return Err(RuntimeError::Panic("Or: expected Bool".into())) };
+                let va = match reg_ref!(a) { GcValue::Bool(b) => *b, _ => return Err(RuntimeError::Panic("Or: expected Bool".into())) };
+                let vb = match reg_ref!(b) { GcValue::Bool(b) => *b, _ => return Err(RuntimeError::Panic("Or: expected Bool".into())) };
                 set_reg!(dst, GcValue::Bool(va || vb));
             }
             Not(dst, src) => {
-                let v = match reg!(src) { GcValue::Bool(b) => b, _ => return Err(RuntimeError::Panic("Not: expected Bool".into())) };
+                let v = match reg_ref!(src) { GcValue::Bool(b) => *b, _ => return Err(RuntimeError::Panic("Not: expected Bool".into())) };
                 set_reg!(dst, GcValue::Bool(!v));
             }
 
             // === Generic equality ===
             Eq(dst, a, b) => {
-                let va = reg!(a);
-                let vb = reg!(b);
-                let equal = self.heap.gc_values_equal(&va, &vb);
+                let equal = self.heap.gc_values_equal(reg_ref!(a), reg_ref!(b));
                 set_reg!(dst, GcValue::Bool(equal));
             }
 
             // === Pattern matching ===
             TestConst(dst, value_reg, const_idx) => {
                 let constant = get_const!(const_idx);
-                let value = reg!(value_reg);
                 let gc_const = self.heap.value_to_gc(&constant);
-                let result = self.heap.gc_values_equal(&value, &gc_const);
+                let result = self.heap.gc_values_equal(reg_ref!(value_reg), &gc_const);
                 set_reg!(dst, GcValue::Bool(result));
             }
 
@@ -3106,8 +3094,7 @@ impl AsyncProcess {
             }
 
             TestUnit(dst, value_reg) => {
-                let val = reg!(value_reg);
-                let result = matches!(val, GcValue::Unit);
+                let result = matches!(reg_ref!(value_reg), GcValue::Unit);
                 set_reg!(dst, GcValue::Bool(result));
             }
 
@@ -3116,10 +3103,10 @@ impl AsyncProcess {
                     Value::String(s) => s.clone(),
                     _ => return Err(RuntimeError::Panic("TestTag: expected string constant".into())),
                 };
-                let val = reg!(value_reg);
+                let val = reg_ref!(value_reg);
                 let result = match val {
                     GcValue::Variant(ptr) => {
-                        if let Some(var) = self.heap.get_variant(ptr) {
+                        if let Some(var) = self.heap.get_variant(*ptr) {
                             var.constructor.as_str() == expected_ctor.as_str()
                         } else {
                             false
@@ -3127,7 +3114,7 @@ impl AsyncProcess {
                     }
                     GcValue::Record(ptr) => {
                         // Records: compare type_name directly
-                        if let Some(rec) = self.heap.get_record(ptr) {
+                        if let Some(rec) = self.heap.get_record(*ptr) {
                             rec.type_name.as_str() == expected_ctor.as_str()
                         } else {
                             false
@@ -3238,16 +3225,14 @@ impl AsyncProcess {
             }
 
             AssertMsg(cond, msg) => {
-                let val = reg!(cond);
-                match val {
+                match reg_ref!(cond) {
                     GcValue::Bool(true) => {}
                     GcValue::Bool(false) => {
-                        let msg_val = reg!(msg);
-                        let msg_str = self.heap.display_value(&msg_val);
+                        let msg_str = self.heap.display_value(reg_ref!(msg));
                         return Err(RuntimeError::Panic(format!("Assertion failed: {}", msg_str)));
                     }
-                    _ => {
-                        return Err(RuntimeError::Panic(format!("Assert: expected Bool, got {:?}", val)));
+                    other => {
+                        return Err(RuntimeError::Panic(format!("Assert: expected Bool, got {:?}", other)));
                     }
                 }
             }
@@ -3390,9 +3375,8 @@ impl AsyncProcess {
             }
 
             GetTupleField(dst, tuple_reg, idx) => {
-                let tuple = reg!(tuple_reg);
-                if let GcValue::Tuple(ptr) = tuple {
-                    if let Some(t) = self.heap.get_tuple(ptr) {
+                if let GcValue::Tuple(ptr) = reg_ref!(tuple_reg) {
+                    if let Some(t) = self.heap.get_tuple(*ptr) {
                         if (*idx as usize) < t.items.len() {
                             let value = t.items[*idx as usize].clone();
                             set_reg!(dst, value);
@@ -3408,9 +3392,8 @@ impl AsyncProcess {
             }
 
             DestructurePair(dst0, dst1, tuple_reg) => {
-                let tuple = reg!(tuple_reg);
-                if let GcValue::Tuple(ptr) = tuple {
-                    if let Some(t) = self.heap.get_tuple(ptr) {
+                if let GcValue::Tuple(ptr) = reg_ref!(tuple_reg) {
+                    if let Some(t) = self.heap.get_tuple(*ptr) {
                         if t.items.len() >= 2 {
                             set_reg!(dst0, t.items[0].clone());
                             set_reg!(dst1, t.items[1].clone());
@@ -3426,9 +3409,8 @@ impl AsyncProcess {
             }
 
             DestructureTriple(dst0, dst1, dst2, tuple_reg) => {
-                let tuple = reg!(tuple_reg);
-                if let GcValue::Tuple(ptr) = tuple {
-                    if let Some(t) = self.heap.get_tuple(ptr) {
+                if let GcValue::Tuple(ptr) = reg_ref!(tuple_reg) {
+                    if let Some(t) = self.heap.get_tuple(*ptr) {
                         if t.items.len() >= 3 {
                             set_reg!(dst0, t.items[0].clone());
                             set_reg!(dst1, t.items[1].clone());
@@ -3524,7 +3506,7 @@ impl AsyncProcess {
                             // Invoke onRead callbacks synchronously
                             let read_callbacks = rec.get_read_callbacks();
                             if !read_callbacks.is_empty() {
-                                let field_name_gc = self.heap.value_to_gc(&Value::String(field_name.into()));
+                                let field_name_gc = self.heap.value_to_gc(&Value::String(field_name.clone().into()));
                                 let value_gc = gc_value;
 
                                 // Push callbacks in reverse order so they execute in forward order
