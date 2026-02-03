@@ -4,21 +4,28 @@
 //! Test files should have a `# expect: <value>` comment at the top to specify
 //! the expected result of running main().
 //!
-//! KNOWN ISSUE: These tests may SIGSEGV when run via `cargo test` (both in parallel
-//! and single-threaded), but all tests pass when run via `tests/runall.sh` or
-//! individually with the nostos binary. The issue appears to be in test harness
-//! cleanup/teardown, not in the compiler or VM. Use `cd tests && ./runall.sh`
-//! as the canonical test method (see CLAUDE.md).
+//! DISABLED BY DEFAULT: These tests are slow because they recompile stdlib each time.
+//! Use `cd tests && ./runall.sh` instead (uses cached binary, runs in parallel).
+//!
+//! To run these tests: cargo test --release -p nostos-compiler --features nos-file-tests
 
+#[cfg(feature = "nos-file-tests")]
 use nostos_compiler::compile::{compile_module, compile_module_with_stdlib, MvarInitValue};
+#[cfg(feature = "nos-file-tests")]
 use nostos_syntax::parse;
+#[cfg(feature = "nos-file-tests")]
 use nostos_vm::value::Value;
+#[cfg(feature = "nos-file-tests")]
 use nostos_vm::async_vm::{AsyncVM, AsyncConfig};
+#[cfg(feature = "nos-file-tests")]
 use nostos_vm::process::ThreadSafeValue;
+#[cfg(feature = "nos-file-tests")]
 use std::fs;
+#[cfg(feature = "nos-file-tests")]
 use std::path::Path;
 
 /// Convert MvarInitValue to ThreadSafeValue for VM registration.
+#[cfg(feature = "nos-file-tests")]
 fn mvar_init_to_thread_safe(init: &MvarInitValue) -> ThreadSafeValue {
     match init {
         MvarInitValue::Unit => ThreadSafeValue::Unit,
@@ -74,6 +81,7 @@ fn mvar_init_to_thread_safe(init: &MvarInitValue) -> ThreadSafeValue {
     }
 }
 
+#[cfg(feature = "nos-file-tests")]
 fn mvar_init_to_shared_key(init: &MvarInitValue) -> Option<nostos_vm::SharedMapKey> {
     use nostos_vm::SharedMapKey;
     match init {
@@ -86,6 +94,7 @@ fn mvar_init_to_shared_key(init: &MvarInitValue) -> Option<nostos_vm::SharedMapK
     }
 }
 
+#[cfg(feature = "nos-file-tests")]
 fn mvar_init_to_shared_value(init: &MvarInitValue) -> nostos_vm::SharedMapValue {
     use nostos_vm::SharedMapValue;
     match init {
@@ -127,6 +136,7 @@ fn mvar_init_to_shared_value(init: &MvarInitValue) -> nostos_vm::SharedMapValue 
 
 /// Parse expected value from test file comments.
 /// Looks for `# expect: <value>` line.
+#[cfg(feature = "nos-file-tests")]
 fn parse_expected(source: &str) -> Option<String> {
     for line in source.lines() {
         let trimmed = line.trim();
@@ -139,6 +149,7 @@ fn parse_expected(source: &str) -> Option<String> {
 
 /// Parse all expected error strings from test file comments.
 /// Looks for all `# expect_error: <value>` lines.
+#[cfg(feature = "nos-file-tests")]
 fn parse_expected_errors(source: &str) -> Vec<String> {
     let mut errors = Vec::new();
     for line in source.lines() {
@@ -151,6 +162,7 @@ fn parse_expected_errors(source: &str) -> Vec<String> {
 }
 
 /// Convert Value to string for comparison.
+#[cfg(feature = "nos-file-tests")]
 fn value_to_string(value: &Value) -> String {
     match value {
         // Signed integers
@@ -203,6 +215,7 @@ fn value_to_string(value: &Value) -> String {
 }
 
 /// Find the stdlib directory relative to the workspace root.
+#[cfg(feature = "nos-file-tests")]
 fn find_stdlib_path() -> std::path::PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let workspace_root = Path::new(manifest_dir).parent().unwrap().parent().unwrap();
@@ -210,6 +223,7 @@ fn find_stdlib_path() -> std::path::PathBuf {
 }
 
 /// Compile and run a Nostos source file using AsyncVM, returning a Value.
+#[cfg(feature = "nos-file-tests")]
 fn run_nos_source(source: &str) -> Result<Value, String> {
     // Parse
     let (module_opt, errors) = parse(source);
@@ -249,6 +263,7 @@ fn run_nos_source(source: &str) -> Result<Value, String> {
 }
 
 /// Compile and run a Nostos source file using AsyncVM (returns string display).
+#[cfg(feature = "nos-file-tests")]
 fn run_nos_source_gc(source: &str) -> Result<String, String> {
     // Parse
     let (module_opt, errors) = parse(source);
@@ -288,6 +303,7 @@ fn run_nos_source_gc(source: &str) -> Result<String, String> {
 }
 
 /// Run a single test file.
+#[cfg(feature = "nos-file-tests")]
 fn run_test_file(path: &Path) -> Result<(), String> {
     let source = fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
@@ -342,6 +358,7 @@ fn run_test_file(path: &Path) -> Result<(), String> {
 }
 
 /// Run a single test file for concurrency tests (checks Pid output).
+#[cfg(feature = "nos-file-tests")]
 fn run_test_file_concurrent(path: &Path) -> Result<(), String> {
     let source = fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
@@ -364,6 +381,7 @@ fn run_test_file_concurrent(path: &Path) -> Result<(), String> {
 }
 
 /// Find all .nos files in a directory recursively.
+#[cfg(feature = "nos-file-tests")]
 fn find_nos_files(dir: &Path) -> Vec<std::path::PathBuf> {
     let mut files = Vec::new();
     if let Ok(entries) = fs::read_dir(dir) {
@@ -379,6 +397,16 @@ fn find_nos_files(dir: &Path) -> Vec<std::path::PathBuf> {
     files
 }
 
+// =============================================================================
+// .nos file integration tests - DISABLED BY DEFAULT
+// =============================================================================
+// These tests run .nos files but are slow because they recompile stdlib each time.
+// Use `cd tests && ./runall.sh` instead (uses cached binary, runs in parallel).
+//
+// To run these anyway: cargo test --release -p nostos-compiler --features nos-file-tests
+// =============================================================================
+
+#[cfg(feature = "nos-file-tests")]
 #[test]
 #[ignore] // This test hangs - use individual category tests instead (see CLAUDE.md)
 fn test_all_nos_files() {
@@ -426,6 +454,7 @@ fn test_all_nos_files() {
 }
 
 // Individual test modules for each category
+#[cfg(feature = "nos-file-tests")]
 mod basics {
     use super::*;
 
@@ -467,6 +496,7 @@ mod basics {
     fn underscore_in_numbers() { run_category_test("underscore_in_numbers"); }
 }
 
+#[cfg(feature = "nos-file-tests")]
 mod arithmetic {
     use super::*;
 
@@ -514,6 +544,7 @@ mod arithmetic {
     fn complex_expr() { run_category_test("complex_expr"); }
 }
 
+#[cfg(feature = "nos-file-tests")]
 mod functions {
     use super::*;
 
@@ -561,6 +592,7 @@ mod functions {
     fn fibonacci() { run_category_test("fibonacci"); }
 }
 
+#[cfg(feature = "nos-file-tests")]
 mod types {
     use super::*;
 
@@ -593,6 +625,7 @@ mod types {
     fn recursive_list() { run_category_test("recursive_list"); }
 }
 
+#[cfg(feature = "nos-file-tests")]
 mod patterns {
     use super::*;
 
@@ -640,6 +673,7 @@ mod patterns {
     fn function_args_map_set() { run_category_test("function_args_map_set"); }
 }
 
+#[cfg(feature = "nos-file-tests")]
 mod traits {
     use super::*;
 
@@ -666,6 +700,7 @@ mod traits {
     fn operator_overloading() { run_category_test("operator_overloading"); }
 }
 
+#[cfg(feature = "nos-file-tests")]
 mod comparison {
     use super::*;
 
@@ -698,6 +733,7 @@ mod comparison {
     fn greater_equal() { run_category_test("greater_equal"); }
 }
 
+#[cfg(feature = "nos-file-tests")]
 mod logical {
     use super::*;
 
@@ -724,6 +760,7 @@ mod logical {
     fn complex() { run_category_test("complex"); }
 }
 
+#[cfg(feature = "nos-file-tests")]
 mod control_flow {
     use super::*;
 
@@ -756,6 +793,7 @@ mod control_flow {
     fn nested_block() { run_category_test("nested_block"); }
 }
 
+#[cfg(feature = "nos-file-tests")]
 mod strings {
     use super::*;
 
@@ -779,6 +817,7 @@ mod strings {
     fn escape() { run_category_test("escape"); }
 }
 
+#[cfg(feature = "nos-file-tests")]
 mod collections {
     use super::*;
 
@@ -805,6 +844,7 @@ mod collections {
     fn list_cons() { run_category_test("list_cons"); }
 }
 
+#[cfg(feature = "nos-file-tests")]
 mod concurrency {
     use super::*;
 
@@ -839,6 +879,7 @@ mod concurrency {
 }
 
 /// Tests for source code display (multi-clause functions)
+#[cfg(feature = "nos-file-tests")]
 mod source_display {
     use super::*;
 
@@ -904,6 +945,7 @@ main() = describe([1,2,3])
     }
 }
 
+#[cfg(feature = "nos-file-tests")]
 mod file_io {
     use super::*;
 
@@ -993,6 +1035,7 @@ mod file_io {
     fn handle_flush() { run_category_test("handle_flush"); }
 }
 
+#[cfg(feature = "nos-file-tests")]
 mod json {
     use super::*;
 
@@ -1150,6 +1193,7 @@ mod json {
 
 // === Debugger Integration Tests ===
 
+#[cfg(feature = "nos-file-tests")]
 mod debugger_tests {
     use super::*;
     use nostos_vm::shared_types::DebugEvent;

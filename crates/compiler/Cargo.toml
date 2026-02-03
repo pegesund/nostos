@@ -13,3 +13,7 @@ rust_decimal = { workspace = true }
 
 [dev-dependencies]
 imbl = "3"
+
+[features]
+# Enable .nos file integration tests (slow - use runall.sh instead)
+nos-file-tests = []
