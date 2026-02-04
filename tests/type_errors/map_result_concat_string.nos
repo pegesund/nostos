@@ -1,0 +1,7 @@
+# expect_error: mismatched types
+# Issue 15: map result ++ String should be caught at compile time
+main() = {
+    xs = [1, 2, 3]
+    mapped = xs.map(x => x * 2)
+    mapped ++ "hello"
+}

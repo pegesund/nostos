@@ -1,0 +1,6 @@
+# expect_error: Wrong number of arguments
+# Issue 5: Lambda called with extra arguments should be compile error
+main() = {
+    f = x => x * 2
+    f(5, 10, 15)
+}

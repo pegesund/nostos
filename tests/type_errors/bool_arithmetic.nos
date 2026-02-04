@@ -1,0 +1,3 @@
+# expect_error: does not implement Num
+# Issue 17: Bool arithmetic should be caught at compile time
+main() = true + 5

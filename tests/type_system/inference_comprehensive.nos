@@ -243,10 +243,10 @@ test44() = {
     funcs
 }
 
-# 45. Nested data structures
+# 45. Nested data structures (homogeneous maps)
 test45() = {
-    data = [%{"name": "Alice", "scores": [90, 85, 92]},
-            %{"name": "Bob", "scores": [78, 82, 88]}]
+    data = [%{"alice": 90, "bob": 78},
+            %{"alice": 85, "bob": 82}]
     data
 }
 

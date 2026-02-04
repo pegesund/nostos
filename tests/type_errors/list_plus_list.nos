@@ -1,0 +1,3 @@
+# expect_error: does not implement Num
+# Issue 20: List + List arithmetic should be caught at compile time
+main() = [1, 2, 3] + [4, 5, 6]

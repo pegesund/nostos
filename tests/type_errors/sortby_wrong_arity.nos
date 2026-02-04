@@ -1,0 +1,6 @@
+# expect_error: expected 2
+# Issue 4: sortBy with unary function should be compile error
+main() = {
+    nums = [3, 1, 2]
+    nums.sortBy(x => x)
+}

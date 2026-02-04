@@ -1,0 +1,3 @@
+# expect_error: does not implement Num
+# Issue 21: Unary negation on non-numeric should be caught at compile time
+main() = -"hello"

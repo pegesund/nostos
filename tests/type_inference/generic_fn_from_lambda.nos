@@ -1,0 +1,16 @@
+# expect: 26
+# Issue 12: Generic function calls from lambdas inside generic functions
+trait Weighted
+    weight(self) -> Int
+end
+
+Int: Weighted
+    weight(self) = self
+end
+
+getWeight[T: Weighted](x: T) -> Int = x.weight()
+
+totalWeights[T: Weighted](items: List[T]) -> Int =
+    items.fold(0, (acc, x) => acc + getWeight(x))
+
+main() = totalWeights([3, 5, 7, 11])

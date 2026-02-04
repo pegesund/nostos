@@ -1,0 +1,3 @@
+# expect_error: has no method
+# Issue 16: List-only methods should be caught on String at compile time
+main() = "hello".head()

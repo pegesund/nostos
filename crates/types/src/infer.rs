@@ -748,9 +748,18 @@ impl<'a> InferCtx<'a> {
                                 deferred_count = 0; // Made progress
                             } else if resolved.has_any_type_var() {
                                 // Type still contains unresolved variables (e.g. List[?a])
-                                // Drop this constraint: the element type is unknown so we
-                                // can't verify the trait statically. Runtime handles it.
-                                // The post-solve check catches critical cases (Option/Result).
+                                // For traits like Eq/Show that depend on element types, defer.
+                                // But for traits like Num that container types NEVER implement
+                                // regardless of element types, report immediately.
+                                let outer_is_container = matches!(&resolved,
+                                    Type::List(_) | Type::Map(_, _) | Type::Set(_) |
+                                    Type::Array(_) | Type::Tuple(_));
+                                if outer_is_container && matches!(trait_name.as_str(), "Num" | "Ord") {
+                                    return Err(TypeError::MissingTraitImpl {
+                                        ty: resolved.display(),
+                                        trait_name,
+                                    });
+                                }
                                 deferred_count = 0;
                             } else if matches!(&resolved, Type::Function(_)) {
                                 // Function types don't implement standard traits (Num, Concat,
@@ -3018,6 +3027,13 @@ impl<'a> InferCtx<'a> {
                     (Type::String, Type::Var(_)) | (Type::Var(_), Type::String) => {
                         self.unify(left_ty.clone(), right_ty);
                         Ok(Type::String)
+                    }
+                    // List ++ String or String ++ List is always a type error
+                    (Type::List(_), Type::String) | (Type::String, Type::List(_)) => {
+                        return Err(TypeError::UnificationFailed(
+                            resolved_left.display(),
+                            resolved_right.display(),
+                        ));
                     }
                     // Both are type variables - defer, might resolve to String or List
                     (Type::Var(_), Type::Var(_)) => {

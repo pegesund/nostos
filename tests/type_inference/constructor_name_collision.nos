@@ -1,0 +1,10 @@
+# expect: Cons(2, Cons(4, Nil))
+# Issue 14: User-defined constructors should take precedence over built-in
+type MyList[A] = Cons(A, MyList[A]) | Nil
+
+myMap[A, B](xs: MyList[A], f: A -> B) -> MyList[B] = match xs {
+    Nil -> Nil
+    Cons(x, rest) -> Cons(f(x), myMap(rest, f))
+}
+
+main() = myMap(Cons(1, Cons(2, Nil)), x => x * 2)

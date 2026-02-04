@@ -2399,7 +2399,15 @@ impl Compiler {
                                                     }
                                                 }
                                             },
-                                            None => true, // Type not in registry - suppress
+                                            None => {
+                                                // Type not in registry - report for known primitives,
+                                                // suppress for unknown types
+                                                let primitives = ["Int", "Float", "Bool", "String", "Char",
+                                                    "Int8", "Int16", "Int32", "Int64",
+                                                    "UInt8", "UInt16", "UInt32", "UInt64",
+                                                    "Float32", "Float64", "BigInt", "Decimal"];
+                                                !primitives.contains(&type_name)
+                                            },
                                         }
                                     }
                                 } else {
@@ -2409,15 +2417,9 @@ impl Compiler {
                                 false
                             }
                         };
-                        // Heterogeneous map/collection value types: Nostos supports mixed-type
-                        // values (e.g., %{"name": "Alice", "scores": [1,2,3]}).
-                        // HM inference unifies all value types, producing false positives.
-                        // The concat error case (xs.map(...) ++ "hello") is handled separately
-                        // by BinOp::Concat which produces "does not implement Concat".
-                        let is_collection_value_mismatch = message.contains("Cannot unify types") &&
-                            ((message.contains("String") && message.contains("List[")) ||
-                             (message.contains("String") && message.contains("Map[")) ||
-                             (message.contains("String") && message.contains("Set[")));
+                        // DISABLED: Heterogeneous map/collection value types are not supported.
+                        // All map values must have the same type.
+                        let is_collection_value_mismatch = false;
                         // "Type annotation required" errors: HM can't handle multi-type-param
                         // generics where if/else branches swap type params (e.g., pair[A,B]
                         // returning (A,B) or (B,A)). The explicit annotations are authoritative.
@@ -9472,7 +9474,15 @@ impl Compiler {
                                                 }
                                             }
                                         },
-                                        None => true,
+                                        None => {
+                                            // Type not in registry - report for known primitives,
+                                            // suppress for unknown types
+                                            let primitives = ["Int", "Float", "Bool", "String", "Char",
+                                                "Int8", "Int16", "Int32", "Int64",
+                                                "UInt8", "UInt16", "UInt32", "UInt64",
+                                                "Float32", "Float64", "BigInt", "Decimal"];
+                                            !primitives.contains(&type_name)
+                                        },
                                     }
                                 }
                             } else {
@@ -9491,7 +9501,6 @@ impl Compiler {
                         message.contains("Unknown type") ||
                         is_field_error_on_unknown ||
                         message.contains("() and ()") ||
-                        (message.contains("List[Int]") && message.contains("String")) ||
                         (message.contains("Cannot unify types") && message.contains("stdlib.")) ||
                         Self::is_type_variable_only_error(message) ||
                         is_overload_confusion ||

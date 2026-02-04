@@ -1,0 +1,10 @@
+# expect_error: countMe
+# Issue 13: Trait bound violations should be compile error, not crash
+trait Countable
+    countMe(self) -> Int
+end
+
+sumCounts[T: Countable](items: List[T]) -> Int =
+    items.fold(0, (acc, x) => acc + x.countMe())
+
+main() = sumCounts(["a", "b", "c"])

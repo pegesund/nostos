@@ -1,0 +1,6 @@
+# expect_error: has no field
+# Issue 18: Field access on primitives should be caught at compile time
+main() = {
+    p = 42
+    p.x
+}

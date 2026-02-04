@@ -1,0 +1,6 @@
+# expect_error: type mismatch
+# Issue 19: Calling non-function value should be caught at compile time
+main() = {
+    f = 42
+    f(10)
+}
