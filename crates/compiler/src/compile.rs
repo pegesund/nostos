@@ -2291,15 +2291,23 @@ impl Compiler {
                         // like "List[Int]" - those are legitimate type errors.
                         let is_try_catch_mismatch = (message.contains("Cannot unify types: Int and String")
                             || message.contains("Cannot unify types: String and Int"));
-                        // "has no field" errors on concrete primitives are real errors
-                        // (e.g., "Type Int has no field x"). Only suppress when the type
-                        // might be unresolved or the inference doesn't know about it.
+                        // "has no field" errors: only suppress when the type is a type
+                        // variable (unresolved). For any concrete type (primitive or user-defined
+                        // record like Point), the error is real and should be reported.
                         let is_field_error_on_unknown = message.contains("has no field") && {
-                            let concrete_types = ["Int", "Float", "Bool", "String", "Char",
-                                            "Int8", "Int16", "Int32", "Int64",
-                                            "UInt8", "UInt16", "UInt32", "UInt64",
-                                            "Float32", "Float64", "BigInt", "Decimal", "List"];
-                            !concrete_types.iter().any(|p| message.contains(&format!("Type {} has no field", p)))
+                            if let Some(pos) = message.find("has no field") {
+                                let prefix = message[..pos].trim();
+                                // prefix is "Type X" where X is the type name
+                                if let Some(type_name) = prefix.strip_prefix("Type ") {
+                                    let type_name = type_name.trim();
+                                    // Only suppress if the type is a type variable
+                                    type_name.starts_with('?')
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
                         };
                         let is_spurious = is_tuple_error || is_try_catch_mismatch ||
                             message.contains("Unknown identifier") ||
@@ -9322,14 +9330,27 @@ impl Compiler {
                     // Pid/() confusion happens in spawn-related code where HM can't properly track
                     // that spawn returns Pid while the block evaluates to ()
                     let is_spawn_confusion = message.contains("Pid") && message.contains("()");
+                    // "has no field" errors: only suppress when the type is a type variable
+                    let is_field_error_on_unknown = message.contains("has no field") && {
+                        if let Some(pos) = message.find("has no field") {
+                            let prefix = message[..pos].trim();
+                            if let Some(type_name) = prefix.strip_prefix("Type ") {
+                                let type_name = type_name.trim();
+                                type_name.starts_with('?')
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    };
                     let is_spurious = is_tuple_error ||
                         message.contains("Unknown identifier") ||
                         message.contains("Unknown type") ||
-                        message.contains("has no field") ||
+                        is_field_error_on_unknown ||
                         message.contains("() and ()") ||
                         (message.contains("List[Int]") && message.contains("String")) ||
                         (message.contains("Cannot unify types") && message.contains("stdlib.")) ||
-                        (message.contains("Bool") && message.contains("does not implement Num")) ||
                         Self::is_type_variable_only_error(message) ||
                         is_overload_confusion ||
                         is_type_var_confusion ||
@@ -23864,6 +23885,43 @@ impl Compiler {
                     if (is_primitive(type1) && is_func_type(type2)) ||
                        (is_primitive(type2) && is_func_type(type1)) {
                         return false;  // NOT a type-variable-only error - report it!
+                    }
+
+                    // Named generic types (like Option[?5], Result[Int, ?3], MyType[?2])
+                    // are structurally incompatible with primitives, lists, and functions
+                    // even if they contain type variables in their parameters
+                    let is_named_generic = |s: &str| {
+                        s.contains('[') && !s.starts_with('[') && !s.starts_with('(')
+                    };
+
+                    if (is_named_generic(type1) && (is_primitive(type2) || is_func_type(type2))) ||
+                       (is_named_generic(type2) && (is_primitive(type1) || is_func_type(type1))) {
+                        return false;  // Real structural mismatch
+                    }
+
+                    // Two different named generic types (e.g., Option[Int] and List[String])
+                    if is_named_generic(type1) && is_named_generic(type2) {
+                        // Extract the base type names (before the [)
+                        let base1 = type1.split('[').next().unwrap_or(type1);
+                        let base2 = type2.split('[').next().unwrap_or(type2);
+                        if base1 != base2 {
+                            // Only treat as real error if both types have at least some
+                            // concrete (non-variable) parameters. If either type has ALL
+                            // type-variable params (e.g., Map[?51, ?52]), HM couldn't
+                            // determine the actual type, so the mismatch is likely spurious.
+                            let has_all_type_var_params = |s: &str| {
+                                if let Some(start) = s.find('[') {
+                                    let inner = &s[start+1..s.len().saturating_sub(1)];
+                                    inner.split(", ").all(|p| p.trim().starts_with('?'))
+                                } else {
+                                    false
+                                }
+                            };
+                            if !has_all_type_var_params(type1) && !has_all_type_var_params(type2) {
+                                return false;  // Both have concrete params - real error
+                            }
+                            // Otherwise fall through to contains_type_var check
+                        }
                     }
 
                     // Check if a type contains type variables (used in higher-order function inference)

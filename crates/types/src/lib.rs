@@ -662,10 +662,15 @@ impl TypeEnv {
                         // Check if all type arguments implement the trait
                         args.is_empty() || args.iter().all(|arg| self.implements(arg, trait_name))
                     }
-                    _ => {
-                        // For other traits, only specific container types are handled
+                    "Hash" => {
+                        // Hash is auto-derived for container types if their element types implement it
                         let container_types = ["Option", "Result", "Json"];
-                        container_types.contains(&name.as_str())
+                        container_types.contains(&name.as_str()) &&
+                            (args.is_empty() || args.iter().all(|arg| self.implements(arg, trait_name)))
+                    }
+                    _ => {
+                        // Other traits (Num, Ord, etc.) are NOT auto-derived for container types
+                        false
                     }
                 }
             }

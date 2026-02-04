@@ -789,6 +789,34 @@ impl<'a> InferCtx<'a> {
             }
         }
 
+        // Post-solve: verify trait bounds on resolved container/wrapper types.
+        // This catches cases where a HasTrait constraint was deferred because the
+        // type was still a variable, but after solving, the variable resolved to a
+        // container type that clearly doesn't implement the trait.
+        // e.g., Some(42) + 1 → ?23 has Num bound, ?23 resolves to Option[Int]
+        //
+        // NOTE: We only check known container types (Option, Result) here.
+        // User-defined named types (Int64Array, Vec2, Point) might have scalar
+        // operations via operator overloading, so we don't validate Num on them.
+        // The compile-time check handles those cases.
+        let container_types = ["Option", "Result"];
+        for (&var_id, bounds) in &self.trait_bounds.clone() {
+            let resolved = self.env.apply_subst(&Type::Var(var_id));
+            match &resolved {
+                Type::Named { name, .. } if container_types.contains(&name.as_str()) => {
+                    for bound in bounds {
+                        if !self.env.implements(&resolved, bound) {
+                            return Err(TypeError::MissingTraitImpl {
+                                ty: resolved.display(),
+                                trait_name: bound.clone(),
+                            });
+                        }
+                    }
+                }
+                _ => {} // Skip: type variables, primitives (caught inline), user types (compile-time)
+            }
+        }
+
         // Post-solve: check pending method calls now that types are resolved
         self.check_pending_method_calls()?;
 
