@@ -16046,6 +16046,55 @@ impl Compiler {
                     }
                 }
 
+                // Try BUILTINS signature lookup for stdlib UFCS methods (e.g., items.head())
+                // Since stdlib functions aren't in fn_asts, we need to resolve their return
+                // types from BUILTINS signatures by matching the receiver type against the
+                // first parameter.
+                if let Some(obj_type) = self.expr_type_name(obj) {
+                    if let Some(sig) = Self::get_builtin_signature(method_name) {
+                        // Parse the builtin signature to extract return type with substitution
+                        // e.g., for head: "[a] -> a" with obj_type="List[Int]" -> return "Int"
+                        let parts: Vec<&str> = sig.split("->").map(|s| s.trim()).collect();
+                        if parts.len() >= 2 {
+                            let first_param = parts[0].trim();
+                            let return_type = parts.last().unwrap().trim();
+
+                            // Build type param map by matching receiver type against first param
+                            let mut type_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+                            // Match [a] against List[X] -> a = X
+                            if first_param.starts_with('[') && first_param.ends_with(']') {
+                                let param_var = &first_param[1..first_param.len()-1];
+                                if obj_type.starts_with("List[") && obj_type.ends_with(']') {
+                                    let elem_type = &obj_type[5..obj_type.len()-1];
+                                    type_map.insert(param_var.to_string(), elem_type.to_string());
+                                }
+                            } else if first_param.len() == 1 && first_param.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false) {
+                                // Simple type param like "a" matching any type
+                                type_map.insert(first_param.to_string(), obj_type.clone());
+                            }
+
+                            // Substitute type params in return type
+                            let mut resolved_return = return_type.to_string();
+                            for (param, concrete) in &type_map {
+                                // Handle [a] -> List[concrete]
+                                let list_pattern = format!("[{}]", param);
+                                if resolved_return.contains(&list_pattern) {
+                                    resolved_return = resolved_return.replace(&list_pattern, &format!("List[{}]", concrete));
+                                }
+                                // Handle bare a -> concrete
+                                if &resolved_return == param {
+                                    resolved_return = concrete.clone();
+                                }
+                            }
+
+                            if !resolved_return.is_empty() {
+                                return Some(resolved_return);
+                            }
+                        }
+                    }
+                }
+
                 hm_fallback.clone()
             }
             // Index expressions - unwrap List element type
