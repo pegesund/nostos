@@ -2291,10 +2291,20 @@ impl Compiler {
                         // like "List[Int]" - those are legitimate type errors.
                         let is_try_catch_mismatch = (message.contains("Cannot unify types: Int and String")
                             || message.contains("Cannot unify types: String and Int"));
+                        // "has no field" errors on concrete primitives are real errors
+                        // (e.g., "Type Int has no field x"). Only suppress when the type
+                        // might be unresolved or the inference doesn't know about it.
+                        let is_field_error_on_unknown = message.contains("has no field") && {
+                            let concrete_types = ["Int", "Float", "Bool", "String", "Char",
+                                            "Int8", "Int16", "Int32", "Int64",
+                                            "UInt8", "UInt16", "UInt32", "UInt64",
+                                            "Float32", "Float64", "BigInt", "Decimal", "List"];
+                            !concrete_types.iter().any(|p| message.contains(&format!("Type {} has no field", p)))
+                        };
                         let is_spurious = is_tuple_error || is_try_catch_mismatch ||
                             message.contains("Unknown identifier") ||
                             message.contains("Unknown type") ||
-                            message.contains("has no field") ||
+                            is_field_error_on_unknown ||
                             message.contains("() and ()") ||
                             (message.contains("Cannot unify types") && message.contains("stdlib.")) ||
                             Self::is_type_variable_only_error(message) ||
@@ -23846,6 +23856,13 @@ impl Compiler {
                     // If one type is a List and the other is a user-defined record/named type, this is a real error
                     if (is_list_type(type1) && is_user_record_type(type2)) ||
                        (is_list_type(type2) && is_user_record_type(type1)) {
+                        return false;  // NOT a type-variable-only error - report it!
+                    }
+
+                    // If one type is a primitive and the other is a function type, this is a real error
+                    // (e.g., using Int as a function: f = 42; f(10))
+                    if (is_primitive(type1) && is_func_type(type2)) ||
+                       (is_primitive(type2) && is_func_type(type1)) {
                         return false;  // NOT a type-variable-only error - report it!
                     }
 
