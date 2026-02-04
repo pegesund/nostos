@@ -19,6 +19,7 @@ This document tracks discovered type inference issues in the Nostos language.
 | 11 | HM false positive blocks monomorphization with function params | **Fixed** | High |
 | 12 | Generic function calls from lambdas inside generic functions | **Fixed** | **Critical** |
 | 13 | Trait bound violations crash instead of compile error | **Fixed** | **Critical** |
+| 14 | Constructor name collision: user-defined types shadowed by built-in | **Fixed** | High |
 
 ## Discovered Issues
 
@@ -450,4 +451,30 @@ main() = totalWeights([3, 5, 7, 11])
 
 ---
 
-*Last updated: Iteration 14 - Fixed Issue #13 (trait bound violations causing crashes). 312 of 315 type_inference tests pass. All 13 issues fixed.*
+### Issue 14: Constructor name collision: user-defined types shadowed by built-in
+
+**Status**: FIXED
+
+**Severity**: High
+
+**Description**: When a user defines a recursive variant type that reuses constructor names from the built-in `List` type (e.g., `type MyList[A] = Cons(A, MyList[A]) | Nil`), the HM type inference's `lookup_constructor` function found the built-in `List`'s `Nil` constructor first (because "List" sorts alphabetically before "MyList"), causing false type errors like "expected List[Int], found MyList[Int]".
+
+**Reproduction**:
+```nostos
+type MyList[A] = Cons(A, MyList[A]) | Nil
+
+myMap[A, B](xs: MyList[A], f: A -> B) -> MyList[B] = match xs {
+    Nil -> Nil
+    Cons(x, rest) -> Cons(f(x), myMap(rest, f))
+}
+
+main() = myMap(Cons(1, Cons(2, Nil)), x => x * 2)
+```
+
+**Root cause**: `lookup_constructor` in `infer.rs` sorted type names to prioritize non-stdlib types, but the built-in `List` type (registered as "List", not "stdlib.List") was not treated as built-in. It sorted alphabetically alongside user types, and "List" < "MyList", so `List`'s `Nil` was found first.
+
+**Fix**: Extended the sort order in `lookup_constructor` to treat built-in types (List, Option, Result) as lower priority than user-defined types, so user constructors take precedence when names collide.
+
+---
+
+*Last updated: Iteration 15 - Fixed Issue #14 (constructor name collision). 314 of 315 type_inference tests pass (proper runner). All 14 issues fixed.*
