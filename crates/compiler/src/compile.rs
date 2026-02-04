@@ -23664,7 +23664,11 @@ impl Compiler {
                     // Skip methods like map "[a] -> (a -> b) -> [b]" which have multiple type params
                     let has_single_type_param = !builtin.signature.contains(" b")
                         && !builtin.signature.contains("(b");
-                    if has_single_type_param {
+                    // Exclude sum/product: their BUILTINS signatures are [a] -> a (too generic),
+                    // but the real stdlib types are List[Int] -> Int. Registering the generic type
+                    // here would bypass the Num check in check_pending_method_calls.
+                    let is_numeric_only = matches!(builtin.name, "sum" | "product");
+                    if has_single_type_param && !is_numeric_only {
                         let qualified_name = format!("List.{}", builtin.name);
                         if !env.functions.contains_key(&qualified_name) {
                             env.insert_function(qualified_name, fn_type);

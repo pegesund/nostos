@@ -1032,11 +1032,25 @@ impl<'a> InferCtx<'a> {
                 let qualified_name = format!("{}.{}", type_name, call.method_name);
 
                 // Look up the function by qualified name first
+                let arity = call.arg_types.len();
                 let fn_type_opt = self.env.functions.get(&qualified_name).cloned().or_else(|| {
-                    // Fallback: for container type methods, try unqualified lookup
-                    // This handles multi-param methods like map, fold, filter which aren't
-                    // registered with "Type." prefix to avoid eager unification at call site.
-                    // Here (post-inference), we can safely do full type checking.
+                    // Try stdlib qualified name first (has real types from source),
+                    // then fall back to BUILTINS unqualified name (generic types).
+                    let stdlib_module = match type_name.as_str() {
+                        "List" => Some("list"),
+                        "Map" => Some("map"),
+                        "Set" => Some("set"),
+                        "String" => Some("string"),
+                        _ => None,
+                    };
+                    // Try stdlib lookup: stdlib.{module}.{method} with arity
+                    if let Some(module) = stdlib_module {
+                        let stdlib_name = format!("stdlib.{}.{}", module, call.method_name);
+                        if let Some(ft) = self.env.lookup_function_with_arity(&stdlib_name, arity) {
+                            return Some(ft.clone());
+                        }
+                    }
+                    // Fallback: try unqualified name (finds BUILTINS entries)
                     match type_name.as_str() {
                         "List" => {
                             self.env.functions.get(&call.method_name).cloned().filter(|ft| {
@@ -1101,6 +1115,24 @@ impl<'a> InferCtx<'a> {
                             });
                         }
 
+                        // Pre-check: methods that require numeric element types
+                        // This must run BEFORE unification to produce MissingTraitImpl errors
+                        // (which aren't filtered) instead of UnificationFailed errors (which
+                        // can be incorrectly filtered by the try/catch mismatch heuristic).
+                        if matches!(call.method_name.as_str(), "sum" | "product") {
+                            let resolved_recv = self.env.apply_subst(&call.receiver_ty);
+                            if let Type::List(elem) = &resolved_recv {
+                                let resolved_elem = self.env.apply_subst(elem);
+                                if matches!(&resolved_elem, Type::String | Type::Bool | Type::Char) {
+                                    self.last_error_span = call.span;
+                                    return Err(TypeError::MissingTraitImpl {
+                                        ty: resolved_elem.display(),
+                                        trait_name: "Num".to_string(),
+                                    });
+                                }
+                            }
+                        }
+
                         // Resolve arg types and check against params
                         for (param_ty, arg_ty) in ft.params.iter().zip(call.arg_types.iter()) {
                             let resolved_arg = self.env.apply_subst(arg_ty);
@@ -1148,22 +1180,6 @@ impl<'a> InferCtx<'a> {
                         // Unify return type
                         let resolved_ret = self.env.apply_subst(&call.ret_ty);
                         self.unify_types(&resolved_ret, &ft.ret)?;
-
-                        // Post-check: methods that require numeric element types
-                        if matches!(call.method_name.as_str(), "sum" | "product") {
-                            // Resolve the element type from the receiver
-                            let resolved_recv = self.env.apply_subst(&call.receiver_ty);
-                            if let Type::List(elem) = &resolved_recv {
-                                let resolved_elem = self.env.apply_subst(elem);
-                                if matches!(&resolved_elem, Type::String | Type::Bool | Type::Char) {
-                                    self.last_error_span = call.span;
-                                    return Err(TypeError::MissingTraitImpl {
-                                        ty: resolved_elem.display(),
-                                        trait_name: "Num".to_string(),
-                                    });
-                                }
-                            }
-                        }
 
                         made_progress = true;
                     }

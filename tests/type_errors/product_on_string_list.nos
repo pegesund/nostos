@@ -1,0 +1,5 @@
+# expect_error: does not implement Num
+main() = {
+    xs = ["a", "b", "c"]
+    xs.product()
+}
