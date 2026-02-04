@@ -1,0 +1,3 @@
+# expect_error: does not implement Num
+# map to tuples then sum - tuples don't implement Num
+main() = [1,2,3].map(x => (x, x * 2)).sum()

@@ -698,12 +698,15 @@ impl TypeEnv {
             Type::Variant(_) | Type::Record(_) => {
                 matches!(trait_name, "Eq" | "Show")
             }
-            // Primitives implement Eq and Show
+            // Numeric types implement Eq, Show, Num, and Ord
             Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 |
             Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64 |
             Type::Float | Type::Float32 | Type::Float64 |
-            Type::Bool | Type::Char | Type::String | Type::Unit |
             Type::BigInt | Type::Decimal => {
+                matches!(trait_name, "Eq" | "Show" | "Num" | "Ord")
+            }
+            // Non-numeric primitives implement Eq and Show
+            Type::Bool | Type::Char | Type::String | Type::Unit => {
                 matches!(trait_name, "Eq" | "Show")
             }
             _ => false,

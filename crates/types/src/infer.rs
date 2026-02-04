@@ -1188,7 +1188,15 @@ impl<'a> InferCtx<'a> {
                             let resolved_recv = self.env.apply_subst(&call.receiver_ty);
                             if let Type::List(elem) = &resolved_recv {
                                 let resolved_elem = self.env.apply_subst(elem);
-                                if matches!(&resolved_elem, Type::String | Type::Bool | Type::Char) {
+                                // Check if element type is definitely non-numeric.
+                                // Numeric types: Int*, UInt*, Float*, BigInt, Decimal
+                                // Type variables (Var/TypeParam) might be numeric, so allow them.
+                                let is_non_numeric = matches!(&resolved_elem,
+                                    Type::String | Type::Bool | Type::Char | Type::Unit | Type::Never |
+                                    Type::Tuple(_) | Type::List(_) | Type::Map(_, _) | Type::Set(_) |
+                                    Type::Array(_) | Type::Record(_) | Type::Function(_) |
+                                    Type::Named { .. });
+                                if is_non_numeric {
                                     self.last_error_span = call.span;
                                     return Err(TypeError::MissingTraitImpl {
                                         ty: resolved_elem.display(),
