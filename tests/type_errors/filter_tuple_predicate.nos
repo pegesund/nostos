@@ -1,0 +1,3 @@
+# expect_error: Bool
+# Filter predicate must return Bool, not tuple
+main() = [(1,2),(3,4)].filter(p => p)

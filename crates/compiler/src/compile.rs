@@ -2053,14 +2053,34 @@ impl Compiler {
                 // Only surface MissingTraitImpl errors for types that can NEVER implement
                 // the trait (tuples, containers, Bool, etc.). User-defined Named types might
                 // have custom trait implementations that the inference env doesn't know about.
-                if let TypeError::MissingTraitImpl { ref ty, .. } = e {
-                    let is_definitely_non_implementing =
+                if let TypeError::MissingTraitImpl { ref ty, ref trait_name } = e {
+                    // Check if the type definitely can't implement the trait.
+                    // Skip type parameters (T, A, etc.) and type variables (?a).
+                    let is_type_param = ty.len() <= 2 && ty.chars().next().map_or(false, |c| c.is_uppercase());
+                    let is_type_var = ty.starts_with('?');
+                    let is_definitely_non_implementing = !is_type_param && !is_type_var && (
                         ty.starts_with('(') ||         // Tuple: (Int, String)
                         ty.starts_with("List[") ||     // List
                         ty.starts_with("Map[") ||      // Map
                         ty.starts_with("Set[") ||      // Set
                         ty.starts_with("Option[") ||   // Option
-                        ty.starts_with("Result[");     // Result
+                        ty.starts_with("Result[") ||   // Result
+                        ty == "Bool" ||                 // Bool never implements Num/Ord
+                        (ty == "String" && trait_name == "Num") || // String doesn't implement Num
+                        // For user-defined types: only check Num/Ord traits (never auto-derived).
+                        // Other traits (Eq, Hash, Show) are auto-derived and not in trait_impls.
+                        (matches!(trait_name.as_str(), "Num" | "Ord") &&
+                         ty.chars().next().map_or(false, |c| c.is_uppercase()) &&
+                         !ty.contains('[') && !ty.contains('(') && !ty.contains("->") &&
+                         !["Int", "Int8", "Int16", "Int32", "Int64",
+                           "UInt8", "UInt16", "UInt32", "UInt64",
+                           "Float", "Float32", "Float64", "BigInt", "Decimal",
+                           "String", "Char", "Bool"].contains(&ty.as_str()) &&
+                         !self.trait_impls.iter().any(|((impl_ty, impl_trait), _)| {
+                             impl_trait == trait_name && (impl_ty == ty ||
+                                 impl_ty.rsplit('.').next() == Some(ty.as_str()))
+                         }))
+                    );
                     if is_definitely_non_implementing {
                         let error_span = ctx.last_error_span().unwrap_or_else(|| Span::new(0, 0));
                         let compile_error = self.convert_type_error(e.clone(), error_span);
@@ -2402,7 +2422,8 @@ impl Compiler {
                         // like "Tuple does not implement Num" (real bugs: tuple + 1).
                         let is_tuple_error = message.contains("(") && message.contains(",") && message.contains(")") &&
                             (message.contains("Cannot unify") || message.contains("mismatch")) &&
-                            !message.contains("does not implement");
+                            !message.contains("does not implement") &&
+                            !message.contains("Bool"); // tuple-vs-Bool is always a real error
                         // Pid/() confusion happens in spawn-related code where HM can't properly track
                         // that spawn returns Pid while the block evaluates to ()
                         let is_spawn_confusion = message.contains("Pid") && message.contains("()");
@@ -9504,7 +9525,8 @@ impl Compiler {
                     let is_tuple_error = message.contains("(") && message.contains(",") && message.contains(")") &&
                         (message.contains("Cannot unify") || message.contains("mismatch")) &&
                         !message.contains("does not implement") &&
-                        !message.contains("->");
+                        !message.contains("->") &&
+                        !message.contains("Bool"); // tuple-vs-Bool is always a real error
                     // Pid/() confusion happens in spawn-related code where HM can't properly track
                     // that spawn returns Pid while the block evaluates to ()
                     let is_spawn_confusion = message.contains("Pid") && message.contains("()");

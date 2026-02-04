@@ -22658,5 +22658,37 @@ main() = {
         assert!(err.contains("Ord"), "Expected Ord error, got: {}", err);
     }
 
+    #[test]
+    fn test_tuple_in_if_condition() {
+        let engine = ReplEngine::new(ReplConfig::default());
+        let result = engine.check_module_compiles("", r#"main() = if (1, 2) then "yes" else "no""#);
+        assert!(result.is_err(), "Expected error for tuple in if condition");
+        assert!(result.unwrap_err().contains("Bool"));
+    }
+
+    #[test]
+    fn test_tuple_in_logical_and() {
+        let engine = ReplEngine::new(ReplConfig::default());
+        let result = engine.check_module_compiles("", "main() = (1, 2) && (3, 4)");
+        assert!(result.is_err(), "Expected error for tuple in && operator");
+        assert!(result.unwrap_err().contains("Bool"));
+    }
+
+    #[test]
+    fn test_filter_tuple_predicate() {
+        let engine = ReplEngine::new(ReplConfig::default());
+        let result = engine.check_module_compiles("", "main() = [(1,2),(3,4)].filter(p => p)");
+        assert!(result.is_err(), "Expected error for filter with tuple predicate");
+        assert!(result.unwrap_err().contains("Bool"));
+    }
+
+    #[test]
+    fn test_sort_bools_caught() {
+        let engine = ReplEngine::new(ReplConfig::default());
+        let result = engine.check_module_compiles("", "main() = [true, false].sort()");
+        assert!(result.is_err(), "Expected error for sorting bools");
+        assert!(result.unwrap_err().contains("Ord"));
+    }
+
 }
 

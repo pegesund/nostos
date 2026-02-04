@@ -1,0 +1,3 @@
+# expect_error: does not implement Ord
+# Sorting bools should fail at compile time
+main() = [true, false, true].sort()

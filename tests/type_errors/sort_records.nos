@@ -1,0 +1,4 @@
+# expect_error: does not implement Ord
+# Sorting records without Ord impl should fail at compile time
+type Point = { x: Int, y: Int }
+main() = [Point(3,4), Point(1,2)].sort()

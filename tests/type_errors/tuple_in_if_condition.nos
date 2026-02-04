@@ -1,0 +1,3 @@
+# expect_error: Bool
+# Tuples should not be usable as Bool conditions
+main() = if (1, 2) then "yes" else "no"

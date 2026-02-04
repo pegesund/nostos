@@ -1,0 +1,3 @@
+# expect_error: Bool
+# Tuples should not be usable in logical && operator
+main() = (1, 2) && (3, 4)
