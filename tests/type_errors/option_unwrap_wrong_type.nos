@@ -1,0 +1,8 @@
+# expect_error: type mismatch
+# Option[String].unwrap() returns String, but Int is expected
+process(x: Int) = x * 2
+
+main() = {
+    opt = Some("hello")
+    process(opt.unwrap())
+}

@@ -120,6 +120,24 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "zipWith", signature: "[a] -> [b] -> ((a, b) -> c) -> [c]", doc: "Combine two lists element-wise using function" },
     BuiltinInfo { name: "enumerate", signature: "[a] -> [(Int, a)]", doc: "Pair each element with its index" },
 
+    // === Option methods ===
+    BuiltinInfo { name: "optUnwrap", signature: "Option[a] -> a", doc: "Unwrap an Option, panics if None" },
+    BuiltinInfo { name: "optUnwrapOr", signature: "Option[a] -> a -> a", doc: "Unwrap Option or return default" },
+    BuiltinInfo { name: "optMap", signature: "Option[a] -> (a -> b) -> Option[b]", doc: "Map a function over an Option" },
+    BuiltinInfo { name: "optFlatMap", signature: "Option[a] -> (a -> Option[b]) -> Option[b]", doc: "FlatMap over an Option" },
+    BuiltinInfo { name: "optIsSome", signature: "Option[a] -> Bool", doc: "Check if Option is Some" },
+    BuiltinInfo { name: "optIsNone", signature: "Option[a] -> Bool", doc: "Check if Option is None" },
+
+    // === Result methods ===
+    BuiltinInfo { name: "resUnwrap", signature: "Result[a, b] -> a", doc: "Unwrap a Result, panics if Err" },
+    BuiltinInfo { name: "resUnwrapOr", signature: "Result[a, b] -> a -> a", doc: "Unwrap Result or return default" },
+    BuiltinInfo { name: "resMap", signature: "Result[a, b] -> (a -> c) -> Result[c, b]", doc: "Map a function over Ok value" },
+    BuiltinInfo { name: "resMapErr", signature: "Result[a, b] -> (b -> c) -> Result[a, c]", doc: "Map a function over Err value" },
+    BuiltinInfo { name: "resFlatMap", signature: "Result[a, b] -> (a -> Result[c, b]) -> Result[c, b]", doc: "FlatMap over a Result" },
+    BuiltinInfo { name: "resIsOk", signature: "Result[a, b] -> Bool", doc: "Check if Result is Ok" },
+    BuiltinInfo { name: "resIsErr", signature: "Result[a, b] -> Bool", doc: "Check if Result is Err" },
+    BuiltinInfo { name: "resToOption", signature: "Result[a, b] -> Option[a]", doc: "Convert Result to Option" },
+
     // === Typed Arrays ===
     BuiltinInfo { name: "newInt64Array", signature: "Int -> Int64Array", doc: "Create a new Int64 array of given size" },
     BuiltinInfo { name: "newFloat64Array", signature: "Int -> Float64Array", doc: "Create a new Float64 array of given size" },

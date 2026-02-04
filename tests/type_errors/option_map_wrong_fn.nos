@@ -1,0 +1,8 @@
+# expect_error: type mismatch
+# Option[String].map passes String to a function expecting Int
+double(x: Int) = x * 2
+
+main() = {
+    opt = Some("hello")
+    opt.map(x => double(x))
+}

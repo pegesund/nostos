@@ -1,0 +1,6 @@
+# expect_error: type mismatch
+# Inner list is List[Int] but ++ expects String operands
+main() = {
+    xs = [[1, 2], [3, 4]]
+    xs.map(inner => inner.map(x => x ++ " items"))
+}

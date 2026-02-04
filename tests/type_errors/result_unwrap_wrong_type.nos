@@ -1,0 +1,8 @@
+# expect_error: type mismatch
+# Result[String, String].unwrap() returns String, but Int is expected
+process(x: Int) = x * 2
+
+main() = {
+    res = Ok("hello")
+    process(res.unwrap())
+}

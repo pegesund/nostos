@@ -1001,14 +1001,34 @@ impl<'a> InferCtx<'a> {
     /// wasn't known during initial inference (e.g., status from Server.bind).
     fn check_pending_method_calls(&mut self) -> Result<(), TypeError> {
         // Take ownership of pending calls to avoid borrow issues
-        let pending = std::mem::take(&mut self.pending_method_calls);
+        let mut pending = std::mem::take(&mut self.pending_method_calls);
 
-        for call in pending {
-            // Resolve the receiver type now that constraints are solved
-            let resolved_receiver = self.env.apply_subst(&call.receiver_ty);
+        // Iteratively process pending calls. Inner calls may have unresolved
+        // receiver types that become resolved after outer calls are processed.
+        // Example: xs.map(inner => inner.map(x => ...)) - the inner map's
+        // receiver type is only known after the outer map is checked.
+        let max_iterations = 5;
+        for iteration in 0..max_iterations {
+            let mut deferred = Vec::new();
+            let mut made_progress = false;
 
-            // Try to get the type name
-            if let Some(type_name) = self.get_type_name(&resolved_receiver) {
+            for call in pending {
+                // Resolve the receiver type now that constraints are solved
+                let resolved_receiver = self.env.apply_subst(&call.receiver_ty);
+
+                // Try to get the type name
+                let type_name_opt = self.get_type_name(&resolved_receiver);
+
+                // If receiver is still a type variable, defer for later iteration
+                // (but not on the final iteration - let it fall through to fallback handling)
+                if type_name_opt.is_none() && matches!(&resolved_receiver, Type::Var(_))
+                    && iteration < max_iterations - 1
+                {
+                    deferred.push(call);
+                    continue;
+                }
+
+                if let Some(type_name) = type_name_opt {
                 let qualified_name = format!("{}.{}", type_name, call.method_name);
 
                 // Look up the function by qualified name first
@@ -1032,6 +1052,34 @@ impl<'a> InferCtx<'a> {
                         "String" => self.env.functions.get(&call.method_name).cloned().filter(|ft| {
                             matches!(ft.params.first(), Some(Type::String))
                         }),
+                        "Option" => {
+                            // Option methods are registered as optXxx in stdlib
+                            let opt_name = match call.method_name.as_str() {
+                                "map" => Some("optMap"),
+                                "flatMap" => Some("optFlatMap"),
+                                "unwrap" => Some("optUnwrap"),
+                                "unwrapOr" => Some("optUnwrapOr"),
+                                "isSome" => Some("optIsSome"),
+                                "isNone" => Some("optIsNone"),
+                                _ => None,
+                            };
+                            opt_name.and_then(|name| self.env.functions.get(name).cloned())
+                        }
+                        "Result" => {
+                            // Result methods are registered as resXxx in stdlib
+                            let res_name = match call.method_name.as_str() {
+                                "map" => Some("resMap"),
+                                "mapErr" => Some("resMapErr"),
+                                "flatMap" => Some("resFlatMap"),
+                                "unwrap" => Some("resUnwrap"),
+                                "unwrapOr" => Some("resUnwrapOr"),
+                                "isOk" => Some("resIsOk"),
+                                "isErr" => Some("resIsErr"),
+                                "toOption" => Some("resToOption"),
+                                _ => None,
+                            };
+                            res_name.and_then(|name| self.env.functions.get(name).cloned())
+                        }
                         _ => None,
                     }
                 });
@@ -1040,6 +1088,7 @@ impl<'a> InferCtx<'a> {
                     let func_ty = self.instantiate_function(&fn_type);
                     if let Type::Function(ft) = func_ty {
                         // Check arity (accounting for optional parameters)
+                        // Note: arg_types includes receiver as first element, matching UFCS params
                         let min_args = ft.required_params.unwrap_or(ft.params.len());
                         let max_args = ft.params.len();
                         let provided = call.arg_types.len();
@@ -1099,6 +1148,24 @@ impl<'a> InferCtx<'a> {
                         // Unify return type
                         let resolved_ret = self.env.apply_subst(&call.ret_ty);
                         self.unify_types(&resolved_ret, &ft.ret)?;
+
+                        // Post-check: methods that require numeric element types
+                        if matches!(call.method_name.as_str(), "sum" | "product") {
+                            // Resolve the element type from the receiver
+                            let resolved_recv = self.env.apply_subst(&call.receiver_ty);
+                            if let Type::List(elem) = &resolved_recv {
+                                let resolved_elem = self.env.apply_subst(elem);
+                                if matches!(&resolved_elem, Type::String | Type::Bool | Type::Char) {
+                                    self.last_error_span = call.span;
+                                    return Err(TypeError::MissingTraitImpl {
+                                        ty: resolved_elem.display(),
+                                        trait_name: "Num".to_string(),
+                                    });
+                                }
+                            }
+                        }
+
+                        made_progress = true;
                     }
                 } else {
                     // Method not found for this type in the inference environment
@@ -1215,7 +1282,16 @@ impl<'a> InferCtx<'a> {
                     });
                 }
             }
-        }
+            } // end for call in pending
+
+            // If no deferred calls remain or no progress was made, stop iterating
+            if deferred.is_empty() || !made_progress {
+                break;
+            }
+
+            // Continue iterating with deferred calls
+            pending = deferred;
+        } // end iteration loop
 
         Ok(())
     }
