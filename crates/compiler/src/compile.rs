@@ -2271,20 +2271,14 @@ impl Compiler {
                         // - Unknown identifier/type: inference doesn't have all info
                         // - "has no field": structural typing inference issue
                         // - "() and ()": unit type comparison noise
-                        // - List[Int] and String: polymorphic function calls (e.g., respond with String or bytes)
                         // - Cannot unify types with stdlib types: cross-module type confusion
                         // - Cannot unify types involving type parameters: inference can't instantiate generics
-                        // - Int and String: common overloading confusion (add(Int,Int) vs add(String,String))
-                        // DISABLED: This filter was hiding legitimate type errors like 5 + "hello"
-                        // The trait method issues are now handled in infer.rs check_pending_method_calls
-                        let is_overload_confusion = false;
-                        // DISABLED: This was incorrectly hiding legitimate type errors like
-                        // passing a function where a List was expected
-                        let is_type_var_confusion = false;
-                        // DISABLED: These filters were incorrectly hiding legitimate type errors
-                        // like List[Int] vs Int and Point vs Int
-                        let is_list_primitive_confusion = false;
-                        let is_custom_type_confusion = false;
+                        // DISABLED: is_overload_confusion - was hiding legitimate type errors like 5 + "hello"
+                        // DISABLED: is_type_var_confusion - was incorrectly hiding legitimate type errors
+                        // DISABLED: is_list_primitive_confusion - was hiding legitimate type errors
+                        // DISABLED: is_custom_type_confusion - was hiding legitimate type errors
+                        // DISABLED: List[Int]+String filter - was hiding legitimate concat type errors
+                        //   (e.g., xs.map(x => x * 2) ++ "hello" was not caught at compile time)
                         // Defer tuple type errors to runtime - tuples are heterogeneous
                         let is_tuple_error = message.contains("(") && message.contains(",") && message.contains(")") &&
                             (message.contains("Cannot unify") || message.contains("mismatch"));
@@ -2293,22 +2287,18 @@ impl Compiler {
                         let is_spawn_confusion = message.contains("Pid") && message.contains("()");
                         // Int/String mismatch in try/catch: the try block may return Int but catch returns String
                         // This is valid at runtime since exceptions are dynamic
-                        let is_try_catch_mismatch = (message.contains("Int") && message.contains("String")) &&
-                            (message.contains("type mismatch") || message.contains("Cannot unify") ||
-                             message.contains("expected") && message.contains("found"));
+                        // IMPORTANT: Only match bare "Int" and "String" types, not compound types
+                        // like "List[Int]" - those are legitimate type errors.
+                        let is_try_catch_mismatch = (message.contains("Cannot unify types: Int and String")
+                            || message.contains("Cannot unify types: String and Int"));
                         let is_spurious = is_tuple_error || is_try_catch_mismatch ||
                             message.contains("Unknown identifier") ||
                             message.contains("Unknown type") ||
                             message.contains("has no field") ||
                             message.contains("() and ()") ||
-                            (message.contains("List[Int]") && message.contains("String")) ||
                             (message.contains("Cannot unify types") && message.contains("stdlib.")) ||
                             (message.contains("Bool") && message.contains("does not implement Num")) ||
                             Self::is_type_variable_only_error(message) ||
-                            is_overload_confusion ||
-                            is_type_var_confusion ||
-                            is_list_primitive_confusion ||
-                            is_custom_type_confusion ||
                             is_spawn_confusion;
                         !is_spurious
                     }

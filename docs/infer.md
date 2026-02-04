@@ -20,6 +20,7 @@ This document tracks discovered type inference issues in the Nostos language.
 | 12 | Generic function calls from lambdas inside generic functions | **Fixed** | **Critical** |
 | 13 | Trait bound violations crash instead of compile error | **Fixed** | **Critical** |
 | 14 | Constructor name collision: user-defined types shadowed by built-in | **Fixed** | High |
+| 15 | `map` result ++ String not caught at compile time | **Fixed** | High |
 
 ## Discovered Issues
 
@@ -477,4 +478,35 @@ main() = myMap(Cons(1, Cons(2, Nil)), x => x * 2)
 
 ---
 
-*Last updated: Iteration 15 - Fixed Issue #14 (constructor name collision). 314 of 315 type_inference tests pass (proper runner). All 14 issues fixed.*
+### Issue 15: `map` result ++ String not caught at compile time
+
+**Status**: FIXED
+
+**Severity**: High (soundness issue - type error only caught at runtime)
+
+**Description**: When using `++` (concat) to concatenate a `List[Int]` produced by `xs.map(x => x * 2)` with a `String`, the type error was not caught at compile time and only produced a runtime error. Strangely, `xs.filter(x => x > 1) ++ "wrong"` WAS caught at compile time. Direct list literals like `[1,2,3] ++ "hello"` were also caught.
+
+**Reproduction**:
+```nostos
+main() = {
+    xs = [1, 2, 3]
+    mapped = xs.map(x => x * 2)
+    mapped ++ "hello"    # Should be compile error, was runtime error
+}
+```
+
+**Root cause**: Two overly broad error suppression filters in `compile.rs` were hiding the legitimate type error from HM inference:
+
+1. `(message.contains("List[Int]") && message.contains("String"))` - intended for "polymorphic function calls" but matched any List[Int] vs String error, including the concat mismatch.
+
+2. `is_try_catch_mismatch` used `message.contains("Int") && message.contains("String")` - intended for try/catch type confusion but matched any error containing "Int" (even "List[Int]") and "String".
+
+The `filter` case worked because `List.filter` is registered in the TypeEnv (single type param), so the error was generated during inference with `List[?27]` (unresolved type variable), which didn't match the `"List[Int]"` filter. The `map` case used deferred method resolution (pending_method_calls), producing a fully-resolved `List[Int]` in the error message, which DID match the filter.
+
+**Fix**:
+1. Removed the `List[Int] + String` suppression filter entirely (it was hiding legitimate errors).
+2. Made `is_try_catch_mismatch` more specific: only match exact "Cannot unify types: Int and String" / "Cannot unify types: String and Int" (not compound types like "List[Int]").
+
+---
+
+*Last updated: Iteration 16 - Fixed Issue #15 (map result ++ String not caught). 314 of 315 type_inference tests pass. All 15 issues fixed.*
