@@ -13086,20 +13086,29 @@ impl Compiler {
                         // Check if this is a polymorphic type (type variable)
                         let is_polymorphic = receiver_type.contains("(polymorphic)");
 
-                        // Find similar methods for typo suggestions (only if type is concrete)
-                        let available_methods = if is_polymorphic {
-                            vec![]
-                        } else {
-                            get_methods_for_type(&receiver_type)
-                        };
+                        // Check if receiver is a type parameter (e.g., "T" from current function
+                        // or enclosing function's type params). This happens when a trait method
+                        // is called on a type-parameterized lambda argument.
+                        let is_type_param = !is_polymorphic && self.current_fn_type_params.iter()
+                            .any(|tp| tp.name.node == receiver_type);
+
+                        // Also check current_type_bindings keys (type params being substituted)
+                        let is_type_param = is_type_param || (!is_polymorphic && self.current_type_bindings.contains_key(&receiver_type));
+
+                        // If the receiver is a type parameter, this is an unresolved trait method
+                        // that needs monomorphization - not a real error
+                        if is_polymorphic || is_type_param {
+                            return Err(CompileError::UnresolvedTraitMethod {
+                                method: name.clone(),
+                                span,
+                            });
+                        }
+
+                        // Find similar methods for typo suggestions
+                        let available_methods = get_methods_for_type(&receiver_type);
                         let similar = find_similar_names(&name, &available_methods, 3);
 
-                        let message = if is_polymorphic {
-                            format!(
-                                "no method `{}` found for polymorphic type\n       the receiver has type `{}` which is a type variable - its concrete type is not known at this point",
-                                name, receiver_type.replace(" (polymorphic)", "")
-                            )
-                        } else if !similar.is_empty() {
+                        let message = if !similar.is_empty() {
                             format!(
                                 "no method `{}` found for type `{}`\n       did you mean: {}?",
                                 name, receiver_type,
@@ -15152,7 +15161,15 @@ impl Compiler {
                     // Try to monomorphize using the full call_name as base
                     match self.compile_monomorphized_variant(&call_name, &concrete_arg_types, &param_names) {
                         Ok(mangled_name) => mangled_name,
-                        Err(_) => call_name.clone(), // Fall back to original if monomorphization fails
+                        Err(e) => {
+                            // If monomorphization fails with a type error (e.g., type doesn't
+                            // implement required trait), propagate the error instead of falling
+                            // back to the empty polymorphic stub which would crash at runtime.
+                            if matches!(e, CompileError::TypeError { .. } | CompileError::UnresolvedTraitMethod { .. }) {
+                                return Err(e);
+                            }
+                            call_name.clone()
+                        }
                     }
                 } else {
                     call_name.clone()
