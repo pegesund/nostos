@@ -2297,7 +2297,6 @@ impl Compiler {
                             message.contains("has no field") ||
                             message.contains("() and ()") ||
                             (message.contains("Cannot unify types") && message.contains("stdlib.")) ||
-                            (message.contains("Bool") && message.contains("does not implement Num")) ||
                             Self::is_type_variable_only_error(message) ||
                             is_spawn_confusion;
                         !is_spurious
