@@ -1,0 +1,6 @@
+# expect_error: type mismatch
+# length() returns Int, Int ++ String should be caught
+main() = {
+    xs = [1, 2, 3]
+    xs.length() ++ " items"
+}

@@ -1069,20 +1069,22 @@ impl<'a> InferCtx<'a> {
                         }
                     }
                     // Fallback: try unqualified name (finds BUILTINS entries)
+                    // Note: Also accept Type::Var as first param - generic BUILTINS functions
+                    // like `length: a -> Int` have type variables, not concrete types.
                     match type_name.as_str() {
                         "List" => {
                             self.env.functions.get(&call.method_name).cloned().filter(|ft| {
-                                matches!(ft.params.first(), Some(Type::List(_)))
+                                matches!(ft.params.first(), Some(Type::List(_)) | Some(Type::Var(_)))
                             })
                         }
                         "Map" => self.env.functions.get(&call.method_name).cloned().filter(|ft| {
-                            matches!(ft.params.first(), Some(Type::Map(_, _)))
+                            matches!(ft.params.first(), Some(Type::Map(_, _)) | Some(Type::Var(_)))
                         }),
                         "Set" => self.env.functions.get(&call.method_name).cloned().filter(|ft| {
-                            matches!(ft.params.first(), Some(Type::Set(_)))
+                            matches!(ft.params.first(), Some(Type::Set(_)) | Some(Type::Var(_)))
                         }),
                         "String" => self.env.functions.get(&call.method_name).cloned().filter(|ft| {
-                            matches!(ft.params.first(), Some(Type::String))
+                            matches!(ft.params.first(), Some(Type::String) | Some(Type::Var(_)))
                         }),
                         "Option" => {
                             // Option methods are registered as optXxx in stdlib

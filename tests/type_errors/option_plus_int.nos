@@ -1,4 +1,4 @@
-# expect_error: type mismatch
+# expect_error: does not implement Num
 # Option[Int] + Int should be caught at compile time
 main() = {
     x = Some(42)
