@@ -15441,6 +15441,10 @@ impl Compiler {
 
         // Use HM-inferred type if available (types are resolved after solve())
         // With file_id in Span, multi-file lookups now work correctly.
+        // For unresolved types (Var, TypeParam), remember them as fallback but try
+        // pattern-based inference first - it may resolve the type more precisely
+        // (e.g., trait method return types from trait definitions).
+        let mut hm_fallback: Option<String> = None;
         if let Some(ty) = self.inferred_expr_types.get(&expr.span()) {
             // Use structural check to avoid converting to string if type has leaked params
             // Skip type parameters that leaked from function calls.
@@ -15450,19 +15454,19 @@ impl Compiler {
             if self.is_type_structurally_resolved(ty) {
                 return Some(ty.display());
             }
-            // For unresolved type variables, show a user-friendly polymorphic type name
-            // This is better than falling through to "unknown" in error messages
+            // For unresolved type variables, store as fallback but try pattern-based first.
+            // Pattern-based matching can determine trait method return types from trait defs,
+            // which HM inference may not have resolved.
             if let nostos_types::Type::Var(id) = ty {
-                // Convert var ID to a letter: 0->a, 1->b, etc.
                 let letter = (b'a' + (*id as u8 % 26)) as char;
-                return Some(format!("{} (polymorphic)", letter));
+                hm_fallback = Some(format!("{} (polymorphic)", letter));
             }
             if let nostos_types::Type::TypeParam(name) = ty {
                 // Check if we have a type binding for this type parameter (during monomorphization)
                 if let Some(concrete_type) = self.current_type_bindings.get(name) {
                     return Some(concrete_type.clone());
                 }
-                return Some(format!("{} (type parameter)", name));
+                hm_fallback = Some(format!("{} (type parameter)", name));
             }
             // Leaked type parameter - fall through to pattern-based inference
         }
@@ -15834,7 +15838,7 @@ impl Compiler {
                         }
                     }
                 }
-                None
+                hm_fallback.clone()
             }
             // For variables, look up tracked type
             Expr::Var(ident) => {
@@ -15955,7 +15959,7 @@ impl Compiler {
                         return self.expr_type_name(e);
                     }
                 }
-                None
+                hm_fallback.clone()
             }
             // Method call - determine return type based on receiver type and method
             Expr::MethodCall(obj, method, _args, _) => {
@@ -16042,7 +16046,7 @@ impl Compiler {
                     }
                 }
 
-                None
+                hm_fallback.clone()
             }
             // Index expressions - unwrap List element type
             Expr::Index(collection, _, _) => {
@@ -16071,7 +16075,7 @@ impl Compiler {
                         return Some("Char".to_string());
                     }
                 }
-                None
+                hm_fallback.clone()
             }
             // Lambda expressions - return function type
             Expr::Lambda(params, _body, _) => {
@@ -16083,7 +16087,7 @@ impl Compiler {
                 // Return a function type string
                 Some(format!("({}) -> ?", param_placeholders))
             }
-            _ => None,
+            _ => hm_fallback,
         }
     }
 
