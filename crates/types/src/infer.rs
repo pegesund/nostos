@@ -2944,10 +2944,32 @@ impl<'a> InferCtx<'a> {
                         self.env.substitution.insert(*id, Type::List(Box::new(elem_ty)));
                         Ok(Type::List(Box::new(result_ty)))
                     }
-                    _ => {
-                        // Not list types - use old behavior (string concat, etc.)
+                    // String ++ String is valid concatenation
+                    (Type::String, Type::String) => {
+                        Ok(Type::String)
+                    }
+                    // String ++ Var or Var ++ String - constrain var to String
+                    (Type::String, Type::Var(_)) | (Type::Var(_), Type::String) => {
+                        self.unify(left_ty.clone(), right_ty);
+                        Ok(Type::String)
+                    }
+                    // Both are type variables - defer, might resolve to String or List
+                    (Type::Var(_), Type::Var(_)) => {
                         self.unify(left_ty.clone(), right_ty);
                         Ok(left_ty)
+                    }
+                    _ => {
+                        // Concrete non-string, non-list type used with ++
+                        // Report error on whichever side is not String/List
+                        let bad_type = if !matches!(&resolved_left, Type::String | Type::List(_) | Type::Var(_)) {
+                            &resolved_left
+                        } else {
+                            &resolved_right
+                        };
+                        return Err(TypeError::MissingTraitImpl {
+                            ty: bad_type.display(),
+                            trait_name: "Concat".to_string(),
+                        });
                     }
                 }
             }
