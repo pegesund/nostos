@@ -17648,7 +17648,7 @@ mod postgres_module_tests {
         // Get browser items for the "floats" module
         let items = engine.get_browser_items(&["floats".to_string()]);
 
-        // Check that test_float32 function is listed in browser items
+        // Check that test_float32 has a proper signature (not "a -> b")
         let test_float32 = items.iter().find(|item| {
             if let BrowserItem::Function { name, .. } = item {
                 name == "test_float32"
@@ -17657,7 +17657,16 @@ mod postgres_module_tests {
             }
         });
 
-        assert!(test_float32.is_some(), "test_float32 should be in browser items");
+        if let Some(BrowserItem::Function { signature, .. }) = test_float32 {
+            println!("DEBUG: test_float32 signature = '{}'", signature);
+            assert!(!signature.contains("a -> b"),
+                "test_float32 should not have placeholder signature 'a -> b', got: {}", signature);
+            // Should be "Int -> ()" since conn comes from Pg.query's first param type
+            assert!(signature.contains("()") || signature == "Int -> ()",
+                "test_float32 should return unit, got: {}", signature);
+        } else {
+            panic!("test_float32 not found in browser items");
+        }
 
         // Also verify test_float32 compiled successfully
         let status = engine.get_compile_status("floats.test_float32");

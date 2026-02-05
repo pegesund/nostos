@@ -900,6 +900,19 @@ impl<'a> InferCtx<'a> {
                                 });
                             }
                         }
+                        Type::List(elem_ty) => {
+                            // Handle numeric field access on lists like list.0, list.1
+                            // This is syntactic sugar for list indexing in Nostos
+                            if field.parse::<usize>().is_ok() {
+                                self.unify_types(elem_ty, &expected_ty)?;
+                                deferred_count = 0; // Made progress
+                            } else {
+                                return Err(TypeError::NoSuchField {
+                                    ty: resolved.display(),
+                                    field,
+                                });
+                            }
+                        }
                         _ => {
                             return Err(TypeError::NoSuchField {
                                 ty: resolved.display(),
@@ -1017,6 +1030,18 @@ impl<'a> InferCtx<'a> {
                                 field,
                             });
                         }
+                    } else {
+                        return Err(TypeError::NoSuchField {
+                            ty: resolved.display(),
+                            field,
+                        });
+                    }
+                }
+                Type::List(elem_ty) => {
+                    // Handle numeric field access on lists like list.0, list.1
+                    // This is syntactic sugar for list indexing in Nostos
+                    if field.parse::<usize>().is_ok() {
+                        self.unify_types(elem_ty, &expected_ty)?;
                     } else {
                         return Err(TypeError::NoSuchField {
                             ty: resolved.display(),
