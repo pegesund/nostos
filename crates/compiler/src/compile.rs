@@ -2446,6 +2446,31 @@ impl Compiler {
                             (message.contains("Cannot unify") || message.contains("mismatch")) &&
                             !message.contains("does not implement") &&
                             !message.contains("Bool"); // tuple-vs-Bool is always a real error
+                        // Nested tuple Num/Ord trait errors: when accessing tuple elements with .0, .1,
+                        // HM may incorrectly require Num/Ord on the whole tuple instead of the element.
+                        // E.g., ((Int, Int), (Int, Int)).0.0 + ... causes "nested tuple doesn't implement Num"
+                        let is_nested_tuple_trait_error = message.contains("does not implement Num") && {
+                            // Extract the type before " does not implement" and check if IT is nested tuple
+                            if let Some(impl_pos) = message.find(" does not implement") {
+                                let type_part = &message[..impl_pos];
+                                // Nested tuple starts with (( or ends with ))
+                                type_part.starts_with("((") || type_part.ends_with("))")
+                            } else {
+                                false
+                            }
+                        };
+                        // Trait dispatch syntax Type.Trait.method() is parsed as field access on constructor
+                        // E.g., Box.Doubler.doubler(b) where Box is resolved as constructor (Int) -> Box
+                        let is_trait_dispatch_confusion = message.contains("has no field") && {
+                            // Extract field name - it's after "has no field "
+                            if let Some(field_start) = message.find("has no field ") {
+                                let field_name = &message[field_start + 13..];
+                                // Trait names are capitalized
+                                field_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+                            } else {
+                                false
+                            }
+                        };
                         // Pid/() confusion happens in spawn-related code where HM can't properly track
                         // that spawn returns Pid while the block evaluates to ()
                         let is_spawn_confusion = message.contains("Pid") && message.contains("()");
@@ -2517,14 +2542,19 @@ impl Compiler {
                                                 }
                                             },
                                             None => {
-                                                // Type not in registry - report for known primitives
-                                                // and function types, suppress for unknown types
+                                                // Type not in registry - report for known primitives,
+                                                // suppress for tuple types (which have .0, .1 fields),
+                                                // function types, and unknown types
                                                 let primitives = ["Int", "Float", "Bool", "String", "Char",
                                                     "Int8", "Int16", "Int32", "Int64",
                                                     "UInt8", "UInt16", "UInt32", "UInt64",
                                                     "Float32", "Float64", "BigInt", "Decimal"];
-                                                // Function types contain "->" and can't have fields
-                                                let is_function_type = type_name.contains("->");
+                                                // Tuple types like (a, b) CAN have .0, .1 fields - suppress
+                                                let is_tuple_type = type_name.starts_with('(') && type_name.contains(',');
+                                                // Function types (at top level) can't have fields - report
+                                                let is_function_type = type_name.contains("->") && !is_tuple_type;
+                                                // Suppress (return true) if NOT a primitive AND NOT a function type
+                                                // This includes tuples and unknown types
                                                 !(primitives.contains(&type_name) || is_function_type)
                                             },
                                         }
@@ -2547,6 +2577,8 @@ impl Compiler {
                         // where a lambda/callback is incorrectly resolved as needing a trait
                         let is_func_trait_error = message.contains("does not implement") && message.contains("->");
                         let is_spurious = is_tuple_error || is_try_catch_mismatch ||
+                            is_nested_tuple_trait_error ||
+                            is_trait_dispatch_confusion ||
                             message.contains("Unknown identifier") ||
                             message.contains("Unknown type") ||
                             is_field_error_on_unknown ||
@@ -9571,6 +9603,31 @@ impl Compiler {
                         !message.contains("does not implement") &&
                         !message.contains("->") &&
                         !message.contains("Bool"); // tuple-vs-Bool is always a real error
+                    // Nested tuple Num/Ord trait errors: when accessing tuple elements with .0, .1,
+                    // HM may incorrectly require Num/Ord on the whole tuple instead of the element.
+                    // E.g., ((Int, Int), (Int, Int)).0.0 + ... causes "nested tuple doesn't implement Num"
+                    let is_nested_tuple_trait_error = message.contains("does not implement Num") && {
+                        // Extract the type before " does not implement" and check if IT is nested tuple
+                        if let Some(impl_pos) = message.find(" does not implement") {
+                            let type_part = &message[..impl_pos];
+                            // Nested tuple starts with (( or ends with ))
+                            type_part.starts_with("((") || type_part.ends_with("))")
+                        } else {
+                            false
+                        }
+                    };
+                    // Trait dispatch syntax Type.Trait.method() is parsed as field access on constructor
+                    // E.g., Box.Doubler.doubler(b) where Box is resolved as constructor (Int) -> Box
+                    let is_trait_dispatch_confusion = message.contains("has no field") && {
+                        // Extract field name - it's after "has no field "
+                        if let Some(field_start) = message.find("has no field ") {
+                            let field_name = &message[field_start + 13..];
+                            // Trait names are capitalized
+                            field_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+                        } else {
+                            false
+                        }
+                    };
                     // Pid/() confusion happens in spawn-related code where HM can't properly track
                     // that spawn returns Pid while the block evaluates to ()
                     let is_spawn_confusion = message.contains("Pid") && message.contains("()");
@@ -9598,14 +9655,19 @@ impl Compiler {
                                             }
                                         },
                                         None => {
-                                            // Type not in registry - report for known primitives
-                                            // and function types, suppress for unknown types
+                                            // Type not in registry - report for known primitives,
+                                            // suppress for tuple types (which have .0, .1 fields),
+                                            // function types, and unknown types
                                             let primitives = ["Int", "Float", "Bool", "String", "Char",
                                                 "Int8", "Int16", "Int32", "Int64",
                                                 "UInt8", "UInt16", "UInt32", "UInt64",
                                                 "Float32", "Float64", "BigInt", "Decimal"];
-                                            // Function types contain "->" and can't have fields
-                                            let is_function_type = type_name.contains("->");
+                                            // Tuple types like (a, b) CAN have .0, .1 fields - suppress
+                                            let is_tuple_type = type_name.starts_with('(') && type_name.contains(',');
+                                            // Function types (at top level) can't have fields - report
+                                            let is_function_type = type_name.contains("->") && !is_tuple_type;
+                                            // Suppress (return true) if NOT a primitive AND NOT a function type
+                                            // This includes tuples and unknown types
                                             !(primitives.contains(&type_name) || is_function_type)
                                         },
                                     }
@@ -9632,6 +9694,8 @@ impl Compiler {
                         }
                     };
                     let is_spurious = is_tuple_error ||
+                        is_nested_tuple_trait_error ||
+                        is_trait_dispatch_confusion ||
                         message.contains("Unknown identifier") ||
                         message.contains("Unknown type") ||
                         is_field_error_on_unknown ||
