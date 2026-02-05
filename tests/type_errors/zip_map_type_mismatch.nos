@@ -1,0 +1,4 @@
+# expect_error: type mismatch
+# zip creates tuples, map destructures - should catch type mismatch
+# Here: zip gives [(Int, String)], lambda tries a + b with Int + String
+main() = [1, 2].zip(["a", "b"]).map((a, b) => a + b)

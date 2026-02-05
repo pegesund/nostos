@@ -1,0 +1,4 @@
+# expect_error: type mismatch
+# map over tuple list with destructuring should catch type mismatch
+# Here: (Int, String) destructured to (a, b), but a + b tries Int + String
+main() = [(1, "a"), (2, "b")].map((a, b) => a + b)

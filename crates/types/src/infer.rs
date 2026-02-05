@@ -1487,12 +1487,35 @@ impl<'a> InferCtx<'a> {
 
                                 // Case 2: Expected takes 1 tuple and actual takes multiple
                                 // In Nostos, (a, b) => creates a 2-param lambda, but map on [(Int,Int)]
-                                // expects (tuple) -> b. Skip unification for these cases to avoid false errors.
-                                let expected_single_tuple = expected_fn.params.len() == 1
-                                    && matches!(expected_fn.params.first(), Some(Type::Tuple(_)));
-                                let actual_multi = actual_fn.params.len() > 1;
-                                if expected_single_tuple && actual_multi {
-                                    continue; // Skip unification - runtime handles conversion
+                                // expects (tuple) -> b. Instead of skipping, unify the tuple elements
+                                // with the lambda parameters to catch type mismatches like (Int, String) => a + b.
+                                if expected_fn.params.len() == 1 {
+                                    if let Some(Type::Tuple(tuple_elems)) = expected_fn.params.first() {
+                                        if tuple_elems.len() == actual_fn.params.len() {
+                                            // Unify each tuple element with the corresponding lambda param
+                                            for (tuple_elem, lambda_param) in tuple_elems.iter().zip(actual_fn.params.iter()) {
+                                                let resolved_tuple_elem = self.env.apply_subst(tuple_elem);
+                                                let resolved_lambda_param = self.env.apply_subst(lambda_param);
+                                                match self.unify_types(&resolved_lambda_param, &resolved_tuple_elem) {
+                                                    Ok(()) => {}
+                                                    Err(TypeError::UnificationFailed(ref a, ref b)) => {
+                                                        // Check if both types are concrete (no type vars)
+                                                        if !a.contains('?') && !b.contains('?') {
+                                                            self.last_error_span = call.span;
+                                                            return Err(TypeError::Mismatch {
+                                                                expected: b.clone(),
+                                                                found: a.clone(),
+                                                            });
+                                                        }
+                                                    }
+                                                    Err(_) => {}
+                                                }
+                                            }
+                                            // Unify return types
+                                            self.unify_types(&actual_fn.ret, &expected_fn.ret)?;
+                                            continue; // Done with this param
+                                        }
+                                    }
                                 }
                             }
 
