@@ -846,19 +846,64 @@ impl<'a> InferCtx<'a> {
                             }
                             deferred_count = 0; // Made progress
                         }
-                        Type::Named { name, .. } => {
-                            // Check if this is a known record type
-                            if let Some(crate::TypeDef::Record { fields, .. }) = self.env.lookup_type(name).cloned() {
-                                if let Some((_, actual_ty, _)) =
-                                    fields.iter().find(|(n, _, _)| n == &field)
-                                {
-                                    self.unify_types(actual_ty, &expected_ty)?;
-                                    deferred_count = 0; // Made progress
-                                } else {
-                                    return Err(TypeError::NoSuchField {
-                                        ty: resolved.display(),
-                                        field,
-                                    });
+                        Type::Named { name, args } => {
+                            // Check if this is a known record or variant type
+                            if let Some(typedef) = self.env.lookup_type(name).cloned() {
+                                match &typedef {
+                                    crate::TypeDef::Record { params, fields, .. } => {
+                                        if let Some((_, actual_ty, _)) =
+                                            fields.iter().find(|(n, _, _)| n == &field)
+                                        {
+                                            // Build substitution from type params to type args
+                                            // e.g., for Wrapper[Int], substitute T -> Int
+                                            let subst: HashMap<String, Type> = params.iter()
+                                                .map(|p| p.name.clone())
+                                                .zip(args.iter().cloned())
+                                                .collect();
+                                            let substituted_ty = Self::substitute_type_params(actual_ty, &subst);
+                                            self.unify_types(&substituted_ty, &expected_ty)?;
+                                            deferred_count = 0; // Made progress
+                                        } else {
+                                            return Err(TypeError::NoSuchField {
+                                                ty: resolved.display(),
+                                                field,
+                                            });
+                                        }
+                                    }
+                                    crate::TypeDef::Variant { params, constructors } => {
+                                        // Handle variant types with named fields
+                                        // e.g., type W[T] = W { v: T }
+                                        let mut found = false;
+                                        for ctor in constructors {
+                                            if let Constructor::Named(_, fields) = ctor {
+                                                if let Some((_, actual_ty)) = fields.iter().find(|(n, _)| n == &field) {
+                                                    // Build substitution from type params to type args
+                                                    let subst: HashMap<String, Type> = params.iter()
+                                                        .map(|p| p.name.clone())
+                                                        .zip(args.iter().cloned())
+                                                        .collect();
+                                                    let substituted_ty = Self::substitute_type_params(actual_ty, &subst);
+                                                    self.unify_types(&substituted_ty, &expected_ty)?;
+                                                    found = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        if found {
+                                            deferred_count = 0; // Made progress
+                                        } else {
+                                            return Err(TypeError::NoSuchField {
+                                                ty: resolved.display(),
+                                                field,
+                                            });
+                                        }
+                                    }
+                                    _ => {
+                                        return Err(TypeError::NoSuchField {
+                                            ty: resolved.display(),
+                                            field,
+                                        });
+                                    }
                                 }
                             } else {
                                 return Err(TypeError::NoSuchField {
