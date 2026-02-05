@@ -92,6 +92,9 @@ pub struct InferCtx<'a> {
     /// These are saved when the type is still unresolved (Var) so they can be
     /// re-checked after check_pending_method_calls resolves more types.
     deferred_has_field: Vec<(Type, String, Type)>,
+    /// Deferred length/len checks: the argument type and call span.
+    /// length() only works on collections (List, String, Map, Set, arrays).
+    deferred_length_checks: Vec<(Type, Span)>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -113,6 +116,7 @@ impl<'a> InferCtx<'a> {
             solve_completed: false,
             deferred_has_trait: Vec::new(),
             deferred_has_field: Vec::new(),
+            deferred_length_checks: Vec::new(),
         }
     }
 
@@ -1027,6 +1031,34 @@ impl<'a> InferCtx<'a> {
                         field,
                     });
                 }
+            }
+        }
+
+        // Post-method-call: check length/len calls require types that VM supports
+        // VM supports: List, String, Tuple, Float64Array, Int64Array
+        // Note: Map and Set should use .size() instead
+        for (arg_ty, _span) in std::mem::take(&mut self.deferred_length_checks) {
+            let resolved = self.env.apply_subst(&arg_ty);
+            let is_valid_for_length = match &resolved {
+                Type::List(_) | Type::String | Type::Tuple(_) | Type::Array(_) => true,
+                Type::Named { name, .. } => {
+                    let short = name.rsplit('.').next().unwrap_or(name);
+                    matches!(short, "Float64Array" | "Int64Array" | "Float32Array" | "Buffer")
+                }
+                Type::Var(_) => true, // Still unresolved, allow it (runtime will check)
+                _ => false,
+            };
+            if !is_valid_for_length {
+                // Special error message for Map/Set to guide users
+                let hint = match &resolved {
+                    Type::Map(_, _) => " (use .size() for Map)",
+                    Type::Set(_) => " (use .size() for Set)",
+                    _ => "",
+                };
+                return Err(TypeError::Mismatch {
+                    expected: format!("List, String, Tuple, or Array{}", hint),
+                    found: resolved.display(),
+                });
             }
         }
 
@@ -2656,6 +2688,14 @@ impl<'a> InferCtx<'a> {
                                 };
                                 self.require_trait(resolved_elem, trait_name);
                             }
+                        }
+                    }
+
+                    // length/len only work on collections (List, String, Map, Set, arrays).
+                    // Save for deferred checking after types are resolved.
+                    if matches!(fn_name, "length" | "len") {
+                        if let Some(first_arg) = arg_types_clone.first() {
+                            self.deferred_length_checks.push((first_arg.clone(), *call_span));
                         }
                     }
                 }

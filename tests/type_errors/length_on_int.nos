@@ -1,0 +1,3 @@
+# expect_error: expected List, String, Tuple, or Array
+# length() only works on collections, not primitive types
+main() = length(42)

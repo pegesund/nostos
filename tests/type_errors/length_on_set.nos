@@ -1,0 +1,6 @@
+# expect_error: use .size() for Set
+# length() does not work on Set - use .size() instead
+main() = {
+    s = Set.fromList([1, 2, 3])
+    length(s)
+}

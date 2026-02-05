@@ -1,0 +1,6 @@
+# expect_error: use .size() for Map
+# length() does not work on Map - use .size() instead
+main() = {
+    m = Map.fromList([("a", 1)])
+    length(m)
+}
