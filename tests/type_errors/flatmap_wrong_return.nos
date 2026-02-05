@@ -1,0 +1,4 @@
+# expect_error: type mismatch
+# flatMap expects (T) -> List[U], not (T) -> Int
+# Method calls in lambda returning wrong type should be caught at compile time
+main() = [[1, 2], [3]].flatMap(xs => xs.length())

@@ -1617,16 +1617,47 @@ impl<'a> InferCtx<'a> {
                         let resolved_ft_ret = self.env.apply_subst(&ft.ret);
                         match self.unify_types(&resolved_ret, &ft.ret) {
                             Ok(()) => {}
-                            Err(TypeError::UnificationFailed(ref a, ref b))
-                                if !resolved_ret.has_any_type_var() && !resolved_ft_ret.has_any_type_var() =>
-                            {
-                                self.last_error_span = call.span;
-                                return Err(TypeError::Mismatch {
-                                    expected: b.clone(),
-                                    found: a.clone(),
-                                });
+                            Err(TypeError::UnificationFailed(ref a, ref b)) => {
+                                // Report error if both types are fully resolved
+                                if !resolved_ret.has_any_type_var() && !resolved_ft_ret.has_any_type_var() {
+                                    self.last_error_span = call.span;
+                                    return Err(TypeError::Mismatch {
+                                        expected: b.clone(),
+                                        found: a.clone(),
+                                    });
+                                }
+                                // Also report error for structural incompatibility even with type vars:
+                                // E.g., List[?X] cannot unify with Int regardless of what ?X resolves to.
+                                // One is a wrapper type (List, Option, etc.) and other is a simple type.
+                                let ret_is_simple = matches!(&resolved_ret,
+                                    Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 |
+                                    Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64 |
+                                    Type::Float | Type::Float32 | Type::Float64 |
+                                    Type::BigInt | Type::Decimal | Type::String | Type::Bool | Type::Char |
+                                    Type::Unit);
+                                let expected_is_simple = matches!(&resolved_ft_ret,
+                                    Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 |
+                                    Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64 |
+                                    Type::Float | Type::Float32 | Type::Float64 |
+                                    Type::BigInt | Type::Decimal | Type::String | Type::Bool | Type::Char |
+                                    Type::Unit);
+                                let ret_is_wrapper = matches!(&resolved_ret,
+                                    Type::List(_) | Type::Set(_) | Type::Map(_, _) |
+                                    Type::Tuple(_) | Type::Named { .. } | Type::Array(_));
+                                let expected_is_wrapper = matches!(&resolved_ft_ret,
+                                    Type::List(_) | Type::Set(_) | Type::Map(_, _) |
+                                    Type::Tuple(_) | Type::Named { .. } | Type::Array(_));
+                                // Simple vs wrapper or wrapper vs simple is always an error
+                                if (ret_is_simple && expected_is_wrapper) ||
+                                   (ret_is_wrapper && expected_is_simple) {
+                                    self.last_error_span = call.span;
+                                    return Err(TypeError::Mismatch {
+                                        expected: resolved_ft_ret.display(),
+                                        found: resolved_ret.display(),
+                                    });
+                                }
                             }
-                            Err(_) => {} // Unresolved types - may resolve later
+                            Err(_) => {} // Other errors - may resolve later
                         }
 
                         made_progress = true;
