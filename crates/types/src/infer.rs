@@ -2468,6 +2468,7 @@ impl<'a> InferCtx<'a> {
                 }
 
                 let ret_ty = self.fresh();
+                let arg_types_clone = arg_types.clone();
                 let expected_func_ty = Type::Function(FunctionType { required_params: None,
                     type_params: vec![],
                     params: arg_types,
@@ -2476,6 +2477,32 @@ impl<'a> InferCtx<'a> {
 
                 // Use unify_at with the call span for precise error reporting
                 self.unify_at(func_ty, expected_func_ty, *call_span);
+
+                // Emit trait constraints for known builtin functions that have
+                // trait requirements not encoded in their generic signatures.
+                // E.g., sort: [a] -> [a] should require Ord a, but BUILTINS
+                // signatures don't support trait bounds.
+                if let Expr::Var(ident) = func.as_ref() {
+                    let fn_name = ident.node.as_str();
+                    if matches!(fn_name, "sort" | "maximum" | "minimum" | "isSorted"
+                                       | "sum" | "product") {
+                        // These functions take a list as the first argument.
+                        // Extract the element type from the resolved first arg.
+                        if let Some(first_arg) = arg_types_clone.first() {
+                            let resolved_arg = self.env.apply_subst(first_arg);
+                            if let Type::List(elem) = &resolved_arg {
+                                let resolved_elem = self.env.apply_subst(elem);
+                                let trait_name = if matches!(fn_name, "sum" | "product") {
+                                    "Num"
+                                } else {
+                                    "Ord"
+                                };
+                                self.require_trait(resolved_elem, trait_name);
+                            }
+                        }
+                    }
+                }
+
                 Ok(ret_ty)
             }
 

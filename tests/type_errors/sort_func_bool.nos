@@ -1,0 +1,2 @@
+# expect_error: does not implement Ord
+main() = sort([true, false, true])

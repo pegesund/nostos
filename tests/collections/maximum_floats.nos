@@ -1,0 +1,2 @@
+# expect: 3
+main() = maximum([1.5, 3.0, 2.5])

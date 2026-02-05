@@ -1,0 +1,2 @@
+# expect: "a"
+main() = minimum(["c", "a", "b"])

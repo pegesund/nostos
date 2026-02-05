@@ -1,0 +1,2 @@
+# expect: "c"
+main() = maximum(["c", "a", "b"])

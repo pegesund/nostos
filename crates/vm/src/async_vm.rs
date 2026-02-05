@@ -4278,21 +4278,20 @@ impl AsyncProcess {
                 let val = reg!(src);
                 match val {
                     GcValue::List(list) => {
-                        let mut max_val: Option<i64> = None;
-                        for item in list.iter() {
-                            if let GcValue::Int64(n) = item {
-                                max_val = Some(max_val.map_or(*n, |m| m.max(*n)));
-                            } else {
-                                return Err(RuntimeError::Panic(
-                                    format!("listMax: expected Int64, got {:?}", item.type_name(&self.heap))
-                                ));
-                            }
-                        }
-                        if let Some(m) = max_val {
-                            set_reg!(dst, GcValue::Int64(m));
-                        } else {
+                        if list.is_empty() {
                             return Err(RuntimeError::Panic("listMax: empty list".into()));
                         }
+                        let mut max_val = list.iter().next().unwrap().clone();
+                        for item in list.iter().skip(1) {
+                            match self.heap.gc_values_compare(item, &max_val) {
+                                Some(std::cmp::Ordering::Greater) => max_val = item.clone(),
+                                Some(_) => {}
+                                None => return Err(RuntimeError::Panic(
+                                    format!("listMax: values are not comparable: {:?}", item.type_name(&self.heap))
+                                )),
+                            }
+                        }
+                        set_reg!(dst, max_val);
                     }
                     GcValue::Int64List(list) => {
                         if list.is_empty() {
@@ -4313,21 +4312,20 @@ impl AsyncProcess {
                 let val = reg!(src);
                 match val {
                     GcValue::List(list) => {
-                        let mut min_val: Option<i64> = None;
-                        for item in list.iter() {
-                            if let GcValue::Int64(n) = item {
-                                min_val = Some(min_val.map_or(*n, |m| m.min(*n)));
-                            } else {
-                                return Err(RuntimeError::Panic(
-                                    format!("listMin: expected Int64, got {:?}", item.type_name(&self.heap))
-                                ));
-                            }
-                        }
-                        if let Some(m) = min_val {
-                            set_reg!(dst, GcValue::Int64(m));
-                        } else {
+                        if list.is_empty() {
                             return Err(RuntimeError::Panic("listMin: empty list".into()));
                         }
+                        let mut min_val = list.iter().next().unwrap().clone();
+                        for item in list.iter().skip(1) {
+                            match self.heap.gc_values_compare(item, &min_val) {
+                                Some(std::cmp::Ordering::Less) => min_val = item.clone(),
+                                Some(_) => {}
+                                None => return Err(RuntimeError::Panic(
+                                    format!("listMin: values are not comparable: {:?}", item.type_name(&self.heap))
+                                )),
+                            }
+                        }
+                        set_reg!(dst, min_val);
                     }
                     GcValue::Int64List(list) => {
                         if list.is_empty() {

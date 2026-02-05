@@ -22762,5 +22762,32 @@ main() = {
         assert!(result.unwrap_err().contains("List of tuples"), "Error should mention List of tuples");
     }
 
+    #[test]
+    fn test_sort_func_form_bool_caught() {
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = sort([true, false, true])";
+        let result = engine.check_module_compiles("", code);
+        assert!(result.is_err(), "Expected error for sort(Bool list)");
+        assert!(result.unwrap_err().contains("Ord"), "Error should mention Ord trait");
+    }
+
+    #[test]
+    fn test_maximum_func_form_variant_caught() {
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "type Color = Red | Green | Blue\nmain() = maximum([Red, Green, Blue])";
+        let result = engine.check_module_compiles("", code);
+        assert!(result.is_err(), "Expected error for maximum(variant list)");
+        assert!(result.unwrap_err().contains("Ord"), "Error should mention Ord trait");
+    }
+
+    #[test]
+    fn test_sum_func_form_string_caught() {
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = sum([\"a\", \"b\", \"c\"])";
+        let result = engine.check_module_compiles("", code);
+        assert!(result.is_err(), "Expected error for sum(String list)");
+        assert!(result.unwrap_err().contains("Num"), "Error should mention Num trait");
+    }
+
 }
 

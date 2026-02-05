@@ -1,0 +1,3 @@
+# expect_error: does not implement Ord
+type Color = Red | Green | Blue
+main() = maximum([Red, Green, Blue])
