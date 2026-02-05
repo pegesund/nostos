@@ -32,6 +32,7 @@ This document tracks discovered type inference issues in the Nostos language.
 | 24 | Type params used with Num/Ord ops crash at runtime | **Fixed** | High |
 | 25 | Trait method on function param return inside lambda fails | **Fixed** | High |
 | 26 | Generic record construction in Expr::Record missing type args | **Fixed** | High |
+| 27 | OccursCheck errors silently ignored (cyclic types in pattern guards) | **Fixed** | High |
 
 ## Discovered Issues
 
@@ -735,4 +736,40 @@ This matches the existing behavior in `lookup_constructor` which already handled
 
 ---
 
-*Last updated: Iteration 27 - Fixed Issue #26. All 26 issues fixed.*
+### Issue 27: OccursCheck errors silently ignored (cyclic types in pattern guards)
+
+**Status**: FIXED
+
+**Severity**: High (runtime crash instead of compile-time error)
+
+**Description**: When a pattern guard like `x when pred(x)` tried to pass a `List[T]` to a function expecting `T`, this created a cyclic type constraint `T = List[T]` which failed the occurs check. However, `OccursCheck` errors from the batch `solve()` were silently dropped, leading to runtime crashes (e.g., "GtInt: expected Int64") instead of compile-time type errors.
+
+**Reproduction**:
+```nostos
+# pred takes T, but x is List[T] - should be a type error
+process[T](items: List[T], pred: T -> Bool) -> Bool = match items {
+    x when pred(x) -> true   # TYPE ERROR: x is List[T], not T
+    _ -> false
+}
+
+main() = process([1, 2, 3], n => n > 0)
+```
+
+**Previous behavior**: Runtime error "Panic: GtInt: expected Int64" because the type mismatch wasn't detected.
+
+**Root cause**: In compile.rs at line 2062, when `ctx.solve()` returns an error, only `MissingTraitImpl` and `Mismatch` errors were handled. `OccursCheck` errors were silently dropped because the comment says "UnificationFailed errors are NOT handled here because this batch solve() for all functions produces many false positives from HM inference confusion."
+
+However, `OccursCheck` is a DISTINCT error type (not `UnificationFailed`) and represents a definitive type error - cyclic types like `T = List[T]` are always invalid.
+
+**Fix**:
+1. Added handling for `TypeError::OccursCheck` in the error filtering code in compile.rs, alongside `MissingTraitImpl` and `Mismatch` handling.
+2. Improved the error message from "Occurs check failed" to "Type mismatch: cannot unify a type with a type containing itself".
+
+**Now produces**:
+```
+Error: Type mismatch: cannot unify a type with a type containing itself (?30 in List[?30])
+```
+
+---
+
+*Last updated: Iteration 28 - Fixed Issue #27. All 27 issues fixed.*
