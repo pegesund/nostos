@@ -1,4 +1,4 @@
-# expect_error: mismatched types
+# expect_error: type mismatch
 # Issue 15: map result ++ String should be caught at compile time
 main() = {
     xs = [1, 2, 3]

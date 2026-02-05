@@ -1,0 +1,2 @@
+# expect_error: type mismatch
+main() = Some("hello").optMap(x => x + 1)

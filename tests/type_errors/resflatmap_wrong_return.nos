@@ -1,0 +1,3 @@
+# expect_error: type mismatch
+# resFlatMap lambda must return Result, not raw value
+main() = Ok(42).resFlatMap(x => x + 1)

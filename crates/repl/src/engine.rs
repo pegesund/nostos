@@ -22789,5 +22789,37 @@ main() = {
         assert!(result.unwrap_err().contains("Num"), "Error should mention Num trait");
     }
 
+    #[test]
+    fn test_optmap_type_mismatch_caught() {
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"main() = Some("hello").optMap(x => x + 1)"#;
+        let result = engine.check_module_compiles("", code);
+        assert!(result.is_err(), "Expected error for optMap with incompatible lambda");
+    }
+
+    #[test]
+    fn test_resmap_type_mismatch_caught() {
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"main() = Ok("hello").resMap(x => x + 1)"#;
+        let result = engine.check_module_compiles("", code);
+        assert!(result.is_err(), "Expected error for resMap with incompatible lambda");
+    }
+
+    #[test]
+    fn test_optflatmap_wrong_return_caught() {
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = Some(42).optFlatMap(x => x + 1)";
+        let result = engine.check_module_compiles("", code);
+        assert!(result.is_err(), "Expected error for optFlatMap returning raw Int instead of Option");
+    }
+
+    #[test]
+    fn test_resflatmap_wrong_return_caught() {
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = "main() = Ok(42).resFlatMap(x => x + 1)";
+        let result = engine.check_module_compiles("", code);
+        assert!(result.is_err(), "Expected error for resFlatMap returning raw Int instead of Result");
+    }
+
 }
 

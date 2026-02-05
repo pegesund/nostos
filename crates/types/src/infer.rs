@@ -600,6 +600,19 @@ impl<'a> InferCtx<'a> {
                 }
                 self.collect_var_ids(&ft.ret, ids);
             }
+            Type::Named { args, .. } => {
+                for arg in args {
+                    self.collect_var_ids(arg, ids);
+                }
+            }
+            Type::Record(rec) => {
+                for (_, field_ty, _) in &rec.fields {
+                    self.collect_var_ids(field_ty, ids);
+                }
+            }
+            Type::IO(inner) => {
+                self.collect_var_ids(inner, ids);
+            }
             _ => {}
         }
     }
@@ -1173,28 +1186,30 @@ impl<'a> InferCtx<'a> {
                         }),
                         "Option" => {
                             // Option methods are registered as optXxx in stdlib
+                            // Support both shorthand (.map) and direct (.optMap) names
                             let opt_name = match call.method_name.as_str() {
-                                "map" => Some("optMap"),
-                                "flatMap" => Some("optFlatMap"),
-                                "unwrap" => Some("optUnwrap"),
-                                "unwrapOr" => Some("optUnwrapOr"),
-                                "isSome" => Some("optIsSome"),
-                                "isNone" => Some("optIsNone"),
+                                "map" | "optMap" => Some("optMap"),
+                                "flatMap" | "optFlatMap" => Some("optFlatMap"),
+                                "unwrap" | "optUnwrap" => Some("optUnwrap"),
+                                "unwrapOr" | "optUnwrapOr" => Some("optUnwrapOr"),
+                                "isSome" | "optIsSome" => Some("optIsSome"),
+                                "isNone" | "optIsNone" => Some("optIsNone"),
                                 _ => None,
                             };
                             opt_name.and_then(|name| self.env.functions.get(name).cloned())
                         }
                         "Result" => {
                             // Result methods are registered as resXxx in stdlib
+                            // Support both shorthand (.map) and direct (.resMap) names
                             let res_name = match call.method_name.as_str() {
-                                "map" => Some("resMap"),
-                                "mapErr" => Some("resMapErr"),
-                                "flatMap" => Some("resFlatMap"),
-                                "unwrap" => Some("resUnwrap"),
-                                "unwrapOr" => Some("resUnwrapOr"),
-                                "isOk" => Some("resIsOk"),
-                                "isErr" => Some("resIsErr"),
-                                "toOption" => Some("resToOption"),
+                                "map" | "resMap" => Some("resMap"),
+                                "mapErr" | "resMapErr" => Some("resMapErr"),
+                                "flatMap" | "resFlatMap" => Some("resFlatMap"),
+                                "unwrap" | "resUnwrap" => Some("resUnwrap"),
+                                "unwrapOr" | "resUnwrapOr" => Some("resUnwrapOr"),
+                                "isOk" | "resIsOk" => Some("resIsOk"),
+                                "isErr" | "resIsErr" => Some("resIsErr"),
+                                "toOption" | "resToOption" => Some("resToOption"),
                                 _ => None,
                             };
                             res_name.and_then(|name| self.env.functions.get(name).cloned())
@@ -1364,12 +1379,84 @@ impl<'a> InferCtx<'a> {
                                 }
                             }
 
-                            self.unify_types(&resolved_arg, &resolved_param)?;
+                            // Convert UnificationFailed to Mismatch so it passes through
+                            // the error filter in compile.rs. Only convert when BOTH types
+                            // are fully resolved (no type variables), to avoid false positives
+                            // from intermediate unification during constraint solving.
+                            //
+                            // Special case for function types: when comparing lambdas, check if
+                            // the PARAMETER types conflict even if return types have variables.
+                            // E.g., (Int) -> ?1 vs (String) -> ?2 should error on Int/String mismatch.
+                            // Also check if return type structures conflict (e.g., Int vs Option[?1]).
+                            match self.unify_types(&resolved_arg, &resolved_param) {
+                                Ok(()) => {}
+                                Err(TypeError::UnificationFailed(ref a, ref b)) => {
+                                    // Check for function parameter type conflicts
+                                    if let (Type::Function(arg_fn), Type::Function(param_fn)) =
+                                        (&resolved_arg, &resolved_param)
+                                    {
+                                        // Check if any parameter types conflict (both resolved to concrete types)
+                                        for (arg_p, param_p) in arg_fn.params.iter().zip(param_fn.params.iter()) {
+                                            if !arg_p.has_any_type_var() && !param_p.has_any_type_var() {
+                                                if self.unify_types(arg_p, param_p).is_err() {
+                                                    self.last_error_span = call.span;
+                                                    return Err(TypeError::Mismatch {
+                                                        expected: param_p.display(),
+                                                        found: arg_p.display(),
+                                                    });
+                                                }
+                                            }
+                                        }
+
+                                        // Check if return type structures are incompatible
+                                        // E.g., Int cannot unify with Option[?1] even though Option has a var
+                                        let arg_ret = &*arg_fn.ret;
+                                        let param_ret = &*param_fn.ret;
+                                        let arg_is_concrete_simple = matches!(arg_ret,
+                                            Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 |
+                                            Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64 |
+                                            Type::Float | Type::Float32 | Type::Float64 |
+                                            Type::BigInt | Type::Decimal | Type::String | Type::Bool | Type::Char);
+                                        let param_is_wrapper = matches!(param_ret,
+                                            Type::Named { .. } | Type::List(_) | Type::Set(_) |
+                                            Type::Map(_, _) | Type::Tuple(_));
+                                        if arg_is_concrete_simple && param_is_wrapper {
+                                            self.last_error_span = call.span;
+                                            return Err(TypeError::Mismatch {
+                                                expected: param_ret.display(),
+                                                found: arg_ret.display(),
+                                            });
+                                        }
+                                    }
+                                    // General case: only error if both are fully resolved
+                                    if !resolved_arg.has_any_type_var() && !resolved_param.has_any_type_var() {
+                                        self.last_error_span = call.span;
+                                        return Err(TypeError::Mismatch {
+                                            expected: b.clone(),
+                                            found: a.clone(),
+                                        });
+                                    }
+                                }
+                                Err(_) => {} // Other errors - ignore for now
+                            }
                         }
 
                         // Unify return type
                         let resolved_ret = self.env.apply_subst(&call.ret_ty);
-                        self.unify_types(&resolved_ret, &ft.ret)?;
+                        let resolved_ft_ret = self.env.apply_subst(&ft.ret);
+                        match self.unify_types(&resolved_ret, &ft.ret) {
+                            Ok(()) => {}
+                            Err(TypeError::UnificationFailed(ref a, ref b))
+                                if !resolved_ret.has_any_type_var() && !resolved_ft_ret.has_any_type_var() =>
+                            {
+                                self.last_error_span = call.span;
+                                return Err(TypeError::Mismatch {
+                                    expected: b.clone(),
+                                    found: a.clone(),
+                                });
+                            }
+                            Err(_) => {} // Unresolved types - may resolve later
+                        }
 
                         made_progress = true;
                     }
@@ -1378,9 +1465,11 @@ impl<'a> InferCtx<'a> {
                     // For known builtin methods that only work on List/String, we can
                     // definitively report an error if called on a primitive.
                     // For unknown methods, assume they might be trait methods.
+                    // Methods that are definitively collection-only (not used by MVar, reactive, etc.)
+                    // Note: "get" and "set" are excluded because they're also used on MVar/reactive types
                     let list_only_methods = [
                         "length", "len", "head", "tail", "init", "last", "nth",
-                        "push", "pop", "get", "set", "slice", "concat", "reverse", "sort",
+                        "push", "pop", "slice", "concat", "reverse", "sort",
                         "map", "filter", "fold", "any", "all", "find", "position",
                         "unique", "flatten", "zip", "unzip", "take", "drop",
                         "empty", "isEmpty", "sum", "product", "indexOf", "sortBy",
@@ -1393,15 +1482,12 @@ impl<'a> InferCtx<'a> {
 
                     let is_list_only = list_only_methods.contains(&call.method_name.as_str());
                     let is_string_method = string_methods.contains(&call.method_name.as_str());
-                    let is_primitive = matches!(type_name.as_str(), "Int" | "Float" | "Bool" | "Char" |
-                                                           "Int8" | "Int16" | "Int32" | "Int64" |
-                                                           "UInt8" | "UInt16" | "UInt32" | "UInt64" |
-                                                           "Float32" | "Float64" | "BigInt" | "Decimal");
 
-                    // Report error for list-only methods on non-List types
-                    // This includes String - list operations like head, tail, map etc.
-                    // don't work on String even though it's not a "primitive"
-                    if is_list_only && (is_primitive || type_name.as_str() == "String") {
+                    // We already tried all lookup paths (qualified name, stdlib,
+                    // BUILTINS, Option/Result mappings) and found nothing.
+                    // If the method is a known list-only or string-only method,
+                    // report an error - this type doesn't support it.
+                    if is_list_only {
                         self.last_error_span = call.span;
                         return Err(TypeError::UndefinedMethod {
                             method: call.method_name.clone(),
@@ -1409,8 +1495,7 @@ impl<'a> InferCtx<'a> {
                         });
                     }
 
-                    // Report error for string methods on non-String primitives
-                    if is_string_method && is_primitive && type_name.as_str() != "String" {
+                    if is_string_method {
                         self.last_error_span = call.span;
                         return Err(TypeError::UndefinedMethod {
                             method: call.method_name.clone(),

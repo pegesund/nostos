@@ -1,0 +1,2 @@
+# expect_error: no method length
+main() = Some(42).length()

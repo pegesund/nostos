@@ -191,7 +191,7 @@ pub struct TraitImpl {
 /// Type checking errors.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum TypeError {
-    #[error("Type mismatch: expected {expected}, found {found}")]
+    #[error("type mismatch: expected {expected}, found {found}")]
     Mismatch { expected: String, found: String },
 
     #[error("Unknown identifier: {0}")]

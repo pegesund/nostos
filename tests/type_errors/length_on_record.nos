@@ -1,0 +1,3 @@
+# expect_error: no method length
+type Point = { x: Int, y: Int }
+main() = Point(1, 2).length()

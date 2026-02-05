@@ -1,0 +1,3 @@
+# expect_error: type mismatch
+# optFlatMap lambda must return Option, not raw value
+main() = Some(42).optFlatMap(x => x + 1)
