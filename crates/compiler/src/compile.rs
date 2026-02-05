@@ -104,6 +104,8 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "isEmpty", signature: "[a] -> Bool", doc: "True if list is empty (alias for empty)" },
     BuiltinInfo { name: "sum", signature: "[a] -> a", doc: "Sum of all elements" },
     BuiltinInfo { name: "product", signature: "[a] -> a", doc: "Product of all elements" },
+    BuiltinInfo { name: "maximum", signature: "[a] -> a", doc: "Maximum element (requires Ord)" },
+    BuiltinInfo { name: "minimum", signature: "[a] -> a", doc: "Minimum element (requires Ord)" },
     BuiltinInfo { name: "indexOf", signature: "[a] -> a -> Option Int", doc: "Find index of first matching element" },
     BuiltinInfo { name: "sortBy", signature: "[a] -> ((a, a) -> Int) -> [a]", doc: "Sort list using comparator function" },
     BuiltinInfo { name: "intersperse", signature: "[a] -> a -> [a]", doc: "Insert element between all elements" },

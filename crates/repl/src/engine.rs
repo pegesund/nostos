@@ -6465,6 +6465,12 @@ impl ReplEngine {
             known_functions.insert(name.to_string());
         }
 
+        // Add common stdlib type constructors so they're recognized even without stdlib loaded
+        // These are needed for basic type checking of Option/Result expressions
+        for name in &["Ok", "Err", "Some", "None", "Result", "Option"] {
+            known_functions.insert(name.to_string());
+        }
+
         // Add stdlib.rhtml HTML tag functions - these are used inside RHtml/Html macros
         // The compiler transforms e.g. h1(...) to stdlib.rhtml.h1(...) inside RHtml
         let rhtml_tags = [
@@ -7382,6 +7388,50 @@ impl ReplEngine {
                 // Check if method exists (either as known function or UFCS)
                 if known_functions.contains(&call_name) ||
                    is_valid_ufcs_method(type_name, method_name, &known_functions) {
+                    // Method exists - now check trait requirements
+                    // Extract element type for List types (e.g., "List[Bool]" -> "Bool")
+                    let elem_type = if type_name.starts_with("List[") && type_name.ends_with(']') {
+                        Some(&type_name[5..type_name.len()-1])
+                    } else {
+                        None
+                    };
+
+                    if let Some(elem) = elem_type {
+                        // Check Ord requirement for sort/maximum/minimum/isSorted
+                        if matches!(method_name, "sort" | "maximum" | "minimum" | "isSorted") {
+                            // Types that implement Ord: Int, Float, String, Char, and numeric variants
+                            let implements_ord = matches!(elem,
+                                "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
+                                "UInt8" | "UInt16" | "UInt32" | "UInt64" |
+                                "Float" | "Float32" | "Float64" |
+                                "String" | "Char" | "BigInt" | "Decimal"
+                            );
+                            if !implements_ord {
+                                let line = get_adjusted_line(offset);
+                                return Err(format!(
+                                    "line {}: {} does not implement Ord (required by {})",
+                                    line, elem, method_name
+                                ));
+                            }
+                        }
+                        // Check Num requirement for sum/product
+                        if matches!(method_name, "sum" | "product") {
+                            // Types that implement Num: Int, Float, and numeric variants
+                            let implements_num = matches!(elem,
+                                "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
+                                "UInt8" | "UInt16" | "UInt32" | "UInt64" |
+                                "Float" | "Float32" | "Float64" |
+                                "BigInt" | "Decimal"
+                            );
+                            if !implements_num {
+                                let line = get_adjusted_line(offset);
+                                return Err(format!(
+                                    "line {}: {} does not implement Num (required by {})",
+                                    line, elem, method_name
+                                ));
+                            }
+                        }
+                    }
                     continue;
                 }
 
@@ -7523,6 +7573,10 @@ impl ReplEngine {
                         return Err(format!("line {}: unknown variable `{}`", line, name));
                     }
                 }
+                nostos_compiler::CompileError::TraitNotImplemented { ty, trait_name, .. } => {
+                    // Report trait errors (e.g., Color does not implement Ord)
+                    return Err(format!("line {}: {} does not implement {} (required by this operation)", line, ty, trait_name));
+                }
                 _ => {
                     // Other errors (like unknown function) might be due to missing stdlib
                 }
@@ -7586,6 +7640,10 @@ impl ReplEngine {
                     if !is_known {
                         return Err(format!("line {}: unknown variable `{}`", line, name));
                     }
+                }
+                nostos_compiler::CompileError::TraitNotImplemented { ty, trait_name, .. } => {
+                    // Report trait errors (e.g., Color does not implement Ord)
+                    return Err(format!("line {}: {} does not implement {} (required by this operation)", line, ty, trait_name));
                 }
                 _ => {
                     // Other errors (like unknown function) might be due to missing stdlib
