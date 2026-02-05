@@ -1,0 +1,8 @@
+# expect_error: no field z
+# Accessing non-existent field in lambda should be compile error
+type Point = { x: Int, y: Int }
+
+main() = {
+    pts = [Point(1, 2), Point(3, 4)]
+    pts.map(p => p.z)
+}

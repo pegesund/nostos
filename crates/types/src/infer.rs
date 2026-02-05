@@ -88,6 +88,10 @@ pub struct InferCtx<'a> {
     /// Unlike trait_bounds (which includes merged bounds from variable unification),
     /// this tracks only direct HasTrait constraints, avoiding false positives.
     deferred_has_trait: Vec<(Type, String)>,
+    /// Deferred HasField constraints: type, field name, expected field type.
+    /// These are saved when the type is still unresolved (Var) so they can be
+    /// re-checked after check_pending_method_calls resolves more types.
+    deferred_has_field: Vec<(Type, String, Type)>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -108,6 +112,7 @@ impl<'a> InferCtx<'a> {
             current_type_param_constraints: HashMap::new(),
             solve_completed: false,
             deferred_has_trait: Vec::new(),
+            deferred_has_field: Vec::new(),
         }
     }
 
@@ -859,7 +864,10 @@ impl<'a> InferCtx<'a> {
                             deferred_count += 1;
                             if deferred_count > self.constraints.len() + 1 {
                                 // We've gone around the entire queue without progress
-                                // Drop this constraint to avoid infinite loop
+                                // Save this constraint for post-method-call re-check
+                                // Don't drop it - it may become checkable after
+                                // check_pending_method_calls resolves more types
+                                self.deferred_has_field.push((ty, field, expected_ty));
                                 continue;
                             }
                             self.constraints
@@ -957,6 +965,70 @@ impl<'a> InferCtx<'a> {
 
         // Post-solve: check pending method calls now that types are resolved
         self.check_pending_method_calls()?;
+
+        // Post-method-call: re-check deferred HasField constraints now that method calls
+        // may have resolved more type variables (e.g., lambda parameter types unified
+        // with list element types)
+        for (ty, field, expected_ty) in std::mem::take(&mut self.deferred_has_field) {
+            let resolved = self.env.apply_subst(&ty);
+            match &resolved {
+                Type::Record(rec) => {
+                    if let Some((_, actual_ty, _)) = rec.fields.iter().find(|(n, _, _)| n == &field) {
+                        self.unify_types(actual_ty, &expected_ty)?;
+                    } else {
+                        return Err(TypeError::NoSuchField {
+                            ty: resolved.display(),
+                            field,
+                        });
+                    }
+                }
+                Type::Named { name, .. } => {
+                    if let Some(crate::TypeDef::Record { fields, .. }) = self.env.lookup_type(name).cloned() {
+                        if let Some((_, actual_ty, _)) = fields.iter().find(|(n, _, _)| n == &field) {
+                            self.unify_types(actual_ty, &expected_ty)?;
+                        } else {
+                            return Err(TypeError::NoSuchField {
+                                ty: resolved.display(),
+                                field,
+                            });
+                        }
+                    } else {
+                        return Err(TypeError::NoSuchField {
+                            ty: resolved.display(),
+                            field,
+                        });
+                    }
+                }
+                Type::Tuple(elems) => {
+                    if let Ok(idx) = field.parse::<usize>() {
+                        if idx < elems.len() {
+                            self.unify_types(&elems[idx], &expected_ty)?;
+                        } else {
+                            return Err(TypeError::NoSuchField {
+                                ty: resolved.display(),
+                                field,
+                            });
+                        }
+                    } else {
+                        return Err(TypeError::NoSuchField {
+                            ty: resolved.display(),
+                            field,
+                        });
+                    }
+                }
+                Type::Var(_) => {
+                    // Still unresolved after method calls - can't check field access
+                    // This is okay for now, runtime will catch any issues
+                }
+                _ => {
+                    // Other types don't support field access
+                    return Err(TypeError::NoSuchField {
+                        ty: resolved.display(),
+                        field,
+                    });
+                }
+            }
+        }
 
         // Post-method-call: re-check trait bounds on type variables that may have been
         // resolved by check_pending_method_calls. For example, xs.zip(ys).map(pair => pair + 1)
