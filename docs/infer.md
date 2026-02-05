@@ -30,7 +30,7 @@ This document tracks discovered type inference issues in the Nostos language.
 | 22 | String doesn't implement Ord but VM supports comparison | **Fixed** | Medium |
 | 23 | Numeric field access (.0, .1) on lists fails HM inference | **Fixed** | Medium |
 | 24 | Type params used with Num/Ord ops crash at runtime | **Fixed** | High |
-| 25 | Trait method on function param return inside lambda fails | Investigating | High |
+| 25 | Trait method on function param return inside lambda fails | **Fixed** | High |
 
 ## Discovered Issues
 
@@ -672,11 +672,11 @@ Error: type parameter `T` must have `Ord` trait bound to use comparison operatio
 
 ### Issue 25: Trait method dispatch fails on function param return inside lambda
 
-**Status**: INVESTIGATING
+**Status**: FIXED
 
 **Severity**: High (false positive - valid code rejected)
 
-**Description**: When calling a trait method on a value returned from a function parameter `f: () -> U` (where `U: Measurable`) inside a lambda in a higher-order function call (like `map`), the compiler fails with "cannot resolve trait method without type information".
+**Description**: When calling a trait method on a value returned from a function parameter `f: () -> U` (where `U: Measurable`) inside a lambda in a higher-order function call (like `map`), the compiler failed with "cannot resolve trait method without type information".
 
 **Reproduction**:
 ```nostos
@@ -691,13 +691,13 @@ end
 applyFunc[U: Measurable](items: List[()], f: () -> U) -> List[Int] =
     items.map(_ => f().measure())
 
-main() = applyFunc([()], () => 42).length()
+main() = applyFunc([()], () => 42).length()  # Now works, returns 1
 ```
 
-**Error**: `cannot resolve trait method 'measure' without type information`
+**Root cause**: When `f()` was called (where `f: () -> U`), `expr_type_name` didn't extract the return type `U` from the function type. It only handled calls to named functions, not calls to function-typed variables.
 
-**Analysis**: The type parameter constraint `U: Measurable` is not being propagated into the lambda when the type comes from a captured function parameter's return type. HM inference creates a fresh type variable for `f()` without the trait constraint information.
+**Fix**: Added handling in `expr_type_name` for `Expr::Call` where the callee is a variable with a known function type. When the variable's type is a function type (contains " -> "), extract the return type and use it for trait method resolution.
 
 ---
 
-*Last updated: Iteration 25 - Fixed Issue #24. Issue #25 investigating. 24/25 issues fixed.*
+*Last updated: Iteration 26 - Fixed Issue #25. All 25 issues fixed.*

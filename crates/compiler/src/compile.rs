@@ -16155,6 +16155,22 @@ impl Compiler {
                         _ => {}
                     }
 
+                    // Check if this is a call to a function-typed variable (like f() where f: () -> U)
+                    // Look up the variable's type and extract the return type from the function type
+                    let var_type = self.local_types.get(&ident.node)
+                        .or_else(|| self.param_types.get(&ident.node));
+                    if let Some(func_type) = var_type {
+                        // Parse the function type to extract the return type
+                        // Function types look like: "() -> U" or "Int -> String" or "(Int, String) -> Bool"
+                        if let Some(arrow_pos) = func_type.rfind(" -> ") {
+                            let ret_type = &func_type[arrow_pos + 4..];
+                            // Don't return raw type variables like "?47", but do return type params like "U"
+                            if !ret_type.starts_with('?') {
+                                return Some(ret_type.to_string());
+                            }
+                        }
+                    }
+
                     if ident.node.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
                         // Check if it's a record constructor (type name matches)
                         // First try direct name, then resolved name (for module-qualified types)
@@ -17738,6 +17754,9 @@ impl Compiler {
         let saved_local_types = std::mem::take(&mut self.local_types);
         let saved_param_types = self.param_types.clone(); // Keep copy for captured var types
         let saved_current_function_name = self.current_function_name.take();
+        // IMPORTANT: Preserve outer function's type parameters for trait method resolution
+        // This allows lambdas to resolve trait methods on captured type parameters (e.g., f: () -> U where U: Trait)
+        let outer_fn_type_params = self.current_fn_type_params.clone();
 
         // Step 4: Create new function for lambda
         self.chunk = Chunk::new();
