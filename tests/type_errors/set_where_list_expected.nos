@@ -1,0 +1,4 @@
+# expect_error: type mismatch
+# Passing Set where List is expected should be a type error
+myList(xs: List[Int]) = xs
+main() = myList(Set.fromList([1, 2, 3]))

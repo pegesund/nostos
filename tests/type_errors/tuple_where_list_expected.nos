@@ -1,0 +1,4 @@
+# expect_error: type mismatch
+# Passing Tuple where List is expected should be a type error
+myList(xs: List[Int]) = xs
+main() = myList((1, 2, 3))

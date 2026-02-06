@@ -1,4 +1,4 @@
-# expect_error: mismatched types
+# expect_error: type mismatch
 # Test: passing Int where List is expected
 
 sumList(xs: List[Int]) = xs.fold(0, (acc, x) => acc + x)

@@ -2562,10 +2562,15 @@ impl Compiler {
                         // Tuple type errors: suppress unification errors involving tuples (HM false
                         // positives from heterogeneous tuples/DB results), but DO report trait errors
                         // like "Tuple does not implement Num" (real bugs: tuple + 1).
+                        // Also DO report "expected Collection[...]" errors from check_fn_call_mismatches
+                        // - these mean a function explicitly expects a collection and got a tuple instead.
                         let is_tuple_error = message.contains("(") && message.contains(",") && message.contains(")") &&
                             (message.contains("Cannot unify") || message.contains("mismatch")) &&
                             !message.contains("does not implement") &&
-                            !message.contains("Bool"); // tuple-vs-Bool is always a real error
+                            !message.contains("Bool") && // tuple-vs-Bool is always a real error
+                            !message.contains("expected List[") &&
+                            !message.contains("expected Map[") &&
+                            !message.contains("expected Set["); // tuple-vs-collection is always real
                         // Nested tuple Num/Ord trait errors: when accessing tuple elements with .0, .1,
                         // HM may incorrectly require Num/Ord on the whole tuple instead of the element.
                         // E.g., ((Int, Int), (Int, Int)).0.0 + ... causes "nested tuple doesn't implement Num"
@@ -24438,11 +24443,25 @@ impl Compiler {
         })?;
 
         // Solve constraints - this is where type mismatches are detected
-        ctx.solve().map_err(|e| {
-            // Use the precise span from constraint solving if available
+        if let Err(e) = ctx.solve() {
+            // Before returning the solve error, check for structural collection mismatches
+            // in function call arguments. These produce Mismatch errors that bypass the
+            // UnificationFailed error filter. This catches cases like passing a Map where
+            // a List is expected, even when HM has type variables.
+            if let Some(mismatch_err) = ctx.check_fn_call_mismatches() {
+                let error_span = ctx.last_error_span().unwrap_or(span);
+                return Err(self.convert_type_error(mismatch_err, error_span));
+            }
             let error_span = ctx.last_error_span().unwrap_or(span);
-            self.convert_type_error(e, error_span)
-        })?;
+            return Err(self.convert_type_error(e, error_span));
+        }
+
+        // Even if solve succeeded, check for structural mismatches that
+        // the unification engine accepted (e.g., due to type variable resolution)
+        if let Some(mismatch_err) = ctx.check_fn_call_mismatches() {
+            let error_span = ctx.last_error_span().unwrap_or(span);
+            return Err(self.convert_type_error(mismatch_err, error_span));
+        }
 
         Ok(())
     }

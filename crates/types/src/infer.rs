@@ -101,6 +101,10 @@ pub struct InferCtx<'a> {
     /// Deferred Set/Map return type checks: function call return types that may
     /// resolve to Set[X] or Map[K, V], requiring Hash+Eq on element/key type.
     deferred_collection_ret_checks: Vec<(Type, Span)>,
+    /// Deferred function call argument checks: (param_type, arg_type, span).
+    /// After solve(), checks that resolved types are structurally compatible
+    /// (e.g., List vs Map is always an error regardless of type variables).
+    deferred_fn_call_checks: Vec<(Type, Type, Span)>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -125,6 +129,7 @@ impl<'a> InferCtx<'a> {
             deferred_length_checks: Vec::new(),
             deferred_concat_checks: Vec::new(),
             deferred_collection_ret_checks: Vec::new(),
+            deferred_fn_call_checks: Vec::new(),
         }
     }
 
@@ -695,6 +700,55 @@ impl<'a> InferCtx<'a> {
 
     pub fn pending_method_calls_count(&self) -> usize {
         self.pending_method_calls.len()
+    }
+
+    /// Check deferred function call arg/param pairs for structural type mismatches.
+    /// This should be called after solve() (even if solve() returned an error) to catch
+    /// cases like passing a Map where a List is expected. Returns the first Mismatch error
+    /// found, or None if all checks pass.
+    ///
+    /// Only reports mismatches where the PARAM type (from the function signature) is a
+    /// concrete collection type (List, Map, Set, Tuple). This avoids false positives from
+    /// generic functions like assert_eq(a, a) where the param type is a type variable.
+    pub fn check_fn_call_mismatches(&mut self) -> Option<TypeError> {
+        for (param_ty, arg_ty, span) in &self.deferred_fn_call_checks {
+            let resolved_param = self.env.apply_subst(param_ty);
+            let resolved_arg = self.env.apply_subst(arg_ty);
+
+            // Only check when param type is a CONCRETE collection type (not a type variable).
+            // This means the function explicitly expects a specific collection type.
+            let param_is_concrete_collection = matches!(&resolved_param,
+                Type::List(_) | Type::Map(_, _) | Type::Set(_) | Type::Tuple(_));
+            if !param_is_concrete_collection {
+                continue;
+            }
+
+            // Skip if arg is still a type variable (not yet resolved)
+            if matches!(&resolved_arg, Type::Var(_) | Type::TypeParam(_)) {
+                continue;
+            }
+
+            // Check structural mismatch: different collection base types
+            let is_mismatch = match (&resolved_param, &resolved_arg) {
+                (Type::List(_), Type::List(_)) => false,
+                (Type::Map(_, _), Type::Map(_, _)) => false,
+                (Type::Set(_), Type::Set(_)) => false,
+                (Type::Tuple(a), Type::Tuple(b)) => a.len() != b.len(),
+                // Param is a collection but arg is something different
+                (Type::List(_), _) | (Type::Map(_, _), _) |
+                (Type::Set(_), _) | (Type::Tuple(_), _) => true,
+                _ => false,
+            };
+
+            if is_mismatch {
+                self.last_error_span = Some(*span);
+                return Some(TypeError::Mismatch {
+                    expected: resolved_param.display(),
+                    found: resolved_arg.display(),
+                });
+            }
+        }
+        None
     }
 
     pub fn pending_method_calls_debug(&self) -> Vec<(String, String)> {
@@ -2971,6 +3025,15 @@ impl<'a> InferCtx<'a> {
                     params: arg_types,
                     ret: Box::new(ret_ty.clone()),
                 });
+
+                // Store param/arg type pairs for post-solve structural mismatch checking.
+                // We need to compare resolved types AFTER solve() to catch cases like
+                // passing a Map where a List is expected.
+                if let Type::Function(ref ft) = func_ty {
+                    for (param_ty, arg_ty) in ft.params.iter().zip(arg_types_clone.iter()) {
+                        self.deferred_fn_call_checks.push((param_ty.clone(), arg_ty.clone(), *call_span));
+                    }
+                }
 
                 // Use unify_at with the call span for precise error reporting
                 self.unify_at(func_ty, expected_func_ty, *call_span);
