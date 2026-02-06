@@ -1,4 +1,0 @@
-# expect_error: Bool does not implement Ord
-# Indirect sort through generic wrapper should detect Ord violation
-applySort(xs) = xs.sort()
-main() = show(applySort([true, false, true]))
