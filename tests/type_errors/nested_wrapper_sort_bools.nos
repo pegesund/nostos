@@ -1,0 +1,5 @@
+# expect_error: Bool does not implement Ord
+# Trait bounds must propagate through multiple levels of generic wrappers
+wrapper1(xs) = wrapper2(xs)
+wrapper2(xs) = xs.sort()
+main() = show(wrapper1([true, false]))

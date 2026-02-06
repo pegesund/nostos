@@ -2475,17 +2475,18 @@ impl Compiler {
                     .and_then(|fv| fv.signature.clone());
 
                 if let Some(sig) = sig_to_check {
-                    // If signature contains ONLY type variables (like 'a' or 'a -> b'), re-infer
-                    // A signature with only type variables won't contain concrete type names
-                    let has_concrete_type = sig.contains("Int") || sig.contains("Float") ||
-                        sig.contains("String") || sig.contains("Bool") || sig.contains("Char") ||
-                        sig.contains("List") || sig.contains("Map") || sig.contains("Set") ||
-                        sig.contains("Option") || sig.contains("Result") || sig.contains("Unit") ||
-                        sig.contains("Bytes") || sig.contains("BigInt") || sig.contains("Decimal");
-                    // Has single-letter type variables like 'a', 'b', etc.
-                    let has_type_var = sig.chars().any(|c| c.is_ascii_lowercase() && c != '-' && c != '>');
+                    // Check if signature has standalone single-letter type variables (like 'a', 'b', 'k', 'v')
+                    // A standalone type var is a lowercase letter NOT adjacent to other alphanumeric chars.
+                    // This distinguishes 'a' in "List[a]" (type var) from 'n' in "Int" (part of type name).
+                    let has_type_var = sig.as_bytes().iter().enumerate().any(|(i, &b)| {
+                        let c = b as char;
+                        if !c.is_ascii_lowercase() { return false; }
+                        let prev_ok = i == 0 || !(sig.as_bytes()[i-1] as char).is_ascii_alphanumeric();
+                        let next_ok = i + 1 >= sig.len() || !(sig.as_bytes()[i+1] as char).is_ascii_alphanumeric();
+                        prev_ok && next_ok
+                    });
 
-                    if has_type_var && !has_concrete_type {
+                    if has_type_var {
                         // Try HM inference again now that all dependencies are compiled
                         // Use reference to fn_ast - no need to clone the entire AST
                         let inferred = self.fn_asts.get(fn_name)
