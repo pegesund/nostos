@@ -680,6 +680,8 @@ impl TypeEnv {
             Type::List(elem) | Type::Array(elem) | Type::Set(elem) => {
                 match trait_name {
                     "Eq" | "Show" => self.implements(elem, trait_name),
+                    // Lists and Arrays support Concat (++), Sets do not
+                    "Concat" => matches!(ty, Type::List(_) | Type::Array(_)),
                     // Lists/Arrays/Sets are NOT hashable - they can't be Set elements or Map keys
                     _ => false,
                 }
@@ -710,9 +712,9 @@ impl TypeEnv {
             Type::BigInt | Type::Decimal => {
                 matches!(trait_name, "Eq" | "Show" | "Num" | "Ord" | "Hash")
             }
-            // String implements Eq, Show, Ord, and Hash
+            // String implements Eq, Show, Ord, Hash, and Concat
             Type::String => {
-                matches!(trait_name, "Eq" | "Show" | "Ord" | "Hash")
+                matches!(trait_name, "Eq" | "Show" | "Ord" | "Hash" | "Concat")
             }
             // Bool implements Eq, Show, and Hash (not Ord - bools can't be compared with <)
             Type::Bool => {

@@ -572,30 +572,62 @@ impl<'a> InferCtx<'a> {
         for type_param in &func_ty.type_params {
             let fresh_var = self.fresh();
 
-            // Add trait constraints for this fresh variable
+            // Add trait constraints for this fresh variable.
+            // Only push HasTrait for well-known traits that the type system can check
+            // (Eq, Ord, Num, Concat, Hash, Show). User-defined traits are stored in
+            // trait_bounds for signature propagation but not actively checked via HasTrait
+            // because the type environment may not have all trait impls registered.
             if let Type::Var(var_id) = &fresh_var {
                 for constraint in &type_param.constraints {
                     self.add_trait_bound(*var_id, constraint.clone());
+                    if matches!(constraint.as_str(), "Eq" | "Ord" | "Num" | "Concat" | "Hash" | "Show") {
+                        self.constraints.push(Constraint::HasTrait(
+                            fresh_var.clone(),
+                            constraint.clone(),
+                        ));
+                    }
                 }
             }
 
             param_subst.insert(type_param.name.clone(), fresh_var);
         }
 
-        // CRITICAL FIX: Transfer trait bounds from param_subst to var_subst.
+        // CRITICAL FIX: Transfer trait bounds from param_subst to the CORRESPONDING var_subst vars.
         // When a function signature uses Var(N) instead of TypeParam("a") in the params,
         // the fresh var created in var_subst won't have the trait bounds. Copy the bounds
-        // from the constrained type parameter to ensure they propagate correctly.
-        // This fixes wrapper functions like printIt(x) = println(x) getting Show bounds.
-        // Now handles multi-parameter generics (not just single-param).
-        for param_fresh_var in param_subst.values() {
+        // from the constrained type parameter to its corresponding var.
+        // The mapping is: TypeParam "a" → Var(1), "b" → Var(2), etc. (from type_name_to_type)
+        // So look up that original Var ID in var_subst to find the fresh var.
+        for (tp_name, param_fresh_var) in &param_subst {
             if let Type::Var(param_var_id) = param_fresh_var {
-                // Copy trait bounds from the param var to all vars in var_subst
                 let bounds = self.trait_bounds.get(param_var_id).cloned().unwrap_or_default();
-                for var_subst_var in var_subst.values() {
-                    if let Type::Var(var_subst_id) = var_subst_var {
-                        for bound in &bounds {
-                            self.add_trait_bound(*var_subst_id, bound.clone());
+                if bounds.is_empty() {
+                    continue;
+                }
+                // Map type param name to original Var ID: "a" → 1, "b" → 2, etc.
+                let original_var_id = if tp_name.len() == 1 {
+                    let ch = tp_name.chars().next().unwrap();
+                    if ch.is_ascii_lowercase() {
+                        Some((ch as u32) - ('a' as u32) + 1)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                // Find the corresponding fresh var in var_subst
+                if let Some(orig_id) = original_var_id {
+                    if let Some(var_subst_var) = var_subst.get(&orig_id) {
+                        if let Type::Var(var_subst_id) = var_subst_var {
+                            for bound in &bounds {
+                                self.add_trait_bound(*var_subst_id, bound.clone());
+                                if matches!(bound.as_str(), "Eq" | "Ord" | "Num" | "Concat" | "Hash" | "Show") {
+                                    self.constraints.push(Constraint::HasTrait(
+                                        var_subst_var.clone(),
+                                        bound.clone(),
+                                    ));
+                                }
+                            }
                         }
                     }
                 }
@@ -3213,9 +3245,12 @@ impl<'a> InferCtx<'a> {
                         self.deferred_fn_call_checks.push((param_ty.clone(), arg_ty.clone(), *call_span));
                     }
                     // Record trait bounds from constrained type params for post-solve checking.
-                    // When a param is a Var with trait bounds (from instantiate_function),
+                    // When a param IS a Var with trait bounds (from instantiate_function),
                     // record (arg_type, trait_name, span) for later verification.
                     // This catches cases like equal[T: Eq] called with function args.
+                    // NOTE: Only check top-level Vars, NOT Vars inside containers (e.g.,
+                    // List[Var(id)]). For container cases, the HasTrait constraint from
+                    // instantiate_function handles checking via solve()/deferred_has_trait.
                     for (param_ty, arg_ty) in ft.params.iter().zip(arg_types_clone.iter()) {
                         if let Type::Var(var_id) = param_ty {
                             if let Some(bounds) = self.trait_bounds.get(var_id) {
@@ -4192,6 +4227,8 @@ impl<'a> InferCtx<'a> {
                     // Both are type variables - defer check until types resolve
                     (Type::Var(_), Type::Var(_)) => {
                         self.unify(left_ty.clone(), right_ty.clone());
+                        // Add Concat trait bound so it propagates through wrapper signatures
+                        self.require_trait(left_ty.clone(), "Concat");
                         // Store for deferred check after type resolution
                         self.deferred_concat_checks.push((left_ty.clone(), span));
                         Ok(left_ty)

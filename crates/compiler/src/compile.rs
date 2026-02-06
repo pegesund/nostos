@@ -2187,6 +2187,12 @@ impl Compiler {
                         ty.contains(" -> ") ||         // Function types never implement traits
                         ty == "Bool" ||                 // Bool never implements Num/Ord
                         (ty == "String" && trait_name == "Num") || // String doesn't implement Num
+                        // Numeric types don't implement Concat
+                        (matches!(trait_name.as_str(), "Concat") && matches!(ty.as_str(),
+                            "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
+                            "UInt8" | "UInt16" | "UInt32" | "UInt64" |
+                            "Float" | "Float32" | "Float64" | "BigInt" | "Decimal" |
+                            "Bool" | "Char" | "Unit")) ||
                         // For user-defined types: only check Num/Ord traits (never auto-derived).
                         // Other traits (Eq, Hash, Show) are auto-derived and not in trait_impls.
                         (matches!(trait_name.as_str(), "Num" | "Ord") &&
@@ -2565,10 +2571,29 @@ impl Compiler {
                         // like "Tuple does not implement Num" (real bugs: tuple + 1).
                         // Also DO report "expected Collection[...]" errors from check_fn_call_mismatches
                         // - these mean a function explicitly expects a collection and got a tuple instead.
+                        // Also DO report when the OTHER side is a concrete primitive - passing a tuple
+                        // where Int/String/Float/etc. is expected is always a real error.
+                        let has_primitive_mismatch = {
+                            let primitives = ["Int", "Float", "Bool", "String", "Char", "Unit",
+                                "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64",
+                                "Float32", "Float64", "BigInt", "Decimal"];
+                            if let Some(types_part) = message.strip_prefix("Cannot unify types: ") {
+                                let parts: Vec<&str> = types_part.split(" and ").collect();
+                                if parts.len() == 2 {
+                                    let ty1 = parts[0].trim();
+                                    let ty2 = parts[1].trim();
+                                    // One side is a tuple, the other is a primitive
+                                    let is_tuple = |s: &str| s.starts_with('(') && s.contains(',');
+                                    (is_tuple(ty1) && primitives.contains(&ty2)) ||
+                                    (is_tuple(ty2) && primitives.contains(&ty1))
+                                } else { false }
+                            } else { false }
+                        };
                         let is_tuple_error = message.contains("(") && message.contains(",") && message.contains(")") &&
                             (message.contains("Cannot unify") || message.contains("mismatch")) &&
                             !message.contains("does not implement") &&
                             !message.contains("Bool") && // tuple-vs-Bool is always a real error
+                            !has_primitive_mismatch && // tuple-vs-primitive is always a real error
                             !message.contains("expected List[") &&
                             !message.contains("expected Map[") &&
                             !message.contains("expected Set["); // tuple-vs-collection is always real
@@ -2726,7 +2751,8 @@ impl Compiler {
                         let is_func_trait_error = message.contains("does not implement") && message.contains("->")
                             && !message.contains("does not implement Eq")
                             && !message.contains("does not implement Ord")
-                            && !message.contains("does not implement Num");
+                            && !message.contains("does not implement Num")
+                            && !message.contains("does not implement Concat");
                         let is_spurious = is_tuple_error || is_try_catch_mismatch ||
                             is_nested_tuple_trait_error ||
                             is_trait_dispatch_confusion ||
@@ -24151,12 +24177,6 @@ impl Compiler {
             }
         }
 
-        // NOTE: We intentionally do NOT register mvars here in type_check_fn.
-        // Mvar registration is only done in try_hm_inference for signature inference.
-        // Registering mvars in type_check_fn can cause spurious type errors when
-        // the inferred function signature uses type variables that don't match
-        // the concrete mvar types.
-
         // Register built-in functions from BUILTINS for type inference
         // This enables UFCS type checking (e.g., String.contains expects String -> Bool)
         for builtin in BUILTINS {
@@ -24489,6 +24509,15 @@ impl Compiler {
             }
         }
 
+        // Remove functions that shadow mvar names to prevent misresolution in type_check_fn.
+        // E.g., `sum` mvar would otherwise resolve to stdlib `sum: Num a => [a] -> a`,
+        // and `log` mvar to math `log: Float -> Float`, causing false type errors.
+        // This must happen after all function registrations are complete.
+        for mvar_name in self.mvars.keys() {
+            let local_name = mvar_name.rfind('.').map(|p| &mvar_name[p+1..]).unwrap_or(mvar_name);
+            env.functions.remove(local_name);
+        }
+
         // Create inference context
         let mut ctx = InferCtx::new(&mut env);
 
@@ -24712,15 +24741,26 @@ impl Compiler {
         // implement Num regardless of type parameters). The last "word" from whitespace
         // splitting could be "?y]" which starts with ? but is actually part of a named
         // generic type, not a bare type variable.
+        // EXCEPTION: Function types (containing "->") NEVER implement Eq/Ord/Num
+        // regardless of type variables, so those errors are always real.
         if message.contains("does not implement") && message.contains('?') {
-            if let Some(pos) = message.find("does not implement") {
-                let prefix = &message[..pos].trim();
-                let words: Vec<&str> = prefix.split_whitespace().collect();
-                if let Some(&last_word) = words.last() {
-                    // Only suppress if the type name is a bare type variable (e.g., "?5")
-                    // NOT a trailing type param inside brackets (e.g., "?y]" from "Result[Int, ?y]")
-                    if last_word.starts_with('?') && !last_word.contains(']') {
-                        return true;
+            // Function types with type vars like "(?25) -> ?25 does not implement Ord"
+            // are always real errors - functions never implement Eq/Ord/Num/Concat
+            let is_func_type_trait = message.contains("->") && (
+                message.contains("does not implement Eq") ||
+                message.contains("does not implement Ord") ||
+                message.contains("does not implement Num") ||
+                message.contains("does not implement Concat"));
+            if !is_func_type_trait {
+                if let Some(pos) = message.find("does not implement") {
+                    let prefix = &message[..pos].trim();
+                    let words: Vec<&str> = prefix.split_whitespace().collect();
+                    if let Some(&last_word) = words.last() {
+                        // Only suppress if the type name is a bare type variable (e.g., "?5")
+                        // NOT a trailing type param inside brackets (e.g., "?y]" from "Result[Int, ?y]")
+                        if last_word.starts_with('?') && !last_word.contains(']') {
+                            return true;
+                        }
                     }
                 }
             }

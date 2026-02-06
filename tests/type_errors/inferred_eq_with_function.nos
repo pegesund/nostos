@@ -1,4 +1,4 @@
-# expect_error: type mismatch
+# expect_error: does not implement Eq
 # Even without explicit [T: Eq], the == operator infers Eq constraint
 # Passing functions should be caught at compile time
 equals(a, b) = a == b
