@@ -677,6 +677,7 @@ impl TypeEnv {
             Type::List(elem) | Type::Array(elem) | Type::Set(elem) => {
                 match trait_name {
                     "Eq" | "Show" => self.implements(elem, trait_name),
+                    // Lists/Arrays/Sets are NOT hashable - they can't be Set elements or Map keys
                     _ => false,
                 }
             }
@@ -685,32 +686,41 @@ impl TypeEnv {
                     "Eq" | "Show" => {
                         self.implements(key, trait_name) && self.implements(val, trait_name)
                     }
+                    // Maps are NOT hashable
                     _ => false,
                 }
             }
             Type::Tuple(elems) => {
                 match trait_name {
-                    "Eq" | "Show" => elems.iter().all(|e| self.implements(e, trait_name)),
+                    "Eq" | "Show" | "Hash" => elems.iter().all(|e| self.implements(e, trait_name)),
                     _ => false,
                 }
             }
-            // Variant and Record types auto-derive Eq and Show
+            // Variant and Record types auto-derive Eq, Show, and Hash
             Type::Variant(_) | Type::Record(_) => {
-                matches!(trait_name, "Eq" | "Show")
+                matches!(trait_name, "Eq" | "Show" | "Hash")
             }
-            // Numeric types implement Eq, Show, Num, and Ord
+            // Numeric types implement Eq, Show, Num, Ord, and Hash
             Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 |
             Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64 |
             Type::Float | Type::Float32 | Type::Float64 |
             Type::BigInt | Type::Decimal => {
-                matches!(trait_name, "Eq" | "Show" | "Num" | "Ord")
+                matches!(trait_name, "Eq" | "Show" | "Num" | "Ord" | "Hash")
             }
-            // String implements Eq, Show, and Ord (VM supports string comparison)
+            // String implements Eq, Show, Ord, and Hash
             Type::String => {
-                matches!(trait_name, "Eq" | "Show" | "Ord")
+                matches!(trait_name, "Eq" | "Show" | "Ord" | "Hash")
             }
-            // Bool, Char, Unit, Pid only implement Eq and Show (not orderable)
-            Type::Bool | Type::Char | Type::Unit | Type::Pid => {
+            // Bool, Char implement Eq, Show, and Hash
+            Type::Bool | Type::Char => {
+                matches!(trait_name, "Eq" | "Show" | "Hash")
+            }
+            // Unit implements Eq, Show, and Hash
+            Type::Unit => {
+                matches!(trait_name, "Eq" | "Show" | "Hash")
+            }
+            // Pid only implements Eq and Show (not hashable)
+            Type::Pid => {
                 matches!(trait_name, "Eq" | "Show")
             }
             _ => false,
@@ -728,7 +738,7 @@ impl TypeEnv {
             Type::List(elem) | Type::Array(elem) | Type::Set(elem) => {
                 match trait_name {
                     "Eq" | "Show" => self.definitely_not_implements(elem, trait_name),
-                    "Num" | "Ord" => true, // Containers never implement Num/Ord
+                    "Num" | "Ord" | "Hash" => true, // Containers never implement Num/Ord/Hash
                     _ => false,
                 }
             }
@@ -738,16 +748,16 @@ impl TypeEnv {
                         self.definitely_not_implements(key, trait_name) ||
                         self.definitely_not_implements(val, trait_name)
                     }
-                    "Num" | "Ord" => true,
+                    "Num" | "Ord" | "Hash" => true, // Maps never implement Num/Ord/Hash
                     _ => false,
                 }
             }
             Type::Tuple(elems) => {
                 match trait_name {
-                    "Eq" | "Show" => {
+                    "Eq" | "Show" | "Hash" => {
                         elems.iter().any(|e| self.definitely_not_implements(e, trait_name))
                     }
-                    "Num" | "Ord" => true,
+                    "Num" | "Ord" => true, // Tuples never implement Num/Ord
                     _ => false,
                 }
             }

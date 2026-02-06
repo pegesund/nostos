@@ -502,6 +502,8 @@ pub enum GcMapKey {
         constructor: String,
         fields: Vec<GcMapKey>,
     },
+    // Tuple as key - elements must all be hashable
+    Tuple(Vec<GcMapKey>),
 }
 
 // Manual implementation of PartialEq for GcMapKey
@@ -528,6 +530,7 @@ impl PartialEq for GcMapKey {
                 GcMapKey::Variant { type_name: tn1, constructor: c1, fields: f1 },
                 GcMapKey::Variant { type_name: tn2, constructor: c2, fields: f2 },
             ) => tn1 == tn2 && c1 == c2 && f1 == f2,
+            (GcMapKey::Tuple(a), GcMapKey::Tuple(b)) => a == b,
             _ => false,
         }
     }
@@ -566,6 +569,12 @@ impl std::hash::Hash for GcMapKey {
                 constructor.hash(state);
                 for field in fields {
                     field.hash(state);
+                }
+            }
+            GcMapKey::Tuple(items) => {
+                items.len().hash(state);
+                for item in items {
+                    item.hash(state);
                 }
             }
         }
@@ -610,6 +619,12 @@ impl GcMapKey {
                     gc_fields,
                 ))
             }
+            GcMapKey::Tuple(items) => {
+                let gc_items: Vec<GcValue> = items.iter()
+                    .map(|f| f.to_gc_value(heap))
+                    .collect();
+                GcValue::Tuple(heap.alloc_tuple(gc_items))
+            }
         }
     }
 
@@ -642,6 +657,9 @@ impl GcMapKey {
                     fields: fields.iter().map(|f| f.to_shared_key()).collect(),
                 }
             }
+            GcMapKey::Tuple(items) => {
+                SharedMapKey::Tuple(items.iter().map(|f| f.to_shared_key()).collect())
+            }
         }
     }
 
@@ -673,6 +691,9 @@ impl GcMapKey {
                     constructor: constructor.clone(),
                     fields: fields.iter().map(|f| GcMapKey::from_shared_key(f)).collect(),
                 }
+            }
+            SharedMapKey::Tuple(items) => {
+                GcMapKey::Tuple(items.iter().map(|f| GcMapKey::from_shared_key(f)).collect())
             }
         }
     }
@@ -1191,6 +1212,14 @@ impl GcValue {
                     constructor: (*variant.constructor).clone(),
                     fields,
                 })
+            }
+            GcValue::Tuple(ptr) => {
+                let tuple = heap.get_tuple(*ptr)?;
+                // Convert all elements to keys - if any fails, the whole thing fails
+                let key_items: Option<Vec<GcMapKey>> = tuple.items.iter()
+                    .map(|f| f.to_gc_map_key(heap))
+                    .collect();
+                key_items.map(GcMapKey::Tuple)
             }
             _ => None,
         }
@@ -2900,6 +2929,10 @@ impl Heap {
                     fields: fields.iter().map(|f| self.deep_copy_key(f, source)).collect(),
                 }
             }
+            // Tuple
+            GcMapKey::Tuple(items) => {
+                GcMapKey::Tuple(items.iter().map(|f| self.deep_copy_key(f, source)).collect())
+            }
         }
     }
 
@@ -3148,6 +3181,10 @@ impl Heap {
                     fields: fields.iter().map(|f| self.clone_key(f)).collect(),
                 }
             }
+            // Tuple
+            GcMapKey::Tuple(items) => {
+                GcMapKey::Tuple(items.iter().map(|f| self.clone_key(f)).collect())
+            }
         }
     }
 }
@@ -3356,6 +3393,10 @@ impl Heap {
                     constructor: constructor.clone(),
                     fields: fields.iter().map(|f| self.map_key_to_gc(f)).collect(),
                 }
+            }
+            // Tuple
+            MapKey::Tuple(items) => {
+                GcMapKey::Tuple(items.iter().map(|f| self.map_key_to_gc(f)).collect())
             }
         }
     }
@@ -3576,6 +3617,10 @@ impl Heap {
                     fields: fields.iter().map(|f| self.gc_map_key_to_value(f)).collect(),
                 }
             }
+            // Tuple
+            GcMapKey::Tuple(items) => {
+                MapKey::Tuple(items.iter().map(|f| self.gc_map_key_to_value(f)).collect())
+            }
         }
     }
 }
@@ -3608,6 +3653,9 @@ fn shared_key_to_map_key(key: &SharedMapKey) -> MapKey {
                 constructor: constructor.clone(),
                 fields: fields.iter().map(shared_key_to_map_key).collect(),
             }
+        }
+        SharedMapKey::Tuple(items) => {
+            MapKey::Tuple(items.iter().map(shared_key_to_map_key).collect())
         }
     }
 }

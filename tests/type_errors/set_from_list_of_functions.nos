@@ -1,0 +1,3 @@
+# expect_error: does not implement Eq
+# Functions are not hashable and cannot be Set elements
+main() = Set.fromList([x => x + 1, x => x + 2])

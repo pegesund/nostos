@@ -301,6 +301,7 @@ pub enum SendableMapKey {
         constructor: String,
         fields: Vec<SendableMapKey>,
     },
+    Tuple(Vec<SendableMapKey>),
 }
 
 impl PartialEq for SendableMapKey {
@@ -319,6 +320,7 @@ impl PartialEq for SendableMapKey {
                 SendableMapKey::Variant { type_name: tn1, constructor: c1, fields: f1 },
                 SendableMapKey::Variant { type_name: tn2, constructor: c2, fields: f2 },
             ) => tn1 == tn2 && c1 == c2 && f1 == f2,
+            (SendableMapKey::Tuple(a), SendableMapKey::Tuple(b)) => a == b,
             _ => false,
         }
     }
@@ -349,6 +351,12 @@ impl Hash for SendableMapKey {
                 constructor.hash(state);
                 for field in fields {
                     field.hash(state);
+                }
+            }
+            SendableMapKey::Tuple(items) => {
+                items.len().hash(state);
+                for item in items {
+                    item.hash(state);
                 }
             }
         }
@@ -557,6 +565,12 @@ impl SendableValue {
                     fields: f,
                 })
             }
+            GcMapKey::Tuple(items) => {
+                let sendable_items: Option<Vec<_>> = items.iter()
+                    .map(|f| Self::gc_map_key_to_sendable(f, heap))
+                    .collect();
+                sendable_items.map(SendableMapKey::Tuple)
+            }
         }
     }
 
@@ -593,6 +607,12 @@ impl SendableValue {
                     constructor: constructor.clone(),
                     fields: f,
                 })
+            }
+            SharedMapKey::Tuple(items) => {
+                let sendable_items: Option<Vec<_>> = items.iter()
+                    .map(Self::shared_key_to_sendable_key)
+                    .collect();
+                sendable_items.map(SendableMapKey::Tuple)
             }
         }
     }
@@ -753,6 +773,9 @@ impl SendableValue {
                         fields: fields.iter().map(sendable_key_to_map_key).collect(),
                     }
                 }
+                SendableMapKey::Tuple(items) => {
+                    MapKey::Tuple(items.iter().map(sendable_key_to_map_key).collect())
+                }
             }
         }
 
@@ -904,6 +927,8 @@ pub enum SharedMapKey {
         constructor: String,
         fields: Vec<SharedMapKey>,
     },
+    /// Tuple as key - elements must all be hashable
+    Tuple(Vec<SharedMapKey>),
 }
 
 // Manual implementation of PartialEq for SharedMapKey
@@ -930,6 +955,7 @@ impl PartialEq for SharedMapKey {
                 SharedMapKey::Variant { type_name: tn1, constructor: c1, fields: f1 },
                 SharedMapKey::Variant { type_name: tn2, constructor: c2, fields: f2 },
             ) => tn1 == tn2 && c1 == c2 && f1 == f2,
+            (SharedMapKey::Tuple(a), SharedMapKey::Tuple(b)) => a == b,
             _ => false,
         }
     }
@@ -969,6 +995,12 @@ impl Hash for SharedMapKey {
                 constructor.hash(state);
                 for field in fields {
                     field.hash(state);
+                }
+            }
+            SharedMapKey::Tuple(items) => {
+                items.len().hash(state);
+                for item in items {
+                    item.hash(state);
                 }
             }
         }
@@ -1054,6 +1086,10 @@ impl SharedMapKey {
                     let fields_str: Vec<_> = fields.iter().map(|v| v.display()).collect();
                     format!("{}.{}({})", type_name, constructor, fields_str.join(", "))
                 }
+            }
+            SharedMapKey::Tuple(items) => {
+                let items_str: Vec<_> = items.iter().map(|v| v.display()).collect();
+                format!("({})", items_str.join(", "))
             }
         }
     }

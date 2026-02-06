@@ -626,6 +626,8 @@ pub enum MapKey {
         constructor: String,
         fields: Vec<MapKey>,
     },
+    // Tuple as key - elements must all be hashable
+    Tuple(Vec<MapKey>),
 }
 
 // Manual implementation of PartialEq for MapKey
@@ -652,6 +654,7 @@ impl PartialEq for MapKey {
                 MapKey::Variant { type_name: tn1, constructor: c1, fields: f1 },
                 MapKey::Variant { type_name: tn2, constructor: c2, fields: f2 },
             ) => tn1 == tn2 && c1 == c2 && f1 == f2,
+            (MapKey::Tuple(a), MapKey::Tuple(b)) => a == b,
             _ => false,
         }
     }
@@ -690,6 +693,12 @@ impl std::hash::Hash for MapKey {
                 constructor.hash(state);
                 for field in fields {
                     field.hash(state);
+                }
+            }
+            MapKey::Tuple(items) => {
+                items.len().hash(state);
+                for item in items {
+                    item.hash(state);
                 }
             }
         }

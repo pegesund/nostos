@@ -123,6 +123,9 @@ impl InspectorTab {
                 constructor: std::sync::Arc::new(constructor.clone()),
                 fields: fields.iter().map(|f| self.key_to_value(f)).collect(),
             },
+            ThreadSafeMapKey::Tuple(items) => ThreadSafeValue::Tuple(
+                items.iter().map(|f| self.key_to_value(f)).collect(),
+            ),
         }
     }
 
@@ -192,6 +195,9 @@ impl InspectorTab {
                 constructor: constructor.clone(),
                 fields: fields.iter().map(|f| self.shared_key_to_thread_safe_key(f)).collect(),
             },
+            SharedMapKey::Tuple(items) => ThreadSafeMapKey::Tuple(
+                items.iter().map(|f| self.shared_key_to_thread_safe_key(f)).collect(),
+            ),
         }
     }
 
@@ -216,6 +222,10 @@ impl InspectorTab {
                 } else {
                     format!("{}.{}(...)", type_name, constructor)
                 }
+            }
+            SharedMapKey::Tuple(items) => {
+                let items_str: Vec<String> = items.iter().map(|f| self.shared_key_preview(f)).collect();
+                format!("({})", items_str.join(", "))
             }
         }
     }
@@ -313,6 +323,12 @@ impl InspectorTab {
                         .collect();
                     format!("{}.{}({})", type_name, constructor, field_strs.join(", "))
                 }
+            }
+            SharedMapKey::Tuple(items) => {
+                let items_str: Vec<String> = items.iter()
+                    .map(|f| self.shared_full_format_key(f))
+                    .collect();
+                format!("({})", items_str.join(", "))
             }
         }
     }
@@ -518,6 +534,10 @@ impl InspectorTab {
                     format!("{}.{}(...)", type_name, constructor)
                 }
             }
+            ThreadSafeMapKey::Tuple(items) => {
+                let items_str: Vec<String> = items.iter().map(|f| self.map_key_preview(f)).collect();
+                format!("({})", items_str.join(", "))
+            }
         }
     }
 
@@ -569,6 +589,12 @@ impl InspectorTab {
                         .collect();
                     format!("{}.{}({})", type_name, constructor, field_strs.join(", "))
                 }
+            }
+            ThreadSafeMapKey::Tuple(items) => {
+                let items_str: Vec<String> = items.iter()
+                    .map(|f| self.full_format_key(f))
+                    .collect();
+                format!("({})", items_str.join(", "))
             }
         }
     }

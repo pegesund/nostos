@@ -9814,6 +9814,10 @@ impl AsyncProcess {
                         GcMapKey::UInt64(n) => n.to_string(),
                         GcMapKey::Record { type_name, .. } => format!("<{}>", type_name),
                         GcMapKey::Variant { type_name, constructor, .. } => format!("{}.{}", type_name, constructor),
+                        GcMapKey::Tuple(items) => {
+                            let items_str: Vec<_> = items.iter().map(|i| format!("{:?}", i)).collect();
+                            format!("({})", items_str.join(", "))
+                        },
                     };
                     let json_value = self.value_to_json(value)?;
                     let key_ptr = self.heap.alloc_string(key_str);
@@ -11393,6 +11397,13 @@ impl AsyncVM {
                                 h = combine_hash(h, fnv1a_hash(constructor.as_bytes()));
                                 for field in fields {
                                     h = combine_hash(h, hash_gc_map_key(field));
+                                }
+                                h
+                            }
+                            GcMapKey::Tuple(items) => {
+                                let mut h = fnv1a_hash(&items.len().to_le_bytes());
+                                for item in items {
+                                    h = combine_hash(h, hash_gc_map_key(item));
                                 }
                                 h
                             }
@@ -13997,6 +14008,14 @@ impl AsyncVM {
                                 found: elem.type_name(heap).to_string()
                             })?;
                             items.insert(key);
+                        }
+                        let new_ptr = heap.alloc_set(items);
+                        Ok(GcValue::Set(new_ptr))
+                    }
+                    GcValue::Int64List(list) => {
+                        let mut items = imbl::HashSet::new();
+                        for n in list.iter() {
+                            items.insert(GcMapKey::Int64(n));
                         }
                         let new_ptr = heap.alloc_set(items);
                         Ok(GcValue::Set(new_ptr))

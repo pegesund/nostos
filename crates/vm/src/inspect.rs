@@ -72,6 +72,10 @@ impl MapKey {
                     format!("{}.{}({})", type_name, constructor, fields_str.join(", "))
                 }
             }
+            MapKey::Tuple(items) => {
+                let items_str: Vec<_> = items.iter().map(|v| v.display()).collect();
+                format!("({})", items_str.join(", "))
+            }
         }
     }
 }

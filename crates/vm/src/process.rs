@@ -484,6 +484,7 @@ pub enum ThreadSafeMapKey {
         constructor: String,
         fields: Vec<ThreadSafeMapKey>,
     },
+    Tuple(Vec<ThreadSafeMapKey>),
 }
 
 impl PartialEq for ThreadSafeMapKey {
@@ -509,6 +510,7 @@ impl PartialEq for ThreadSafeMapKey {
                 ThreadSafeMapKey::Variant { type_name: tn1, constructor: c1, fields: f1 },
                 ThreadSafeMapKey::Variant { type_name: tn2, constructor: c2, fields: f2 },
             ) => tn1 == tn2 && c1 == c2 && f1 == f2,
+            (ThreadSafeMapKey::Tuple(a), ThreadSafeMapKey::Tuple(b)) => a == b,
             _ => false,
         }
     }
@@ -546,6 +548,12 @@ impl std::hash::Hash for ThreadSafeMapKey {
                 constructor.hash(state);
                 for field in fields {
                     field.hash(state);
+                }
+            }
+            ThreadSafeMapKey::Tuple(items) => {
+                items.len().hash(state);
+                for item in items {
+                    item.hash(state);
                 }
             }
         }
@@ -631,6 +639,7 @@ impl ThreadSafeMapKey {
                 constructor: constructor.clone(),
                 fields: fields.iter().map(|f| ThreadSafeMapKey::from_gc_map_key(f)).collect(),
             },
+            GcMapKey::Tuple(items) => ThreadSafeMapKey::Tuple(items.iter().map(|f| ThreadSafeMapKey::from_gc_map_key(f)).collect()),
         }
     }
 
@@ -659,6 +668,7 @@ impl ThreadSafeMapKey {
                 constructor: constructor.clone(),
                 fields: fields.iter().map(|f| f.to_gc_map_key()).collect(),
             },
+            ThreadSafeMapKey::Tuple(items) => GcMapKey::Tuple(items.iter().map(|f| f.to_gc_map_key()).collect()),
         }
     }
 }

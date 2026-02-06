@@ -1,0 +1,3 @@
+# expect: 3
+# Set.fromList should work with Int lists (Int64List optimization)
+main() = Set.fromList([1, 2, 3, 2, 1]).size()

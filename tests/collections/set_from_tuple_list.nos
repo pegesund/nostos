@@ -1,0 +1,3 @@
+# expect: 3
+# Set.fromList should work with tuples as elements
+main() = Set.fromList([(1, "a"), (2, "b"), (3, "c"), (1, "a")]).size()

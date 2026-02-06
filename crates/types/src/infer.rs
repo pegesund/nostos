@@ -1184,11 +1184,21 @@ impl<'a> InferCtx<'a> {
         // Post-solve: check function call return types that resolved to Set[X] or Map[K, V].
         // Set/Map require their element/key types to implement Hash+Eq.
         // We couldn't check at call time because unification was deferred.
+        // Check Hash (stricter than Eq) - Lists implement Eq but not Hash,
+        // so checking Hash catches Set[List[Int]] which would fail at runtime.
         for (ret_ty, span) in std::mem::take(&mut self.deferred_collection_ret_checks) {
             let resolved = self.env.apply_subst(&ret_ty);
             match &resolved {
                 Type::Set(elem) => {
                     let resolved_elem = self.env.apply_subst(elem);
+                    // Check Hash first (stricter), then Eq as fallback
+                    if self.env.definitely_not_implements(&resolved_elem, "Hash") {
+                        self.last_error_span = Some(span);
+                        return Err(TypeError::MissingTraitImpl {
+                            ty: resolved_elem.display(),
+                            trait_name: "Eq".to_string(), // User-facing: say Eq (Hash is internal)
+                        });
+                    }
                     if self.env.definitely_not_implements(&resolved_elem, "Eq") {
                         self.last_error_span = Some(span);
                         return Err(TypeError::MissingTraitImpl {
@@ -1199,6 +1209,13 @@ impl<'a> InferCtx<'a> {
                 }
                 Type::Map(key, _) => {
                     let resolved_key = self.env.apply_subst(key);
+                    if self.env.definitely_not_implements(&resolved_key, "Hash") {
+                        self.last_error_span = Some(span);
+                        return Err(TypeError::MissingTraitImpl {
+                            ty: resolved_key.display(),
+                            trait_name: "Eq".to_string(),
+                        });
+                    }
                     if self.env.definitely_not_implements(&resolved_key, "Eq") {
                         self.last_error_span = Some(span);
                         return Err(TypeError::MissingTraitImpl {

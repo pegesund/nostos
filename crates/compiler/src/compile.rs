@@ -5833,6 +5833,7 @@ impl Compiler {
             SendableMapKey::Unit => AstKind::Unit,
             SendableMapKey::Record { .. } => return None, // Complex keys not supported
             SendableMapKey::Variant { .. } => return None, // Variant keys not supported
+            SendableMapKey::Tuple(_) => return None, // Tuple keys not supported
         }))
     }
 
