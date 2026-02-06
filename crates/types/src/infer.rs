@@ -1723,30 +1723,39 @@ impl<'a> InferCtx<'a> {
                                     // different type structure than the parameter expects.
                                     // These mismatches are always errors regardless of type variables
                                     // inside the expected type (e.g., List[?b] with ?b unresolved).
-                                    let arg_is_concrete_simple = matches!(&resolved_arg,
-                                        Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 |
-                                        Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64 |
-                                        Type::Float | Type::Float32 | Type::Float64 |
-                                        Type::BigInt | Type::Decimal | Type::String | Type::Bool | Type::Char |
-                                        Type::Unit);
-                                    if arg_is_concrete_simple {
-                                        // A simple concrete type can never unify with a structural type
-                                        let param_is_structural = matches!(&resolved_param,
-                                            Type::Function(_) | Type::List(_) | Type::Map(_, _) |
-                                            Type::Set(_) | Type::Tuple(_) | Type::Array(_));
-                                        if param_is_structural {
-                                            let expected = match &resolved_param {
-                                                Type::Function(_) => "function".to_string(),
-                                                Type::List(_) => "List".to_string(),
-                                                Type::Map(_, _) => "Map".to_string(),
-                                                Type::Set(_) => "Set".to_string(),
-                                                Type::Tuple(_) => "Tuple".to_string(),
-                                                Type::Array(_) => "Array".to_string(),
-                                                _ => resolved_param.display(),
-                                            };
+
+                                    // Check: any non-Var, non-Function type passed where Function expected
+                                    if matches!(&resolved_param, Type::Function(_))
+                                        && !matches!(&resolved_arg, Type::Function(_) | Type::Var(_) | Type::TypeParam(_))
+                                    {
+                                        self.last_error_span = call.span;
+                                        return Err(TypeError::Mismatch {
+                                            expected: "function".to_string(),
+                                            found: resolved_arg.display(),
+                                        });
+                                    }
+
+                                    // Check: concrete primitive/structural type where different structure expected
+                                    let arg_is_concrete_non_var = !matches!(&resolved_arg, Type::Var(_) | Type::TypeParam(_));
+                                    if arg_is_concrete_non_var {
+                                        let param_is_list = matches!(&resolved_param, Type::List(_));
+                                        let arg_is_list = matches!(&resolved_arg, Type::List(_));
+                                        let param_is_map = matches!(&resolved_param, Type::Map(_, _));
+                                        let arg_is_map = matches!(&resolved_arg, Type::Map(_, _));
+
+                                        // Non-list where List expected
+                                        if param_is_list && !arg_is_list {
                                             self.last_error_span = call.span;
                                             return Err(TypeError::Mismatch {
-                                                expected,
+                                                expected: "List".to_string(),
+                                                found: resolved_arg.display(),
+                                            });
+                                        }
+                                        // Non-map where Map expected
+                                        if param_is_map && !arg_is_map {
+                                            self.last_error_span = call.span;
+                                            return Err(TypeError::Mismatch {
+                                                expected: "Map".to_string(),
                                                 found: resolved_arg.display(),
                                             });
                                         }
