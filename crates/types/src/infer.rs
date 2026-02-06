@@ -1188,8 +1188,21 @@ impl<'a> InferCtx<'a> {
         // Post-method-call: re-check deferred HasField constraints now that method calls
         // may have resolved more type variables (e.g., lambda parameter types unified
         // with list element types)
-        for (ty, field, expected_ty) in std::mem::take(&mut self.deferred_has_field) {
+        // Process deferred HasField constraints in a loop - each pass may resolve
+        // type vars that enable the next pass (e.g., o.inner.value needs inner resolved first)
+        let mut max_passes = 5;
+        loop {
+            max_passes -= 1;
+            if max_passes == 0 { break; }
+            let deferred = std::mem::take(&mut self.deferred_has_field);
+            if deferred.is_empty() { break; }
+            let mut still_deferred = Vec::new();
+            let mut made_progress = false;
+        for (ty, field, expected_ty) in deferred {
             let resolved = self.env.apply_subst(&ty);
+            if !matches!(&resolved, Type::Var(_)) {
+                made_progress = true;
+            }
             match &resolved {
                 Type::Record(rec) => {
                     if let Some((_, actual_ty, _)) = rec.fields.iter().find(|(n, _, _)| n == &field) {
@@ -1286,8 +1299,8 @@ impl<'a> InferCtx<'a> {
                     }
                 }
                 Type::Var(_) => {
-                    // Still unresolved after method calls - can't check field access
-                    // This is okay for now, runtime will catch any issues
+                    // Still unresolved - re-defer for another pass
+                    still_deferred.push((ty, field, expected_ty));
                 }
                 _ => {
                     // Other types don't support field access
@@ -1298,6 +1311,16 @@ impl<'a> InferCtx<'a> {
                 }
             }
         }
+            // If we made progress or still have deferred constraints, continue
+            if still_deferred.is_empty() {
+                break;
+            }
+            if !made_progress {
+                // No progress - these vars are truly unresolved, stop retrying
+                break;
+            }
+            self.deferred_has_field = still_deferred;
+        } // end loop
 
         // Post-method-call: check length/len calls require types that VM supports
         // VM supports: List, String, Tuple, Float64Array, Int64Array
