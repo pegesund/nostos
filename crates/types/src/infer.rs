@@ -1252,6 +1252,19 @@ impl<'a> InferCtx<'a> {
                         }
                     }
                 }
+                Type::Function(_) => {
+                    // Function types never implement any standard trait (Eq, Ord, Num, Concat, etc.)
+                    // This catches user-defined generic functions with trait bounds
+                    // e.g., equals[T: Eq](a: T, b: T) = a == b called with function arguments
+                    for bound in bounds {
+                        if !self.env.implements(&resolved, bound) {
+                            return Err(TypeError::MissingTraitImpl {
+                                ty: resolved.display(),
+                                trait_name: bound.clone(),
+                            });
+                        }
+                    }
+                }
                 Type::String | Type::Bool | Type::Char | Type::Unit => {
                     // These primitives don't implement Num
                     // They may have been resolved after check_pending_method_calls

@@ -1,0 +1,4 @@
+# expect_error: does not implement Eq
+# User-defined generic function with inferred Eq constraint called with functions
+equals(a, b) = a == b
+main() = equals(x => x + 1, x => x + 2)

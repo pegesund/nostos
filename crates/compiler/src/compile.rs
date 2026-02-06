@@ -2714,11 +2714,13 @@ impl Compiler {
                         let is_annotation_error = message.contains("Type annotation required");
                         // Function types "(X) -> Y does not implement Trait" can be HM false positives
                         // where a lambda/callback is incorrectly resolved as needing a trait.
-                        // But Eq errors on function types are ALWAYS real - functions never
-                        // implement Eq, so "fn does not implement Eq" is a genuine type error
-                        // (e.g., Set.fromList([lambda]), contains on list of lambdas).
+                        // But Eq/Ord/Num errors on function types are ALWAYS real - functions never
+                        // implement these traits, so they are genuine type errors
+                        // (e.g., Set.fromList([lambda]) for Eq, myMax(fn1, fn2) for Ord).
                         let is_func_trait_error = message.contains("does not implement") && message.contains("->")
-                            && !message.contains("does not implement Eq");
+                            && !message.contains("does not implement Eq")
+                            && !message.contains("does not implement Ord")
+                            && !message.contains("does not implement Num");
                         let is_spurious = is_tuple_error || is_try_catch_mismatch ||
                             is_nested_tuple_trait_error ||
                             is_trait_dispatch_confusion ||
