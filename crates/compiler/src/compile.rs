@@ -24273,8 +24273,16 @@ impl Compiler {
                     }
                 }
             } else {
-                // Fully typed function - always register/overwrite for mutual recursion
-                env.insert_function(fn_name.clone(), fn_type.clone());
+                // Fully typed function - register for mutual recursion.
+                // BUT: don't overwrite if the existing entry has HM-inferred trait bounds
+                // (non-empty type_params like Ord/Eq) that the pending version lacks.
+                // pending_fn_signatures may have stale type_params from before HM inference.
+                let should_skip = env.functions.get(fn_name)
+                    .map(|existing| !existing.type_params.is_empty() && fn_type.type_params.is_empty())
+                    .unwrap_or(false);
+                if !should_skip {
+                    env.insert_function(fn_name.clone(), fn_type.clone());
+                }
             }
         }
 

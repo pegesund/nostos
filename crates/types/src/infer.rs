@@ -1371,11 +1371,13 @@ impl<'a> InferCtx<'a> {
                     }
                 }
                 Type::String | Type::Bool | Type::Char | Type::Unit => {
-                    // These primitives don't implement Num
-                    // They may have been resolved after check_pending_method_calls
-                    // from lambda parameter types (e.g., fold("start", (acc, x) => acc + x))
+                    // Check Num and Ord bounds on primitive types.
+                    // - Bool/Char/Unit don't implement Num or Ord
+                    // - String doesn't implement Num
+                    // Only check Num/Ord (not Eq/Show which are auto-derived and cause
+                    // false positives from merged trait_bounds during variable unification).
                     for bound in bounds {
-                        if bound == "Num" && !self.env.implements(&resolved, bound) {
+                        if matches!(bound.as_str(), "Num" | "Ord") && !self.env.implements(&resolved, bound) {
                             return Err(TypeError::MissingTraitImpl {
                                 ty: resolved.display(),
                                 trait_name: bound.clone(),
@@ -2156,7 +2158,7 @@ impl<'a> InferCtx<'a> {
                 let can_infer_list = infer_list_methods.contains(&call.method_name.as_str());
                 if matches!(&resolved, Type::Var(_)) && can_infer_list {
                     let elem_ty = self.fresh();
-                    let list_ty = Type::List(Box::new(elem_ty));
+                    let list_ty = Type::List(Box::new(elem_ty.clone()));
                     let _ = self.unify_types(&resolved, &list_ty);
 
                     // Now look up the method with the inferred List type
@@ -2184,6 +2186,32 @@ impl<'a> InferCtx<'a> {
                                 }
                                 let _ = self.unify_types(&call.ret_ty, &ft.ret);
                                 made_progress = true;
+                            }
+                        }
+                    }
+
+                    // Add trait bounds for methods that require them on element type.
+                    // These bounds propagate through the inferred signature so that
+                    // e.g. `applySort(xs) = xs.sort()` gets signature `Ord a => [a] -> [a]`.
+                    // We use add_trait_bound directly (not require_trait) because
+                    // check_pending_method_calls runs AFTER the main constraint loop,
+                    // so new HasTrait constraints from require_trait would never be processed.
+                    // IMPORTANT: This must be AFTER the signature unification above,
+                    // so that elem_ty resolves to the canonical variable.
+                    {
+                        let resolved_elem = self.env.apply_subst(&elem_ty);
+                        if let Type::Var(var_id) = resolved_elem {
+                            match call.method_name.as_str() {
+                                "sort" | "maximum" | "minimum" | "isSorted" => {
+                                    self.add_trait_bound(var_id, "Ord".to_string());
+                                }
+                                "sum" | "product" => {
+                                    self.add_trait_bound(var_id, "Num".to_string());
+                                }
+                                "unique" => {
+                                    self.add_trait_bound(var_id, "Eq".to_string());
+                                }
+                                _ => {}
                             }
                         }
                     }
