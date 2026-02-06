@@ -3205,7 +3205,27 @@ impl<'a> InferCtx<'a> {
                                 self.instantiate_function(&sig)
                             }
                         } else if let Some(ty) = self.lookup_constructor(name) {
-                            // Could be a constructor call
+                            // Constructor call - check arity
+                            match &ty {
+                                Type::Function(ft) => {
+                                    // Constructor with fields - check arg count
+                                    if ft.params.len() != args.len() {
+                                        return Err(TypeError::ArityMismatch {
+                                            expected: ft.params.len(),
+                                            found: args.len(),
+                                        });
+                                    }
+                                }
+                                _ => {
+                                    // Unit constructor (no fields) - should not be called with args
+                                    if !args.is_empty() {
+                                        return Err(TypeError::ArityMismatch {
+                                            expected: 0,
+                                            found: args.len(),
+                                        });
+                                    }
+                                }
+                            }
                             ty
                         } else {
                             // Function not found with this arity - check if it exists with different arity
@@ -3625,6 +3645,12 @@ impl<'a> InferCtx<'a> {
                     if fields.is_empty() {
                         // Unit constructor (no arguments) - ctor_ty is just the result type
                         Ok(ctor_ty)
+                    } else if !matches!(&ctor_ty, Type::Function(_)) {
+                        // Unit constructor called with arguments - error
+                        return Err(TypeError::ArityMismatch {
+                            expected: 0,
+                            found: fields.len(),
+                        });
                     } else {
                         // Positional/named constructor - ctor_ty is a Function type
                         // Infer argument types and unify with constructor parameter types
