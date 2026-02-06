@@ -1010,16 +1010,10 @@ impl<'a> InferCtx<'a> {
             match &resolved {
                 Type::Var(_) => {} // Still unresolved, skip
                 Type::Function(_) => {
-                    // Function types never implement standard traits (Eq, Ord, Num, etc.)
-                    if resolved.has_any_type_var() {
-                        // Still has unresolved vars - likely a false positive from batch
-                        // inference where type variables from different functions got
-                        // confused (e.g., a Num constraint landing on a callback type).
-                        // Skip these to avoid false positives.
-                        continue;
-                    }
-                    // Fully concrete function type - definitely an error.
-                    // e.g., (Int) -> Int does not implement Eq
+                    // Function types NEVER implement standard traits (Eq, Ord, Num, etc.)
+                    // regardless of their parameter/return types. So even with unresolved
+                    // type vars in the function signature, this is always an error.
+                    // Display the type, substituting what we can.
                     return Err(TypeError::MissingTraitImpl {
                         ty: resolved.display(),
                         trait_name: trait_name.clone(),

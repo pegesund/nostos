@@ -1,0 +1,3 @@
+# expect_error: does not implement Eq
+# Inline lambda expressions should not bypass Eq trait checking
+main() = (x => x) == (y => y)

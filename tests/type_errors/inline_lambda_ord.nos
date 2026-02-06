@@ -1,0 +1,3 @@
+# expect_error: does not implement Ord
+# Inline lambda expressions should not bypass Ord trait checking
+main() = (x => x) > (y => y)
