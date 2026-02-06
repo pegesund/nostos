@@ -1719,17 +1719,37 @@ impl<'a> InferCtx<'a> {
                             match self.unify_types(&resolved_arg, &resolved_param) {
                                 Ok(()) => {}
                                 Err(TypeError::UnificationFailed(ref a, ref b)) => {
-                                    // Structural mismatch: non-function where function is expected
-                                    // (e.g., [1,2,3].map(42) - passing Int where (a -> b) expected).
-                                    // This is always an error regardless of type variables.
-                                    let arg_is_non_function = !matches!(&resolved_arg, Type::Function(_) | Type::Var(_));
-                                    let param_is_function = matches!(&resolved_param, Type::Function(_));
-                                    if arg_is_non_function && param_is_function {
-                                        self.last_error_span = call.span;
-                                        return Err(TypeError::Mismatch {
-                                            expected: "function".to_string(),
-                                            found: resolved_arg.display(),
-                                        });
+                                    // Structural mismatch: the argument has a fundamentally
+                                    // different type structure than the parameter expects.
+                                    // These mismatches are always errors regardless of type variables
+                                    // inside the expected type (e.g., List[?b] with ?b unresolved).
+                                    let arg_is_concrete_simple = matches!(&resolved_arg,
+                                        Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 |
+                                        Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64 |
+                                        Type::Float | Type::Float32 | Type::Float64 |
+                                        Type::BigInt | Type::Decimal | Type::String | Type::Bool | Type::Char |
+                                        Type::Unit);
+                                    if arg_is_concrete_simple {
+                                        // A simple concrete type can never unify with a structural type
+                                        let param_is_structural = matches!(&resolved_param,
+                                            Type::Function(_) | Type::List(_) | Type::Map(_, _) |
+                                            Type::Set(_) | Type::Tuple(_) | Type::Array(_));
+                                        if param_is_structural {
+                                            let expected = match &resolved_param {
+                                                Type::Function(_) => "function".to_string(),
+                                                Type::List(_) => "List".to_string(),
+                                                Type::Map(_, _) => "Map".to_string(),
+                                                Type::Set(_) => "Set".to_string(),
+                                                Type::Tuple(_) => "Tuple".to_string(),
+                                                Type::Array(_) => "Array".to_string(),
+                                                _ => resolved_param.display(),
+                                            };
+                                            self.last_error_span = call.span;
+                                            return Err(TypeError::Mismatch {
+                                                expected,
+                                                found: resolved_arg.display(),
+                                            });
+                                        }
                                     }
 
                                     // Check for function parameter type conflicts

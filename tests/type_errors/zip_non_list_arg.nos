@@ -1,0 +1,3 @@
+# expect_error: expected List
+# zip requires a List argument, not a primitive
+main() = [1,2,3].zip(42)
