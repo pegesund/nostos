@@ -1,4 +1,4 @@
-# expect_error: type mismatch
+# expect_error: does not implement Concat
 # Inner list is List[Int] but ++ expects String operands
 main() = {
     xs = [[1, 2], [3, 4]]

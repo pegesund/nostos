@@ -1,4 +1,4 @@
-# expect_error: type mismatch
+# expect_error: does not implement Concat
 # length() returns Int, Int ++ String should be caught
 main() = {
     xs = [1, 2, 3]

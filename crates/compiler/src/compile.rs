@@ -25434,9 +25434,13 @@ impl Compiler {
                     let var_id = (ty.chars().next().expect("single char type should have a char") as u32) - ('a' as u32) + 1;
                     nostos_types::Type::Var(var_id)
                 } else if ty.len() == 1 && ty.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false) {
-                    // Single uppercase letter is a type parameter like T, U, V
-                    // These are used in generic function signatures
-                    nostos_types::Type::TypeParam(ty.to_string())
+                    // Single uppercase letter could be a type parameter (T, U, V)
+                    // OR a single-letter type name. Check if it's a known type first.
+                    if self.types.contains_key(ty) {
+                        nostos_types::Type::Named { name: ty.to_string(), args: vec![] }
+                    } else {
+                        nostos_types::Type::TypeParam(ty.to_string())
+                    }
                 } else {
                     nostos_types::Type::Named { name: ty.to_string(), args: vec![] }
                 }

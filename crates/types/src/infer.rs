@@ -98,9 +98,9 @@ pub struct InferCtx<'a> {
     /// Deferred length/len checks: the argument type and call span.
     /// length() only works on collections (List, String, Map, Set, arrays).
     deferred_length_checks: Vec<(Type, Span)>,
-    /// Deferred concat (++) checks: the operand type and span.
-    /// ++ only works on String or List[T].
-    deferred_concat_checks: Vec<(Type, Span)>,
+    /// Deferred concat (++) checks: (left_type, right_type, span).
+    /// ++ only works on String ++ String or List[T] ++ List[T].
+    deferred_concat_checks: Vec<(Type, Type, Span)>,
     /// Deferred Set/Map return type checks: function call return types that may
     /// resolve to Set[X] or Map[K, V], requiring Hash+Eq on element/key type.
     deferred_collection_ret_checks: Vec<(Type, Span)>,
@@ -1321,7 +1321,6 @@ impl<'a> InferCtx<'a> {
             }
             self.deferred_has_field = still_deferred;
         } // end loop
-
         // Post-method-call: check length/len calls require types that VM supports
         // VM supports: List, String, Tuple, Float64Array, Int64Array
         // Note: Map and Set should use .size() instead
@@ -1351,19 +1350,40 @@ impl<'a> InferCtx<'a> {
         }
 
         // Post-method-call: check deferred concat (++) operations
-        // ++ only works on String or List[T]. When both operands were type variables,
+        // ++ only works on String ++ String or List[T] ++ List[T].
+        // When operands were type variables (e.g., from deferred field access),
         // we deferred the check. Now that types are resolved, verify they're valid.
-        for (operand_ty, _span) in std::mem::take(&mut self.deferred_concat_checks) {
-            let resolved = self.env.apply_subst(&operand_ty);
-            let is_valid_for_concat = matches!(
-                &resolved,
-                Type::String | Type::List(_) | Type::Var(_)
-            );
-            if !is_valid_for_concat {
-                return Err(TypeError::MissingTraitImpl {
-                    ty: resolved.display(),
-                    trait_name: "Concat".to_string(),
-                });
+        for (left_ty, right_ty, _span) in std::mem::take(&mut self.deferred_concat_checks) {
+            let resolved_left = self.env.apply_subst(&left_ty);
+            let resolved_right = self.env.apply_subst(&right_ty);
+            // Check each operand - must be String, List, or still-unresolved Var
+            for resolved in [&resolved_left, &resolved_right] {
+                let is_valid = matches!(
+                    resolved,
+                    Type::String | Type::List(_) | Type::Var(_)
+                );
+                if !is_valid {
+                    return Err(TypeError::MissingTraitImpl {
+                        ty: resolved.display(),
+                        trait_name: "Concat".to_string(),
+                    });
+                }
+            }
+            // If both resolved to concrete types, verify they're compatible
+            match (&resolved_left, &resolved_right) {
+                (Type::List(_), Type::String) | (Type::String, Type::List(_)) => {
+                    return Err(TypeError::Mismatch {
+                        expected: resolved_left.display(),
+                        found: resolved_right.display(),
+                    });
+                }
+                (Type::List(a), Type::List(b)) => {
+                    let _ = self.unify_types(a, b);
+                }
+                (Type::String, Type::String) => {}
+                _ => {
+                    // At least one is still Var or they match - OK
+                }
             }
         }
 
@@ -4341,9 +4361,10 @@ impl<'a> InferCtx<'a> {
                     (Type::String, Type::String) => {
                         Ok(Type::String)
                     }
-                    // String ++ Var or Var ++ String - constrain var to String
+                    // String ++ Var or Var ++ String - defer check until Var resolves
+                    // (the Var may come from a deferred field access that hasn't resolved yet)
                     (Type::String, Type::Var(_)) | (Type::Var(_), Type::String) => {
-                        self.unify(left_ty.clone(), right_ty);
+                        self.deferred_concat_checks.push((left_ty.clone(), right_ty.clone(), span));
                         Ok(Type::String)
                     }
                     // List ++ String or String ++ List is always a type error
@@ -4359,7 +4380,7 @@ impl<'a> InferCtx<'a> {
                         // Add Concat trait bound so it propagates through wrapper signatures
                         self.require_trait(left_ty.clone(), "Concat");
                         // Store for deferred check after type resolution
-                        self.deferred_concat_checks.push((left_ty.clone(), span));
+                        self.deferred_concat_checks.push((left_ty.clone(), right_ty.clone(), span));
                         Ok(left_ty)
                     }
                     _ => {
