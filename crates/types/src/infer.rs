@@ -1535,7 +1535,7 @@ impl<'a> InferCtx<'a> {
                         "map" | "filter" | "fold" | "flatMap" | "any" | "all" | "find" |
                         "sort" | "sortBy" | "head" | "tail" | "init" | "last" |
                         "reverse" | "sum" | "product" | "zip" | "unzip" | "take" | "drop" |
-                        "unique" | "flatten" | "position" | "indexOf" |
+                        "unique" | "flatten" | "position" | "indexOf" | "contains" |
                         "push" | "pop" | "nth" | "slice" |
                         "scanl" | "foldl" | "foldr" | "enumerate" | "intersperse" |
                         "spanList" | "groupBy" | "transpose" | "pairwise" | "isSorted" |
@@ -2208,13 +2208,29 @@ impl<'a> InferCtx<'a> {
                                 "sum" | "product" => {
                                     self.add_trait_bound(var_id, "Num".to_string());
                                 }
-                                "unique" => {
+                                "unique" | "contains" | "indexOf" => {
                                     self.add_trait_bound(var_id, "Eq".to_string());
                                 }
                                 _ => {}
                             }
                         }
                     }
+                    continue;
+                }
+
+                // Special handling for `contains` with Var receiver:
+                // `contains` is shared between List and String, so we can't force
+                // the receiver to be a List. But both return Bool, and List.contains
+                // requires Eq on the search argument (String already implements Eq).
+                if matches!(&resolved, Type::Var(_)) && call.method_name == "contains" {
+                    let _ = self.unify_types(&call.ret_ty, &Type::Bool);
+                    if let Some(arg_ty) = call.arg_types.first() {
+                        let resolved_arg = self.env.apply_subst(arg_ty);
+                        if let Type::Var(var_id) = resolved_arg {
+                            self.add_trait_bound(var_id, "Eq".to_string());
+                        }
+                    }
+                    made_progress = true;
                     continue;
                 }
 

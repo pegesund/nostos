@@ -1,0 +1,7 @@
+# expect_error: does not implement Eq
+# Eq constraint must propagate through wrapper around contains
+myContains(xs, x) = xs.contains(x)
+main() = {
+    fns = [x => x + 1, x => x + 2]
+    myContains(fns, x => x + 1)
+}
