@@ -24402,10 +24402,25 @@ impl Compiler {
         // e.g., getFirst(pairs) = { pair = pairs.head(); pair.0 ++ " items" }
         // → HasMethod(head,b) a, HasField(0,c) b, Concat c => a -> String
         let deferred_methods = ctx.get_deferred_method_on_var().to_vec();
-        for (ty, method_name, _arg_types, ret_ty, _span) in &deferred_methods {
+        for (ty, method_name, arg_types, ret_ty, _span) in &deferred_methods {
             let resolved = ctx.env.apply_subst(ty);
             if let nostos_types::Type::Var(var_id) = &resolved {
                 if let Some(&var_letter) = var_map.get(var_id) {
+                    // Encode arg types using | separator: HasMethod(name|arg1|arg2,retparam) receiver
+                    // This enables callers to validate method argument type compatibility.
+                    // e.g., hasString(xs) = xs.contains("hello") → HasMethod(contains|String) a
+                    let mut encoded_args = Vec::new();
+                    for arg_ty in arg_types {
+                        let resolved_arg = ctx.env.apply_subst(arg_ty);
+                        let arg_str = self.format_type_normalized_both(&resolved_arg, &var_map, &type_param_map);
+                        encoded_args.push(arg_str);
+                    }
+                    let args_suffix = if encoded_args.is_empty() {
+                        String::new()
+                    } else {
+                        format!("|{}", encoded_args.join("|"))
+                    };
+
                     // Check if return type is an unresolved var - if so, encode it
                     let resolved_ret_method = ctx.env.apply_subst(ret_ty);
                     if let nostos_types::Type::Var(ret_var_id) = &resolved_ret_method {
@@ -24418,10 +24433,10 @@ impl Compiler {
                             next_var_letter += 1;
                             letter
                         };
-                        bounds.push(format!("HasMethod({},{}) {}", method_name, ret_letter, var_letter));
+                        bounds.push(format!("HasMethod({}{},{}) {}", method_name, args_suffix, ret_letter, var_letter));
                     } else {
                         // Return type is concrete - no need for result param
-                        bounds.push(format!("HasMethod({}) {}", method_name, var_letter));
+                        bounds.push(format!("HasMethod({}{}) {}", method_name, args_suffix, var_letter));
                     }
                 }
             }

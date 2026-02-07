@@ -638,33 +638,52 @@ impl<'a> InferCtx<'a> {
             // because the type environment may not have all trait impls registered.
             if let Type::Var(var_id) = &fresh_var {
                 for constraint in &type_param.constraints {
-                    // Handle HasMethod constraints: "HasMethod(methodname)" or "HasMethod(methodname,resultparam)"
-                    // The resultparam variant links method return type to a type param,
-                    // enabling proper type flow through generic method chains
-                    // (e.g., getFirst(pairs) = { pair = pairs.head(); pair.0 ++ " items" }).
+                    // Handle HasMethod constraints with optional arg types and return param:
+                    //   HasMethod(name) - simple existence check
+                    //   HasMethod(name|arg1|arg2) - with concrete/param arg types
+                    //   HasMethod(name,retparam) - with return type param (no arg types)
+                    //   HasMethod(name|arg1,retparam) - with both arg types and return param
+                    // Arg types enable checking that callers provide compatible types.
+                    // e.g., hasString(xs) = xs.contains("hello") → HasMethod(contains|String) a
                     if let Some(inner) = constraint.strip_prefix("HasMethod(").and_then(|s| s.strip_suffix(')')) {
-                        if let Some(comma_pos) = inner.find(',') {
-                            // HasMethod(name,resultparam) - push as PendingMethodCall
-                            // so check_pending_method_calls dispatches the method and
-                            // unifies its return type with the result param's fresh var.
-                            let method_name = &inner[..comma_pos];
-                            let result_param = inner[comma_pos + 1..].trim();
-                            let result_ty = param_subst.get(result_param)
-                                .cloned()
-                                .or_else(|| {
-                                    if result_param.len() == 1 {
-                                        let ch = result_param.chars().next().unwrap();
-                                        if ch.is_ascii_lowercase() {
-                                            let orig_id = (ch as u32) - ('a' as u32) + 1;
-                                            var_subst.get(&orig_id).cloned()
+                        // Split on comma for return param (comma is AFTER any |args)
+                        let (method_and_args, result_param_opt) = if let Some(comma_pos) = inner.find(',') {
+                            (&inner[..comma_pos], Some(inner[comma_pos + 1..].trim()))
+                        } else {
+                            (inner, None)
+                        };
+                        // Split method_and_args on | for arg types
+                        let parts: Vec<&str> = method_and_args.split('|').collect();
+                        let method_name = parts[0];
+                        let encoded_arg_types = &parts[1..]; // may be empty
+
+                        // Parse arg types from their string representations
+                        let parsed_arg_types: Vec<Type> = encoded_arg_types.iter().map(|s| {
+                            Self::parse_simple_type(s, &param_subst, &var_subst)
+                        }).collect();
+
+                        if result_param_opt.is_some() || !parsed_arg_types.is_empty() {
+                            // Has return param or arg types - push as PendingMethodCall
+                            let result_ty = if let Some(result_param) = result_param_opt {
+                                param_subst.get(result_param)
+                                    .cloned()
+                                    .or_else(|| {
+                                        if result_param.len() == 1 {
+                                            let ch = result_param.chars().next().unwrap();
+                                            if ch.is_ascii_lowercase() {
+                                                let orig_id = (ch as u32) - ('a' as u32) + 1;
+                                                var_subst.get(&orig_id).cloned()
+                                            } else { None }
                                         } else { None }
-                                    } else { None }
-                                })
-                                .unwrap_or_else(|| self.fresh());
+                                    })
+                                    .unwrap_or_else(|| self.fresh())
+                            } else {
+                                self.fresh()
+                            };
                             self.pending_method_calls.push(PendingMethodCall {
                                 receiver_ty: fresh_var.clone(),
                                 method_name: method_name.to_string(),
-                                arg_types: vec![],
+                                arg_types: parsed_arg_types,
                                 named_args: vec![],
                                 ret_ty: result_ty,
                                 span: None,
@@ -673,7 +692,7 @@ impl<'a> InferCtx<'a> {
                             // HasMethod(name) - simple existence check
                             self.deferred_method_existence_checks.push((
                                 fresh_var.clone(),
-                                inner.to_string(),
+                                method_name.to_string(),
                                 None,
                             ));
                         }
@@ -754,35 +773,48 @@ impl<'a> InferCtx<'a> {
                         if let Type::Var(var_subst_id) = var_subst_var {
                             for bound in &bounds {
                                 if let Some(inner) = bound.strip_prefix("HasMethod(").and_then(|s| s.strip_suffix(')')) {
-                                    if let Some(comma_pos) = inner.find(',') {
-                                        // HasMethod(name,resultparam)
-                                        let method_name = &inner[..comma_pos];
-                                        let result_param = inner[comma_pos + 1..].trim();
-                                        let result_ty = param_subst.get(result_param)
-                                            .cloned()
-                                            .or_else(|| {
-                                                if result_param.len() == 1 {
-                                                    let ch = result_param.chars().next().unwrap();
-                                                    if ch.is_ascii_lowercase() {
-                                                        let orig_id = (ch as u32) - ('a' as u32) + 1;
-                                                        var_subst.get(&orig_id).cloned()
+                                    // Parse same format as main section: name|arg1|arg2,retparam
+                                    let (method_and_args, result_param_opt) = if let Some(comma_pos) = inner.find(',') {
+                                        (&inner[..comma_pos], Some(inner[comma_pos + 1..].trim()))
+                                    } else {
+                                        (inner, None)
+                                    };
+                                    let parts: Vec<&str> = method_and_args.split('|').collect();
+                                    let method_name = parts[0];
+                                    let encoded_arg_types = &parts[1..];
+                                    let parsed_arg_types: Vec<Type> = encoded_arg_types.iter().map(|s| {
+                                        Self::parse_simple_type(s, &param_subst, &var_subst)
+                                    }).collect();
+
+                                    if result_param_opt.is_some() || !parsed_arg_types.is_empty() {
+                                        let result_ty = if let Some(result_param) = result_param_opt {
+                                            param_subst.get(result_param)
+                                                .cloned()
+                                                .or_else(|| {
+                                                    if result_param.len() == 1 {
+                                                        let ch = result_param.chars().next().unwrap();
+                                                        if ch.is_ascii_lowercase() {
+                                                            let orig_id = (ch as u32) - ('a' as u32) + 1;
+                                                            var_subst.get(&orig_id).cloned()
+                                                        } else { None }
                                                     } else { None }
-                                                } else { None }
-                                            })
-                                            .unwrap_or_else(|| self.fresh());
+                                                })
+                                                .unwrap_or_else(|| self.fresh())
+                                        } else {
+                                            self.fresh()
+                                        };
                                         self.pending_method_calls.push(PendingMethodCall {
                                             receiver_ty: var_subst_var.clone(),
                                             method_name: method_name.to_string(),
-                                            arg_types: vec![],
+                                            arg_types: parsed_arg_types,
                                             named_args: vec![],
                                             ret_ty: result_ty,
                                             span: None,
                                         });
                                     } else {
-                                        // HasMethod(name) - simple existence check
                                         self.deferred_method_existence_checks.push((
                                             var_subst_var.clone(),
-                                            inner.to_string(),
+                                            method_name.to_string(),
                                             None,
                                         ));
                                     }
@@ -882,6 +914,38 @@ impl<'a> InferCtx<'a> {
                 self.collect_var_ids(inner, ids);
             }
             _ => {}
+        }
+    }
+
+    /// Parse a simple type string from a signature encoding back into a Type.
+    /// Handles primitives (Int, String, Bool, etc.), single-letter type params,
+    /// and basic compound types (List[X], (X, Y)).
+    fn parse_simple_type(s: &str, param_subst: &HashMap<String, Type>, var_subst: &HashMap<u32, Type>) -> Type {
+        match s.trim() {
+            "Int" => Type::Int,
+            "String" => Type::String,
+            "Bool" => Type::Bool,
+            "Float" => Type::Float,
+            "Char" => Type::Char,
+            "()" => Type::Unit,
+            s if s.starts_with("List[") && s.ends_with(']') => {
+                let inner = &s[5..s.len() - 1];
+                Type::List(Box::new(Self::parse_simple_type(inner, param_subst, var_subst)))
+            }
+            s if s.len() == 1 && s.chars().next().unwrap().is_ascii_lowercase() => {
+                let ch = s.chars().next().unwrap();
+                // Look up in param_subst first, then var_subst
+                param_subst.get(s).cloned()
+                    .or_else(|| {
+                        let orig_id = (ch as u32) - ('a' as u32) + 1;
+                        var_subst.get(&orig_id).cloned()
+                    })
+                    .unwrap_or(Type::String) // Should not happen in practice
+            }
+            _ => {
+                // Unknown type string - return a Named type as fallback
+                Type::Named { name: s.to_string(), args: vec![] }
+            }
         }
     }
 
