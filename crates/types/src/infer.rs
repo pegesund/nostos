@@ -2181,6 +2181,40 @@ impl<'a> InferCtx<'a> {
                     }
                 });
 
+                // Cross-type UFCS lookup: when {ReceiverType}.{method} is not found,
+                // try other type-prefixed entries (e.g., String.join when receiver is List).
+                // This is the general UFCS pattern: methods may be registered under a
+                // different type prefix but still accept the receiver type as first param.
+                let fn_type_opt = if fn_type_opt.is_some() {
+                    fn_type_opt
+                } else {
+                    let resolved_receiver = self.env.apply_subst(&call.receiver_ty);
+                    let cross_prefixes = ["List", "String", "Map", "Set"];
+                    let mut cross_found = None;
+                    for prefix in &cross_prefixes {
+                        if *prefix == type_name.as_str() { continue; }
+                        let cross_name = format!("{}.{}", prefix, call.method_name);
+                        if let Some(ft) = self.env.functions.get(&cross_name) {
+                            // Check if first param structurally matches receiver type
+                            if let Some(first_param) = ft.params.first() {
+                                let compatible = match (&resolved_receiver, first_param) {
+                                    (Type::List(_), Type::List(_)) => true,
+                                    (Type::Map(_, _), Type::Map(_, _)) => true,
+                                    (Type::Set(_), Type::Set(_)) => true,
+                                    (Type::String, Type::String) => true,
+                                    (_, Type::Var(_)) => true,
+                                    _ => false,
+                                };
+                                if compatible {
+                                    cross_found = Some(ft.clone());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    cross_found
+                };
+
                 if let Some(fn_type) = fn_type_opt {
                     let func_ty = self.instantiate_function(&fn_type);
                     if let Type::Function(ft) = func_ty {
@@ -2619,12 +2653,9 @@ impl<'a> InferCtx<'a> {
                         made_progress = true;
                     }
                 } else {
-                    // Method not found for this type in the inference environment
-                    // For known builtin methods that only work on List/String, we can
-                    // definitively report an error if called on a primitive.
-                    // For unknown methods, assume they might be trait methods.
-                    // Methods that are definitively collection-only (not used by MVar, reactive, etc.)
-                    // Note: "get" and "set" are excluded because they're also used on MVar/reactive types
+                    // Method not found for this type in the inference environment.
+                    // For known builtin methods that only work on List/String, report an error.
+                    // Note: "get" and "set" are excluded — also used on MVar/reactive types.
                     let list_only_methods = [
                         "length", "len", "head", "tail", "init", "last", "nth",
                         "push", "pop", "slice", "concat", "reverse", "sort",
@@ -2634,6 +2665,7 @@ impl<'a> InferCtx<'a> {
                         "intersperse", "spanList", "groupBy", "transpose", "pairwise",
                         "isSorted", "isSortedBy", "enumerate", "maximum", "minimum",
                         "takeWhile", "dropWhile", "partition", "zipWith", "flatMap",
+                        "join",
                     ];
                     let string_methods = ["split", "trim", "trimStart", "trimEnd",
                                            "toUpper", "toLower", "startsWith", "endsWith",
@@ -2642,19 +2674,7 @@ impl<'a> InferCtx<'a> {
                     let is_list_only = list_only_methods.contains(&call.method_name.as_str());
                     let is_string_method = string_methods.contains(&call.method_name.as_str());
 
-                    // We already tried all lookup paths (qualified name, stdlib,
-                    // BUILTINS, Option/Result mappings) and found nothing.
-                    // If the method is a known list-only or string-only method,
-                    // report an error - this type doesn't support it.
-                    if is_list_only {
-                        self.last_error_span = call.span;
-                        return Err(TypeError::UndefinedMethod {
-                            method: call.method_name.clone(),
-                            receiver_type: type_name.to_string(),
-                        });
-                    }
-
-                    if is_string_method {
+                    if is_list_only || is_string_method {
                         self.last_error_span = call.span;
                         return Err(TypeError::UndefinedMethod {
                             method: call.method_name.clone(),
