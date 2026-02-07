@@ -24975,8 +24975,8 @@ impl Compiler {
                         s.contains('[') && !s.starts_with('[') && !s.starts_with('(')
                     };
 
-                    if (is_named_generic(type1) && (is_primitive(type2) || is_func_type(type2))) ||
-                       (is_named_generic(type2) && (is_primitive(type1) || is_func_type(type1))) {
+                    if (is_named_generic(type1) && (is_primitive(type2) || is_func_type(type2) || is_user_record_type(type2))) ||
+                       (is_named_generic(type2) && (is_primitive(type1) || is_func_type(type1) || is_user_record_type(type1))) {
                         // Exception: Bool vs Result with unresolved error type is a false positive
                         // from the ? operator on functions that use throw instead of returning Result
                         let is_qmark_confusion = |prim: &str, generic: &str| {

@@ -4360,6 +4360,8 @@ impl<'a> InferCtx<'a> {
                                 // Use unify_at with call span for precise error reporting
                                 for (param_ty, arg_ty) in ft.params.iter().zip(arg_types.iter()) {
                                     self.unify_at(arg_ty.clone(), param_ty.clone(), *call_span);
+                                    // Record for post-solve structural mismatch checking
+                                    self.deferred_fn_call_checks.push((param_ty.clone(), arg_ty.clone(), *call_span));
                                 }
                                 // Save return type for post-solve Set/Map Hash+Eq checking
                                 self.deferred_collection_ret_checks.push(((*ft.ret).clone(), *call_span));
@@ -4400,6 +4402,8 @@ impl<'a> InferCtx<'a> {
                             // Use unify_at with call span for precise error reporting
                             for (param_ty, arg_ty) in ft.params.iter().zip(arg_types.iter()) {
                                 self.unify_at(arg_ty.clone(), param_ty.clone(), *call_span);
+                                // Record for post-solve structural mismatch checking
+                                self.deferred_fn_call_checks.push((param_ty.clone(), arg_ty.clone(), *call_span));
                             }
                             // Save return type for post-solve Set/Map Hash+Eq checking
                             self.deferred_collection_ret_checks.push(((*ft.ret).clone(), *call_span));
