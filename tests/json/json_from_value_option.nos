@@ -1,0 +1,14 @@
+# expect: default
+# fromJsonValue handles Option[T] fields - null maps to None
+use stdlib.json.{jsonParse, fromJsonValue}
+
+type Config = { name: String, desc: Option[String] }
+
+getDesc(Some(s)) = s
+getDesc(None) = "default"
+
+main() = {
+    json = jsonParse("{\"name\": \"hello\", \"desc\": null}")
+    c: Config = fromJsonValue("Config", json)
+    getDesc(c.desc)
+}

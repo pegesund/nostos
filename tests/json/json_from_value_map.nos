@@ -1,0 +1,11 @@
+# expect: 300
+# fromJsonValue handles Map[String, V] fields
+use stdlib.json.{jsonParse, fromJsonValue}
+
+type Settings = { config: Map[String, Int] }
+
+main() = {
+    json = jsonParse("{\"config\": {\"width\": 100, \"height\": 200}}")
+    s: Settings = fromJsonValue("Settings", json)
+    Map.get(s.config, "width") + Map.get(s.config, "height")
+}

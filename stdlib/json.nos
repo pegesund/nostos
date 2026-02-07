@@ -272,9 +272,58 @@ pub convertPrimitive(json, typeName) =
             }
             _ -> throw("Expected String for Char, got " ++ show(json))
         }
+    else if String.startsWith(typeName, "List[") then {
+        (_, typeArgs) = parseTypeName(typeName)
+        elementType = match typeArgs {
+            [t] -> t
+            _ -> throw("List expects exactly one type argument in " ++ typeName)
+        }
+        match json {
+            Array(items) -> convertList(items, elementType)
+            _ -> throw("Expected Array for " ++ typeName ++ ", got " ++ show(json))
+        }
+    }
+    else if String.startsWith(typeName, "Option[") then {
+        (_, typeArgs) = parseTypeName(typeName)
+        innerType = match typeArgs {
+            [t] -> t
+            _ -> throw("Option expects exactly one type argument in " ++ typeName)
+        }
+        match json {
+            Null -> None
+            _ -> Some(convertPrimitive(json, innerType))
+        }
+    }
+    else if String.startsWith(typeName, "Map[") then {
+        (_, typeArgs) = parseTypeName(typeName)
+        (keyType, valType) = match typeArgs {
+            [k, v] -> (k, v)
+            _ -> throw("Map expects exactly two type arguments in " ++ typeName)
+        }
+        match json {
+            Object(pairs) -> convertMapPairs(pairs, keyType, valType, %{})
+            _ -> throw("Expected Object for " ++ typeName ++ ", got " ++ show(json))
+        }
+    }
     else
         # Nested type - recursive call
         fromJsonValue(typeName, json)
+
+# Convert a JSON array to a typed list
+pub convertList(items, elementType) = match items {
+    [] -> []
+    [item | rest] -> [convertPrimitive(item, elementType) | convertList(rest, elementType)]
+}
+
+# Convert JSON object pairs to a typed Map
+pub convertMapPairs(pairs, keyType, valType, acc) = match pairs {
+    [] -> acc
+    [(k, v) | rest] -> {
+        convertedKey = convertPrimitive(String(k), keyType)
+        convertedVal = convertPrimitive(v, valType)
+        convertMapPairs(rest, keyType, valType, Map.insert(acc, convertedKey, convertedVal))
+    }
+}
 
 # Build field map for record construction
 pub buildRecordFields(fields, pairs, acc) = match fields {
@@ -387,11 +436,36 @@ pub buildTypeParamMap(typeParams, typeArgs, acc) = match typeParams {
         [arg | restArgs] -> buildTypeParamMap(restParams, restArgs, Map.insert(acc, param, arg))
     }
 }
+# Join type args with ", "
+pub joinTypeArgs(args) = match args {
+    [] -> ""
+    [x] -> x
+    [x | rest] -> x ++ ", " ++ joinTypeArgs(rest)
+}
+
+# Rebuild type name from base and args: ("List", ["Int"]) -> "List[Int]"
+pub rebuildTypeName(baseName, args) = match args {
+    [] -> baseName
+    _ -> baseName ++ "[" ++ joinTypeArgs(args) ++ "]"
+}
+
+# Recursively substitute type params in a list of type arguments
+pub substituteTypeArgs(args, typeParamMap) = match args {
+    [] -> []
+    [arg | rest] -> [substituteTypeParam(arg, typeParamMap) | substituteTypeArgs(rest, typeParamMap)]
+}
+
 # Substitute type parameter in a field type
+# Handles both simple params (T -> Int) and compound types (List[T] -> List[Int])
 pub substituteTypeParam(fieldType, typeParamMap) =
-    if Map.contains(typeParamMap, fieldType)
+    if Map.isEmpty(typeParamMap) then fieldType
+    else if Map.contains(typeParamMap, fieldType)
     then Map.get(typeParamMap, fieldType)
-    else fieldType
+    else {
+        (baseName, args) = parseTypeName(fieldType)
+        if args == [] then fieldType
+        else rebuildTypeName(baseName, substituteTypeArgs(args, typeParamMap))
+    }
 
 # Convert Json to typed value by type name
 # Supports parameterized types like "Result[Int, String]"

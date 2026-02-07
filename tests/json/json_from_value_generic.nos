@@ -1,0 +1,11 @@
+# expect: [1, 2, 3]
+# fromJsonValue substitutes type params in compound fields (List[T] -> List[Int])
+use stdlib.json.{jsonParse, fromJsonValue}
+
+type Wrapper[T] = { value: T, items: List[T] }
+
+main() = {
+    json = jsonParse("{\"value\": 42, \"items\": [1, 2, 3]}")
+    w = fromJsonValue("Wrapper[Int]", json)
+    w.items
+}

@@ -1,0 +1,14 @@
+# expect: world
+# fromJsonValue handles Option[T] fields - value maps to Some
+use stdlib.json.{jsonParse, fromJsonValue}
+
+type Config = { name: String, desc: Option[String] }
+
+getDesc(Some(s)) = s
+getDesc(None) = "default"
+
+main() = {
+    json = jsonParse("{\"name\": \"hello\", \"desc\": \"world\"}")
+    c: Config = fromJsonValue("Config", json)
+    getDesc(c.desc)
+}

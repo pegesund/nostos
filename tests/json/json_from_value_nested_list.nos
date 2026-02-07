@@ -1,0 +1,11 @@
+# expect: 5
+# fromJsonValue handles nested List[List[Int]]
+use stdlib.json.{jsonParse, fromJsonValue}
+
+type Matrix = { data: List[List[Int]] }
+
+main() = {
+    json = jsonParse("{\"data\": [[1, 2], [3, 4, 5]]}")
+    m: Matrix = fromJsonValue("Matrix", json)
+    m.data[1][2]
+}

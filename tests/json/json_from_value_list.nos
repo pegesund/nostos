@@ -1,0 +1,12 @@
+# expect: Widget
+# fromJsonValue handles List[Record] fields (issue #8)
+use stdlib.json.{jsonParse, fromJsonValue}
+
+type Item = { name: String, price: Float }
+type Order = { items: List[Item], total: Float }
+
+main() = {
+    json = jsonParse("{\"items\": [{\"name\": \"Widget\", \"price\": 9.99}], \"total\": 9.99}")
+    order: Order = fromJsonValue("Order", json)
+    head(order.items).name
+}
