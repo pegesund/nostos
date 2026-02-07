@@ -638,13 +638,45 @@ impl<'a> InferCtx<'a> {
             // because the type environment may not have all trait impls registered.
             if let Type::Var(var_id) = &fresh_var {
                 for constraint in &type_param.constraints {
-                    // Handle HasMethod constraints: "HasMethod(methodname)" → deferred existence check
-                    if let Some(method_name) = constraint.strip_prefix("HasMethod(").and_then(|s| s.strip_suffix(')')) {
-                        self.deferred_method_existence_checks.push((
-                            fresh_var.clone(),
-                            method_name.to_string(),
-                            None,
-                        ));
+                    // Handle HasMethod constraints: "HasMethod(methodname)" or "HasMethod(methodname,resultparam)"
+                    // The resultparam variant links method return type to a type param,
+                    // enabling proper type flow through generic method chains
+                    // (e.g., getFirst(pairs) = { pair = pairs.head(); pair.0 ++ " items" }).
+                    if let Some(inner) = constraint.strip_prefix("HasMethod(").and_then(|s| s.strip_suffix(')')) {
+                        if let Some(comma_pos) = inner.find(',') {
+                            // HasMethod(name,resultparam) - push as PendingMethodCall
+                            // so check_pending_method_calls dispatches the method and
+                            // unifies its return type with the result param's fresh var.
+                            let method_name = &inner[..comma_pos];
+                            let result_param = inner[comma_pos + 1..].trim();
+                            let result_ty = param_subst.get(result_param)
+                                .cloned()
+                                .or_else(|| {
+                                    if result_param.len() == 1 {
+                                        let ch = result_param.chars().next().unwrap();
+                                        if ch.is_ascii_lowercase() {
+                                            let orig_id = (ch as u32) - ('a' as u32) + 1;
+                                            var_subst.get(&orig_id).cloned()
+                                        } else { None }
+                                    } else { None }
+                                })
+                                .unwrap_or_else(|| self.fresh());
+                            self.pending_method_calls.push(PendingMethodCall {
+                                receiver_ty: fresh_var.clone(),
+                                method_name: method_name.to_string(),
+                                arg_types: vec![],
+                                named_args: vec![],
+                                ret_ty: result_ty,
+                                span: None,
+                            });
+                        } else {
+                            // HasMethod(name) - simple existence check
+                            self.deferred_method_existence_checks.push((
+                                fresh_var.clone(),
+                                inner.to_string(),
+                                None,
+                            ));
+                        }
                         // Also store in trait_bounds for the transfer section
                         self.add_trait_bound(*var_id, constraint.clone());
                     // Handle HasField constraints: "HasField(fieldname)" or "HasField(fieldname,resultparam)"
@@ -721,12 +753,39 @@ impl<'a> InferCtx<'a> {
                     if let Some(var_subst_var) = var_subst.get(&orig_id) {
                         if let Type::Var(var_subst_id) = var_subst_var {
                             for bound in &bounds {
-                                if let Some(method_name) = bound.strip_prefix("HasMethod(").and_then(|s| s.strip_suffix(')')) {
-                                    self.deferred_method_existence_checks.push((
-                                        var_subst_var.clone(),
-                                        method_name.to_string(),
-                                        None,
-                                    ));
+                                if let Some(inner) = bound.strip_prefix("HasMethod(").and_then(|s| s.strip_suffix(')')) {
+                                    if let Some(comma_pos) = inner.find(',') {
+                                        // HasMethod(name,resultparam)
+                                        let method_name = &inner[..comma_pos];
+                                        let result_param = inner[comma_pos + 1..].trim();
+                                        let result_ty = param_subst.get(result_param)
+                                            .cloned()
+                                            .or_else(|| {
+                                                if result_param.len() == 1 {
+                                                    let ch = result_param.chars().next().unwrap();
+                                                    if ch.is_ascii_lowercase() {
+                                                        let orig_id = (ch as u32) - ('a' as u32) + 1;
+                                                        var_subst.get(&orig_id).cloned()
+                                                    } else { None }
+                                                } else { None }
+                                            })
+                                            .unwrap_or_else(|| self.fresh());
+                                        self.pending_method_calls.push(PendingMethodCall {
+                                            receiver_ty: var_subst_var.clone(),
+                                            method_name: method_name.to_string(),
+                                            arg_types: vec![],
+                                            named_args: vec![],
+                                            ret_ty: result_ty,
+                                            span: None,
+                                        });
+                                    } else {
+                                        // HasMethod(name) - simple existence check
+                                        self.deferred_method_existence_checks.push((
+                                            var_subst_var.clone(),
+                                            inner.to_string(),
+                                            None,
+                                        ));
+                                    }
                                 } else if let Some(inner) = bound.strip_prefix("HasField(").and_then(|s| s.strip_suffix(')')) {
                                     let (field_name, field_ty) = if let Some(comma_pos) = inner.find(',') {
                                         let fname = &inner[..comma_pos];
@@ -1622,6 +1681,50 @@ impl<'a> InferCtx<'a> {
             }
             self.deferred_has_field = still_deferred;
         } // end loop
+
+        // Post-HasField: re-check deferred HasTrait constraints a third time.
+        // The deferred_has_field loop above may have resolved type variables that
+        // intermediate HasField results depend on. For example:
+        //   getFirst(pairs) = { pair = pairs.head(); pair.0 ++ " items" }
+        // The signature encodes HasField(0,b) on list element type and Concat on b.
+        // After deferred_has_field resolves pair.0 → Int, the Concat bound on b (now Int)
+        // becomes checkable. Without this third pass, the error goes undetected.
+        for (ty, trait_name) in &self.deferred_has_trait.clone() {
+            let resolved = self.env.apply_subst(ty);
+            match &resolved {
+                Type::Var(_) => {} // Still unresolved, skip
+                Type::Function(_) => {
+                    return Err(TypeError::MissingTraitImpl {
+                        ty: resolved.display(),
+                        trait_name: trait_name.clone(),
+                    });
+                }
+                _ => {
+                    if !self.env.implements(&resolved, trait_name) {
+                        if resolved.has_any_type_var() {
+                            if !self.env.definitely_not_implements(&resolved, trait_name) {
+                                continue;
+                            }
+                        }
+                        self.last_error_span = None;
+                        let display_ty = if let Type::Named { name, args, .. } = &resolved {
+                            if args.iter().any(|a| a.has_any_type_var()) {
+                                name.rsplit('.').next().unwrap_or(name).to_string()
+                            } else {
+                                resolved.display()
+                            }
+                        } else {
+                            resolved.display()
+                        };
+                        return Err(TypeError::MissingTraitImpl {
+                            ty: display_ty,
+                            trait_name: trait_name.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
         // Post-method-call: check length/len calls require types that VM supports
         // VM supports: List, String, Tuple, Float64Array, Int64Array
         // Note: Map and Set should use .size() instead

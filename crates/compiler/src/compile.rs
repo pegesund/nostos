@@ -2158,7 +2158,8 @@ impl Compiler {
             }
 
             // Solve user constraints - capture trait-bound errors for reporting
-            if let Err(ref e) = ctx.solve() {
+            let solve_result = ctx.solve();
+            if let Err(ref e) = solve_result {
                 use nostos_types::TypeError;
                 // Only surface MissingTraitImpl errors for types that can NEVER implement
                 // the trait (tuples, containers, Bool, etc.). User-defined Named types might
@@ -24352,9 +24353,10 @@ impl Compiler {
         }
 
         // Create mapping from type var ID to normalized letter
-        let var_map: HashMap<u32, char> = var_order.iter().enumerate()
+        let mut var_map: HashMap<u32, char> = var_order.iter().enumerate()
             .map(|(i, &id)| (id, (b'a' + (i as u8 % 26)) as char))
             .collect();
+        let mut next_var_letter = var_order.len();
 
         // Also collect TypeParam names and map them to normalized letters
         // TypeParams (from explicit annotations) don't have Var IDs directly,
@@ -24365,8 +24367,9 @@ impl Compiler {
         }
         // Assign letters to TypeParams AFTER Var letters to avoid collisions
         let type_param_map: HashMap<String, char> = type_param_order.iter().enumerate()
-            .map(|(i, name)| (name.clone(), (b'a' + ((var_order.len() + i) as u8 % 26)) as char))
+            .map(|(i, name)| (name.clone(), (b'a' + ((next_var_letter + i) as u8 % 26)) as char))
             .collect();
+        next_var_letter += type_param_order.len();
 
         // Format with normalized type variables (handles both Var and TypeParam)
         let combined_map = (var_map.clone(), type_param_map.clone());
@@ -24394,38 +24397,80 @@ impl Compiler {
                 }
             }
         }
+        // Collect HasMethod constraints FIRST (before HasField), because HasMethod
+        // adds intermediate return type vars that HasField sources may reference.
+        // e.g., getFirst(pairs) = { pair = pairs.head(); pair.0 ++ " items" }
+        // → HasMethod(head,b) a, HasField(0,c) b, Concat c => a -> String
+        let deferred_methods = ctx.get_deferred_method_on_var().to_vec();
+        for (ty, method_name, _arg_types, ret_ty, _span) in &deferred_methods {
+            let resolved = ctx.env.apply_subst(ty);
+            if let nostos_types::Type::Var(var_id) = &resolved {
+                if let Some(&var_letter) = var_map.get(var_id) {
+                    // Check if return type is an unresolved var - if so, encode it
+                    let resolved_ret_method = ctx.env.apply_subst(ret_ty);
+                    if let nostos_types::Type::Var(ret_var_id) = &resolved_ret_method {
+                        let ret_letter = if let Some(&existing) = var_map.get(ret_var_id) {
+                            existing
+                        } else {
+                            // Return type var not in var_map - add it as intermediate
+                            let letter = (b'a' + (next_var_letter as u8 % 26)) as char;
+                            var_map.insert(*ret_var_id, letter);
+                            next_var_letter += 1;
+                            letter
+                        };
+                        bounds.push(format!("HasMethod({},{}) {}", method_name, ret_letter, var_letter));
+                    } else {
+                        // Return type is concrete - no need for result param
+                        bounds.push(format!("HasMethod({}) {}", method_name, var_letter));
+                    }
+                }
+            }
+        }
         // Collect HasField constraints for type variables that are still unresolved
         // These represent field requirements on generic parameters (e.g., r.name in getName(r))
         // Encode the result type param so callers can link field types to return types.
         // e.g., swap(p) = (p.1, p.0) → "HasField(1,b) a, HasField(0,c) a => a -> (b, c)"
+        // Source vars may have been added by HasMethod processing above.
         let deferred_fields = ctx.get_deferred_has_field().to_vec();
         for (ty, field_name, field_ty) in &deferred_fields {
             let resolved = ctx.env.apply_subst(ty);
             if let nostos_types::Type::Var(var_id) = &resolved {
-                if let Some(&var_letter) = var_map.get(var_id) {
-                    // Check if the field result type maps to a known type param
-                    let resolved_field = ctx.env.apply_subst(field_ty);
-                    if let nostos_types::Type::Var(field_var_id) = &resolved_field {
-                        if let Some(&field_letter) = var_map.get(field_var_id) {
-                            // Encode both field name and result type param
-                            bounds.push(format!("HasField({},{}) {}", field_name, field_letter, var_letter));
-                            continue;
-                        }
-                    }
-                    // Fallback: no result type param (field type is concrete or unknown)
+                // Source var might be in var_map from params/return or from HasMethod
+                let var_letter = if let Some(&existing) = var_map.get(var_id) {
+                    existing
+                } else {
+                    // Source var not in var_map - skip (not reachable from signature)
+                    continue;
+                };
+                // Check if the field result type maps to a known type param
+                let resolved_field = ctx.env.apply_subst(field_ty);
+                if let nostos_types::Type::Var(field_var_id) = &resolved_field {
+                    let field_letter = if let Some(&existing) = var_map.get(field_var_id) {
+                        existing
+                    } else {
+                        // Field result var not in var_map - add it as intermediate
+                        let letter = (b'a' + (next_var_letter as u8 % 26)) as char;
+                        var_map.insert(*field_var_id, letter);
+                        next_var_letter += 1;
+                        letter
+                    };
+                    bounds.push(format!("HasField({},{}) {}", field_name, field_letter, var_letter));
+                } else {
+                    // Field type is concrete - no need for result param
                     bounds.push(format!("HasField({}) {}", field_name, var_letter));
                 }
             }
         }
-        // Collect HasMethod constraints for type variables with pending method calls
-        // These represent method requirements on generic parameters (e.g., x.length() in f(x))
-        let deferred_methods = ctx.get_deferred_method_on_var().to_vec();
-        for (ty, method_name, _arg_types, _ret_ty, _span) in &deferred_methods {
-            let resolved = ctx.env.apply_subst(ty);
-            if let nostos_types::Type::Var(var_id) = &resolved {
-                if let Some(&var_letter) = var_map.get(var_id) {
-                    bounds.push(format!("HasMethod({}) {}", method_name, var_letter));
-                }
+        // Collect trait bounds for vars added during HasMethod/HasField processing.
+        // These intermediate vars may carry trait bounds (e.g., Concat on a field result var)
+        // that must appear in the signature for callers to check.
+        for (&var_id, &var_name) in &var_map {
+            if var_order.contains(&var_id) {
+                continue; // Already collected in the main trait bounds loop
+            }
+            let trait_names = ctx.get_trait_bounds(var_id);
+            for trait_name in trait_names {
+                bounds.push(format!("{} {}", trait_name, var_name));
             }
         }
         bounds.sort(); // Deterministic ordering
@@ -25064,7 +25109,8 @@ impl Compiler {
         })?;
 
         // Solve constraints - this is where type mismatches are detected
-        if let Err(e) = ctx.solve() {
+        let solve_result = ctx.solve();
+        if let Err(e) = solve_result {
             // Before returning the solve error, check for more specific errors that
             // bypass string-based error filters. These produce Mismatch errors.
             if let Some(mismatch_err) = ctx.check_fn_call_mismatches() {
