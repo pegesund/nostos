@@ -186,6 +186,12 @@ impl<'a> InferCtx<'a> {
         result
     }
 
+    /// Get unresolved HasField constraints (field access on still-generic type vars).
+    /// Used to propagate field requirements from generic function bodies to call sites.
+    pub fn get_deferred_has_field(&self) -> &[(Type, String, Type)] {
+        &self.deferred_has_field
+    }
+
     /// Look up the Var type that a TypeParam name maps to.
     pub fn get_type_param_mapping(&self, name: &str) -> Option<Type> {
         self.type_param_mappings.get(name).cloned()
@@ -585,12 +591,24 @@ impl<'a> InferCtx<'a> {
             // because the type environment may not have all trait impls registered.
             if let Type::Var(var_id) = &fresh_var {
                 for constraint in &type_param.constraints {
-                    self.add_trait_bound(*var_id, constraint.clone());
-                    if matches!(constraint.as_str(), "Eq" | "Ord" | "Num" | "Concat" | "Hash" | "Show") {
-                        self.constraints.push(Constraint::HasTrait(
+                    // Handle HasField constraints: "HasField(fieldname)" → emit HasField constraint
+                    if let Some(field_name) = constraint.strip_prefix("HasField(").and_then(|s| s.strip_suffix(')')) {
+                        let field_ty = self.fresh();
+                        self.constraints.push(Constraint::HasField(
                             fresh_var.clone(),
-                            constraint.clone(),
+                            field_name.to_string(),
+                            field_ty,
                         ));
+                        // Also store in trait_bounds so transfer section can copy to var_subst vars
+                        self.add_trait_bound(*var_id, constraint.clone());
+                    } else {
+                        self.add_trait_bound(*var_id, constraint.clone());
+                        if matches!(constraint.as_str(), "Eq" | "Ord" | "Num" | "Concat" | "Hash" | "Show") {
+                            self.constraints.push(Constraint::HasTrait(
+                                fresh_var.clone(),
+                                constraint.clone(),
+                            ));
+                        }
                     }
                 }
             }
@@ -626,12 +644,21 @@ impl<'a> InferCtx<'a> {
                     if let Some(var_subst_var) = var_subst.get(&orig_id) {
                         if let Type::Var(var_subst_id) = var_subst_var {
                             for bound in &bounds {
-                                self.add_trait_bound(*var_subst_id, bound.clone());
-                                if matches!(bound.as_str(), "Eq" | "Ord" | "Num" | "Concat" | "Hash" | "Show") {
-                                    self.constraints.push(Constraint::HasTrait(
+                                if let Some(field_name) = bound.strip_prefix("HasField(").and_then(|s| s.strip_suffix(')')) {
+                                    let field_ty = self.fresh();
+                                    self.constraints.push(Constraint::HasField(
                                         var_subst_var.clone(),
-                                        bound.clone(),
+                                        field_name.to_string(),
+                                        field_ty,
                                     ));
+                                } else {
+                                    self.add_trait_bound(*var_subst_id, bound.clone());
+                                    if matches!(bound.as_str(), "Eq" | "Ord" | "Num" | "Concat" | "Hash" | "Show") {
+                                        self.constraints.push(Constraint::HasTrait(
+                                            var_subst_var.clone(),
+                                            bound.clone(),
+                                        ));
+                                    }
                                 }
                             }
                         }
@@ -754,6 +781,10 @@ impl<'a> InferCtx<'a> {
 
     pub fn pending_method_calls_count(&self) -> usize {
         self.pending_method_calls.len()
+    }
+
+    pub fn constraint_count(&self) -> usize {
+        self.constraints.len()
     }
 
     /// Check deferred function call arg/param pairs for structural type mismatches.
@@ -1363,6 +1394,8 @@ impl<'a> InferCtx<'a> {
             }
             if !made_progress {
                 // No progress - these vars are truly unresolved, stop retrying
+                // Preserve them for later inspection (e.g., encoding in function signatures)
+                self.deferred_has_field = still_deferred;
                 break;
             }
             self.deferred_has_field = still_deferred;

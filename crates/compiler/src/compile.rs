@@ -24047,6 +24047,17 @@ impl Compiler {
                 }
             }
         }
+        // Collect HasField constraints for type variables that are still unresolved
+        // These represent field requirements on generic parameters (e.g., r.name in getName(r))
+        let deferred_fields = ctx.get_deferred_has_field().to_vec();
+        for (ty, field_name, _field_ty) in &deferred_fields {
+            let resolved = ctx.env.apply_subst(ty);
+            if let nostos_types::Type::Var(var_id) = &resolved {
+                if let Some(&var_letter) = var_map.get(var_id) {
+                    bounds.push(format!("HasField({}) {}", field_name, var_letter));
+                }
+            }
+        }
         bounds.sort(); // Deterministic ordering
         bounds.dedup(); // Remove duplicate bounds (e.g., multiple Ord from multiple < operators)
 
