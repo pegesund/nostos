@@ -2275,6 +2275,9 @@ impl Compiler {
             // constraints when instantiating the function.
             // Also replace Var types with TypeParam types in the signature so that
             // instantiate_function can properly propagate the bounds to call sites.
+            // Store root_var→letter mapping per function for post-subst replacement
+            // of Var inside nested types (e.g., curried function returns).
+            let mut fn_root_var_to_letter: std::collections::HashMap<String, std::collections::HashMap<u32, String>> = std::collections::HashMap::new();
             for (fn_name, fn_type) in self.pending_fn_signatures.iter_mut() {
                 let is_stdlib = stdlib_fn_names.contains(fn_name) || fn_name.starts_with("stdlib.");
                 if is_stdlib || !fn_type.type_params.is_empty() {
@@ -2333,7 +2336,12 @@ impl Compiler {
                 }
 
                 if !new_type_params.is_empty() {
-                    // Replace Var types with TypeParam in params and return type
+                    // Store root_var→letter mapping for post-subst replacement in nested types.
+                    // This is needed because apply_full_subst resolves Var(2) → Function(Var(root), Var(root))
+                    // but doesn't know about the TypeParam mapping. We apply it afterwards.
+                    fn_root_var_to_letter.insert(fn_name.clone(), root_var_to_letter.clone());
+
+                    // Replace top-level Var types with TypeParam in params and return type
                     let new_params: Vec<nostos_types::Type> = fn_type.params.iter().map(|p| {
                         if let nostos_types::Type::Var(var_id) = p {
                             if let Some(&root_id) = original_to_root.get(var_id) {
@@ -2375,78 +2383,98 @@ impl Compiler {
                         .collect();
                     let resolved_ret = ctx.apply_full_subst(&fn_type.ret);
 
-                    // For functions with multiple type params (e.g., pair[A, B]),
-                    // HM inference may have merged distinct type params (A=B) through
-                    // if/else branches. Detect this and restore TypeParam types so that
-                    // instantiate_function creates separate fresh vars for each declared
-                    // type param, preserving the function's polymorphism.
-                    let (final_params, final_ret) = if fn_type.type_params.len() >= 2 {
-                        // Build a mapping from Var IDs back to TypeParam names
-                        // The original params before solve() had distinct Vars for each TypeParam.
-                        // After solve(), some may have been merged. We need to figure out which
-                        // original param position corresponded to which TypeParam.
-                        // Strategy: use the AST type annotations to determine which params are type params.
-                        // For each TypeParam in type_params, find which param positions use it
-                        // and replace with TypeParam type.
-                        let mut var_to_first_tp: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
-                        let mut tp_index = 0;
+                    // Replace Var IDs with TypeParam in resolved types.
+                    // This handles:
+                    // 1. Curried functions: adder(a) = b => a+b → TypeParam("a") in both outer
+                    //    param AND inner Function return type
+                    // 2. Multi-TypeParam functions: pair[A,B] where HM may have merged A=B
+                    // 3. Nested types: List[a], Map[k,v], (a, b), etc.
+                    fn restore_type_params(ty: &nostos_types::Type, var_map: &std::collections::HashMap<u32, String>) -> nostos_types::Type {
+                        match ty {
+                            nostos_types::Type::Var(id) => {
+                                if let Some(tp_name) = var_map.get(id) {
+                                    nostos_types::Type::TypeParam(tp_name.clone())
+                                } else {
+                                    ty.clone()
+                                }
+                            }
+                            nostos_types::Type::Function(ft) => {
+                                nostos_types::Type::Function(nostos_types::FunctionType {
+                                    type_params: ft.type_params.clone(),
+                                    params: ft.params.iter().map(|p| restore_type_params(p, var_map)).collect(),
+                                    ret: Box::new(restore_type_params(&ft.ret, var_map)),
+                                    required_params: ft.required_params,
+                                })
+                            }
+                            nostos_types::Type::Tuple(elems) => {
+                                nostos_types::Type::Tuple(elems.iter().map(|e| restore_type_params(e, var_map)).collect())
+                            }
+                            nostos_types::Type::List(elem) => {
+                                nostos_types::Type::List(Box::new(restore_type_params(elem, var_map)))
+                            }
+                            nostos_types::Type::Map(k, v) => {
+                                nostos_types::Type::Map(
+                                    Box::new(restore_type_params(k, var_map)),
+                                    Box::new(restore_type_params(v, var_map)),
+                                )
+                            }
+                            nostos_types::Type::Set(elem) => {
+                                nostos_types::Type::Set(Box::new(restore_type_params(elem, var_map)))
+                            }
+                            nostos_types::Type::Named { name, args } => {
+                                nostos_types::Type::Named {
+                                    name: name.clone(),
+                                    args: args.iter().map(|a| restore_type_params(a, var_map)).collect(),
+                                }
+                            }
+                            nostos_types::Type::IO(inner) => {
+                                nostos_types::Type::IO(Box::new(restore_type_params(inner, var_map)))
+                            }
+                            nostos_types::Type::Array(elem) => {
+                                nostos_types::Type::Array(Box::new(restore_type_params(elem, var_map)))
+                            }
+                            _ => ty.clone(),
+                        }
+                    }
+
+                    let (final_params, final_ret) = if !fn_type.type_params.is_empty() {
+                        // Get the root_var→letter mapping (stored during enrichment step)
+                        let var_map = fn_root_var_to_letter.get(fn_name);
+
+                        // For multi-TypeParam functions, also handle merged vars
+                        // (where HM unified distinct TypeParams)
                         let mut restored_params = resolved_params.clone();
-                        let mut restored_ret = resolved_ret.clone();
-                        for (i, orig_param) in fn_type.params.iter().enumerate() {
-                            if let nostos_types::Type::Var(var_id) = orig_param {
-                                // This param was a type variable before solve
-                                if tp_index < fn_type.type_params.len() {
-                                    let tp_name = &fn_type.type_params[tp_index].name;
-                                    // Check if this var was already assigned to a TypeParam
-                                    if let Some(existing_tp) = var_to_first_tp.get(var_id) {
-                                        // This var was merged with another TypeParam
-                                        // Use the CURRENT TypeParam name (not the first one)
-                                        if existing_tp != tp_name {
-                                            // Different type param but same var - restore as separate TypeParam
+                        if fn_type.type_params.len() >= 2 {
+                            let mut var_to_first_tp: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+                            let mut tp_index = 0;
+                            for (i, orig_param) in fn_type.params.iter().enumerate() {
+                                if let nostos_types::Type::Var(var_id) = orig_param {
+                                    if tp_index < fn_type.type_params.len() {
+                                        let tp_name = &fn_type.type_params[tp_index].name;
+                                        if let Some(existing_tp) = var_to_first_tp.get(var_id) {
+                                            if existing_tp != tp_name {
+                                                restored_params[i] = nostos_types::Type::TypeParam(tp_name.clone());
+                                            }
+                                        } else {
+                                            var_to_first_tp.insert(*var_id, tp_name.clone());
                                             restored_params[i] = nostos_types::Type::TypeParam(tp_name.clone());
                                         }
-                                    } else {
-                                        var_to_first_tp.insert(*var_id, tp_name.clone());
-                                        restored_params[i] = nostos_types::Type::TypeParam(tp_name.clone());
-                                    }
-                                    tp_index += 1;
-                                }
-                            }
-                        }
-                        // Also restore TypeParams in the return type
-                        // Replace resolved vars with TypeParams based on the mapping
-                        fn restore_type_params(ty: &nostos_types::Type, var_map: &std::collections::HashMap<u32, String>) -> nostos_types::Type {
-                            match ty {
-                                nostos_types::Type::Var(id) => {
-                                    if let Some(tp_name) = var_map.get(id) {
-                                        nostos_types::Type::TypeParam(tp_name.clone())
-                                    } else {
-                                        ty.clone()
+                                        tp_index += 1;
                                     }
                                 }
-                                nostos_types::Type::Tuple(elems) => {
-                                    nostos_types::Type::Tuple(elems.iter().map(|e| restore_type_params(e, var_map)).collect())
-                                }
-                                nostos_types::Type::List(elem) => {
-                                    nostos_types::Type::List(Box::new(restore_type_params(elem, var_map)))
-                                }
-                                _ => ty.clone(),
                             }
                         }
-                        // Build a complete var->TypeParam mapping (all vars that correspond to type params)
-                        let mut complete_var_map: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
-                        let mut tp_idx2 = 0;
-                        for orig_param in &fn_type.params {
-                            if let nostos_types::Type::Var(var_id) = orig_param {
-                                if tp_idx2 < fn_type.type_params.len() {
-                                    complete_var_map.entry(*var_id)
-                                        .or_insert_with(|| fn_type.type_params[tp_idx2].name.clone());
-                                    tp_idx2 += 1;
-                                }
-                            }
+
+                        // Apply recursive Var→TypeParam replacement to ALL resolved types
+                        if let Some(var_map) = var_map {
+                            let final_params = restored_params.iter()
+                                .map(|p| restore_type_params(p, var_map))
+                                .collect();
+                            let final_ret = restore_type_params(&resolved_ret, var_map);
+                            (final_params, final_ret)
+                        } else {
+                            (restored_params, resolved_ret)
                         }
-                        restored_ret = restore_type_params(&resolved_ret, &complete_var_map);
-                        (restored_params, restored_ret)
                     } else {
                         (resolved_params, resolved_ret)
                     };
@@ -24911,6 +24939,11 @@ impl Compiler {
                 let error_span = ctx.last_error_span().unwrap_or(span);
                 return Err(self.convert_type_error(mismatch_err, error_span));
             }
+            // Check indirect calls (curried functions, higher-order returns)
+            if let Some(mismatch_err) = ctx.check_indirect_call_mismatches() {
+                let error_span = ctx.last_error_span().unwrap_or(span);
+                return Err(self.convert_type_error(mismatch_err, error_span));
+            }
             // Check generic function trait bounds (e.g., Num constraint on String arg).
             // The solve may fail with an UnificationFailed error that gets filtered,
             // but the underlying cause is a trait bound violation which should be reported.
@@ -24925,6 +24958,12 @@ impl Compiler {
         // Even if solve succeeded, check for structural mismatches that
         // the unification engine accepted (e.g., due to type variable resolution)
         if let Some(mismatch_err) = ctx.check_fn_call_mismatches() {
+            let error_span = ctx.last_error_span().unwrap_or(span);
+            return Err(self.convert_type_error(mismatch_err, error_span));
+        }
+
+        // Check indirect calls (curried functions, higher-order returns)
+        if let Some(mismatch_err) = ctx.check_indirect_call_mismatches() {
             let error_span = ctx.last_error_span().unwrap_or(span);
             return Err(self.convert_type_error(mismatch_err, error_span));
         }

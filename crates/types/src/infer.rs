@@ -129,6 +129,11 @@ pub struct InferCtx<'a> {
     /// After solve() resolves the type var, we check if the resolved type supports the method.
     /// Format: (type_var, method_name, span).
     deferred_method_existence_checks: Vec<(Type, String, Option<Span>)>,
+    /// Deferred indirect call checks: (func_type_var, arg_types, span).
+    /// When a Call expression's func_ty is a Var (e.g., curried calls like `adder(1)("hello")`),
+    /// we can't extract param types at inference time. After solve(), resolve func_ty to a
+    /// Function type and check each param vs arg for concrete type mismatches.
+    deferred_indirect_call_checks: Vec<(Type, Vec<Type>, Span)>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -158,6 +163,7 @@ impl<'a> InferCtx<'a> {
             deferred_default_param_checks: Vec::new(),
             deferred_method_on_var: Vec::new(),
             deferred_method_existence_checks: Vec::new(),
+            deferred_indirect_call_checks: Vec::new(),
         }
     }
 
@@ -886,6 +892,85 @@ impl<'a> InferCtx<'a> {
                     expected: resolved_param.display(),
                     found: resolved_arg.display(),
                 });
+            }
+        }
+        None
+    }
+
+    /// Check deferred indirect call mismatches (curried calls, higher-order returns).
+    /// When func_ty is a Var at inference time (e.g., `adder(1)("hello")` where
+    /// adder(1) returns a Var), we defer the check. After solve(), resolve func_ty
+    /// to a Function type and check each param vs arg for concrete type mismatches.
+    pub fn check_indirect_call_mismatches(&mut self) -> Option<TypeError> {
+        for (func_ty, arg_types, span) in &self.deferred_indirect_call_checks {
+            let resolved_func = self.env.apply_subst(func_ty);
+            if let Type::Function(ft) = &resolved_func {
+                for (param_ty, arg_ty) in ft.params.iter().zip(arg_types.iter()) {
+                    let resolved_param = self.env.apply_subst(param_ty);
+                    let resolved_arg = self.env.apply_subst(arg_ty);
+
+                    // Skip if either is still a type variable (not yet resolved)
+                    if matches!(&resolved_param, Type::Var(_) | Type::TypeParam(_)) { continue; }
+                    if matches!(&resolved_arg, Type::Var(_) | Type::TypeParam(_)) { continue; }
+
+                    // Check concrete type mismatch: both are concrete and differ
+                    let is_concrete_simple = |t: &Type| -> bool {
+                        matches!(t, Type::Int | Type::Float | Type::Bool |
+                                    Type::String | Type::Char | Type::Unit)
+                    };
+                    let is_collection = |t: &Type| -> bool {
+                        matches!(t, Type::List(_) | Type::Map(_, _) | Type::Set(_) | Type::Tuple(_))
+                    };
+
+                    // Simple type vs anything different
+                    if is_concrete_simple(&resolved_param) && resolved_param != resolved_arg {
+                        self.last_error_span = Some(*span);
+                        return Some(TypeError::Mismatch {
+                            expected: resolved_param.display(),
+                            found: resolved_arg.display(),
+                        });
+                    }
+
+                    // Collection type vs incompatible type
+                    if is_collection(&resolved_param) {
+                        let compatible = match (&resolved_param, &resolved_arg) {
+                            (Type::List(_), Type::List(_)) => true,
+                            (Type::Map(_, _), Type::Map(_, _)) => true,
+                            (Type::Set(_), Type::Set(_)) => true,
+                            (Type::Tuple(a), Type::Tuple(b)) => a.len() == b.len(),
+                            _ => false,
+                        };
+                        if !compatible {
+                            self.last_error_span = Some(*span);
+                            return Some(TypeError::Mismatch {
+                                expected: resolved_param.display(),
+                                found: resolved_arg.display(),
+                            });
+                        }
+                    }
+
+                    // Named type vs different type
+                    if let Type::Named { name: ref name_p, .. } = &resolved_param {
+                        match &resolved_arg {
+                            Type::Named { name: ref name_a, .. } if name_a != name_p => {
+                                self.last_error_span = Some(*span);
+                                return Some(TypeError::Mismatch {
+                                    expected: resolved_param.display(),
+                                    found: resolved_arg.display(),
+                                });
+                            }
+                            Type::Named { .. } => {} // Same name, compatible
+                            _ => {
+                                // Named vs primitive/collection
+                                self.last_error_span = Some(*span);
+                                return Some(TypeError::Mismatch {
+                                    expected: resolved_param.display(),
+                                    found: resolved_arg.display(),
+                                });
+                            }
+                        }
+                    }
+                }
             }
         }
         None
@@ -3870,6 +3955,11 @@ impl<'a> InferCtx<'a> {
                             }
                         }
                     }
+                } else {
+                    // func_ty is not directly a Function (likely a Var from curried calls,
+                    // e.g., `adder(1)("hello")` where the inner call returns a Var).
+                    // Defer the check: after solve(), resolve func_ty and check param/arg types.
+                    self.deferred_indirect_call_checks.push((func_ty.clone(), arg_types_clone.clone(), *call_span));
                 }
 
                 // Use unify_at with the call span for precise error reporting
