@@ -1,0 +1,4 @@
+# expect_error: Eq
+# groupBy key function returning a function type should fail
+# because functions don't implement Eq
+main() = [1, 2, 3].groupBy(x => (y => y + x))

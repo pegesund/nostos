@@ -1,0 +1,3 @@
+# expect_error: no field name
+# List types don't have arbitrary named fields
+main() = [1, 2, 3].name

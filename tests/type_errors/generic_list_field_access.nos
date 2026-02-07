@@ -1,0 +1,4 @@
+# expect_error: no field
+# Field access on generic list result through function
+f(xs) = xs.sort().name
+main() = f([1, 2, 3])

@@ -1,0 +1,3 @@
+# expect_error: no field
+# Field access on list method result should be caught at compile time
+main() = [1, 2, 3].sort().name

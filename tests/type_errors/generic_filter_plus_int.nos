@@ -1,0 +1,4 @@
+# expect_error: type mismatch
+# Filter returns a list, adding Int to a list is a type error
+f(xs) = xs.filter(x => x > 0) + 1
+main() = f([1, 2, 3])

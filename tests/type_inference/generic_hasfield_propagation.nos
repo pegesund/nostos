@@ -1,0 +1,5 @@
+# expect: alice
+# HasField constraints should propagate through generic function calls
+type Person = { name: String, age: Int }
+getName(x) = x.name
+main() = getName(Person(name: "alice", age: 30))

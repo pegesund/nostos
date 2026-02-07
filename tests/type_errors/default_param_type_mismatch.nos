@@ -1,0 +1,4 @@
+# expect_error: type mismatch
+# Default parameter value type should match the parameter type from usage
+greet(name = 42) = "Hello, " ++ name
+main() = greet()

@@ -1,0 +1,5 @@
+# expect_error: Num
+# Recursive function building [String] via concat - .sum() should fail
+# because String doesn't implement Num
+collect(n) = if n == 0 then [] else [show(n)] ++ collect(n - 1)
+main() = collect(3).sum()

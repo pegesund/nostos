@@ -1,0 +1,4 @@
+# expect_error: Wrong number of arguments
+# Variant constructor called with wrong number of positional fields
+type Shape = Circle(Float, Float) | Square(Float)
+main() = Circle(1.0, 2.0, 3.0)

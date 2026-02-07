@@ -1,0 +1,3 @@
+# expect_error: expected List, String, Tuple, or Array
+# Pipeline operator should check that methods exist on the type
+main() = 42 |> length

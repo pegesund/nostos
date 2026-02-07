@@ -1,0 +1,4 @@
+# expect: [hello, 1, 2, 3]
+# Nostos supports heterogeneous lists - different element types can be concatenated
+f(xs) = ["hello"] ++ xs
+main() = f([1, 2, 3])

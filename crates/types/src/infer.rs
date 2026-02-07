@@ -4746,27 +4746,14 @@ impl<'a> InferCtx<'a> {
                 let resolved_right = self.env.apply_subst(&right_ty);
 
                 match (&resolved_left, &resolved_right) {
-                    // Both are concrete list types - element types must match
+                    // Both are concrete list types - try to unify element types
+                    // but allow heterogeneous lists (Nostos supports mixed-type lists)
                     (Type::List(elem_left), Type::List(elem_right)) => {
-                        // Unify element types to catch mismatches
-                        match self.unify_types(elem_left, elem_right) {
-                            Ok(()) => Ok(resolved_left.clone()),
-                            Err(TypeError::UnificationFailed(a, b)) => {
-                                // Check if both element types are fully resolved
-                                let resolved_elem_left = self.env.apply_subst(elem_left);
-                                let resolved_elem_right = self.env.apply_subst(elem_right);
-                                if !resolved_elem_left.has_any_type_var() && !resolved_elem_right.has_any_type_var() {
-                                    Err(TypeError::Mismatch {
-                                        expected: format!("List[{}]", a),
-                                        found: format!("List[{}]", b),
-                                    })
-                                } else {
-                                    // Type variables still unresolved, allow for now
-                                    Ok(resolved_left.clone())
-                                }
-                            }
-                            Err(e) => Err(e),
-                        }
+                        // Try to unify element types (useful when one has type vars)
+                        // If both are concrete but different, allow it - Nostos
+                        // supports heterogeneous lists like Python
+                        let _ = self.unify_types(elem_left, elem_right);
+                        Ok(resolved_left.clone())
                     }
                     // Left is list, right is type variable - constrain right to be SOME list
                     (Type::List(_), Type::Var(id)) => {

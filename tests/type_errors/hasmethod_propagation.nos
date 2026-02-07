@@ -1,0 +1,5 @@
+# expect_error: no method toUpper
+# HasMethod constraint should propagate: calling .sort() constrains the type,
+# then calling .toUpper() on the list result should fail
+f(xs) = xs.sort().toUpper()
+main() = f([1, 2, 3])

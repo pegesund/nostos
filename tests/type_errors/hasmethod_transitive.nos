@@ -1,0 +1,5 @@
+# expect_error: no method
+# HasMethod constraints should propagate transitively through call chains
+helper(xs) = xs.sort()
+f(xs) = helper(xs).split(",")
+main() = f([1, 2, 3])

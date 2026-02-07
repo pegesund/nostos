@@ -1,0 +1,5 @@
+# expect: 3
+# Method return types should be correctly constrained on generic params
+# sort() returns a list, length() returns Int
+f(xs) = xs.sort().length()
+main() = f([3, 1, 2])

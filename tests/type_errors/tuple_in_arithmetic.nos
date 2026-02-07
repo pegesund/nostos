@@ -1,0 +1,4 @@
+# expect_error: Num
+# Tuples don't implement Num - can't use in arithmetic
+f() = (1, 2) + 1
+main() = f()
