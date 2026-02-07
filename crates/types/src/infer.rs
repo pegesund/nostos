@@ -2019,6 +2019,34 @@ impl<'a> InferCtx<'a> {
                     }
                 }
 
+                // If receiver is still a Var but method is list-only, infer receiver as List.
+                // This ensures the method call gets processed (lookup, param/return unification)
+                // instead of being silently dropped when type_name_opt is None.
+                let type_name_opt = if type_name_opt.is_none() && matches!(&resolved_receiver, Type::Var(_)) {
+                    let can_infer_from_method = matches!(call.method_name.as_str(),
+                        "map" | "filter" | "fold" | "flatMap" | "any" | "all" | "find" |
+                        "sort" | "sortBy" | "head" | "tail" | "init" | "last" |
+                        "reverse" | "sum" | "product" | "zip" | "unzip" | "take" | "drop" |
+                        "unique" | "flatten" | "position" | "indexOf" |
+                        "push" | "pop" | "nth" | "slice" |
+                        "scanl" | "foldl" | "foldr" | "enumerate" | "intersperse" |
+                        "spanList" | "groupBy" | "transpose" | "pairwise" | "isSorted" |
+                        "isSortedBy" | "maximum" | "minimum" | "takeWhile" | "dropWhile" |
+                        "partition" | "zipWith"
+                    );
+                    if can_infer_from_method {
+                        // Unify receiver with List[?X] so type info flows properly
+                        let elem = self.fresh();
+                        let list_ty = Type::List(Box::new(elem));
+                        let _ = self.unify_types(&resolved_receiver, &list_ty);
+                        Some("List".to_string())
+                    } else {
+                        type_name_opt
+                    }
+                } else {
+                    type_name_opt
+                };
+
                 if let Some(type_name) = type_name_opt {
                 let qualified_name = format!("{}.{}", type_name, call.method_name);
 
