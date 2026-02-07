@@ -1395,6 +1395,46 @@ impl<'a> InferCtx<'a> {
             }
         }
 
+        // Pre-concat: check default parameter values against resolved param types.
+        // This MUST run before deferred_concat_checks so that default types are
+        // substituted into param vars, allowing concat to see concrete types.
+        // e.g., process(items = [1,2,3]) = items ++ " done"
+        // → items stays as Var with Concat bound, default is List[Int]
+        // → substitute ?X = List[Int], then concat check sees List[Int] ++ String → error
+        for (default_ty, param_ty, span) in std::mem::take(&mut self.deferred_default_param_checks) {
+            let resolved_default = self.env.apply_subst(&default_ty);
+            let resolved_param = self.env.apply_subst(&param_ty);
+            if !resolved_default.has_any_type_var() && !resolved_param.has_any_type_var() {
+                // Both fully concrete - simple equality check
+                if resolved_default != resolved_param {
+                    self.last_error_span = Some(span);
+                    return Err(TypeError::Mismatch {
+                        expected: resolved_param.display(),
+                        found: resolved_default.display(),
+                    });
+                }
+            } else if !resolved_default.has_any_type_var() {
+                // Default is concrete but param still has unresolved vars.
+                // Check if param's trait bounds are satisfied by the default type.
+                if let Type::Var(var_id) = &resolved_param {
+                    let bounds: Vec<String> = self.get_trait_bounds(*var_id)
+                        .into_iter().cloned().collect();
+                    for bound in &bounds {
+                        if !self.env.implements(&resolved_default, bound) {
+                            self.last_error_span = Some(span);
+                            return Err(TypeError::Mismatch {
+                                expected: format!("type implementing {}", bound),
+                                found: resolved_default.display(),
+                            });
+                        }
+                    }
+                    // Substitute the default type into the param var so that downstream
+                    // checks (concat, etc.) see concrete types instead of Var.
+                    self.env.substitution.insert(*var_id, resolved_default);
+                }
+            }
+        }
+
         // Post-method-call: check deferred concat (++) operations
         // ++ only works on String ++ String or List[T] ++ List[T].
         // When operands were type variables (e.g., from deferred field access),
@@ -1550,43 +1590,6 @@ impl<'a> InferCtx<'a> {
                     }
                 }
                 _ => {} // Numeric primitives (Int, Float, etc.) implement Num
-            }
-        }
-
-        // Post-solve: check default parameter values against resolved param types.
-        // Now that the function body has constrained parameter types through usage,
-        // verify that default values are type-compatible.
-        // e.g., greet(name, greeting = 42) = greeting ++ " " ++ name
-        // → greeting resolves to String (from ++ usage), default 42 is Int → error
-        for (default_ty, param_ty, span) in std::mem::take(&mut self.deferred_default_param_checks) {
-            let resolved_default = self.env.apply_subst(&default_ty);
-            let resolved_param = self.env.apply_subst(&param_ty);
-            if !resolved_default.has_any_type_var() && !resolved_param.has_any_type_var() {
-                // Both fully concrete - simple equality check
-                if resolved_default != resolved_param {
-                    self.last_error_span = Some(span);
-                    return Err(TypeError::Mismatch {
-                        expected: resolved_param.display(),
-                        found: resolved_default.display(),
-                    });
-                }
-            } else if !resolved_default.has_any_type_var() {
-                // Default is concrete but param still has unresolved vars.
-                // Check if param's trait bounds are satisfied by the default type.
-                // e.g., greeting = 42 where greeting has Concat bound → Int doesn't implement Concat
-                if let Type::Var(var_id) = &resolved_param {
-                    let bounds: Vec<String> = self.get_trait_bounds(*var_id)
-                        .into_iter().cloned().collect();
-                    for bound in &bounds {
-                        if !self.env.implements(&resolved_default, bound) {
-                            self.last_error_span = Some(span);
-                            return Err(TypeError::Mismatch {
-                                expected: format!("type implementing {}", bound),
-                                found: resolved_default.display(),
-                            });
-                        }
-                    }
-                }
             }
         }
 
