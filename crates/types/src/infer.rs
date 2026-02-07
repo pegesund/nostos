@@ -1432,6 +1432,46 @@ impl<'a> InferCtx<'a> {
                     // checks (concat, etc.) see concrete types instead of Var.
                     self.env.substitution.insert(*var_id, resolved_default);
                 }
+            } else if resolved_default.has_any_type_var() {
+                // Default has unresolved type vars (e.g., [] → List[?T], None → Option[?T],
+                // x => x → ?A -> ?B). Even though inner types are unknown, the OUTER
+                // constructor may be known to never implement certain traits.
+                // e.g., List[?T] never implements Num, Function never implements anything.
+                if let Type::Var(var_id) = &resolved_param {
+                    let bounds: Vec<String> = self.get_trait_bounds(*var_id)
+                        .into_iter().cloned().collect();
+                    for bound in &bounds {
+                        if self.env.definitely_not_implements(&resolved_default, bound) {
+                            self.last_error_span = Some(span);
+                            return Err(TypeError::Mismatch {
+                                expected: format!("type implementing {}", bound),
+                                found: resolved_default.display(),
+                            });
+                        }
+                    }
+                } else if !resolved_param.has_any_type_var() {
+                    // Param is concrete but default has type vars.
+                    // Outer type constructors must match for the types to be compatible.
+                    // e.g., List[?Y] vs Int → mismatch, List[?Y] vs List[Int] → OK
+                    let mismatch = match (&resolved_default, &resolved_param) {
+                        (Type::List(_), Type::List(_)) => false,
+                        (Type::List(_), _) => true,
+                        (Type::Tuple(_), Type::Tuple(_)) => false,
+                        (Type::Tuple(_), _) => true,
+                        (Type::Function(_), Type::Function(_)) => false,
+                        (Type::Function(_), _) => true,
+                        (Type::Named { name: a, .. }, Type::Named { name: b, .. }) => a != b,
+                        (Type::Named { .. }, _) => true,
+                        _ => false, // Can't determine, skip
+                    };
+                    if mismatch {
+                        self.last_error_span = Some(span);
+                        return Err(TypeError::Mismatch {
+                            expected: resolved_param.display(),
+                            found: resolved_default.display(),
+                        });
+                    }
+                }
             }
         }
 
