@@ -2268,6 +2268,102 @@ impl Compiler {
                 .collect();
             self.inferred_expr_types.extend(user_expr_types);
 
+            // Enrich user function signatures with inferred trait bounds.
+            // After batch inference, function bodies may have discovered trait bounds
+            // (e.g., add(x,y) = x+y discovers Num on the param vars). Extract these
+            // bounds and add them as type_params so that callers get proper HasTrait
+            // constraints when instantiating the function.
+            // Also replace Var types with TypeParam types in the signature so that
+            // instantiate_function can properly propagate the bounds to call sites.
+            for (fn_name, fn_type) in self.pending_fn_signatures.iter_mut() {
+                let is_stdlib = stdlib_fn_names.contains(fn_name) || fn_name.starts_with("stdlib.");
+                if is_stdlib || !fn_type.type_params.is_empty() {
+                    continue; // Skip stdlib and functions that already have explicit type_params
+                }
+                // Build mapping from root var IDs to letter names and their bounds
+                let mut root_var_to_letter: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+                let mut letter_idx = 0u8;
+                let mut new_type_params: Vec<nostos_types::TypeParam> = Vec::new();
+
+                // Process all Var params and return type
+                let mut all_original_vars: Vec<u32> = Vec::new();
+                for param in &fn_type.params {
+                    if let nostos_types::Type::Var(var_id) = param {
+                        all_original_vars.push(*var_id);
+                    }
+                }
+                if let nostos_types::Type::Var(var_id) = fn_type.ret.as_ref() {
+                    all_original_vars.push(*var_id);
+                }
+
+                // Find root vars and their bounds
+                let mut original_to_root: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+                for &var_id in &all_original_vars {
+                    let resolved = ctx.apply_full_subst(&nostos_types::Type::Var(var_id));
+                    if let nostos_types::Type::Var(root_id) = resolved {
+                        original_to_root.insert(var_id, root_id);
+
+                        // Get bounds and assign letter if not already done
+                        if !root_var_to_letter.contains_key(&root_id) {
+                            let bounds: Vec<String> = ctx.get_trait_bounds(root_id)
+                                .into_iter()
+                                .cloned()
+                                .filter(|b| matches!(b.as_str(), "Eq" | "Ord" | "Num" | "Concat" | "Hash" | "Show"))
+                                .collect();
+
+                            // Deduplicate bounds
+                            let mut unique_bounds: Vec<String> = Vec::new();
+                            for b in bounds {
+                                if !unique_bounds.contains(&b) {
+                                    unique_bounds.push(b);
+                                }
+                            }
+
+                            if !unique_bounds.is_empty() {
+                                let letter = format!("{}", (b'a' + letter_idx) as char);
+                                letter_idx += 1;
+                                new_type_params.push(nostos_types::TypeParam {
+                                    name: letter.clone(),
+                                    constraints: unique_bounds,
+                                });
+                                root_var_to_letter.insert(root_id, letter);
+                            }
+                        }
+                    }
+                }
+
+                if !new_type_params.is_empty() {
+                    // Replace Var types with TypeParam in params and return type
+                    let new_params: Vec<nostos_types::Type> = fn_type.params.iter().map(|p| {
+                        if let nostos_types::Type::Var(var_id) = p {
+                            if let Some(&root_id) = original_to_root.get(var_id) {
+                                if let Some(letter) = root_var_to_letter.get(&root_id) {
+                                    return nostos_types::Type::TypeParam(letter.clone());
+                                }
+                            }
+                        }
+                        p.clone()
+                    }).collect();
+                    let new_ret = if let nostos_types::Type::Var(var_id) = fn_type.ret.as_ref() {
+                        if let Some(&root_id) = original_to_root.get(var_id) {
+                            if let Some(letter) = root_var_to_letter.get(&root_id) {
+                                nostos_types::Type::TypeParam(letter.clone())
+                            } else {
+                                (*fn_type.ret).clone()
+                            }
+                        } else {
+                            (*fn_type.ret).clone()
+                        }
+                    } else {
+                        (*fn_type.ret).clone()
+                    };
+
+                    fn_type.type_params = new_type_params;
+                    fn_type.params = new_params;
+                    fn_type.ret = Box::new(new_ret);
+                }
+            }
+
             // Apply full substitution (including TypeParam resolution) only to user signatures
             // Exclude both compiled-from-source stdlib (in stdlib_fn_names) AND loaded-from-cache
             // stdlib (which start with "stdlib." prefix).
@@ -2617,11 +2713,28 @@ impl Compiler {
                             } else { false };
                             from_unify || from_mismatch
                         };
+                        // Check if the "Cannot unify" error involves a tuple vs a collection type
+                        // (List, Map, Set). These are structural mismatches, not tuple inference issues.
+                        let is_tuple_vs_collection = message.contains("Cannot unify types:") && {
+                            if let Some(types_part) = message.strip_prefix("Cannot unify types: ") {
+                                let parts: Vec<&str> = types_part.split(" and ").collect();
+                                if parts.len() == 2 {
+                                    let ty1 = parts[0].trim();
+                                    let ty2 = parts[1].trim();
+                                    let is_collection = |s: &str| s.starts_with("List[") || s.starts_with("[") ||
+                                        s.starts_with("Map[") || s.starts_with("Set[");
+                                    let is_tuple = |s: &str| s.starts_with('(') && s.contains(',');
+                                    (is_collection(ty1) && is_tuple(ty2)) ||
+                                    (is_collection(ty2) && is_tuple(ty1))
+                                } else { false }
+                            } else { false }
+                        };
                         let is_tuple_error = message.contains("(") && message.contains(",") && message.contains(")") &&
                             (message.contains("Cannot unify") || message.contains("mismatch")) &&
                             !message.contains("does not implement") &&
                             !message.contains("Bool") && // tuple-vs-Bool is always a real error
                             !has_primitive_mismatch && // tuple-vs-primitive is always a real error
+                            !is_tuple_vs_collection && // tuple-vs-collection is always a real error
                             !message.contains("expected List[") &&
                             !message.contains("expected Map[") &&
                             !message.contains("expected Set["); // tuple-vs-collection is always real
@@ -24644,13 +24757,18 @@ impl Compiler {
 
         // Solve constraints - this is where type mismatches are detected
         if let Err(e) = ctx.solve() {
-            // Before returning the solve error, check for structural collection mismatches
-            // in function call arguments. These produce Mismatch errors that bypass the
-            // UnificationFailed error filter. This catches cases like passing a Map where
-            // a List is expected, even when HM has type variables.
+            // Before returning the solve error, check for more specific errors that
+            // bypass string-based error filters. These produce Mismatch errors.
             if let Some(mismatch_err) = ctx.check_fn_call_mismatches() {
                 let error_span = ctx.last_error_span().unwrap_or(span);
                 return Err(self.convert_type_error(mismatch_err, error_span));
+            }
+            // Check generic function trait bounds (e.g., Num constraint on String arg).
+            // The solve may fail with an UnificationFailed error that gets filtered,
+            // but the underlying cause is a trait bound violation which should be reported.
+            if let Some(trait_err) = ctx.check_generic_trait_bounds() {
+                let error_span = ctx.last_error_span().unwrap_or(span);
+                return Err(self.convert_type_error(trait_err, error_span));
             }
             let error_span = ctx.last_error_span().unwrap_or(span);
             return Err(self.convert_type_error(e, error_span));
@@ -24829,10 +24947,17 @@ impl Compiler {
                         }
                     }
 
+                    // Structural mismatch between different type constructors is ALWAYS a real error,
+                    // even if one side contains type variables. E.g., List[Int] vs (?, ?) is always wrong.
+                    if (is_list_type(type1) && is_tuple_type(type2)) ||
+                       (is_list_type(type2) && is_tuple_type(type1)) {
+                        return false;  // List vs Tuple - real error!
+                    }
+
                     // Check if a type contains type variables (used in higher-order function inference)
                     let contains_type_var = |s: &str| {
                         s.contains('?') ||  // Internal type variable like ?5 or (?2, ?3) -> ?2
-                        (s.len() == 1 && s.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false))  // Single letter like T or a
+                        (s.len() == 1 && s.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false))  // Single lowercase letter like a, b (NOT uppercase - those are user types like R, S)
                     };
 
                     // Suppress if either type contains type variables

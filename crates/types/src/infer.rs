@@ -878,20 +878,44 @@ impl<'a> InferCtx<'a> {
     /// this targets ONLY bounds from explicit type parameters, so it can safely
     /// check function types even when inner vars are unresolved.
     pub fn check_generic_trait_bounds(&mut self) -> Option<TypeError> {
+        // Only check builtin traits here. User-defined traits are checked through
+        // the trait system's method dispatch. The implements() method on TypeEnv
+        // may not have user-defined trait impls registered in the type_check_fn context.
+        let builtin_traits = ["Eq", "Ord", "Num", "Hash", "Show", "Concat"];
         for (arg_ty, trait_name, span) in &self.deferred_generic_trait_checks {
+            if !builtin_traits.contains(&trait_name.as_str()) {
+                continue;
+            }
             let resolved = self.env.apply_subst(arg_ty);
-            // Only check function types - they NEVER implement Eq/Ord/Num
-            // regardless of inner type variables
-            if let Type::Function(_) = &resolved {
-                if !self.env.implements(&resolved, trait_name) {
-                    self.last_error_span = Some(*span);
-                    // Use Mismatch to bypass the string-based error filters in compile.rs
-                    // that would suppress MissingTraitImpl with type variables
-                    return Some(TypeError::Mismatch {
-                        expected: format!("type implementing {}", trait_name),
-                        found: format!("{} (function type)", resolved.display()),
-                    });
+            // Skip unresolved type variables - can't check yet
+            if let Type::Var(_) = &resolved {
+                continue;
+            }
+            // Skip type parameters - they represent generic params whose bounds
+            // are checked at the caller's call site, not here
+            if let Type::TypeParam(_) = &resolved {
+                continue;
+            }
+            // Skip types that still contain unresolved vars (partially resolved)
+            if resolved.has_any_type_var() {
+                continue;
+            }
+            // Skip Named types that look like unresolved type variables (e.g., "?429")
+            // These arise from stale substitutions in pending_fn_signatures
+            if let Type::Named { name, .. } = &resolved {
+                if name.starts_with('?') {
+                    continue;
                 }
+            }
+            // Check if the concrete type implements the required trait
+            if !self.env.implements(&resolved, trait_name) {
+                self.last_error_span = Some(*span);
+                // Use Mismatch to bypass the string-based error filters in compile.rs
+                // that would suppress MissingTraitImpl with type variables
+                return Some(TypeError::Mismatch {
+                    expected: format!("type implementing {}", trait_name),
+                    found: resolved.display(),
+                });
             }
         }
         None

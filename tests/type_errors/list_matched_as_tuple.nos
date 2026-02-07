@@ -1,0 +1,5 @@
+# expect_error: Cannot unify types
+# Bug 75: List matched against tuple pattern should fail at compile time
+main() = match [1, 2, 3] {
+    (a, b) -> a + b
+}

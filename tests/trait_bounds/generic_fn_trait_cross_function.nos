@@ -1,0 +1,5 @@
+# expect_error: type mismatch
+# String result from showEx() passed through generic add() should fail at compile time
+showEx(x) = show(x) ++ "!"
+add(x, y) = x + y
+main() = add(showEx(1), 2)

@@ -1,0 +1,5 @@
+# expect_error: type mismatch
+# Bug 92: String passed to generic numeric fn - should fail at compile time
+# When add(x,y) = x + y infers Num constraint, passing String should be caught
+add(x, y) = x + y
+main() = add("hello", 2)

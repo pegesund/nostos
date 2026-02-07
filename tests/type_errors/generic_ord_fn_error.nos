@@ -1,4 +1,4 @@
-# expect_error: does not implement Ord
+# expect_error: type implementing Ord
 # User-defined generic function with inferred Ord constraint called with functions
 myMax(a, b) = if a > b then a else b
 main() = myMax(x => x + 1, x => x + 2)

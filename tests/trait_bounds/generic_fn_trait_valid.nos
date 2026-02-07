@@ -1,0 +1,5 @@
+# expect: 7
+# Valid use of generic numeric function - should compile and run
+add(x, y) = x + y
+double(x) = add(x, x)
+main() = add(double(2), 3)

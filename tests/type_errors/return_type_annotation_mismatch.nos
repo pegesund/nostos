@@ -1,0 +1,6 @@
+# expect_error: type mismatch
+# Bug 28: Return type annotation should be enforced
+type R = { x: Int }
+type S = { y: String }
+f(r: R) -> S = r
+main() = f(R(x: 1))
