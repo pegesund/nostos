@@ -1490,7 +1490,20 @@ impl<'a> InferCtx<'a> {
                     let short = name.rsplit('.').next().unwrap_or(name);
                     matches!(short, "Float64Array" | "Int64Array" | "Float32Array" | "Buffer")
                 }
-                Type::Var(_) => true, // Still unresolved, allow it (runtime will check)
+                Type::Var(_) => {
+                    // Still unresolved - propagate as HasMethod("length") so the
+                    // constraint reaches call sites through generic function signatures.
+                    // Without this, getLen(x) = length(x) then getLen(42) would not
+                    // catch that Int doesn't support length.
+                    self.deferred_method_on_var.push((
+                        resolved.clone(),
+                        "length".to_string(),
+                        vec![],
+                        Type::Int,
+                        Some(_span),
+                    ));
+                    true
+                }
                 _ => false,
             };
             if !is_valid_for_length {
