@@ -2234,6 +2234,25 @@ impl Compiler {
                         .map(|(_, (_, _, _, _, source, source_name))| (source_name.clone(), source.clone()))
                         .unwrap_or_else(|| ("unknown".to_string(), Arc::new(String::new())));
                     errors.push(("".to_string(), compile_error, source_name, source));
+                } else if let TypeError::NoSuchField { ref ty, ref field } = e {
+                    // NoSuchField from deferred_has_field is definitive only for
+                    // built-in types where HM inference has complete field knowledge.
+                    // For user-defined Named types, HM may not know about reactive
+                    // fields, private fields, or module-specific fields - those are
+                    // better handled by later compilation stages.
+                    let is_builtin_type = ty.starts_with("List[") // List
+                        || ty.starts_with('(')                   // Tuple
+                        || ty == "Int" || ty == "String" || ty == "Bool"
+                        || ty == "Float" || ty == "Char" || ty == "Unit"
+                        || ty.contains("->"); // Function type
+                    if is_builtin_type && !ty.starts_with('?') {
+                        let error_span = ctx.last_error_span().unwrap_or_else(|| Span::new(0, 0));
+                        let compile_error = self.convert_type_error(e.clone(), error_span);
+                        let (source_name, source) = user_fns.first()
+                            .map(|(_, (_, _, _, _, source, source_name))| (source_name.clone(), source.clone()))
+                            .unwrap_or_else(|| ("unknown".to_string(), Arc::new(String::new())));
+                        errors.push(("".to_string(), compile_error, source_name, source));
+                    }
                 }
                 // Note: UnificationFailed errors are NOT handled here because this batch
                 // solve() for all functions produces many false positives from HM inference
