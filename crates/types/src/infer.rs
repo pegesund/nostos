@@ -115,6 +115,11 @@ pub struct InferCtx<'a> {
     /// the trait - particularly catches function types passed to constrained generics
     /// (functions never implement Eq/Ord/Num).
     deferred_generic_trait_checks: Vec<(Type, String, Span)>,
+    /// Deferred default parameter checks: (default_value_type, param_type, span).
+    /// Instead of immediately unifying default values with param types (which
+    /// over-constrains generic params in batch inference), defer the check
+    /// until after solve() resolves types through body usage.
+    deferred_default_param_checks: Vec<(Type, Type, Span)>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -141,6 +146,7 @@ impl<'a> InferCtx<'a> {
             deferred_collection_ret_checks: Vec::new(),
             deferred_fn_call_checks: Vec::new(),
             deferred_generic_trait_checks: Vec::new(),
+            deferred_default_param_checks: Vec::new(),
         }
     }
 
@@ -1544,6 +1550,43 @@ impl<'a> InferCtx<'a> {
                     }
                 }
                 _ => {} // Numeric primitives (Int, Float, etc.) implement Num
+            }
+        }
+
+        // Post-solve: check default parameter values against resolved param types.
+        // Now that the function body has constrained parameter types through usage,
+        // verify that default values are type-compatible.
+        // e.g., greet(name, greeting = 42) = greeting ++ " " ++ name
+        // → greeting resolves to String (from ++ usage), default 42 is Int → error
+        for (default_ty, param_ty, span) in std::mem::take(&mut self.deferred_default_param_checks) {
+            let resolved_default = self.env.apply_subst(&default_ty);
+            let resolved_param = self.env.apply_subst(&param_ty);
+            if !resolved_default.has_any_type_var() && !resolved_param.has_any_type_var() {
+                // Both fully concrete - simple equality check
+                if resolved_default != resolved_param {
+                    self.last_error_span = Some(span);
+                    return Err(TypeError::Mismatch {
+                        expected: resolved_param.display(),
+                        found: resolved_default.display(),
+                    });
+                }
+            } else if !resolved_default.has_any_type_var() {
+                // Default is concrete but param still has unresolved vars.
+                // Check if param's trait bounds are satisfied by the default type.
+                // e.g., greeting = 42 where greeting has Concat bound → Int doesn't implement Concat
+                if let Type::Var(var_id) = &resolved_param {
+                    let bounds: Vec<String> = self.get_trait_bounds(*var_id)
+                        .into_iter().cloned().collect();
+                    for bound in &bounds {
+                        if !self.env.implements(&resolved_default, bound) {
+                            self.last_error_span = Some(span);
+                            return Err(TypeError::Mismatch {
+                                expected: format!("type implementing {}", bound),
+                                found: resolved_default.display(),
+                            });
+                        }
+                    }
+                }
             }
         }
 
@@ -5211,6 +5254,21 @@ impl<'a> InferCtx<'a> {
                 fresh_ty
             };
             self.infer_pattern(&param.pattern, &param_ty)?;
+
+            // Defer type-check of default value against parameter type.
+            // We can't unify immediately because in batch inference (shared InferCtx),
+            // unifying would over-constrain generic params (e.g., f = helper would lock
+            // f to helper's concrete type, preventing other function args).
+            // Instead, infer the default's type and check compatibility after solve().
+            // If infer_expr fails (e.g., function reference not in scope during
+            // per-function inference), skip the check - the body constrains the param type.
+            if let Some(default_expr) = &param.default {
+                if let Ok(default_ty) = self.infer_expr(default_expr) {
+                    let span = default_expr.span();
+                    self.deferred_default_param_checks.push((default_ty, param_ty.clone(), span));
+                }
+            }
+
             param_types.push(param_ty);
         }
 
