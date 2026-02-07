@@ -120,6 +120,15 @@ pub struct InferCtx<'a> {
     /// over-constrains generic params in batch inference), defer the check
     /// until after solve() resolves types through body usage.
     deferred_default_param_checks: Vec<(Type, Type, Span)>,
+    /// Deferred method-on-var checks: (receiver_type, method_name, arg_types, ret_type, span).
+    /// When a method call is resolved on a type variable (e.g., x.length() where x is Var),
+    /// record it so the constraint can be propagated through function signatures.
+    /// At the call site, the method will be re-validated on the concrete type.
+    deferred_method_on_var: Vec<(Type, String, Vec<Type>, Type, Option<Span>)>,
+    /// Deferred method existence checks from HasMethod constraints in instantiate_function.
+    /// After solve() resolves the type var, we check if the resolved type supports the method.
+    /// Format: (type_var, method_name, span).
+    deferred_method_existence_checks: Vec<(Type, String, Option<Span>)>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -147,6 +156,8 @@ impl<'a> InferCtx<'a> {
             deferred_fn_call_checks: Vec::new(),
             deferred_generic_trait_checks: Vec::new(),
             deferred_default_param_checks: Vec::new(),
+            deferred_method_on_var: Vec::new(),
+            deferred_method_existence_checks: Vec::new(),
         }
     }
 
@@ -190,6 +201,12 @@ impl<'a> InferCtx<'a> {
     /// Used to propagate field requirements from generic function bodies to call sites.
     pub fn get_deferred_has_field(&self) -> &[(Type, String, Type)] {
         &self.deferred_has_field
+    }
+
+    /// Get deferred method-on-var calls (method calls on still-generic type vars).
+    /// Used to propagate method requirements from generic function bodies to call sites.
+    pub fn get_deferred_method_on_var(&self) -> &[(Type, String, Vec<Type>, Type, Option<Span>)] {
+        &self.deferred_method_on_var
     }
 
     /// Look up the Var type that a TypeParam name maps to.
@@ -591,8 +608,17 @@ impl<'a> InferCtx<'a> {
             // because the type environment may not have all trait impls registered.
             if let Type::Var(var_id) = &fresh_var {
                 for constraint in &type_param.constraints {
+                    // Handle HasMethod constraints: "HasMethod(methodname)" → deferred existence check
+                    if let Some(method_name) = constraint.strip_prefix("HasMethod(").and_then(|s| s.strip_suffix(')')) {
+                        self.deferred_method_existence_checks.push((
+                            fresh_var.clone(),
+                            method_name.to_string(),
+                            None,
+                        ));
+                        // Also store in trait_bounds for the transfer section
+                        self.add_trait_bound(*var_id, constraint.clone());
                     // Handle HasField constraints: "HasField(fieldname)" → emit HasField constraint
-                    if let Some(field_name) = constraint.strip_prefix("HasField(").and_then(|s| s.strip_suffix(')')) {
+                    } else if let Some(field_name) = constraint.strip_prefix("HasField(").and_then(|s| s.strip_suffix(')')) {
                         let field_ty = self.fresh();
                         self.constraints.push(Constraint::HasField(
                             fresh_var.clone(),
@@ -644,7 +670,13 @@ impl<'a> InferCtx<'a> {
                     if let Some(var_subst_var) = var_subst.get(&orig_id) {
                         if let Type::Var(var_subst_id) = var_subst_var {
                             for bound in &bounds {
-                                if let Some(field_name) = bound.strip_prefix("HasField(").and_then(|s| s.strip_suffix(')')) {
+                                if let Some(method_name) = bound.strip_prefix("HasMethod(").and_then(|s| s.strip_suffix(')')) {
+                                    self.deferred_method_existence_checks.push((
+                                        var_subst_var.clone(),
+                                        method_name.to_string(),
+                                        None,
+                                    ));
+                                } else if let Some(field_name) = bound.strip_prefix("HasField(").and_then(|s| s.strip_suffix(')')) {
                                     let field_ty = self.fresh();
                                     self.constraints.push(Constraint::HasField(
                                         var_subst_var.clone(),
@@ -1666,6 +1698,34 @@ impl<'a> InferCtx<'a> {
             }
         }
 
+        // Process deferred method existence checks from HasMethod constraints.
+        // These come from instantiate_function when a generic function has a HasMethod
+        // bound (e.g., applyLen(x) = x.length() → HasMethod(length) a => a -> b).
+        // After solve(), the type var should be resolved; check if the method exists.
+        for (ty, method_name, span) in std::mem::take(&mut self.deferred_method_existence_checks) {
+            let resolved = self.env.apply_subst(&ty);
+            // Skip unresolved type vars - can't check
+            if matches!(&resolved, Type::Var(_)) { continue; }
+
+            // Types that definitely don't support collection/string methods
+            let has_no_methods = matches!(&resolved,
+                Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 |
+                Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64 |
+                Type::Float | Type::Float32 | Type::Float64 |
+                Type::Bool | Type::Char | Type::BigInt | Type::Decimal |
+                Type::Unit | Type::Function(_)
+            );
+
+            if has_no_methods {
+                let type_display = resolved.display();
+                self.last_error_span = span;
+                return Err(TypeError::UndefinedMethod {
+                    method: method_name,
+                    receiver_type: type_display,
+                });
+            }
+        }
+
         // Verify post-solve invariants (debug mode only)
         self.verify_post_solve_invariants();
 
@@ -2509,11 +2569,39 @@ impl<'a> InferCtx<'a> {
                         receiver_type: type_name,
                     });
                 }
+
+                // Record method calls on still-unresolved Vars for signature propagation.
+                // These will be encoded as HasMethod(name) in the function signature so that
+                // call sites can validate the method when the type becomes concrete.
+                if matches!(&resolved, Type::Var(_)) {
+                    self.deferred_method_on_var.push((
+                        call.receiver_ty.clone(),
+                        call.method_name.clone(),
+                        call.arg_types.clone(),
+                        call.ret_ty.clone(),
+                        call.span,
+                    ));
+                }
             }
             } // end for call in pending
 
             // If no deferred calls remain or no progress was made, stop iterating
             if deferred.is_empty() || !made_progress {
+                // Before breaking, record any deferred method calls on still-unresolved
+                // Vars for signature propagation. These will be encoded as HasMethod(name)
+                // in the function signature so call sites can validate them.
+                for call in &deferred {
+                    let resolved = self.env.apply_subst(&call.receiver_ty);
+                    if matches!(&resolved, Type::Var(_)) {
+                        self.deferred_method_on_var.push((
+                            call.receiver_ty.clone(),
+                            call.method_name.clone(),
+                            call.arg_types.clone(),
+                            call.ret_ty.clone(),
+                            call.span,
+                        ));
+                    }
+                }
                 break;
             }
 

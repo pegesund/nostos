@@ -24058,6 +24058,17 @@ impl Compiler {
                 }
             }
         }
+        // Collect HasMethod constraints for type variables with pending method calls
+        // These represent method requirements on generic parameters (e.g., x.length() in f(x))
+        let deferred_methods = ctx.get_deferred_method_on_var().to_vec();
+        for (ty, method_name, _arg_types, _ret_ty, _span) in &deferred_methods {
+            let resolved = ctx.env.apply_subst(ty);
+            if let nostos_types::Type::Var(var_id) = &resolved {
+                if let Some(&var_letter) = var_map.get(var_id) {
+                    bounds.push(format!("HasMethod({}) {}", method_name, var_letter));
+                }
+            }
+        }
         bounds.sort(); // Deterministic ordering
         bounds.dedup(); // Remove duplicate bounds (e.g., multiple Ord from multiple < operators)
 
@@ -24068,11 +24079,12 @@ impl Compiler {
             format!("{} -> {}", param_types.join(" -> "), ret_type)
         };
 
-        if bounds.is_empty() {
+        let result = if bounds.is_empty() {
             Some(type_sig)
         } else {
             Some(format!("{} => {}", bounds.join(", "), type_sig))
-        }
+        };
+        result
     }
 
     /// Type check a function definition using Hindley-Milner type inference.
