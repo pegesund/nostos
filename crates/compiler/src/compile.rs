@@ -367,7 +367,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Regex.replace", signature: "String -> String -> String -> String", doc: "Replace first match: replace(s, pattern, replacement)" },
     BuiltinInfo { name: "Regex.replaceAll", signature: "String -> String -> String -> String", doc: "Replace all matches: replaceAll(s, pattern, replacement)" },
     BuiltinInfo { name: "Regex.split", signature: "String -> String -> [String]", doc: "Split string by regex pattern" },
-    BuiltinInfo { name: "Regex.captures", signature: "String -> String -> Option [String]", doc: "Get capture groups from first match" },
+    BuiltinInfo { name: "Regex.captures", signature: "String -> String -> Option[List[String]]", doc: "Get capture groups from first match" },
 
     // === Map Functions ===
     BuiltinInfo { name: "Map.insert", signature: "Map k v -> k -> v -> Map k v", doc: "Insert key-value pair, returns new map" },
