@@ -403,7 +403,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
 
     // === PostgreSQL ===
     BuiltinInfo { name: "Pg.connect", signature: "String -> Int", doc: "Connect to PostgreSQL database, returns handle" },
-    BuiltinInfo { name: "Pg.query", signature: "Int -> String -> p -> [[a]]", doc: "Execute query with params (list/tuple/scalar/unit), returns rows as list of lists" },
+    BuiltinInfo { name: "Pg.query", signature: "Int -> String -> p -> [a]", doc: "Execute query with params (list/tuple/scalar/unit), returns rows as tuples" },
     BuiltinInfo { name: "Pg.execute", signature: "Int -> String -> p -> Int", doc: "Execute statement with params (list/tuple/scalar/unit), returns affected row count" },
     BuiltinInfo { name: "Pg.close", signature: "Int -> ()", doc: "Close PostgreSQL connection" },
     BuiltinInfo { name: "Pg.begin", signature: "Int -> ()", doc: "Begin a transaction" },
@@ -411,7 +411,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Pg.rollback", signature: "Int -> ()", doc: "Rollback the current transaction" },
     BuiltinInfo { name: "Pg.transaction", signature: "Int -> (() -> a) -> a", doc: "Execute function in transaction with auto-rollback on error" },
     BuiltinInfo { name: "Pg.prepare", signature: "Int -> String -> String -> ()", doc: "Prepare a statement with name and query" },
-    BuiltinInfo { name: "Pg.queryPrepared", signature: "Int -> String -> p -> [[a]]", doc: "Execute prepared query with params (list/tuple/scalar/unit), returns rows" },
+    BuiltinInfo { name: "Pg.queryPrepared", signature: "Int -> String -> p -> [a]", doc: "Execute prepared query with params (list/tuple/scalar/unit), returns rows as tuples" },
     BuiltinInfo { name: "Pg.executePrepared", signature: "Int -> String -> p -> Int", doc: "Execute prepared statement with params (list/tuple/scalar/unit), returns affected count" },
     BuiltinInfo { name: "Pg.deallocate", signature: "Int -> String -> ()", doc: "Deallocate a prepared statement" },
     // LISTEN/NOTIFY

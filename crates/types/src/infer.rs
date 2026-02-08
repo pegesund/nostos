@@ -4900,16 +4900,40 @@ impl<'a> InferCtx<'a> {
                         self.unify(index_ty, Type::Int);
                         Ok(elem_ty)
                     }
+                    Type::Map(key_ty, val_ty) => {
+                        // Map[K,V] indexing: m[key] returns V, index must be K
+                        self.constraints.push(Constraint::Equal(
+                            index_ty,
+                            (**key_ty).clone(),
+                            Some(*span),
+                        ));
+                        self.constraints.push(Constraint::Equal(
+                            elem_ty.clone(),
+                            (**val_ty).clone(),
+                            Some(*span),
+                        ));
+                        Ok(elem_ty)
+                    }
+                    Type::Set(set_elem_ty) => {
+                        // Set[T] indexing: s[elem] returns Bool (contains check)
+                        self.constraints.push(Constraint::Equal(
+                            index_ty,
+                            (**set_elem_ty).clone(),
+                            Some(*span),
+                        ));
+                        self.constraints.push(Constraint::Equal(
+                            elem_ty.clone(),
+                            Type::Bool,
+                            Some(*span),
+                        ));
+                        Ok(elem_ty)
+                    }
                     _ => {
-                        // Container could be List, Array, Map, or String
+                        // Container is List, Array, or String
                         let list_ty = Type::List(Box::new(elem_ty.clone()));
 
-                        // For now, assume Int index for lists/arrays
-                        // This is simplified - a full impl would handle Map[K, V]
                         self.unify(index_ty, Type::Int);
 
-                        // Try to unify with List or Array
-                        // We'll handle this via constraint solving
                         self.constraints.push(Constraint::Equal(
                             container_ty,
                             list_ty,
