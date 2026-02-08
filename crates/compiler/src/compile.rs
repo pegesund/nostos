@@ -11500,8 +11500,7 @@ impl Compiler {
                 let obj_reg = self.compile_expr_tail(obj, false)?;
                 let dst = self.alloc_reg();
 
-                // For variants with positional fields, convert field name to numeric index
-                // For records, keep the field name as-is (VM looks up by name)
+                // Resolve field name to numeric index at compile time when type is known
                 let mut field_index: Option<usize> = None;
 
                 // Try structural type first to get base type name
@@ -11524,33 +11523,51 @@ impl Compiler {
 
                 let base_type = base_type_structural.or(base_type_string);
                 if let Some(ref base_type) = base_type {
-
-                    // Check if this is a variant type with positional fields
-                    // Records keep field names; variants need numeric indices
                     if let Some(type_def) = self.type_defs.get(base_type) {
-                        if let nostos_syntax::ast::TypeBody::Variant(variants) = &type_def.body {
-                            // Single-constructor variant with named fields needs index conversion
-                            if variants.len() == 1 {
-                                if let nostos_syntax::ast::VariantFields::Named(fields) = &variants[0].fields {
-                                    for (idx, f) in fields.iter().enumerate() {
-                                        if f.name.node == field.node {
-                                            field_index = Some(idx);
-                                            break;
+                        // Skip compile-time index resolution for reactive records
+                        // (they use Arc-based storage with callback system, not simple Vec)
+                        if !type_def.reactive {
+                        match &type_def.body {
+                            nostos_syntax::ast::TypeBody::Record(fields) => {
+                                // Resolve record field name to index at compile time
+                                for (idx, f) in fields.iter().enumerate() {
+                                    if f.name.node == field.node {
+                                        field_index = Some(idx);
+                                        break;
+                                    }
+                                }
+                            }
+                            nostos_syntax::ast::TypeBody::Variant(variants) => {
+                                // Single-constructor variant with named fields needs index conversion
+                                if variants.len() == 1 {
+                                    if let nostos_syntax::ast::VariantFields::Named(fields) = &variants[0].fields {
+                                        for (idx, f) in fields.iter().enumerate() {
+                                            if f.name.node == field.node {
+                                                field_index = Some(idx);
+                                                break;
+                                            }
                                         }
                                     }
                                 }
                             }
+                            _ => {}
                         }
-                        // Note: Record types keep field names (no index conversion)
+                        } // end if !type_def.reactive
                     }
                 }
 
-                // Use numeric index for variants, field name for records
-                let field_const = match field_index {
-                    Some(idx) => self.chunk.add_constant(Value::String(Arc::new(idx.to_string()))),
-                    None => self.chunk.add_constant(Value::String(Arc::new(field.node.clone()))),
-                };
-                self.chunk.emit(Instruction::GetField(dst, obj_reg, field_const), line);
+                // Use GetFieldByIdx when index is known at compile time, fall back to GetField
+                if let Some(idx) = field_index {
+                    if idx <= 255 {
+                        self.chunk.emit(Instruction::GetFieldByIdx(dst, obj_reg, idx as u8), line);
+                    } else {
+                        let field_const = self.chunk.add_constant(Value::String(Arc::new(field.node.clone())));
+                        self.chunk.emit(Instruction::GetField(dst, obj_reg, field_const), line);
+                    }
+                } else {
+                    let field_const = self.chunk.add_constant(Value::String(Arc::new(field.node.clone())));
+                    self.chunk.emit(Instruction::GetField(dst, obj_reg, field_const), line);
+                }
                 Ok(dst)
             }
 
@@ -21539,8 +21556,48 @@ impl Compiler {
             }
             AssignTarget::Field(obj, field) => {
                 let obj_reg = self.compile_expr_tail(obj, false)?;
-                let field_idx = self.chunk.add_constant(Value::String(Arc::new(field.node.clone())));
-                self.chunk.emit(Instruction::SetField(obj_reg, field_idx, value_reg), 0);
+                // Try to resolve field index at compile time
+                let mut resolved_idx: Option<usize> = None;
+                let base_type_structural = self.inferred_expr_types.get(&obj.span())
+                    .and_then(|ty| self.get_type_base_name_from_type(ty));
+                let base_type_string = if base_type_structural.is_none() {
+                    self.expr_type_name(obj).map(|type_name| {
+                        if let Some(bracket_pos) = type_name.find('[') {
+                            type_name[..bracket_pos].to_string()
+                        } else {
+                            type_name
+                        }
+                    })
+                } else {
+                    None
+                };
+                let base_type = base_type_structural.or(base_type_string);
+                if let Some(ref base_type) = base_type {
+                    if let Some(type_def) = self.type_defs.get(base_type) {
+                        // Skip for reactive records (they use Arc-based storage with callbacks)
+                        if !type_def.reactive {
+                            if let nostos_syntax::ast::TypeBody::Record(fields) = &type_def.body {
+                                for (idx, f) in fields.iter().enumerate() {
+                                    if f.name.node == field.node {
+                                        resolved_idx = Some(idx);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(idx) = resolved_idx {
+                    if idx <= 255 {
+                        self.chunk.emit(Instruction::SetFieldByIdx(obj_reg, idx as u8, value_reg), 0);
+                    } else {
+                        let field_idx = self.chunk.add_constant(Value::String(Arc::new(field.node.clone())));
+                        self.chunk.emit(Instruction::SetField(obj_reg, field_idx, value_reg), 0);
+                    }
+                } else {
+                    let field_idx = self.chunk.add_constant(Value::String(Arc::new(field.node.clone())));
+                    self.chunk.emit(Instruction::SetField(obj_reg, field_idx, value_reg), 0);
+                }
             }
             AssignTarget::Index(coll, idx) => {
                 // Check for custom type index assignment dispatch: MyType[i] = v -> myTypeSet(coll, i, v)
@@ -22020,18 +22077,22 @@ impl Compiler {
 
         // For each field in the record type:
         // - If updated, compile the new value
-        // - If not updated, get the field from base
+        // - If not updated, get the field from base by compile-time index
         let mut field_regs = Vec::new();
-        for field_name in &all_field_names {
+        for (idx, field_name) in all_field_names.iter().enumerate() {
             if let Some(update_expr) = updates.get(field_name) {
                 // Use the updated value
                 let reg = self.compile_expr_tail(update_expr, false)?;
                 field_regs.push(reg);
             } else {
-                // Get the field from base record
+                // Get the field from base record by index
                 let dst = self.alloc_reg();
-                let field_idx = self.chunk.add_constant(Value::String(Arc::new(field_name.clone())));
-                self.chunk.emit(Instruction::GetField(dst, base_reg, field_idx), 0);
+                if idx <= 255 {
+                    self.chunk.emit(Instruction::GetFieldByIdx(dst, base_reg, idx as u8), 0);
+                } else {
+                    let field_idx = self.chunk.add_constant(Value::String(Arc::new(field_name.clone())));
+                    self.chunk.emit(Instruction::GetField(dst, base_reg, field_idx), 0);
+                }
                 field_regs.push(dst);
             }
         }

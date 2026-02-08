@@ -908,6 +908,28 @@ impl VM {
                     }),
                 }
             }
+            Instruction::GetFieldByIdx(dst, record, field_idx) => {
+                let idx = *field_idx as usize;
+                match reg!(record) {
+                    Value::Record(rec) => {
+                        let value = rec.fields.get(idx)
+                            .ok_or_else(|| RuntimeError::Panic(format!("Field index {} out of bounds (record has {} fields)", idx, rec.fields.len())))?
+                            .clone();
+                        set_reg!(dst, value);
+                    }
+                    Value::Tuple(items) => {
+                        let value = items.get(idx).cloned().ok_or_else(|| RuntimeError::IndexOutOfBounds {
+                            index: idx as i64,
+                            length: items.len(),
+                        })?;
+                        set_reg!(dst, value);
+                    }
+                    other => return Err(RuntimeError::TypeError {
+                        expected: "Record or Tuple".to_string(),
+                        found: other.type_name().to_string(),
+                    }),
+                }
+            }
             Instruction::SetField(record, field_idx, value) => {
                 let field_name = match &constants[field_idx as usize] {
                     Value::String(s) => s.to_string(),
@@ -926,6 +948,27 @@ impl VM {
                             })?;
                         if !rec.mutable_fields[idx] {
                             return Err(RuntimeError::ImmutableField { field: field_name });
+                        }
+                        let mut new_rec = (*rec).clone();
+                        new_rec.fields[idx] = new_value;
+                        set_reg!(record, Value::Record(Rc::new(new_rec)));
+                    }
+                    other => return Err(RuntimeError::TypeError {
+                        expected: "Record".to_string(),
+                        found: other.type_name().to_string(),
+                    }),
+                }
+            }
+            Instruction::SetFieldByIdx(record, field_idx, value) => {
+                let idx = *field_idx as usize;
+                let new_value = reg!(value).clone();
+                match reg!(record).clone() {
+                    Value::Record(rec) => {
+                        if idx >= rec.fields.len() {
+                            return Err(RuntimeError::Panic(format!("Field index {} out of bounds", idx)));
+                        }
+                        if !rec.mutable_fields[idx] {
+                            return Err(RuntimeError::ImmutableField { field: format!("index {}", idx) });
                         }
                         let mut new_rec = (*rec).clone();
                         new_rec.fields[idx] = new_value;

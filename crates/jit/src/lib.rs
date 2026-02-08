@@ -3630,6 +3630,11 @@ impl JitCompiler {
                         }
                     }
                 }
+                // GetFieldByIdx on tuples (compile-time resolved index)
+                Instruction::GetFieldByIdx(_, _, field_idx) => {
+                    has_tuple_op = true;
+                    max_tuple_arity = max_tuple_arity.max(*field_idx as usize + 1);
+                }
                 Instruction::DestructurePair(_, _, _) => {
                     has_tuple_op = true;
                     max_tuple_arity = max_tuple_arity.max(2);
@@ -3967,6 +3972,15 @@ impl JitCompiler {
                                     builder.def_var(regs[*dst as usize][0], v);
                                 }
                             }
+                        }
+                    }
+
+                    // GetFieldByIdx - compile-time resolved field index
+                    Instruction::GetFieldByIdx(dst, src, field_idx) => {
+                        let idx = *field_idx as usize;
+                        if idx < vars_per_reg {
+                            let v = builder.use_var(regs[*src as usize][idx]);
+                            builder.def_var(regs[*dst as usize][0], v);
                         }
                     }
 

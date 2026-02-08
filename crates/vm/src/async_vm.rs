@@ -3720,6 +3720,46 @@ impl AsyncProcess {
                 }
             }
 
+            GetFieldByIdx(dst, record, field_idx) => {
+                let rec_val = reg!(record);
+                match rec_val {
+                    GcValue::Record(ptr) => {
+                        let value = {
+                            let idx = *field_idx as usize;
+                            let rec = self.heap.get_record(ptr)
+                                .ok_or_else(|| RuntimeError::Panic("Invalid record reference".into()))?;
+                            rec.fields.get(idx)
+                                .ok_or_else(|| RuntimeError::Panic(format!("Field index {} out of bounds (record has {} fields)", idx, rec.fields.len())))?
+                                .clone()
+                        };
+                        set_reg!(dst, value);
+                    }
+                    GcValue::Variant(ptr) => {
+                        let value = {
+                            let idx = *field_idx as usize;
+                            let var = self.heap.get_variant(ptr)
+                                .ok_or_else(|| RuntimeError::Panic("Invalid variant reference".into()))?;
+                            var.fields.get(idx)
+                                .ok_or_else(|| RuntimeError::Panic(format!("Variant field index {} out of bounds", idx)))?
+                                .clone()
+                        };
+                        set_reg!(dst, value);
+                    }
+                    GcValue::Tuple(ptr) => {
+                        let value = {
+                            let idx = *field_idx as usize;
+                            let tuple = self.heap.get_tuple(ptr)
+                                .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".into()))?;
+                            tuple.items.get(idx)
+                                .ok_or_else(|| RuntimeError::Panic(format!("Tuple index {} out of bounds", idx)))?
+                                .clone()
+                        };
+                        set_reg!(dst, value);
+                    }
+                    _ => return Err(RuntimeError::Panic("GetFieldByIdx expects record, variant, or tuple".into())),
+                }
+            }
+
             SetField(record_reg, field_idx, value_reg) => {
                 let field_name = match get_const!(field_idx) {
                     Value::String(s) => (*s).clone(),
@@ -3816,6 +3856,26 @@ impl AsyncProcess {
                         }
                     }
                     _ => return Err(RuntimeError::Panic("SetField expects record or reactive record".into())),
+                }
+            }
+
+            SetFieldByIdx(record_reg, field_idx, value_reg) => {
+                let value = reg!(value_reg);
+                let rec_val = reg!(record_reg);
+                match rec_val {
+                    GcValue::Record(ptr) => {
+                        let idx = *field_idx as usize;
+                        let rec = self.heap.get_record_mut(ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid record reference".into()))?;
+                        if idx >= rec.fields.len() {
+                            return Err(RuntimeError::Panic(format!("Field index {} out of bounds", idx)));
+                        }
+                        if !rec.mutable_fields[idx] {
+                            return Err(RuntimeError::Panic(format!("Field at index {} is not mutable", idx)));
+                        }
+                        rec.fields[idx] = value;
+                    }
+                    _ => return Err(RuntimeError::Panic("SetFieldByIdx expects record".into())),
                 }
             }
 

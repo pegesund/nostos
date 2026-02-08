@@ -1520,8 +1520,12 @@ pub enum Instruction {
     MakeReactiveRecord(Reg, ConstIdx, RegList),
     /// Get field: dst = record.field
     GetField(Reg, Reg, ConstIdx),
+    /// Get field by compile-time resolved index: dst = record.fields[idx]
+    GetFieldByIdx(Reg, Reg, u8),
     /// Set field: record.field = value
     SetField(Reg, ConstIdx, Reg),
+    /// Set field by compile-time resolved index: record.fields[idx] = value
+    SetFieldByIdx(Reg, u8, Reg),
     /// Register onChange callback on reactive record: record.onChange(callback)
     ReactiveAddCallback(Reg, Reg),
     /// Register onRead callback on reactive record: record.onRead(callback)
