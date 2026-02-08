@@ -259,6 +259,13 @@ pub type JitListSumFn = fn(*const i64, i64, *const std::sync::atomic::AtomicBool
 /// Returns i64::MIN if yielded early (safepoint triggered)
 pub type JitListSumTrFn = fn(*const i64, i64, i64, *const std::sync::atomic::AtomicBool) -> i64;
 
+/// JIT tuple pair function (arity 1): fn(i64) -> (i64, i64)
+pub type JitTuplePairFn1 = fn(i64) -> (i64, i64);
+/// JIT tuple pair function (arity 2): fn(i64, i64) -> (i64, i64)
+pub type JitTuplePairFn2 = fn(i64, i64) -> (i64, i64);
+/// JIT tuple triple function (arity 1): fn(i64) -> (i64, i64, i64)
+pub type JitTupleTripleFn1 = fn(i64) -> (i64, i64, i64);
+
 /// Sentinel value returned by JIT functions when they yield at a safepoint.
 /// This value is extremely unlikely to be a valid computation result.
 pub const JIT_YIELD_SENTINEL: i64 = i64::MIN;

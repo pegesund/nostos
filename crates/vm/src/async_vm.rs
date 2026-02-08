@@ -217,6 +217,12 @@ pub struct AsyncSharedState {
     pub jit_list_sum_functions: RwLock<HashMap<u16, crate::shared_types::JitListSumFn>>,
     /// JIT tail-recursive list sum functions: (data_ptr, len, acc) -> sum
     pub jit_list_sum_tr_functions: RwLock<HashMap<u16, crate::shared_types::JitListSumTrFn>>,
+    /// JIT tuple pair functions (arity 1): fn(i64) -> (i64, i64)
+    pub jit_tuple_pair_functions_1: RwLock<HashMap<u16, crate::shared_types::JitTuplePairFn1>>,
+    /// JIT tuple pair functions (arity 2): fn(i64, i64) -> (i64, i64)
+    pub jit_tuple_pair_functions_2: RwLock<HashMap<u16, crate::shared_types::JitTuplePairFn2>>,
+    /// JIT tuple triple functions (arity 1): fn(i64) -> (i64, i64, i64)
+    pub jit_tuple_triple_functions_1: RwLock<HashMap<u16, crate::shared_types::JitTupleTripleFn1>>,
 
     /// Shutdown signal (permanent).
     pub shutdown: AtomicBool,
@@ -2115,6 +2121,48 @@ impl AsyncProcess {
                                 return Ok(StepResult::Continue);
                             }
                         }
+                        // JIT tuple pair function (arity 1): fn(i64) -> (i64, i64)
+                        let jit_fn_opt = self.shared.jit_tuple_pair_functions_1.read().unwrap().get(&func_idx_u16).copied();
+                        if let Some(jit_fn) = jit_fn_opt {
+                            if let GcValue::Int64(n) = reg!(args[0]) {
+                                let (result, duration) = if profiling {
+                                    let start = Instant::now();
+                                    let r = jit_fn(n);
+                                    (r, Some(start.elapsed()))
+                                } else {
+                                    (jit_fn(n), None)
+                                };
+                                let tuple_items = vec![GcValue::Int64(result.0), GcValue::Int64(result.1)];
+                                let tuple_ptr = self.heap.alloc_tuple(tuple_items);
+                                set_reg!(dst, GcValue::Tuple(tuple_ptr));
+                                if let Some(d) = duration {
+                                    let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    self.profile_jit_call(&name, d);
+                                }
+                                return Ok(StepResult::Continue);
+                            }
+                        }
+                        // JIT tuple triple function (arity 1): fn(i64) -> (i64, i64, i64)
+                        let jit_fn_opt = self.shared.jit_tuple_triple_functions_1.read().unwrap().get(&func_idx_u16).copied();
+                        if let Some(jit_fn) = jit_fn_opt {
+                            if let GcValue::Int64(n) = reg!(args[0]) {
+                                let (result, duration) = if profiling {
+                                    let start = Instant::now();
+                                    let r = jit_fn(n);
+                                    (r, Some(start.elapsed()))
+                                } else {
+                                    (jit_fn(n), None)
+                                };
+                                let tuple_items = vec![GcValue::Int64(result.0), GcValue::Int64(result.1), GcValue::Int64(result.2)];
+                                let tuple_ptr = self.heap.alloc_tuple(tuple_items);
+                                set_reg!(dst, GcValue::Tuple(tuple_ptr));
+                                if let Some(d) = duration {
+                                    let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    self.profile_jit_call(&name, d);
+                                }
+                                return Ok(StepResult::Continue);
+                            }
+                        }
                     }
                     2 => {
                         // Try numeric JIT first
@@ -2175,6 +2223,27 @@ impl AsyncProcess {
                                     (list.sum() + acc, None)
                                 };
                                 set_reg!(dst, GcValue::Int64(result));
+                                if let Some(d) = duration {
+                                    let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
+                                    self.profile_jit_call(&name, d);
+                                }
+                                return Ok(StepResult::Continue);
+                            }
+                        }
+                        // JIT tuple pair function (arity 2): fn(i64, i64) -> (i64, i64)
+                        let jit_fn_opt = self.shared.jit_tuple_pair_functions_2.read().unwrap().get(&func_idx_u16).copied();
+                        if let Some(jit_fn) = jit_fn_opt {
+                            if let (GcValue::Int64(a), GcValue::Int64(b)) = (reg!(args[0]), reg!(args[1])) {
+                                let (result, duration) = if profiling {
+                                    let start = Instant::now();
+                                    let r = jit_fn(a, b);
+                                    (r, Some(start.elapsed()))
+                                } else {
+                                    (jit_fn(a, b), None)
+                                };
+                                let tuple_items = vec![GcValue::Int64(result.0), GcValue::Int64(result.1)];
+                                let tuple_ptr = self.heap.alloc_tuple(tuple_items);
+                                set_reg!(dst, GcValue::Tuple(tuple_ptr));
                                 if let Some(d) = duration {
                                     let name = self.shared.function_list.read().unwrap().get(*func_idx as usize).map(|f| f.name.clone()).unwrap_or_else(|| "unknown".to_string());
                                     self.profile_jit_call(&name, d);
@@ -10793,6 +10862,9 @@ impl AsyncVM {
             jit_array_sum_functions: RwLock::new(HashMap::new()),
             jit_list_sum_functions: RwLock::new(HashMap::new()),
             jit_list_sum_tr_functions: RwLock::new(HashMap::new()),
+            jit_tuple_pair_functions_1: RwLock::new(HashMap::new()),
+            jit_tuple_pair_functions_2: RwLock::new(HashMap::new()),
+            jit_tuple_triple_functions_1: RwLock::new(HashMap::new()),
             shutdown: AtomicBool::new(false),
             interrupt: AtomicBool::new(false),
             interactive_mode: AtomicBool::new(false),
@@ -10935,6 +11007,24 @@ impl AsyncVM {
     /// Register a JIT tail-recursive list sum function - safe during concurrent evals.
     pub fn register_jit_list_sum_tr_function(&mut self, func_index: u16, jit_fn: crate::shared_types::JitListSumTrFn) {
         self.shared.jit_list_sum_tr_functions.write().unwrap()
+            .insert(func_index, jit_fn);
+    }
+
+    /// Register a JIT tuple pair function (arity 1) - safe during concurrent evals.
+    pub fn register_jit_tuple_pair_function_1(&mut self, func_index: u16, jit_fn: crate::shared_types::JitTuplePairFn1) {
+        self.shared.jit_tuple_pair_functions_1.write().unwrap()
+            .insert(func_index, jit_fn);
+    }
+
+    /// Register a JIT tuple pair function (arity 2) - safe during concurrent evals.
+    pub fn register_jit_tuple_pair_function_2(&mut self, func_index: u16, jit_fn: crate::shared_types::JitTuplePairFn2) {
+        self.shared.jit_tuple_pair_functions_2.write().unwrap()
+            .insert(func_index, jit_fn);
+    }
+
+    /// Register a JIT tuple triple function (arity 1) - safe during concurrent evals.
+    pub fn register_jit_tuple_triple_function_1(&mut self, func_index: u16, jit_fn: crate::shared_types::JitTupleTripleFn1) {
+        self.shared.jit_tuple_triple_functions_1.write().unwrap()
             .insert(func_index, jit_fn);
     }
 

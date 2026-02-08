@@ -202,6 +202,20 @@ pub struct CompiledListSumFunction {
     pub func_id: FuncId,
 }
 
+/// A compiled native function that uses numeric tuples.
+/// Functions take i64 args and return multiple i64 values (the tuple elements).
+/// Example: fibPair(n: i64) -> (i64, i64)
+pub struct CompiledTupleFunction {
+    /// Pointer to the native code
+    pub code_ptr: *const u8,
+    /// Function ID in the module
+    pub func_id: FuncId,
+    /// Number of arguments to the function
+    pub arity: usize,
+    /// Number of elements in the returned tuple (2 or 3)
+    pub tuple_arity: usize,
+}
+
 /// A compiled native function for tail-recursive Int64List sum operations
 /// Signature: fn(data_ptr: *const i64, len: i64, initial_acc: i64) -> i64
 /// For sumTR([], acc) = acc; sumTR([x|xs], acc) = sumTR(xs, acc+x)
@@ -230,6 +244,8 @@ pub struct JitCompiler {
     list_sum_cache: HashMap<u16, CompiledListSumFunction>,
     /// Cache of compiled tail-recursive list sum functions: func_index → compiled function
     list_sum_tr_cache: HashMap<u16, CompiledListSumTrFunction>,
+    /// Cache of compiled numeric tuple functions: func_index → compiled function
+    tuple_cache: HashMap<u16, CompiledTupleFunction>,
     /// Configuration
     #[allow(dead_code)]
     config: JitConfig,
@@ -241,6 +257,8 @@ pub struct JitCompiler {
     declared_array_funcs: HashMap<(u16, ArrayElementType), FuncId>,
     /// Declared function IDs for list sum function self-recursion
     declared_list_sum_funcs: HashMap<u16, FuncId>,
+    /// Declared function IDs for tuple function self-recursion
+    declared_tuple_funcs: HashMap<u16, FuncId>,
 }
 
 impl JitCompiler {
@@ -278,11 +296,13 @@ impl JitCompiler {
             array_fill_cache: HashMap::new(),
             list_sum_cache: HashMap::new(),
             list_sum_tr_cache: HashMap::new(),
+            tuple_cache: HashMap::new(),
             config,
             compile_queue: Vec::new(),
             declared_funcs: HashMap::new(),
             declared_array_funcs: HashMap::new(),
             declared_list_sum_funcs: HashMap::new(),
+            declared_tuple_funcs: HashMap::new(),
         })
     }
 
@@ -471,6 +491,49 @@ impl JitCompiler {
         })
     }
 
+    /// Check if a function is compiled as a tuple function
+    pub fn is_tuple_compiled(&self, func_index: u16) -> bool {
+        self.tuple_cache.contains_key(&func_index)
+    }
+
+    /// Get compiled tuple function info
+    pub fn get_tuple_compiled(&self, func_index: u16) -> Option<&CompiledTupleFunction> {
+        self.tuple_cache.get(&func_index)
+    }
+
+    /// Get compiled tuple function returning pair: fn(i64) -> (i64, i64) [arity 1]
+    pub fn get_tuple_pair_function_1(&self, func_index: u16) -> Option<fn(i64) -> (i64, i64)> {
+        self.tuple_cache.get(&func_index).and_then(|f| {
+            if f.arity == 1 && f.tuple_arity == 2 {
+                Some(unsafe { std::mem::transmute::<*const u8, fn(i64) -> (i64, i64)>(f.code_ptr) })
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Get compiled tuple function returning pair: fn(i64, i64) -> (i64, i64) [arity 2]
+    pub fn get_tuple_pair_function_2(&self, func_index: u16) -> Option<fn(i64, i64) -> (i64, i64)> {
+        self.tuple_cache.get(&func_index).and_then(|f| {
+            if f.arity == 2 && f.tuple_arity == 2 {
+                Some(unsafe { std::mem::transmute::<*const u8, fn(i64, i64) -> (i64, i64)>(f.code_ptr) })
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Get compiled tuple function returning triple: fn(i64) -> (i64, i64, i64) [arity 1]
+    pub fn get_tuple_triple_function_1(&self, func_index: u16) -> Option<fn(i64) -> (i64, i64, i64)> {
+        self.tuple_cache.get(&func_index).and_then(|f| {
+            if f.arity == 1 && f.tuple_arity == 3 {
+                Some(unsafe { std::mem::transmute::<*const u8, fn(i64) -> (i64, i64, i64)>(f.code_ptr) })
+            } else {
+                None
+            }
+        })
+    }
+
     /// Queue a function for compilation
     pub fn queue_compilation(&mut self, func_index: u16) {
         if !self.is_compiled(func_index) && !self.compile_queue.contains(&func_index) {
@@ -559,6 +622,17 @@ impl JitCompiler {
 
                     // Try tail-recursive list sum JIT: sumTR(list, acc)
                     match self.compile_list_sum_tr_function(func_index, func) {
+                        Ok(_) => {
+                            compiled += 1;
+                            made_progress = true;
+                            continue;
+                        }
+                        Err(JitError::NotSuitable(_)) => {}
+                        Err(_) => {}
+                    }
+
+                    // Try numeric tuple JIT: functions using MakeTuple/GetTupleField with Int64 arithmetic
+                    match self.compile_tuple_function(func_index, func) {
                         Ok(_) => {
                             compiled += 1;
                             made_progress = true;
@@ -3237,11 +3311,507 @@ impl JitCompiler {
     }
 
     /// Get JIT statistics
+    /// Detect if a function is a numeric tuple function.
+    /// These are functions that use MakeTuple, GetTupleField, or DestructurePair
+    /// alongside integer arithmetic. Returns the tuple arity (2 or 3).
+    fn detect_tuple_function(&self, func: &FunctionValue) -> Result<usize, JitError> {
+        if func.arity > 4 {
+            return Err(JitError::NotSuitable("arity > 4".to_string()));
+        }
+        if func.code.code.is_empty() {
+            return Err(JitError::NotSuitable("empty function".to_string()));
+        }
+
+        let mut has_tuple_op = false;
+        let mut max_tuple_arity: usize = 0;
+        let code = &func.code.code;
+
+        for (i, instr) in code.iter().enumerate() {
+            match instr {
+                // Tuple operations
+                Instruction::MakeTuple(_, regs) => {
+                    has_tuple_op = true;
+                    max_tuple_arity = max_tuple_arity.max(regs.len());
+                }
+                Instruction::GetTupleField(_, _, _) => {
+                    has_tuple_op = true;
+                }
+                // GetField with numeric field name (e.g., ".0", ".1") on tuples
+                Instruction::GetField(_, _, idx) => {
+                    if let Some(val) = func.code.constants.get(*idx as usize) {
+                        if let Value::String(s) = val {
+                            if let Ok(field_idx) = s.parse::<usize>() {
+                                has_tuple_op = true;
+                                max_tuple_arity = max_tuple_arity.max(field_idx + 1);
+                            } else {
+                                return Err(JitError::NotSuitable(
+                                    format!("GetField with non-numeric field: {}", s)
+                                ));
+                            }
+                        } else {
+                            return Err(JitError::NotSuitable(
+                                format!("GetField with non-string constant: {:?}", val)
+                            ));
+                        }
+                    }
+                }
+                Instruction::DestructurePair(_, _, _) => {
+                    has_tuple_op = true;
+                    max_tuple_arity = max_tuple_arity.max(2);
+                }
+                Instruction::DestructureTriple(_, _, _, _) => {
+                    has_tuple_op = true;
+                    max_tuple_arity = max_tuple_arity.max(3);
+                }
+                // Numeric operations - all allowed
+                Instruction::LoadConst(_, idx) => {
+                    // Skip error path constants (string loaded then Panic/Throw)
+                    let next_is_error = code.get(i + 1).map(|next| {
+                        matches!(next, Instruction::Panic(_) | Instruction::Throw(_))
+                    }).unwrap_or(false);
+                    if next_is_error { continue; }
+
+                    if let Some(val) = func.code.constants.get(*idx as usize) {
+                        match val {
+                            Value::Int64(_) | Value::Bool(_) => {}
+                            // String constants: allow numeric field names (used by GetField for tuple access)
+                            Value::String(s) => {
+                                if s.parse::<usize>().is_err() {
+                                    return Err(JitError::NotSuitable(
+                                        format!("string constant in non-error path: {:?}", s)
+                                    ));
+                                }
+                                // Numeric string like "0", "1" - tuple field name, allowed
+                            }
+                            _ => return Err(JitError::NotSuitable(
+                                format!("non-int64 constant: {:?}", val)
+                            )),
+                        }
+                    }
+                }
+                Instruction::Move(_, _) |
+                Instruction::LoadTrue(_) | Instruction::LoadFalse(_) |
+                Instruction::LoadUnit(_) |
+                Instruction::AddInt(_, _, _) | Instruction::SubInt(_, _, _) |
+                Instruction::MulInt(_, _, _) | Instruction::NegInt(_, _) |
+                Instruction::EqInt(_, _, _) | Instruction::NeInt(_, _, _) |
+                Instruction::LtInt(_, _, _) | Instruction::LeInt(_, _, _) |
+                Instruction::GtInt(_, _, _) | Instruction::GeInt(_, _, _) |
+                Instruction::TestConst(_, _, _) |
+                Instruction::Jump(_) |
+                Instruction::JumpIfTrue(_, _) | Instruction::JumpIfFalse(_, _) |
+                Instruction::Return(_) |
+                Instruction::CallSelf(_, _) | Instruction::TailCallSelf(_) |
+                Instruction::Panic(_) => {}
+                Instruction::Throw(_) => {
+                    return Err(JitError::NotSuitable("contains Throw".to_string()));
+                }
+                other => {
+                    return Err(JitError::NotSuitable(
+                        format!("unsupported instruction for tuple JIT: {:?}", other)
+                    ));
+                }
+            }
+        }
+
+        if !has_tuple_op {
+            return Err(JitError::NotSuitable("no tuple operations found".to_string()));
+        }
+        if max_tuple_arity < 2 {
+            // If we only have GetTupleField but no MakeTuple, infer arity from field indices
+            let mut max_field_idx: u8 = 0;
+            for instr in code.iter() {
+                if let Instruction::GetTupleField(_, _, idx) = instr {
+                    max_field_idx = max_field_idx.max(*idx);
+                }
+            }
+            max_tuple_arity = (max_field_idx as usize + 1).max(2);
+        }
+        if max_tuple_arity > 3 {
+            return Err(JitError::NotSuitable(
+                format!("tuple arity {} > 3 (max supported)", max_tuple_arity)
+            ));
+        }
+
+        Ok(max_tuple_arity)
+    }
+
+    /// Compile a numeric tuple function to native code.
+    /// The function uses multiple Cranelift return values for tuple results.
+    /// Internally, each bytecode register is mapped to `tuple_arity` Cranelift variables
+    /// to track individual tuple elements.
+    pub fn compile_tuple_function(
+        &mut self,
+        func_index: u16,
+        func: &FunctionValue,
+    ) -> Result<(), JitError> {
+        let tuple_arity = self.detect_tuple_function(func)?;
+
+        if self.tuple_cache.contains_key(&func_index) {
+            return Ok(());
+        }
+
+        let cl_type = I64;
+
+        // Create signature: all params are i64, returns tuple_arity i64 values
+        let mut sig = self.module.make_signature();
+        for _ in 0..func.arity {
+            sig.params.push(AbiParam::new(cl_type));
+        }
+        for _ in 0..tuple_arity {
+            sig.returns.push(AbiParam::new(cl_type));
+        }
+
+        let func_name = format!("nos_tuple{}_{}", tuple_arity, func_index);
+        let func_id = self.module
+            .declare_function(&func_name, Linkage::Local, &sig)
+            .map_err(|e| JitError::Module(e.to_string()))?;
+
+        self.declared_tuple_funcs.insert(func_index, func_id);
+
+        // Build function body
+        self.ctx.func.signature = sig.clone();
+        self.ctx.func.name = UserFuncName::user(0, func_index as u32);
+
+        {
+            let mut builder_ctx = FunctionBuilderContext::new();
+            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut builder_ctx);
+
+            let entry_block = builder.create_block();
+            builder.append_block_params_for_function_params(entry_block);
+            builder.switch_to_block(entry_block);
+
+            // Each bytecode register maps to `tuple_arity` Cranelift variables.
+            // For scalar values, only slot 0 is used (others are unused/zero).
+            // For tuples, slots 0..tuple_arity hold the tuple elements.
+            let reg_count = func.code.register_count;
+            let vars_per_reg = tuple_arity;
+            let mut regs: Vec<Vec<Variable>> = Vec::with_capacity(reg_count);
+            let mut var_idx = 0u32;
+            for _ in 0..reg_count {
+                let mut slots = Vec::with_capacity(vars_per_reg);
+                for _ in 0..vars_per_reg {
+                    let var = Variable::from_u32(var_idx);
+                    builder.declare_var(var, cl_type);
+                    slots.push(var);
+                    var_idx += 1;
+                }
+                regs.push(slots);
+            }
+
+            // Initialize parameter registers (scalar params, slot 0 only)
+            let block_params: Vec<_> = builder.block_params(entry_block).to_vec();
+            for i in 0..func.arity {
+                builder.def_var(regs[i][0], block_params[i]);
+                // Zero out other slots
+                let zero = builder.ins().iconst(cl_type, 0);
+                for s in 1..vars_per_reg {
+                    builder.def_var(regs[i][s], zero);
+                }
+            }
+
+            // Initialize non-parameter registers to zero
+            for r in func.arity..reg_count {
+                let zero = builder.ins().iconst(cl_type, 0);
+                for s in 0..vars_per_reg {
+                    builder.def_var(regs[r][s], zero);
+                }
+            }
+
+            // Create blocks for jump targets
+            let mut jump_targets: HashMap<usize, Block> = HashMap::new();
+            for (ip, instr) in func.code.code.iter().enumerate() {
+                match instr {
+                    Instruction::Jump(offset) => {
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        jump_targets.entry(target).or_insert_with(|| builder.create_block());
+                    }
+                    Instruction::JumpIfTrue(_, offset) | Instruction::JumpIfFalse(_, offset) => {
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        jump_targets.entry(target).or_insert_with(|| builder.create_block());
+                        jump_targets.entry(ip + 1).or_insert_with(|| builder.create_block());
+                    }
+                    _ => {}
+                }
+            }
+
+            // Import self for recursive calls
+            let self_func_ref = self.module.declare_func_in_func(func_id, builder.func);
+
+            // Compile instructions
+            let mut ip = 0;
+            let mut block_terminated = false;
+            while ip < func.code.code.len() {
+                if let Some(&block) = jump_targets.get(&ip) {
+                    if !block_terminated {
+                        builder.ins().jump(block, &[]);
+                    }
+                    builder.switch_to_block(block);
+                    block_terminated = false;
+                }
+
+                if block_terminated {
+                    ip += 1;
+                    continue;
+                }
+
+                let instr = &func.code.code[ip];
+
+                match instr {
+                    Instruction::LoadConst(dst, idx) => {
+                        let next_is_error = func.code.code.get(ip + 1).map(|next| {
+                            matches!(next, Instruction::Panic(_) | Instruction::Throw(_))
+                        }).unwrap_or(false);
+                        if next_is_error { ip += 1; continue; }
+                        let v = Self::load_const(&mut builder, &func.code.constants, *idx, NumericType::Int64, cl_type)?;
+                        builder.def_var(regs[*dst as usize][0], v);
+                    }
+
+                    Instruction::Move(dst, src) => {
+                        // Copy all tuple slots
+                        for s in 0..vars_per_reg {
+                            let v = builder.use_var(regs[*src as usize][s]);
+                            builder.def_var(regs[*dst as usize][s], v);
+                        }
+                    }
+
+                    Instruction::LoadTrue(dst) => {
+                        let v = builder.ins().iconst(cl_type, 1);
+                        builder.def_var(regs[*dst as usize][0], v);
+                    }
+                    Instruction::LoadFalse(dst) => {
+                        let v = builder.ins().iconst(cl_type, 0);
+                        builder.def_var(regs[*dst as usize][0], v);
+                    }
+                    Instruction::LoadUnit(dst) => {
+                        let v = builder.ins().iconst(cl_type, 0);
+                        builder.def_var(regs[*dst as usize][0], v);
+                    }
+
+                    // Integer arithmetic (operates on slot 0 - scalar)
+                    Instruction::AddInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize][0]);
+                        let vb = builder.use_var(regs[*b as usize][0]);
+                        let result = builder.ins().iadd(va, vb);
+                        builder.def_var(regs[*dst as usize][0], result);
+                    }
+                    Instruction::SubInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize][0]);
+                        let vb = builder.use_var(regs[*b as usize][0]);
+                        let result = builder.ins().isub(va, vb);
+                        builder.def_var(regs[*dst as usize][0], result);
+                    }
+                    Instruction::MulInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize][0]);
+                        let vb = builder.use_var(regs[*b as usize][0]);
+                        let result = builder.ins().imul(va, vb);
+                        builder.def_var(regs[*dst as usize][0], result);
+                    }
+                    Instruction::NegInt(dst, src) => {
+                        let v = builder.use_var(regs[*src as usize][0]);
+                        let result = builder.ins().ineg(v);
+                        builder.def_var(regs[*dst as usize][0], result);
+                    }
+
+                    // Integer comparisons
+                    Instruction::EqInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize][0]);
+                        let vb = builder.use_var(regs[*b as usize][0]);
+                        let cmp = builder.ins().icmp(IntCC::Equal, va, vb);
+                        let result = builder.ins().uextend(cl_type, cmp);
+                        builder.def_var(regs[*dst as usize][0], result);
+                    }
+                    Instruction::NeInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize][0]);
+                        let vb = builder.use_var(regs[*b as usize][0]);
+                        let cmp = builder.ins().icmp(IntCC::NotEqual, va, vb);
+                        let result = builder.ins().uextend(cl_type, cmp);
+                        builder.def_var(regs[*dst as usize][0], result);
+                    }
+                    Instruction::LtInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize][0]);
+                        let vb = builder.use_var(regs[*b as usize][0]);
+                        let cmp = builder.ins().icmp(IntCC::SignedLessThan, va, vb);
+                        let result = builder.ins().uextend(cl_type, cmp);
+                        builder.def_var(regs[*dst as usize][0], result);
+                    }
+                    Instruction::LeInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize][0]);
+                        let vb = builder.use_var(regs[*b as usize][0]);
+                        let cmp = builder.ins().icmp(IntCC::SignedLessThanOrEqual, va, vb);
+                        let result = builder.ins().uextend(cl_type, cmp);
+                        builder.def_var(regs[*dst as usize][0], result);
+                    }
+                    Instruction::GtInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize][0]);
+                        let vb = builder.use_var(regs[*b as usize][0]);
+                        let cmp = builder.ins().icmp(IntCC::SignedGreaterThan, va, vb);
+                        let result = builder.ins().uextend(cl_type, cmp);
+                        builder.def_var(regs[*dst as usize][0], result);
+                    }
+                    Instruction::GeInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize][0]);
+                        let vb = builder.use_var(regs[*b as usize][0]);
+                        let cmp = builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, va, vb);
+                        let result = builder.ins().uextend(cl_type, cmp);
+                        builder.def_var(regs[*dst as usize][0], result);
+                    }
+
+                    Instruction::TestConst(dst, value, idx) => {
+                        let val = builder.use_var(regs[*value as usize][0]);
+                        let const_val = Self::load_const(&mut builder, &func.code.constants, *idx, NumericType::Int64, cl_type)?;
+                        let cmp = builder.ins().icmp(IntCC::Equal, val, const_val);
+                        let result = builder.ins().uextend(cl_type, cmp);
+                        builder.def_var(regs[*dst as usize][0], result);
+                    }
+
+                    // Tuple operations
+                    Instruction::MakeTuple(dst, elem_regs) => {
+                        for (s, &r) in elem_regs.iter().enumerate() {
+                            if s < vars_per_reg {
+                                let v = builder.use_var(regs[r as usize][0]);
+                                builder.def_var(regs[*dst as usize][s], v);
+                            }
+                        }
+                    }
+
+                    Instruction::GetTupleField(dst, tuple, idx) => {
+                        let field_idx = *idx as usize;
+                        if field_idx < vars_per_reg {
+                            let v = builder.use_var(regs[*tuple as usize][field_idx]);
+                            builder.def_var(regs[*dst as usize][0], v);
+                        }
+                    }
+
+                    // GetField with numeric field name (e.g., ".0", ".1") - same as GetTupleField
+                    Instruction::GetField(dst, src, const_idx) => {
+                        if let Some(Value::String(s)) = func.code.constants.get(*const_idx as usize) {
+                            if let Ok(field_idx) = s.parse::<usize>() {
+                                if field_idx < vars_per_reg {
+                                    let v = builder.use_var(regs[*src as usize][field_idx]);
+                                    builder.def_var(regs[*dst as usize][0], v);
+                                }
+                            }
+                        }
+                    }
+
+                    Instruction::DestructurePair(dst0, dst1, tuple) => {
+                        let v0 = builder.use_var(regs[*tuple as usize][0]);
+                        let v1 = builder.use_var(regs[*tuple as usize][1]);
+                        builder.def_var(regs[*dst0 as usize][0], v0);
+                        builder.def_var(regs[*dst1 as usize][0], v1);
+                    }
+
+                    Instruction::DestructureTriple(dst0, dst1, dst2, tuple) => {
+                        let v0 = builder.use_var(regs[*tuple as usize][0]);
+                        let v1 = builder.use_var(regs[*tuple as usize][1]);
+                        let v2 = builder.use_var(regs[*tuple as usize][2]);
+                        builder.def_var(regs[*dst0 as usize][0], v0);
+                        builder.def_var(regs[*dst1 as usize][0], v1);
+                        builder.def_var(regs[*dst2 as usize][0], v2);
+                    }
+
+                    // Control flow
+                    Instruction::Jump(offset) => {
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        let target_block = jump_targets[&target];
+                        builder.ins().jump(target_block, &[]);
+                        block_terminated = true;
+                    }
+                    Instruction::JumpIfTrue(cond, offset) => {
+                        let cond_val = builder.use_var(regs[*cond as usize][0]);
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        let target_block = jump_targets[&target];
+                        let next_block = jump_targets[&(ip + 1)];
+                        builder.ins().brif(cond_val, target_block, &[], next_block, &[]);
+                        block_terminated = true;
+                    }
+                    Instruction::JumpIfFalse(cond, offset) => {
+                        let cond_val = builder.use_var(regs[*cond as usize][0]);
+                        let target = (ip as i32 + *offset as i32 + 1) as usize;
+                        let target_block = jump_targets[&target];
+                        let next_block = jump_targets[&(ip + 1)];
+                        builder.ins().brif(cond_val, next_block, &[], target_block, &[]);
+                        block_terminated = true;
+                    }
+
+                    Instruction::Return(src) => {
+                        let mut ret_vals = Vec::with_capacity(tuple_arity);
+                        for s in 0..tuple_arity {
+                            ret_vals.push(builder.use_var(regs[*src as usize][s]));
+                        }
+                        builder.ins().return_(&ret_vals);
+                        block_terminated = true;
+                    }
+
+                    // Self-recursion: call returns tuple_arity values
+                    Instruction::CallSelf(dst, arg_regs) => {
+                        // Args are scalar (slot 0 only)
+                        let args: Vec<CraneliftValue> = arg_regs.iter()
+                            .map(|&r| builder.use_var(regs[r as usize][0]))
+                            .collect();
+                        let call = builder.ins().call(self_func_ref, &args);
+                        let results = builder.inst_results(call).to_vec();
+                        for (s, &v) in results.iter().enumerate() {
+                            if s < vars_per_reg {
+                                builder.def_var(regs[*dst as usize][s], v);
+                            }
+                        }
+                    }
+
+                    Instruction::TailCallSelf(arg_regs) => {
+                        let args: Vec<CraneliftValue> = arg_regs.iter()
+                            .map(|&r| builder.use_var(regs[r as usize][0]))
+                            .collect();
+                        builder.ins().return_call(self_func_ref, &args);
+                        block_terminated = true;
+                    }
+
+                    Instruction::Panic(_) => {
+                        builder.ins().trap(cranelift_codegen::ir::TrapCode::user(1).unwrap());
+                        block_terminated = true;
+                    }
+
+                    other => {
+                        return Err(JitError::UnsupportedInstruction(format!("{:?}", other)));
+                    }
+                }
+
+                ip += 1;
+            }
+
+            builder.seal_all_blocks();
+            builder.finalize();
+        }
+
+        // Compile to native code
+        self.module
+            .define_function(func_id, &mut self.ctx)
+            .map_err(|e| JitError::Module(e.to_string()))?;
+
+        self.module.finalize_definitions()
+            .map_err(|e| JitError::Module(e.to_string()))?;
+
+        let code_ptr = self.module.get_finalized_function(func_id);
+
+        self.tuple_cache.insert(func_index, CompiledTupleFunction {
+            code_ptr,
+            func_id,
+            arity: func.arity,
+            tuple_arity,
+        });
+
+        self.module.clear_context(&mut self.ctx);
+
+        Ok(())
+    }
+
     pub fn stats(&self) -> JitStats {
         JitStats {
             compiled_functions: self.cache.len(),
             array_functions: self.array_cache.len(),
             loop_array_functions: self.loop_array_cache.len(),
+            tuple_functions: self.tuple_cache.len(),
             queued_functions: self.compile_queue.len(),
         }
     }
@@ -3253,6 +3823,7 @@ pub struct JitStats {
     pub compiled_functions: usize,
     pub array_functions: usize,
     pub loop_array_functions: usize,
+    pub tuple_functions: usize,
     pub queued_functions: usize,
 }
 
@@ -3985,5 +4556,113 @@ mod tests {
 
         assert_eq!(result, expected);
         eprintln!("[JIT] Loop array sum(1..10000) = {} in {:?}", result, elapsed);
+    }
+
+    /// Create a fibPair function that returns a tuple:
+    /// fibPair(n) = if n <= 1 then (1, 0) else { prev = fibPair(n-1); (prev.0+prev.1, prev.0) }
+    fn make_fib_pair_function() -> FunctionValue {
+        let mut chunk = Chunk::new();
+
+        // Constants
+        chunk.constants.push(Value::Int64(1)); // idx 0: constant 1
+        chunk.constants.push(Value::Int64(0)); // idx 1: constant 0
+
+        // Registers:
+        // r0 = n (argument)
+        // r1 = 1 (constant)
+        // r2 = n <= 1 (condition)
+        // r3 = 1 (for tuple)
+        // r4 = 0 (for tuple)
+        // r5 = n - 1
+        // r6 = prev (tuple result from recursive call)
+        // r7 = prev.0
+        // r8 = prev.1
+        // r9 = prev.0 + prev.1
+
+        // IP=0: r1 = 1
+        chunk.code.push(Instruction::LoadConst(1, 0));
+        // IP=1: r2 = n <= 1
+        chunk.code.push(Instruction::LeInt(2, 0, 1));
+        // IP=2: if !(n <= 1) jump to else at IP=7 (offset = 7-2-1 = 4)
+        chunk.code.push(Instruction::JumpIfFalse(2, 4));
+        // IP=3: r3 = 1
+        chunk.code.push(Instruction::LoadConst(3, 0));
+        // IP=4: r4 = 0
+        chunk.code.push(Instruction::LoadConst(4, 1));
+        // IP=5: r0 = (r3, r4) = (1, 0)
+        chunk.code.push(Instruction::MakeTuple(0, vec![3, 4].into()));
+        // IP=6: return r0
+        chunk.code.push(Instruction::Return(0));
+        // IP=7: r5 = n - 1
+        chunk.code.push(Instruction::SubInt(5, 0, 1));
+        // IP=8: r6 = fibPair(r5)
+        chunk.code.push(Instruction::CallSelf(6, vec![5].into()));
+        // IP=9: r7 = r6.0 (prev.0)
+        chunk.code.push(Instruction::GetTupleField(7, 6, 0));
+        // IP=10: r8 = r6.1 (prev.1)
+        chunk.code.push(Instruction::GetTupleField(8, 6, 1));
+        // IP=11: r9 = r7 + r8 (prev.0 + prev.1)
+        chunk.code.push(Instruction::AddInt(9, 7, 8));
+        // IP=12: r0 = (r9, r7) = (prev.0+prev.1, prev.0)
+        chunk.code.push(Instruction::MakeTuple(0, vec![9, 7].into()));
+        // IP=13: return r0
+        chunk.code.push(Instruction::Return(0));
+
+        chunk.register_count = 10;
+
+        FunctionValue {
+            name: "fibPair".to_string(),
+            arity: 1,
+            param_names: vec!["n".to_string()],
+            code: Arc::new(chunk),
+            module: None,
+            source_span: None,
+            jit_code: None,
+            call_count: AtomicU32::new(0),
+            debug_symbols: vec![],
+            source_code: None,
+            source_file: None,
+            doc: None,
+            signature: None,
+            param_types: vec![],
+            return_type: None, required_params: None,
+        }
+    }
+
+    #[test]
+    fn test_jit_tuple_pair() {
+        let config = JitConfig::default();
+        let mut jit = JitCompiler::new(config).unwrap();
+
+        let func = make_fib_pair_function();
+
+        // Detect should succeed
+        let tuple_arity = jit.detect_tuple_function(&func);
+        eprintln!("[JIT] detect_tuple_function result: {:?}", tuple_arity);
+        assert!(tuple_arity.is_ok(), "Should detect as tuple function");
+        assert_eq!(tuple_arity.unwrap(), 2);
+
+        // Compile
+        jit.compile_tuple_function(0, &func).expect("Tuple JIT compilation failed");
+
+        // Get compiled function
+        let native_fn = jit.get_tuple_pair_function_1(0).expect("Tuple pair function not compiled");
+
+        // Test: fibPair(0) = (1, 0)
+        assert_eq!(native_fn(0), (1, 0));
+        // Test: fibPair(1) = (1, 0)
+        assert_eq!(native_fn(1), (1, 0));
+        // Test: fibPair(2) = (1+0, 1) = (1, 1)
+        assert_eq!(native_fn(2), (1, 1));
+        // Test: fibPair(3) = (1+1, 1) = (2, 1)
+        assert_eq!(native_fn(3), (2, 1));
+        // Test: fibPair(10) = (55, ?)
+        let result = native_fn(10);
+        assert_eq!(result.0, 55);
+        // Test: fibPair(20) = (6765, ?)
+        let result = native_fn(20);
+        assert_eq!(result.0, 6765);
+
+        eprintln!("[JIT] Tuple pair test passed! fibPair(20) = {:?}", result);
     }
 }

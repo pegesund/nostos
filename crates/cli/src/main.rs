@@ -1691,6 +1691,15 @@ fn run_with_async_vm(
                     if let Some(jit_fn) = jit.get_list_sum_tr_function(idx as u16) {
                         vm.register_jit_list_sum_tr_function(idx as u16, jit_fn);
                     }
+                    if let Some(jit_fn) = jit.get_tuple_pair_function_1(idx as u16) {
+                        vm.register_jit_tuple_pair_function_1(idx as u16, jit_fn);
+                    }
+                    if let Some(jit_fn) = jit.get_tuple_pair_function_2(idx as u16) {
+                        vm.register_jit_tuple_pair_function_2(idx as u16, jit_fn);
+                    }
+                    if let Some(jit_fn) = jit.get_tuple_triple_function_1(idx as u16) {
+                        vm.register_jit_tuple_triple_function_1(idx as u16, jit_fn);
+                    }
                 }
             }
         }
