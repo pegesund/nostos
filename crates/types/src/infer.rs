@@ -144,6 +144,13 @@ pub struct InferCtx<'a> {
     /// paired with the shared result type variable. After solve(), check for
     /// structural container mismatches (e.g., List vs Set in different branches).
     deferred_branch_type_checks: Vec<(Type, Type, Span)>,
+    /// Known implicit conversion function names (e.g., "tensorFromList").
+    /// Populated by the compiler from functions matching the naming convention.
+    known_implicit_fns: HashSet<String>,
+    /// Implicit conversions detected during solve(): (span, conversion_fn_name).
+    /// When a type mismatch is resolved by an implicit conversion, the span
+    /// of the argument expression and the conversion function name are recorded.
+    pub implicit_conversions: Vec<(Span, String)>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -176,6 +183,72 @@ impl<'a> InferCtx<'a> {
             deferred_indirect_call_checks: Vec::new(),
             deferred_typed_binding_checks: Vec::new(),
             deferred_branch_type_checks: Vec::new(),
+            known_implicit_fns: HashSet::new(),
+            implicit_conversions: Vec::new(),
+        }
+    }
+
+    /// Set the known implicit conversion function names.
+    /// These follow the naming convention: {targetTypeLower}From{SourceTypeShort}
+    /// e.g., "tensorFromList" converts List[Float] -> Tensor.
+    pub fn set_known_implicit_fns(&mut self, fns: HashSet<String>) {
+        self.known_implicit_fns = fns;
+    }
+
+    /// Try to find an implicit conversion function for a type mismatch.
+    /// Returns the function name (e.g., "tensorFromList") if a valid conversion exists.
+    ///
+    /// Convention: {targetTypeLower}From{sourceTypeShort}
+    ///   List[Float] -> Tensor:  tensorFromList
+    ///   List[Int]   -> Tensor:  tensorFromIntList
+    ///   Int         -> Tensor:  tensorFromInt
+    fn find_implicit_conversion(&self, t1: &Type, t2: &Type) -> Option<String> {
+        if self.known_implicit_fns.is_empty() {
+            return None;
+        }
+
+        // Try both directions: (target, source) and (source, target)
+        self.try_conversion(t1, t2)
+            .or_else(|| self.try_conversion(t2, t1))
+    }
+
+    /// Try to find a conversion function from `source` to `target`.
+    fn try_conversion(&self, target: &Type, source: &Type) -> Option<String> {
+        let target_name = match target {
+            Type::Named { name, .. } => name.clone(),
+            _ => return None,
+        };
+        let target_lower = {
+            let mut s = target_name.clone();
+            if let Some(first) = s.get_mut(..1) {
+                first.make_ascii_lowercase();
+            }
+            s
+        };
+
+        let source_short = match source {
+            Type::List(elem) => {
+                // List[Float] -> "List", List[Int] -> "IntList"
+                match elem.as_ref() {
+                    Type::Int | Type::Int64 => "IntList".to_string(),
+                    Type::Float | Type::Float64 => "List".to_string(),
+                    Type::String => "StringList".to_string(),
+                    Type::Bool => "BoolList".to_string(),
+                    _ => "List".to_string(),
+                }
+            }
+            Type::Int | Type::Int64 => "Int".to_string(),
+            Type::Float | Type::Float64 => "Float".to_string(),
+            Type::String => "String".to_string(),
+            Type::Bool => "Bool".to_string(),
+            _ => return None,
+        };
+
+        let fn_name = format!("{}From{}", target_lower, source_short);
+        if self.known_implicit_fns.contains(&fn_name) {
+            Some(fn_name)
+        } else {
+            None
         }
     }
 
@@ -1466,6 +1539,19 @@ impl<'a> InferCtx<'a> {
                     // Use this constraint's span if it has one, otherwise use the tracked span
                     let error_span = span.or(self.current_constraint_span);
                     if let Err(e) = self.unify_types(&t1, &t2) {
+                        // Check for implicit conversion before reporting error.
+                        // If one side is a Named type (e.g., Tensor) and the other is List,
+                        // look for a conversion function like tensorFromList.
+                        let t1r = self.apply_full_subst(&t1);
+                        let t2r = self.apply_full_subst(&t2);
+                        if let Some(conv_fn) = self.find_implicit_conversion(&t1r, &t2r) {
+                            if let Some(s) = span {
+                                self.implicit_conversions.push((s, conv_fn));
+                            }
+                            deferred_count = 0;
+                            continue; // Skip error, accept the conversion
+                        }
+
                         self.last_error_span = error_span;
                         // Check if this unification failure involves a parameter that needs annotation
                         match self.check_annotation_required(&t1, &t2, &e) {
@@ -4058,9 +4144,24 @@ impl<'a> InferCtx<'a> {
                     });
                 }
 
-                // Unify the params that were provided
+                // Unify the params that were provided.
+                // When a param unification fails, check for implicit conversion before propagating.
                 for (p1, p2) in func_with_more.params.iter().zip(func_with_less.params.iter()) {
-                    self.unify_types(p1, p2)?;
+                    if let Err(_e) = self.unify_types(p1, p2) {
+                        // Try implicit conversion: resolve the types and check
+                        let p1r = self.apply_full_subst(p1);
+                        let p2r = self.apply_full_subst(p2);
+                        if let Some(conv_fn) = self.find_implicit_conversion(&p1r, &p2r) {
+                            // Record the conversion (span will be associated at the solve level)
+                            if let Some(span) = self.current_constraint_span {
+                                self.implicit_conversions.push((span, conv_fn));
+                            }
+                            // Continue without error — the conversion will be applied in codegen
+                            continue;
+                        }
+                        // No conversion found — propagate the error
+                        return Err(_e);
+                    }
                 }
                 self.unify_types(&f1.ret, &f2.ret)
             }

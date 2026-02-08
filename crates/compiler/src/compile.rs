@@ -1291,6 +1291,11 @@ pub struct Compiler {
     /// Inferred expression types from HM inference, keyed by Span.
     /// Used for proper type-based method dispatch instead of string hacks.
     inferred_expr_types: HashMap<nostos_syntax::Span, nostos_types::Type>,
+    /// Implicit conversions detected by HM inference: maps expression Span to conversion function name.
+    /// During codegen, when compiling an expression at a Span in this map, wrap the result in a
+    /// call to the conversion function. E.g., Span -> "tensorFromList" means the expression should
+    /// be wrapped as `tensorFromList(expr)`.
+    implicit_conversions: HashMap<nostos_syntax::Span, String>,
     /// File path to file_id mapping for LSP hover support.
     /// Allows looking up types by file path instead of file_id.
     #[allow(dead_code)]
@@ -1561,6 +1566,7 @@ impl Compiler {
             extension_signatures: HashMap::new(),
             extension_types: HashMap::new(),
             inferred_expr_types: HashMap::new(),
+            implicit_conversions: HashMap::new(),
             file_path_to_id: HashMap::new(),
             functions_by_base: HashMap::new(),
             function_variants: HashMap::new(),
@@ -2151,10 +2157,34 @@ impl Compiler {
                 }
             }
 
+            // Collect implicit conversion function names (e.g., "tensorFromList").
+            // These follow the naming convention {targetLower}From{Source} and allow
+            // the type checker to accept type mismatches that can be resolved by
+            // auto-inserting a call to the conversion function.
+            // Extract the bare function name (after last dot, before slash) from qualified keys.
+            let implicit_fns: HashSet<String> = self.pending_fn_signatures.keys()
+                .filter_map(|name| {
+                    // Get base name: strip arity suffix (e.g., "candle.tensorFromList/_" -> "candle.tensorFromList")
+                    let base = name.split('/').next().unwrap_or(name);
+                    // Get local name: strip module prefix (e.g., "candle.tensorFromList" -> "tensorFromList")
+                    let local = base.rsplit('.').next().unwrap_or(base);
+                    // Match pattern: xFrom... where x starts lowercase
+                    if let Some(from_pos) = local.find("From") {
+                        if from_pos > 0 && local[..1].chars().next().map_or(false, |c| c.is_ascii_lowercase()) {
+                            return Some(local.to_string());
+                        }
+                    }
+                    None
+                })
+                .collect();
+
             // Infer ALL user functions to capture expression types for compilation.
             // Even functions with complete type annotations need body inference for
             // proper method dispatch and expression type recording.
             let mut ctx = InferCtx::new(&mut env);
+            if !implicit_fns.is_empty() {
+                ctx.set_known_implicit_fns(implicit_fns);
+            }
             for (_, (fn_def, _, _, _, _, _)) in &user_fns {
                 let _ = ctx.infer_function(fn_def);
             }
@@ -2294,6 +2324,12 @@ impl Compiler {
                 .map(|(span, ty)| (span, ctx.apply_full_subst(&ty)))
                 .collect();
             self.inferred_expr_types.extend(user_expr_types);
+
+            // Transfer implicit conversions from inference context.
+            // These map expression Span -> conversion function name (e.g., "tensorFromList").
+            for (span, fn_name) in ctx.implicit_conversions.iter() {
+                self.implicit_conversions.insert(*span, fn_name.clone());
+            }
 
             // Enrich user function signatures with inferred trait bounds.
             // After batch inference, function bodies may have discovered trait bounds
@@ -3824,6 +3860,7 @@ impl Compiler {
             extension_signatures: HashMap::new(),
             extension_types: HashMap::new(),
             inferred_expr_types: HashMap::new(),
+            implicit_conversions: HashMap::new(),
             file_path_to_id: HashMap::new(),
             functions_by_base: HashMap::new(),
             function_variants: HashMap::new(),
@@ -15369,6 +15406,17 @@ impl Compiler {
                 .and_then(|t| t.as_ref())
                 .map(|t| self.substitute_type_params(t, &type_param_map));
             let reg = self.compile_arg_with_expected_type(expr, expected_type.as_ref())?;
+
+            // Check for implicit conversion: if the argument expression has a different type
+            // than expected, wrap it in a conversion function call.
+            let reg = if let Some(conv_fn_name) = self.check_implicit_conversion_for_call(
+                expr, maybe_qualified_name.as_deref(), i
+            ) {
+                self.emit_implicit_conversion(reg, &conv_fn_name, line)?
+            } else {
+                reg
+            };
+
             arg_regs.push(reg);
         }
 
@@ -22666,6 +22714,127 @@ impl Compiler {
         }
     }
 
+    /// Check if an argument needs an implicit conversion based on the called function's
+    /// compiled parameter types and the argument expression's inferred type.
+    /// Returns the conversion function name if needed (e.g., "tensorFromList").
+    fn check_implicit_conversion_for_call(
+        &self,
+        arg_expr: &Expr,
+        fn_name: Option<&str>,
+        arg_idx: usize,
+    ) -> Option<String> {
+        let fn_name = fn_name?;
+        let resolved = self.resolve_name(fn_name);
+
+        // Get the expected parameter type from the function's compiled signature
+        let expected_type_name = self.get_param_type_for_arg(&resolved, arg_idx)?;
+
+        // Skip if expected type is a built-in collection or primitive
+        if expected_type_name.starts_with("List[") || expected_type_name.starts_with("Map[")
+            || expected_type_name.starts_with("Set[") || expected_type_name == "Int"
+            || expected_type_name == "Float" || expected_type_name == "String"
+            || expected_type_name == "Bool" || expected_type_name == "()"
+        {
+            return None;
+        }
+
+        // Get the inferred type of the argument expression
+        let inferred_type = self.inferred_expr_types.get(&arg_expr.span())?;
+
+        // Check if inferred type is a source type that can be converted
+        let source_short = match inferred_type {
+            nostos_types::Type::List(elem) => {
+                match elem.as_ref() {
+                    nostos_types::Type::Int | nostos_types::Type::Int64 => "IntList",
+                    nostos_types::Type::Float | nostos_types::Type::Float64 => "List",
+                    nostos_types::Type::String => "StringList",
+                    nostos_types::Type::Bool => "BoolList",
+                    _ => "List", // Default for unresolved element types
+                }
+            }
+            nostos_types::Type::Int | nostos_types::Type::Int64 => "Int",
+            nostos_types::Type::Float | nostos_types::Type::Float64 => "Float",
+            nostos_types::Type::String => "String",
+            nostos_types::Type::Bool => "Bool",
+            _ => return None,
+        };
+
+        // Build the conversion function name
+        let target_lower = {
+            let mut s = expected_type_name.clone();
+            if let Some(first) = s.get_mut(..1) {
+                first.make_ascii_lowercase();
+            }
+            s
+        };
+
+        let conv_fn = format!("{}From{}", target_lower, source_short);
+
+        // Check if this conversion function exists as a compiled function
+        let has_conversion = self.functions.keys().any(|k| {
+            let base = k.split('/').next().unwrap_or(k);
+            let local = base.rsplit('.').next().unwrap_or(base);
+            local == conv_fn
+        });
+
+        if has_conversion {
+            Some(conv_fn)
+        } else {
+            None
+        }
+    }
+
+    /// Get the expected parameter type for a given argument index of a function.
+    /// Looks up the function's compiled signature (param_types) from self.functions.
+    fn get_param_type_for_arg(&self, fn_name: &str, arg_idx: usize) -> Option<String> {
+        let prefix = format!("{}/", fn_name);
+
+        // Try to find the function by exact name or prefix match
+        for (key, func_val) in &self.functions {
+            if key == fn_name || key.starts_with(&prefix) {
+                if let Some(param_type) = func_val.param_types.get(arg_idx) {
+                    if param_type != "?" {
+                        return Some(param_type.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Emit code to wrap a register value in an implicit conversion function call.
+    /// The conversion function is looked up and called with the argument register.
+    fn emit_implicit_conversion(
+        &mut self,
+        arg_reg: Reg,
+        conv_fn_name: &str,
+        line: usize,
+    ) -> Result<Reg, CompileError> {
+        // Find the actual qualified function name
+        let qualified_name = self.functions.keys()
+            .find(|k| {
+                let base = k.split('/').next().unwrap_or(k);
+                let local = base.rsplit('.').next().unwrap_or(base);
+                local == conv_fn_name
+            })
+            .cloned();
+
+        if let Some(qname) = qualified_name {
+            if let Some(func) = self.functions.get(&qname).cloned() {
+                let dst = self.alloc_reg();
+                let func_idx = self.chunk.add_constant(Value::Function(func));
+                self.chunk.emit(Instruction::LoadConst(dst, func_idx), line);
+                let result = self.alloc_reg();
+                let arg_regs = vec![arg_reg];
+                self.chunk.emit(Instruction::Call(result, dst, arg_regs.into()), line);
+                return Ok(result);
+            }
+        }
+
+        // Function not found — return arg_reg unchanged (should not happen)
+        Ok(arg_reg)
+    }
+
     /// Emit code to load a compile-time constant value.
     /// This inlines the constant at the usage site.
     fn emit_const_value(&mut self, value: &MvarInitValue, line: usize) -> Result<Reg, CompileError> {
@@ -25160,6 +25329,27 @@ impl Compiler {
 
         // Create inference context
         let mut ctx = InferCtx::new(&mut env);
+
+        // Set up implicit conversion functions (e.g., tensorFromList) so the solver
+        // accepts type mismatches that can be resolved by auto-inserting conversions.
+        {
+            let implicit_fns: HashSet<String> = self.pending_fn_signatures.keys()
+                .chain(self.functions.keys())
+                .filter_map(|name| {
+                    let base = name.split('/').next().unwrap_or(name);
+                    let local = base.rsplit('.').next().unwrap_or(base);
+                    if let Some(from_pos) = local.find("From") {
+                        if from_pos > 0 && local[..1].chars().next().map_or(false, |c| c.is_ascii_lowercase()) {
+                            return Some(local.to_string());
+                        }
+                    }
+                    None
+                })
+                .collect();
+            if !implicit_fns.is_empty() {
+                ctx.set_known_implicit_fns(implicit_fns);
+            }
+        }
 
         // Infer the function type - this generates constraints
         let span = def.name.span;
