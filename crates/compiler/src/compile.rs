@@ -25362,16 +25362,13 @@ impl Compiler {
                         }
                     }
 
-                    // If one type is a fully-concrete tuple and the other is a primitive,
-                    // this is a real structural mismatch (e.g., passing Int where (Int, Int) expected)
-                    // But if the tuple contains type variables, it may be from incomplete inference
-                    // (e.g., try/catch where exception type isn't fully resolved)
+                    // If one type is a tuple and the other is a primitive,
+                    // this is a real structural mismatch - a primitive can NEVER unify
+                    // with a tuple regardless of type variables inside the tuple.
+                    // (e.g., Map.fromList([1,2,3]) where Int vs (?k, ?v) is always wrong)
                     if (is_tuple_type(type1) && is_primitive(type2)) ||
                        (is_tuple_type(type2) && is_primitive(type1)) {
-                        let tuple_part = if is_tuple_type(type1) { type1 } else { type2 };
-                        if !tuple_part.contains('?') {
-                            return false;  // Fully concrete tuple vs primitive - real error!
-                        }
+                        return false;  // Tuple vs primitive - always a real error!
                     }
 
                     // List vs Tuple with type vars in the tuple (e.g., List[?24] vs (?27, ?27))
