@@ -21,6 +21,7 @@ use nostos_types::*;
 
 /// A test case that should type-check successfully.
 /// Contains source code and expected inferred type.
+#[allow(dead_code)]
 struct TypeCheckOk {
     source: &'static str,
     expected_type: Type,
@@ -28,12 +29,14 @@ struct TypeCheckOk {
 
 /// A test case that should fail type-checking.
 /// Contains source code and expected error kind.
+#[allow(dead_code)]
 struct TypeCheckErr {
     source: &'static str,
     error: ExpectedError,
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 enum ExpectedError {
     Mismatch { expected: &'static str, found: &'static str },
     UnknownIdent(&'static str),
