@@ -3124,6 +3124,24 @@ impl<'a> InferCtx<'a> {
                                             found: a.clone(),
                                         });
                                     }
+                                    // Structural mismatch: primitive vs wrapper can never unify
+                                    // regardless of type variables (e.g., Int vs List[?1] from
+                                    // [1,2,3].flatten() where flatten expects List[List[a]]).
+                                    let is_prim = |s: &str| matches!(s,
+                                        "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
+                                        "UInt8" | "UInt16" | "UInt32" | "UInt64" |
+                                        "Float" | "Float32" | "Float64" |
+                                        "BigInt" | "Decimal" | "String" | "Bool" | "Char" | "()");
+                                    let is_wrap = |s: &str| s.starts_with("List[") || s.starts_with('[')
+                                        || s.starts_with("Map[") || s.starts_with("Set[")
+                                        || (s.starts_with('(') && s.contains(','));
+                                    if (is_prim(a) && is_wrap(b)) || (is_wrap(a) && is_prim(b)) {
+                                        self.last_error_span = call.span;
+                                        return Err(TypeError::Mismatch {
+                                            expected: resolved_param.display(),
+                                            found: resolved_arg.display(),
+                                        });
+                                    }
                                 }
                                 Err(TypeError::ArityMismatch { expected, found }) => {
                                     // Function arity mismatch (e.g., passing 2-arg function to map)
