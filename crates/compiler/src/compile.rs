@@ -25174,6 +25174,12 @@ impl Compiler {
             return Err(self.convert_type_error(trait_err, error_span));
         }
 
+        // Check typed binding annotations (e.g., b: Box[Int] = Box(value: "hello"))
+        if let Some(binding_err) = ctx.check_typed_binding_mismatches() {
+            let error_span = ctx.last_error_span().unwrap_or(span);
+            return Err(self.convert_type_error(binding_err, error_span));
+        }
+
         Ok(())
     }
 

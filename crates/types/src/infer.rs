@@ -134,6 +134,10 @@ pub struct InferCtx<'a> {
     /// we can't extract param types at inference time. After solve(), resolve func_ty to a
     /// Function type and check each param vs arg for concrete type mismatches.
     deferred_indirect_call_checks: Vec<(Type, Vec<Type>, Span)>,
+    /// Deferred typed binding checks: (value_type, annotation_type, span).
+    /// When a binding has a type annotation (e.g., `b: Box[Int] = expr`), record
+    /// both types. After solve(), verify the resolved types match.
+    deferred_typed_binding_checks: Vec<(Type, Type, Span)>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -164,6 +168,7 @@ impl<'a> InferCtx<'a> {
             deferred_method_on_var: Vec::new(),
             deferred_method_existence_checks: Vec::new(),
             deferred_indirect_call_checks: Vec::new(),
+            deferred_typed_binding_checks: Vec::new(),
         }
     }
 
@@ -1157,6 +1162,44 @@ impl<'a> InferCtx<'a> {
                         }
                     }
                 }
+            }
+        }
+        None
+    }
+
+    /// Check deferred typed binding annotations.
+    /// After solve(), verify that resolved value types match their annotations.
+    /// This catches mismatches like `b: Box[Int] = Box(value: "hello")` that
+    /// the batch unify might have silently dropped.
+    pub fn check_typed_binding_mismatches(&mut self) -> Option<TypeError> {
+        for (value_ty, ann_ty, span) in &self.deferred_typed_binding_checks {
+            let resolved_value = self.env.apply_subst(value_ty);
+            let resolved_ann = self.env.apply_subst(ann_ty);
+
+            // Skip if either is still unresolved
+            if resolved_value.has_any_type_var() || resolved_ann.has_any_type_var() {
+                continue;
+            }
+
+            // Only check Named types with type arguments (generic constructors).
+            // This is specifically for catching mismatches like Box[Int] = Box(value: "hello")
+            // where fresh vars in the constructor were disconnected. Primitive types and
+            // non-generic types are handled correctly by normal unification.
+            let is_generic_named = matches!(&resolved_ann, Type::Named { args, .. } if !args.is_empty());
+            if !is_generic_named {
+                continue;
+            }
+
+            // Compare display strings to avoid false positives from internal Type representation
+            // differences (e.g., two Option[Val] with different internal ids but same semantics)
+            let val_str = resolved_value.display();
+            let ann_str = resolved_ann.display();
+            if val_str != ann_str {
+                self.last_error_span = Some(*span);
+                return Some(TypeError::Mismatch {
+                    expected: ann_str,
+                    found: val_str,
+                });
             }
         }
         None
@@ -4549,8 +4592,9 @@ impl<'a> InferCtx<'a> {
                         // For named fields, validate field names against the constructor definition
                         let has_named_fields = fields.iter().any(|f| matches!(f, RecordField::Named(_, _)));
                         if has_named_fields {
-                            // Look up the constructor definition to get field names
-                            if let Some(ctor_fields) = self.lookup_constructor_named_fields(&resolved_type_name) {
+                            // Look up the constructor definition to get field names AND return type
+                            // sharing the same fresh type vars (so field constraints flow to return type)
+                            if let Some((ctor_fields, shared_ret_ty)) = self.lookup_constructor_named_fields_with_ret(&resolved_type_name) {
                                 // Validate and type-check named fields
                                 let mut provided = HashMap::new();
                                 let mut positional_count = 0;
@@ -4578,13 +4622,8 @@ impl<'a> InferCtx<'a> {
                                         }
                                     }
                                 }
-                                // Extract return type from constructor function type
-                                let ret_ty = if let Type::Function(ft) = &ctor_ty {
-                                    (*ft.ret).clone()
-                                } else {
-                                    ctor_ty.clone()
-                                };
-                                return Ok(ret_ty);
+                                // Use the return type that shares fresh vars with field types
+                                return Ok(shared_ret_ty);
                             }
                         }
 
@@ -5759,6 +5798,11 @@ impl<'a> InferCtx<'a> {
     /// Look up a variant constructor's named fields (with instantiated types).
     /// Returns None if the constructor is not a Named variant or not found.
     fn lookup_constructor_named_fields(&mut self, name: &str) -> Option<Vec<(String, Type)>> {
+        self.lookup_constructor_named_fields_with_ret(name).map(|(fields, _)| fields)
+    }
+
+    /// Look up a variant constructor's named fields AND return type, using shared fresh vars.
+    fn lookup_constructor_named_fields_with_ret(&mut self, name: &str) -> Option<(Vec<(String, Type)>, Type)> {
         let types_clone = self.env.types.clone();
         for (type_name, def) in &types_clone {
             if let TypeDef::Variant { params, constructors } = def {
@@ -5769,9 +5813,18 @@ impl<'a> InferCtx<'a> {
                                 .iter()
                                 .map(|p| (p.name.clone(), self.fresh()))
                                 .collect();
-                            return Some(fields.iter().map(|(fname, fty)| {
+                            let field_types = fields.iter().map(|(fname, fty)| {
                                 (fname.clone(), Self::substitute_type_params(fty, &substitution))
-                            }).collect());
+                            }).collect();
+                            let type_args: Vec<Type> = params
+                                .iter()
+                                .map(|p| substitution.get(&p.name).cloned().unwrap_or_else(|| Type::TypeParam(p.name.clone())))
+                                .collect();
+                            let ret_ty = Type::Named {
+                                name: type_name.clone(),
+                                args: type_args,
+                            };
+                            return Some((field_types, ret_ty));
                         }
                     }
                 }
@@ -5872,7 +5925,13 @@ impl<'a> InferCtx<'a> {
         // If there's a type annotation, unify with it
         if let Some(ty_expr) = &binding.ty {
             let annotated_ty = self.type_from_ast(ty_expr);
-            self.unify(value_ty.clone(), annotated_ty);
+            self.unify(value_ty.clone(), annotated_ty.clone());
+            // Also record for deferred check (batch unify errors are dropped)
+            self.deferred_typed_binding_checks.push((
+                value_ty.clone(),
+                annotated_ty,
+                binding.span,
+            ));
         }
 
         // Bind pattern
