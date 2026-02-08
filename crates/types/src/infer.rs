@@ -964,8 +964,8 @@ impl<'a> InferCtx<'a> {
         }
 
         // Handle ?N type variable references (from first-pass inference embedded in HasMethod args)
-        if s.starts_with('?') {
-            if let Ok(id) = s[1..].parse::<u32>() {
+        if let Some(stripped) = s.strip_prefix('?') {
+            if let Ok(id) = stripped.parse::<u32>() {
                 return qvar_map.entry(id).or_insert_with(|| {
                     *next_var += 1;
                     Type::Var(*next_var)
