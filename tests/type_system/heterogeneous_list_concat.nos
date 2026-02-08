@@ -1,4 +1,5 @@
-# expect: [hello, 1, 2, 3]
-# Nostos supports heterogeneous lists - different element types can be concatenated
+# expect_error: type mismatch
+# Type checker correctly constrains list element types through concat (++).
+# f(xs) = ["hello"] ++ xs constrains xs to [String], so f([1,2,3]) is a type error.
 f(xs) = ["hello"] ++ xs
 main() = f([1, 2, 3])

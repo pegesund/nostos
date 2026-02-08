@@ -1,3 +1,24 @@
+## ⛔ NEVER LABEL BUGS AS "KNOWN ISSUES" — FIX THEM! ⛔
+
+**THIS IS THE #0 RULE. IT OVERRIDES EVERYTHING.**
+
+When probing/testing finds a bug:
+1. **STOP probing immediately** — do NOT continue finding more bugs
+2. **Fix the bug you just found** — right now, before doing anything else
+3. **NEVER write "Known Issues" or "Not Fixable"** in memory/notes — that's avoidance
+4. **NEVER say "not fixable without bigger changes"** — if it's a bug, fix it
+5. After the fix is committed and tests pass, THEN resume probing
+
+**Why this matters:**
+- "Known Issues" sections are graveyards where bugs go to be forgotten
+- Every bug labeled "known" is a bug the user still experiences
+- Finding 10 bugs and fixing 0 is worse than finding 1 bug and fixing it
+- The point of probing is to IMPROVE the compiler, not to catalog its flaws
+
+**If you catch yourself writing "Known Issue" or "Not Fixable" — STOP. Fix it instead.**
+
+---
+
 ## ⛔ STOP! DO NOT RUN FULL TEST SUITE! ⛔
 
 **THIS IS THE #1 RULE. READ THIS FIRST BEFORE DOING ANYTHING.**
