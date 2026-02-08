@@ -1,5 +1,19 @@
 //! JIT Compiler for Nostos
-#![allow(unreachable_patterns)]
+#![allow(
+    unreachable_patterns,
+    clippy::collapsible_if,
+    clippy::type_complexity,
+    clippy::only_used_in_recursion,
+    clippy::unnecessary_map_or,
+    clippy::if_same_then_else,
+    clippy::unnecessary_cast,
+    clippy::collapsible_match,
+    clippy::needless_range_loop,
+    clippy::needless_borrowed_reference,
+    clippy::or_fun_call,
+    clippy::unused_enumerate_index,
+    clippy::map_entry
+)]
 //!
 //! Tiered compilation strategy:
 //! - Tier 0: Interpreter (existing Runtime)

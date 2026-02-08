@@ -737,6 +737,7 @@ pub struct ReactiveRecordValue {
     pub reactive_field_mask: u64,
     /// Parent references: (weak_parent, field_index_in_parent)
     /// Uses Weak to avoid reference cycles
+    #[allow(clippy::type_complexity)]
     pub parents: Arc<std::sync::RwLock<Vec<(std::sync::Weak<ReactiveRecordValue>, u16)>>>,
     /// Registered onChange callbacks - called with (fieldName: String, oldValue: Value, newValue: Value)
     pub callbacks: Arc<std::sync::RwLock<Vec<Value>>>,
@@ -821,7 +822,7 @@ impl ReactiveRecordValue {
     pub fn remove_parent(&self, parent_ptr: *const ReactiveRecordValue) {
         if let Ok(mut parents) = self.parents.write() {
             parents.retain(|(weak, _)| {
-                weak.upgrade().map_or(true, |arc| Arc::as_ptr(&arc) != parent_ptr)
+                weak.upgrade().is_none_or(|arc| Arc::as_ptr(&arc) != parent_ptr)
             });
         }
     }
@@ -1086,6 +1087,7 @@ pub struct ClosureValue {
 pub struct NativeFn {
     pub name: String,
     pub arity: usize,
+    #[allow(clippy::type_complexity)]
     pub func: Box<dyn Fn(&[Value]) -> Result<Value, RuntimeError> + Send + Sync>,
 }
 

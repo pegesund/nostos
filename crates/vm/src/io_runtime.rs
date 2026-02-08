@@ -1299,21 +1299,17 @@ impl IoRuntime {
                                             // Spawn task to complete upgrade and store WebSocket
                                             let ws_conns = ws_conns.clone();
                                             tokio::spawn(async move {
-                                                match upgrade.await {
-                                                    Ok(upgraded) => {
-                                                        // Create WebSocket from upgraded connection using tokio-tungstenite
-                                                        use tokio_tungstenite::WebSocketStream;
-                                                        let io = hyper_util::rt::TokioIo::new(upgraded);
-                                                        let ws = WebSocketStream::from_raw_socket(
-                                                            io,
-                                                            tokio_tungstenite::tungstenite::protocol::Role::Server,
-                                                            None,
-                                                        ).await;
-                                                        let (sender, receiver) = ws.split();
-                                                        ws_conns.lock().await.insert(request_id, (sender, receiver));
-                                                    }
-                                                    Err(_) => {
-                                                    }
+                                                if let Ok(upgraded) = upgrade.await {
+                                                    // Create WebSocket from upgraded connection using tokio-tungstenite
+                                                    use tokio_tungstenite::WebSocketStream;
+                                                    let io = hyper_util::rt::TokioIo::new(upgraded);
+                                                    let ws = WebSocketStream::from_raw_socket(
+                                                        io,
+                                                        tokio_tungstenite::tungstenite::protocol::Role::Server,
+                                                        None,
+                                                    ).await;
+                                                    let (sender, receiver) = ws.split();
+                                                    ws_conns.lock().await.insert(request_id, (sender, receiver));
                                                 }
                                             });
 
@@ -3431,7 +3427,7 @@ impl IoRuntime {
         }
     }
 
-    fn convert_io_error(e: std::io::Error, path: &PathBuf) -> IoError {
+    fn convert_io_error(e: std::io::Error, path: &std::path::Path) -> IoError {
         use std::io::ErrorKind;
         match e.kind() {
             ErrorKind::NotFound => IoError::FileNotFound(path.display().to_string()),

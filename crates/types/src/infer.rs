@@ -124,6 +124,7 @@ pub struct InferCtx<'a> {
     /// When a method call is resolved on a type variable (e.g., x.length() where x is Var),
     /// record it so the constraint can be propagated through function signatures.
     /// At the call site, the method will be re-validated on the concrete type.
+    #[allow(clippy::type_complexity)]
     deferred_method_on_var: Vec<(Type, String, Vec<Type>, Type, Option<Span>)>,
     /// Deferred method existence checks from HasMethod constraints in instantiate_function.
     /// After solve() resolves the type var, we check if the resolved type supports the method.
@@ -222,6 +223,7 @@ impl<'a> InferCtx<'a> {
 
     /// Get deferred method-on-var calls (method calls on still-generic type vars).
     /// Used to propagate method requirements from generic function bodies to call sites.
+    #[allow(clippy::type_complexity)]
     pub fn get_deferred_method_on_var(&self) -> &[(Type, String, Vec<Type>, Type, Option<Span>)] {
         &self.deferred_method_on_var
     }
@@ -1184,15 +1186,14 @@ impl<'a> InferCtx<'a> {
 
             // Check structural container mismatches even with unresolved type vars.
             // E.g., List[?25] vs Set[Int] - different container types, always an error.
-            let is_structural_mismatch = match (&resolved_value, &resolved_ann) {
-                (Type::List(_), Type::Set(_)) | (Type::Set(_), Type::List(_)) => true,
-                (Type::List(_), Type::Map(_, _)) | (Type::Map(_, _), Type::List(_)) => true,
-                (Type::Set(_), Type::Map(_, _)) | (Type::Map(_, _), Type::Set(_)) => true,
-                (Type::List(_), Type::Named { .. }) | (Type::Named { .. }, Type::List(_)) => true,
-                (Type::Set(_), Type::Named { .. }) | (Type::Named { .. }, Type::Set(_)) => true,
-                (Type::Map(_, _), Type::Named { .. }) | (Type::Named { .. }, Type::Map(_, _)) => true,
-                _ => false,
-            };
+            let is_structural_mismatch = matches!((&resolved_value, &resolved_ann),
+                (Type::List(_), Type::Set(_)) | (Type::Set(_), Type::List(_)) |
+                (Type::List(_), Type::Map(_, _)) | (Type::Map(_, _), Type::List(_)) |
+                (Type::Set(_), Type::Map(_, _)) | (Type::Map(_, _), Type::Set(_)) |
+                (Type::List(_), Type::Named { .. }) | (Type::Named { .. }, Type::List(_)) |
+                (Type::Set(_), Type::Named { .. }) | (Type::Named { .. }, Type::Set(_)) |
+                (Type::Map(_, _), Type::Named { .. }) | (Type::Named { .. }, Type::Map(_, _))
+            );
             if is_structural_mismatch {
                 self.last_error_span = Some(*span);
                 return Some(TypeError::Mismatch {
@@ -1242,12 +1243,11 @@ impl<'a> InferCtx<'a> {
             let resolved_b = self.env.apply_subst(type_b);
 
             // Check structural container mismatches
-            let is_structural_mismatch = match (&resolved_a, &resolved_b) {
-                (Type::List(_), Type::Set(_)) | (Type::Set(_), Type::List(_)) => true,
-                (Type::List(_), Type::Map(_, _)) | (Type::Map(_, _), Type::List(_)) => true,
-                (Type::Set(_), Type::Map(_, _)) | (Type::Map(_, _), Type::Set(_)) => true,
-                _ => false,
-            };
+            let is_structural_mismatch = matches!((&resolved_a, &resolved_b),
+                (Type::List(_), Type::Set(_)) | (Type::Set(_), Type::List(_)) |
+                (Type::List(_), Type::Map(_, _)) | (Type::Map(_, _), Type::List(_)) |
+                (Type::Set(_), Type::Map(_, _)) | (Type::Map(_, _), Type::Set(_))
+            );
             if is_structural_mismatch {
                 self.last_error_span = Some(*span);
                 return Some(TypeError::Mismatch {
@@ -1686,10 +1686,9 @@ impl<'a> InferCtx<'a> {
                 }
                 _ => {
                     if !self.env.implements(&resolved, trait_name) {
-                        if resolved.has_any_type_var() {
-                            if !self.env.definitely_not_implements(&resolved, trait_name) {
-                                continue;
-                            }
+                        if resolved.has_any_type_var()
+                            && !self.env.definitely_not_implements(&resolved, trait_name) {
+                            continue;
                         }
                         self.last_error_span = None;
                         let display_ty = if let Type::Named { name, args, .. } = &resolved {
@@ -1872,10 +1871,9 @@ impl<'a> InferCtx<'a> {
                 }
                 _ => {
                     if !self.env.implements(&resolved, trait_name) {
-                        if resolved.has_any_type_var() {
-                            if !self.env.definitely_not_implements(&resolved, trait_name) {
-                                continue;
-                            }
+                        if resolved.has_any_type_var()
+                            && !self.env.definitely_not_implements(&resolved, trait_name) {
+                            continue;
                         }
                         self.last_error_span = None;
                         let display_ty = if let Type::Named { name, args, .. } = &resolved {
@@ -2380,15 +2378,14 @@ impl<'a> InferCtx<'a> {
                                 trait_ret = resolved_receiver.clone();
                             }
                         }
-                        if !trait_ret.has_any_type_var() && !matches!(trait_ret, Type::TypeParam(_)) {
-                            if let Err(_) = self.unify_types(ret_ty, &trait_ret) {
-                                let resolved_call_ret = self.env.apply_subst(ret_ty);
-                                self.last_error_span = span;
-                                return Err(TypeError::Mismatch {
-                                    expected: format!("{} (return type of .{}())", trait_ret.display(), method_name),
-                                    found: format!("{}", resolved_call_ret.display()),
-                                });
-                            }
+                        if !trait_ret.has_any_type_var() && !matches!(trait_ret, Type::TypeParam(_))
+                            && self.unify_types(ret_ty, &trait_ret).is_err() {
+                            let resolved_call_ret = self.env.apply_subst(ret_ty);
+                            self.last_error_span = span;
+                            return Err(TypeError::Mismatch {
+                                expected: format!("{} (return type of .{}())", trait_ret.display(), method_name),
+                                found: resolved_call_ret.display().to_string(),
+                            });
                         }
                         // Trait method found - don't fall through to BUILTINS lookup
                         return Ok(());
@@ -2441,11 +2438,11 @@ impl<'a> InferCtx<'a> {
             let common_ret = concrete_return_types[0].clone();
             let resolved_call_ret = self.env.apply_subst(ret_ty);
 
-            if let Err(_) = self.unify_types(ret_ty, &common_ret) {
+            if self.unify_types(ret_ty, &common_ret).is_err() {
                 self.last_error_span = span;
                 return Err(TypeError::Mismatch {
                     expected: format!("{} (return type of .{}())", common_ret.display(), method_name),
-                    found: format!("{}", resolved_call_ret.display()),
+                    found: resolved_call_ret.display().to_string(),
                 });
             }
         }
@@ -2627,14 +2624,13 @@ impl<'a> InferCtx<'a> {
                         if let Some(ft) = self.env.functions.get(&cross_name) {
                             // Check if first param structurally matches receiver type
                             if let Some(first_param) = ft.params.first() {
-                                let compatible = match (&resolved_receiver, first_param) {
-                                    (Type::List(_), Type::List(_)) => true,
-                                    (Type::Map(_, _), Type::Map(_, _)) => true,
-                                    (Type::Set(_), Type::Set(_)) => true,
-                                    (Type::String, Type::String) => true,
-                                    (_, Type::Var(_)) => true,
-                                    _ => false,
-                                };
+                                let compatible = matches!((&resolved_receiver, first_param),
+                                    (Type::List(_), Type::List(_)) |
+                                    (Type::Map(_, _), Type::Map(_, _)) |
+                                    (Type::Set(_), Type::Set(_)) |
+                                    (Type::String, Type::String) |
+                                    (_, Type::Var(_))
+                                );
                                 if compatible {
                                     cross_found = Some(ft.clone());
                                     break;
@@ -3057,14 +3053,13 @@ impl<'a> InferCtx<'a> {
                                     {
                                         // Check if any parameter types conflict (both resolved to concrete types)
                                         for (arg_p, param_p) in arg_fn.params.iter().zip(param_fn.params.iter()) {
-                                            if !arg_p.has_any_type_var() && !param_p.has_any_type_var() {
-                                                if self.unify_types(arg_p, param_p).is_err() {
-                                                    self.last_error_span = call.span;
-                                                    return Err(TypeError::Mismatch {
-                                                        expected: param_p.display(),
-                                                        found: arg_p.display(),
-                                                    });
-                                                }
+                                            if !arg_p.has_any_type_var() && !param_p.has_any_type_var()
+                                                && self.unify_types(arg_p, param_p).is_err() {
+                                                self.last_error_span = call.span;
+                                                return Err(TypeError::Mismatch {
+                                                    expected: param_p.display(),
+                                                    found: arg_p.display(),
+                                                });
                                             }
                                         }
 
@@ -3354,7 +3349,7 @@ impl<'a> InferCtx<'a> {
                                 for (param_ty, arg_ty) in ft.params.iter().zip(call.arg_types.iter()) {
                                     let _ = self.unify_types(arg_ty, param_ty);
                                 }
-                                if let Err(_) = self.unify_types(&call.ret_ty, &ft.ret) {
+                                if self.unify_types(&call.ret_ty, &ft.ret).is_err() {
                                     // Check for structural container mismatch (e.g., List vs Map)
                                     let resolved_ret = self.env.apply_subst(&call.ret_ty);
                                     let resolved_expected = self.env.apply_subst(&ft.ret);
@@ -5539,10 +5534,10 @@ impl<'a> InferCtx<'a> {
                     }
                     // List ++ String or String ++ List is always a type error
                     (Type::List(_), Type::String) | (Type::String, Type::List(_)) => {
-                        return Err(TypeError::UnificationFailed(
+                        Err(TypeError::UnificationFailed(
                             resolved_left.display(),
                             resolved_right.display(),
-                        ));
+                        ))
                     }
                     // Both are type variables - defer check until types resolve
                     (Type::Var(_), Type::Var(_)) => {
@@ -5561,10 +5556,10 @@ impl<'a> InferCtx<'a> {
                         } else {
                             &resolved_right
                         };
-                        return Err(TypeError::MissingTraitImpl {
+                        Err(TypeError::MissingTraitImpl {
                             ty: bad_type.display(),
                             trait_name: "Concat".to_string(),
-                        });
+                        })
                     }
                 }
             }
@@ -6055,12 +6050,6 @@ impl<'a> InferCtx<'a> {
             }
         }
         None
-    }
-
-    /// Look up a variant constructor's named fields (with instantiated types).
-    /// Returns None if the constructor is not a Named variant or not found.
-    fn lookup_constructor_named_fields(&mut self, name: &str) -> Option<Vec<(String, Type)>> {
-        self.lookup_constructor_named_fields_with_ret(name).map(|(fields, _)| fields)
     }
 
     /// Look up a variant constructor's named fields AND return type, using shared fresh vars.

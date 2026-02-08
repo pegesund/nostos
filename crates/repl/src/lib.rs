@@ -3,6 +3,25 @@
 //! This crate provides a REPL session that maintains type safety across
 //! function redefinitions using a call graph to track dependencies.
 
+#![allow(
+    clippy::collapsible_if,
+    clippy::collapsible_match,
+    clippy::for_kv_map,
+    clippy::if_same_then_else,
+    clippy::map_entry,
+    clippy::needless_borrow,
+    clippy::needless_range_loop,
+    clippy::ptr_arg,
+    clippy::redundant_closure,
+    clippy::unnecessary_map_or,
+    clippy::unnecessary_to_owned,
+    clippy::unwrap_or_default,
+    clippy::into_iter_on_ref,
+    clippy::manual_map,
+    clippy::manual_strip,
+    clippy::type_complexity
+)]
+
 pub mod callgraph;
 pub mod session;
 pub mod engine;

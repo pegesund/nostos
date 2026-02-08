@@ -1,5 +1,29 @@
 //! Nostos CLI - Command-line interface for running Nostos programs.
 
+#![allow(
+    clippy::collapsible_if,
+    clippy::collapsible_else_if,
+    clippy::collapsible_match,
+    clippy::clone_on_copy,
+    clippy::needless_borrow,
+    clippy::redundant_closure,
+    clippy::unnecessary_map_or,
+    clippy::type_complexity,
+    clippy::manual_strip,
+    clippy::manual_pattern_char_comparison,
+    clippy::manual_div_ceil,
+    clippy::match_result_ok,
+    clippy::implicit_saturating_sub,
+    clippy::only_used_in_recursion,
+    clippy::writeln_empty_string,
+    clippy::field_reassign_with_default,
+    clippy::while_let_loop,
+    clippy::needless_lifetimes,
+    clippy::redundant_pattern_matching,
+    clippy::needless_borrows_for_generic_args,
+    dead_code
+)]
+
 //!
 //! Note: We use the system allocator (not mimalloc) to ensure compatibility
 //! with native extensions, which also use the system allocator. Using different

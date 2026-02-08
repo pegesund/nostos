@@ -725,9 +725,7 @@ impl Scheduler {
                 let _ = target.sender.send(msg);
 
                 // Wake up the target if it was waiting for a message
-                if target.state == ProcessState::Waiting {
-                    target.state = ProcessState::Running;
-                } else if target.state == ProcessState::WaitingTimeout {
+                if target.state == ProcessState::Waiting || target.state == ProcessState::WaitingTimeout {
                     target.state = ProcessState::Running;
                 }
                 drop(target); // Unlock before waking

@@ -195,6 +195,7 @@ pub struct GcBuffer {
     pub data: std::cell::RefCell<String>,
 }
 
+#[allow(clippy::new_without_default)]
 impl GcBuffer {
     pub fn new() -> Self {
         GcBuffer {
@@ -212,6 +213,7 @@ impl GcBuffer {
         self.data.borrow_mut().push_str(s);
     }
 
+    #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self) -> String {
         self.data.borrow().clone()
     }
@@ -236,6 +238,7 @@ impl PartialEq for GcList {
     }
 }
 
+#[allow(clippy::new_without_default)]
 impl GcList {
     /// Create a new empty list
     #[inline]
@@ -362,6 +365,7 @@ impl std::fmt::Debug for GcInt64List {
     }
 }
 
+#[allow(clippy::new_without_default)]
 impl GcInt64List {
     #[inline]
     pub fn new() -> Self {
@@ -682,18 +686,18 @@ impl GcMapKey {
                 GcMapKey::Record {
                     type_name: type_name.clone(),
                     field_names: field_names.clone(),
-                    fields: fields.iter().map(|f| GcMapKey::from_shared_key(f)).collect(),
+                    fields: fields.iter().map(GcMapKey::from_shared_key).collect(),
                 }
             }
             SharedMapKey::Variant { type_name, constructor, fields } => {
                 GcMapKey::Variant {
                     type_name: type_name.clone(),
                     constructor: constructor.clone(),
-                    fields: fields.iter().map(|f| GcMapKey::from_shared_key(f)).collect(),
+                    fields: fields.iter().map(GcMapKey::from_shared_key).collect(),
                 }
             }
             SharedMapKey::Tuple(items) => {
-                GcMapKey::Tuple(items.iter().map(|f| GcMapKey::from_shared_key(f)).collect())
+                GcMapKey::Tuple(items.iter().map(GcMapKey::from_shared_key).collect())
             }
         }
     }
@@ -756,6 +760,7 @@ pub struct GcNativeFn {
     pub arity: usize,
     /// The function takes GcValue args and a mutable heap reference.
     /// Returns a GcValue directly allocated on the heap.
+    #[allow(clippy::type_complexity)]
     pub func: Box<dyn Fn(&[GcValue], &mut Heap) -> Result<GcValue, RuntimeError> + Send + Sync>,
 }
 
@@ -1912,7 +1917,10 @@ impl Heap {
     }
 
     /// Fast unchecked closure access - skips bounds checks and Option handling.
-    /// SAFETY: ptr must be a valid closure pointer that hasn't been collected.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be a valid closure pointer that hasn't been collected.
     #[inline(always)]
     pub unsafe fn get_closure_unchecked(&self, ptr: GcPtr<GcClosure>) -> &GcClosure {
         let obj = self.objects.get_unchecked(ptr.as_raw() as usize);
@@ -2357,7 +2365,7 @@ impl Heap {
                 }
             }
             GcValue::Buffer(buf_ptr) => {
-                self.get_buffer(buf_ptr.clone())
+                self.get_buffer(*buf_ptr)
                     .map(|b| b.to_string())
                     .unwrap_or_else(|| "<buffer>".to_string())
             }
@@ -2527,7 +2535,7 @@ impl Heap {
             }
             SharedMapValue::Set(items) => {
                 let gc_items: ImblHashSet<GcMapKey> = items.iter()
-                    .map(|k| GcMapKey::from_shared_key(k))
+                    .map(GcMapKey::from_shared_key)
                     .collect();
                 let ptr = self.alloc_set(gc_items);
                 GcValue::Set(ptr)
@@ -2876,7 +2884,7 @@ impl Heap {
             GcValue::Buffer(ptr) => {
                 if let Some(b) = source.get_buffer(*ptr) {
                     let buf_ptr = self.alloc_buffer();
-                    if let Some(new_buf) = self.get_buffer(buf_ptr.clone()) {
+                    if let Some(new_buf) = self.get_buffer(buf_ptr) {
                         new_buf.append(&b.to_string());
                     }
                     GcValue::Buffer(buf_ptr)
@@ -2896,6 +2904,7 @@ impl Heap {
     }
 
     /// Deep copy a map key.
+    #[allow(clippy::only_used_in_recursion)]
     fn deep_copy_key(&mut self, key: &GcMapKey, source: &Heap) -> GcMapKey {
         match key {
             GcMapKey::Unit => GcMapKey::Unit,
@@ -3132,7 +3141,7 @@ impl Heap {
                 if let Some(b) = self.get_buffer(*ptr) {
                     let s = b.to_string();
                     let buf_ptr = self.alloc_buffer();
-                    if let Some(new_buf) = self.get_buffer(buf_ptr.clone()) {
+                    if let Some(new_buf) = self.get_buffer(buf_ptr) {
                         new_buf.append(&s);
                     }
                     GcValue::Buffer(buf_ptr)
@@ -3148,6 +3157,7 @@ impl Heap {
     }
 
     /// Clone a map key within the same heap.
+    #[allow(clippy::only_used_in_recursion)]
     fn clone_key(&mut self, key: &GcMapKey) -> GcMapKey {
         match key {
             GcMapKey::Unit => GcMapKey::Unit,
@@ -3359,6 +3369,7 @@ impl Heap {
     }
 
     /// Convert a MapKey to a GcMapKey.
+    #[allow(clippy::only_used_in_recursion)]
     fn map_key_to_gc(&mut self, key: &MapKey) -> GcMapKey {
         match key {
             MapKey::Unit => GcMapKey::Unit,
@@ -3582,6 +3593,7 @@ impl Heap {
     }
 
     /// Convert a GcMapKey back to a MapKey.
+    #[allow(clippy::only_used_in_recursion)]
     fn gc_map_key_to_value(&self, key: &GcMapKey) -> MapKey {
         match key {
             GcMapKey::Unit => MapKey::Unit,

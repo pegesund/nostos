@@ -303,6 +303,7 @@ impl CachedValue {
             CachedValue::InlineFunction(cached_fn) => {
                 // Inline functions (lambdas) - convert WITH resolver using boxed trait object
                 // to avoid recursive type expansion
+                #[allow(clippy::type_complexity)]
                 let boxed_resolver: Box<dyn Fn(&str) -> Option<Value> + '_> = Box::new(|name| resolver(name));
                 let func = cached_to_function_with_boxed_resolver(cached_fn, &boxed_resolver);
                 Value::Function(Arc::new(func))
@@ -314,6 +315,7 @@ impl CachedValue {
 
     /// Convert to Value with boxed function reference resolution
     /// This avoids recursive type expansion when inline functions contain other inline functions
+    #[allow(clippy::type_complexity)]
     pub fn to_value_with_boxed_resolver(&self, resolver: &Box<dyn Fn(&str) -> Option<Value> + '_>) -> Value {
         match self {
             CachedValue::FunctionRef(name) => {
@@ -433,6 +435,7 @@ impl CachedChunk {
 
     /// Convert CachedChunk back to Chunk with boxed function reference resolution
     /// This avoids recursive type expansion when inline functions contain other inline functions
+    #[allow(clippy::type_complexity)]
     pub fn to_chunk_with_boxed_resolver(&self, resolver: &Box<dyn Fn(&str) -> Option<Value> + '_>) -> Chunk {
         Chunk {
             code: self.code.clone(),
@@ -1080,6 +1083,7 @@ where
 
 /// Helper to convert a CachedFunction back to FunctionValue with a boxed resolver
 /// This avoids recursive type expansion when inline functions contain other inline functions
+#[allow(clippy::type_complexity)]
 pub fn cached_to_function_with_boxed_resolver(
     cached: &CachedFunction,
     resolver: &Box<dyn Fn(&str) -> Option<Value> + '_>,

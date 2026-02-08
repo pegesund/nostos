@@ -110,7 +110,7 @@ impl ProfileData {
             let duration = entry.start_time.elapsed().as_nanos() as u64;
             self.stats
                 .entry(entry.function_name)
-                .or_insert_with(FunctionStats::new)
+                .or_default()
                 .record_call(duration);
         }
     }
@@ -118,7 +118,7 @@ impl ProfileData {
     /// Merge another ProfileData into this one.
     pub fn merge(&mut self, other: &ProfileData) {
         for (name, other_stats) in &other.stats {
-            let stats = self.stats.entry(name.clone()).or_insert_with(FunctionStats::new);
+            let stats = self.stats.entry(name.clone()).or_default();
             stats.call_count += other_stats.call_count;
             stats.total_time_ns += other_stats.total_time_ns;
             stats.min_time_ns = stats.min_time_ns.min(other_stats.min_time_ns);
@@ -632,14 +632,14 @@ impl ThreadSafeMapKey {
             GcMapKey::Record { type_name, field_names, fields } => ThreadSafeMapKey::Record {
                 type_name: type_name.clone(),
                 field_names: field_names.clone(),
-                fields: fields.iter().map(|f| ThreadSafeMapKey::from_gc_map_key(f)).collect(),
+                fields: fields.iter().map(ThreadSafeMapKey::from_gc_map_key).collect(),
             },
             GcMapKey::Variant { type_name, constructor, fields } => ThreadSafeMapKey::Variant {
                 type_name: type_name.clone(),
                 constructor: constructor.clone(),
-                fields: fields.iter().map(|f| ThreadSafeMapKey::from_gc_map_key(f)).collect(),
+                fields: fields.iter().map(ThreadSafeMapKey::from_gc_map_key).collect(),
             },
-            GcMapKey::Tuple(items) => ThreadSafeMapKey::Tuple(items.iter().map(|f| ThreadSafeMapKey::from_gc_map_key(f)).collect()),
+            GcMapKey::Tuple(items) => ThreadSafeMapKey::Tuple(items.iter().map(ThreadSafeMapKey::from_gc_map_key).collect()),
         }
     }
 
@@ -756,7 +756,7 @@ impl ThreadSafeValue {
             GcValue::Set(ptr) => {
                 let set = heap.get_set(*ptr)?;
                 let items: Vec<_> = set.items.iter()
-                    .map(|k| ThreadSafeMapKey::from_gc_map_key(k))
+                    .map(ThreadSafeMapKey::from_gc_map_key)
                     .collect();
                 ThreadSafeValue::Set(items)
             }
@@ -772,7 +772,7 @@ impl ThreadSafeValue {
             // Int64List - convert to regular list of Int64
             GcValue::Int64List(int_list) => {
                 let items: Vec<ThreadSafeValue> = int_list.iter()
-                    .map(|n| ThreadSafeValue::Int64(n))
+                    .map(ThreadSafeValue::Int64)
                     .collect();
                 ThreadSafeValue::List(items)
             }

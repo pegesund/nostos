@@ -275,6 +275,7 @@ pub struct AsyncSharedState {
     pub stdlib_function_list: Arc<RwLock<Vec<String>>>,
 
     /// Eval callback - uses std RwLock for compatibility.
+    #[allow(clippy::type_complexity)]
     pub eval_callback: Arc<RwLock<Option<Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>>>>,
 
     /// IO request sender.
@@ -3550,7 +3551,7 @@ impl AsyncProcess {
                             // Return List[ReactiveRecord] of child reactive records
                             let children = rec.get_children();
                             let items: Vec<GcValue> = children.into_iter()
-                                .map(|child| GcValue::ReactiveRecord(child))
+                                .map(GcValue::ReactiveRecord)
                                 .collect();
                             let list = self.heap.make_list(items);
                             set_reg!(dst, GcValue::List(list));
@@ -3565,7 +3566,7 @@ impl AsyncProcess {
                             // Track dependency if we're inside an RHtml render context
                             if let Some(current_component) = self.reactive_context.render_stack.last() {
                                 let record_id = rec.id;
-                                let deps = self.reactive_context.dependencies.entry(record_id).or_insert_with(Vec::new);
+                                let deps = self.reactive_context.dependencies.entry(record_id).or_default();
                                 if !deps.contains(current_component) {
                                     deps.push(current_component.clone());
                                 }
@@ -3849,7 +3850,7 @@ impl AsyncProcess {
                             let reg_count = func.code.register_count;
                             let mut registers = vec![GcValue::Unit; reg_count];
                             // Pass (old_value, new_value) to callback (both as plain variants)
-                            if reg_count > 0 { registers[0] = GcValue::Variant(old_gc.clone()); }
+                            if reg_count > 0 { registers[0] = GcValue::Variant(old_gc); }
                             if reg_count > 1 { registers[1] = new_variant_gc.clone(); }
 
                             self.frames.push(CallFrame {
@@ -4046,7 +4047,7 @@ impl AsyncProcess {
                         found: "non-integer".to_string(),
                     }),
                 };
-                let items: Vec<GcValue> = (1..=n).map(|i| GcValue::Int64(i)).collect();
+                let items: Vec<GcValue> = (1..=n).map(GcValue::Int64).collect();
                 let list = self.heap.make_list(items);
                 set_reg!(dst, GcValue::List(list));
             }
@@ -7327,7 +7328,7 @@ impl AsyncProcess {
                     GcValue::List(list) => {
                         let mut pg_params = Vec::new();
                         for item in list.iter() {
-                            let param = self.gc_value_to_pg_param(&item)?;
+                            let param = self.gc_value_to_pg_param(item)?;
                             pg_params.push(param);
                         }
                         pg_params
@@ -7335,7 +7336,7 @@ impl AsyncProcess {
                     GcValue::Int64List(list) => {
                         // Handle specialized Int64List
                         use crate::io_runtime::PgParam;
-                        list.iter().map(|i| PgParam::Int(i)).collect()
+                        list.iter().map(PgParam::Int).collect()
                     }
                     GcValue::Tuple(ptr) => {
                         // Handle tuples for heterogeneous parameter types
@@ -7343,7 +7344,7 @@ impl AsyncProcess {
                             .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".into()))?;
                         let mut pg_params = Vec::new();
                         for item in &tuple.items {
-                            let param = self.gc_value_to_pg_param(&item)?;
+                            let param = self.gc_value_to_pg_param(item)?;
                             pg_params.push(param);
                         }
                         pg_params
@@ -7402,7 +7403,7 @@ impl AsyncProcess {
                     GcValue::List(list) => {
                         let mut pg_params = Vec::new();
                         for item in list.iter() {
-                            let param = self.gc_value_to_pg_param(&item)?;
+                            let param = self.gc_value_to_pg_param(item)?;
                             pg_params.push(param);
                         }
                         pg_params
@@ -7410,7 +7411,7 @@ impl AsyncProcess {
                     GcValue::Int64List(list) => {
                         // Handle specialized Int64List
                         use crate::io_runtime::PgParam;
-                        list.iter().map(|i| PgParam::Int(i)).collect()
+                        list.iter().map(PgParam::Int).collect()
                     }
                     GcValue::Tuple(ptr) => {
                         // Handle tuples for heterogeneous parameter types
@@ -7418,7 +7419,7 @@ impl AsyncProcess {
                             .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".into()))?;
                         let mut pg_params = Vec::new();
                         for item in &tuple.items {
-                            let param = self.gc_value_to_pg_param(&item)?;
+                            let param = self.gc_value_to_pg_param(item)?;
                             pg_params.push(param);
                         }
                         pg_params
@@ -7640,7 +7641,7 @@ impl AsyncProcess {
                     GcValue::List(list) => {
                         let mut pg_params = Vec::new();
                         for item in list.iter() {
-                            let param = self.gc_value_to_pg_param(&item)?;
+                            let param = self.gc_value_to_pg_param(item)?;
                             pg_params.push(param);
                         }
                         pg_params
@@ -7648,7 +7649,7 @@ impl AsyncProcess {
                     GcValue::Int64List(list) => {
                         // Handle specialized Int64List
                         use crate::io_runtime::PgParam;
-                        list.iter().map(|i| PgParam::Int(i)).collect()
+                        list.iter().map(PgParam::Int).collect()
                     }
                     GcValue::Tuple(ptr) => {
                         // Handle tuples for heterogeneous parameter types
@@ -7656,7 +7657,7 @@ impl AsyncProcess {
                             .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".into()))?;
                         let mut pg_params = Vec::new();
                         for item in &tuple.items {
-                            let param = self.gc_value_to_pg_param(&item)?;
+                            let param = self.gc_value_to_pg_param(item)?;
                             pg_params.push(param);
                         }
                         pg_params
@@ -7714,7 +7715,7 @@ impl AsyncProcess {
                     GcValue::List(list) => {
                         let mut pg_params = Vec::new();
                         for item in list.iter() {
-                            let param = self.gc_value_to_pg_param(&item)?;
+                            let param = self.gc_value_to_pg_param(item)?;
                             pg_params.push(param);
                         }
                         pg_params
@@ -7722,7 +7723,7 @@ impl AsyncProcess {
                     GcValue::Int64List(list) => {
                         // Handle specialized Int64List
                         use crate::io_runtime::PgParam;
-                        list.iter().map(|i| PgParam::Int(i)).collect()
+                        list.iter().map(PgParam::Int).collect()
                     }
                     GcValue::Tuple(ptr) => {
                         // Handle tuples for heterogeneous parameter types
@@ -7730,7 +7731,7 @@ impl AsyncProcess {
                             .ok_or_else(|| RuntimeError::Panic("Invalid tuple reference".into()))?;
                         let mut pg_params = Vec::new();
                         for item in &tuple.items {
-                            let param = self.gc_value_to_pg_param(&item)?;
+                            let param = self.gc_value_to_pg_param(item)?;
                             pg_params.push(param);
                         }
                         pg_params
@@ -8397,7 +8398,7 @@ impl AsyncProcess {
                     GcValue::Int64(v) => v,
                     _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "non-int".to_string() }),
                 };
-                let millis = hour * 3600_000 + min * 60_000 + sec * 1000;
+                let millis = hour * 3_600_000 + min * 60_000 + sec * 1000;
                 set_reg!(dst, GcValue::Int64(millis));
             }
 
@@ -8528,7 +8529,7 @@ impl AsyncProcess {
             TagOf(dst, val_reg) => {
                 let tag = match reg!(val_reg) {
                     GcValue::Variant(ptr) => {
-                        self.heap.get_variant(ptr.clone())
+                        self.heap.get_variant(ptr)
                             .map(|v| v.constructor.as_ref().clone())
                             .unwrap_or_default()
                     }
@@ -8547,7 +8548,7 @@ impl AsyncProcess {
             TypeInfo(dst, name_reg) => {
                 let type_name = match reg!(name_reg) {
                     GcValue::String(ptr) => {
-                        self.heap.get_string(ptr.clone())
+                        self.heap.get_string(ptr)
                             .map(|s| s.data.clone())
                             .unwrap_or_default()
                     }
@@ -8569,7 +8570,7 @@ impl AsyncProcess {
             Construct(dst, type_reg, json_reg) => {
                 let type_name = match reg!(type_reg) {
                     GcValue::String(ptr) => {
-                        self.heap.get_string(ptr.clone())
+                        self.heap.get_string(ptr)
                             .map(|s| s.data.clone())
                             .unwrap_or_default()
                     }
@@ -8605,7 +8606,7 @@ impl AsyncProcess {
             MakeRecordDyn(dst, type_reg, fields_reg) => {
                 let type_name = match reg!(type_reg) {
                     GcValue::String(ptr) => {
-                        self.heap.get_string(ptr.clone())
+                        self.heap.get_string(ptr)
                             .map(|s| s.data.clone())
                             .unwrap_or_default()
                     }
@@ -8639,7 +8640,7 @@ impl AsyncProcess {
             MakeVariantDyn(dst, type_reg, ctor_reg, fields_reg) => {
                 let type_name = match reg!(type_reg) {
                     GcValue::String(ptr) => {
-                        self.heap.get_string(ptr.clone())
+                        self.heap.get_string(ptr)
                             .map(|s| s.data.clone())
                             .unwrap_or_default()
                     }
@@ -8647,7 +8648,7 @@ impl AsyncProcess {
                 };
                 let ctor_name = match reg!(ctor_reg) {
                     GcValue::String(ptr) => {
-                        self.heap.get_string(ptr.clone())
+                        self.heap.get_string(ptr)
                             .map(|s| s.data.clone())
                             .unwrap_or_default()
                     }
@@ -8681,7 +8682,7 @@ impl AsyncProcess {
             RequestToType(dst, request_reg, type_name_reg) => {
                 let type_name = match reg!(type_name_reg) {
                     GcValue::String(ptr) => {
-                        self.heap.get_string(ptr.clone())
+                        self.heap.get_string(ptr)
                             .map(|s| s.data.clone())
                             .unwrap_or_default()
                     }
@@ -8704,7 +8705,7 @@ impl AsyncProcess {
                 match &buf {
                     GcValue::Buffer(buf_ptr) => {
                         let s = self.heap.display_value(&str_val);
-                        if let Some(gc_buf) = self.heap.get_buffer(buf_ptr.clone()) {
+                        if let Some(gc_buf) = self.heap.get_buffer(*buf_ptr) {
                             gc_buf.append(&s);
                         }
                     }
@@ -8721,7 +8722,7 @@ impl AsyncProcess {
                 let buf = reg!(buf_reg);
                 match &buf {
                     GcValue::Buffer(buf_ptr) => {
-                        if let Some(gc_buf) = self.heap.get_buffer(buf_ptr.clone()) {
+                        if let Some(gc_buf) = self.heap.get_buffer(*buf_ptr) {
                             let s = gc_buf.to_string();
                             let str_ptr = self.heap.alloc_string(s);
                             set_reg!(dst, GcValue::String(str_ptr));
@@ -8989,7 +8990,7 @@ impl AsyncProcess {
             RegisterRenderer(name_reg, func_reg) => {
                 // Get component name
                 let name = match reg!(name_reg) {
-                    GcValue::String(s) => self.heap.get_string(s).map(|s| s.data.clone()).unwrap_or_else(|| String::new()),
+                    GcValue::String(s) => self.heap.get_string(s).map(|s| s.data.clone()).unwrap_or_default(),
                     _ => return Err(RuntimeError::Panic("RegisterRenderer: name must be string".into())),
                 };
                 // Store function in renderers map
@@ -10174,7 +10175,7 @@ impl AsyncProcess {
     fn extract_json_object_pairs(&self, json: &GcValue) -> Result<Vec<(String, GcValue)>, RuntimeError> {
         match json {
             GcValue::Variant(var_ptr) => {
-                let variant = self.heap.get_variant(var_ptr.clone())
+                let variant = self.heap.get_variant(*var_ptr)
                     .ok_or_else(|| RuntimeError::Panic("Invalid variant".to_string()))?;
 
                 if variant.constructor.as_ref() != "Object" {
@@ -10194,11 +10195,11 @@ impl AsyncProcess {
                         for item in list.iter() {
                             match item {
                                 GcValue::Tuple(tup_ptr) => {
-                                    let tup = self.heap.get_tuple(tup_ptr.clone())
+                                    let tup = self.heap.get_tuple(*tup_ptr)
                                         .ok_or_else(|| RuntimeError::Panic("Invalid tuple".to_string()))?;
                                     if tup.items.len() >= 2 {
                                         let key = match &tup.items[0] {
-                                            GcValue::String(s) => self.heap.get_string(s.clone())
+                                            GcValue::String(s) => self.heap.get_string(*s)
                                                 .map(|st| st.data.clone())
                                                 .unwrap_or_default(),
                                             _ => return Err(RuntimeError::Panic("Object key must be string".to_string())),
@@ -10222,7 +10223,7 @@ impl AsyncProcess {
     fn extract_json_array(&self, json: &GcValue) -> Result<Vec<GcValue>, RuntimeError> {
         match json {
             GcValue::Variant(var_ptr) => {
-                let variant = self.heap.get_variant(var_ptr.clone())
+                let variant = self.heap.get_variant(*var_ptr)
                     .ok_or_else(|| RuntimeError::Panic("Invalid variant".to_string()))?;
 
                 if variant.constructor.as_ref() != "Array" {
@@ -10249,7 +10250,7 @@ impl AsyncProcess {
     fn json_to_primitive(&mut self, json: &GcValue, expected_type: &str) -> Result<GcValue, RuntimeError> {
         match json {
             GcValue::Variant(var_ptr) => {
-                let variant = self.heap.get_variant(var_ptr.clone())
+                let variant = self.heap.get_variant(*var_ptr)
                     .ok_or_else(|| RuntimeError::Panic("Invalid variant".to_string()))?;
 
                 let ctor = variant.constructor.as_str();
@@ -10292,7 +10293,7 @@ impl AsyncProcess {
                         Ok(GcValue::String(self.heap.alloc_string(String::new())))
                     } else {
                         match &variant.fields[0] {
-                            GcValue::String(s) => Ok(GcValue::String(s.clone())),
+                            GcValue::String(s) => Ok(GcValue::String(*s)),
                             _ => Ok(GcValue::String(self.heap.alloc_string(String::new()))),
                         }
                     }
@@ -10389,7 +10390,7 @@ impl AsyncProcess {
         // Extract entries from the Map
         let map_entries = match &fields_map {
             GcValue::Map(ptr) => {
-                let map = self.heap.get_map(ptr.clone())
+                let map = self.heap.get_map(*ptr)
                     .ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
                 map.entries.clone()
             }
@@ -10455,7 +10456,7 @@ impl AsyncProcess {
         // Extract entries from the Map
         let map_entries = match &fields_map {
             GcValue::Map(ptr) => {
-                let map = self.heap.get_map(ptr.clone())
+                let map = self.heap.get_map(*ptr)
                     .ok_or_else(|| RuntimeError::Panic("Invalid map pointer".to_string()))?;
                 map.entries.clone()
             }
@@ -11042,7 +11043,7 @@ impl AsyncVM {
             func: Box::new(move |args, heap| {
                 let name = match &args[1] {
                     GcValue::String(ptr) => {
-                        heap.get_string(*ptr).map(|s| s.data.clone()).unwrap_or_else(|| String::new())
+                        heap.get_string(*ptr).map(|s| s.data.clone()).unwrap_or_default()
                     }
                     _ => return Err(RuntimeError::Panic("inspect: second argument must be a string".to_string())),
                 };
@@ -11442,7 +11443,7 @@ impl AsyncVM {
                             if let Some(tuple) = heap.get_tuple(*ptr) {
                                 let mut h = fnv1a_hash(b"tuple");
                                 for item in &tuple.items {
-                                    h = combine_hash(h, hash_value(&item, heap)?);
+                                    h = combine_hash(h, hash_value(item, heap)?);
                                 }
                                 Ok(h)
                             } else {
@@ -12192,7 +12193,7 @@ impl AsyncVM {
                         for item in list.iter() {
                             match item {
                                 GcValue::String(s) => {
-                                    if let Some(str_val) = heap.get_string(s.clone()) {
+                                    if let Some(str_val) = heap.get_string(*s) {
                                         result.push(str_val.data.clone());
                                     } else {
                                         return Err(RuntimeError::Panic("Invalid string pointer".to_string()));
@@ -12206,7 +12207,7 @@ impl AsyncVM {
                     _ => return Err(RuntimeError::TypeError { expected: "List".to_string(), found: "other".to_string() })
                 };
                 let delim = match &args[1] {
-                    GcValue::String(ptr) => heap.get_string(ptr.clone()).map(|s| s.data.clone()),
+                    GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
                     _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
                 };
                 match (strings, delim) {
@@ -13236,7 +13237,7 @@ impl AsyncVM {
                         let mut hasher = Sha256::new();
                         hasher.update(s.as_bytes());
                         let result = hasher.finalize();
-                        let hex = result.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                        let hex = result.iter().fold(String::new(), |mut acc, b| { use std::fmt::Write; let _ = write!(acc, "{:02x}", b); acc });
                         Ok(GcValue::String(heap.alloc_string(hex)))
                     },
                     None => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
@@ -13258,7 +13259,7 @@ impl AsyncVM {
                         let mut hasher = Sha512::new();
                         hasher.update(s.as_bytes());
                         let result = hasher.finalize();
-                        let hex = result.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                        let hex = result.iter().fold(String::new(), |mut acc, b| { use std::fmt::Write; let _ = write!(acc, "{:02x}", b); acc });
                         Ok(GcValue::String(heap.alloc_string(hex)))
                     },
                     None => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
@@ -13280,7 +13281,7 @@ impl AsyncVM {
                         let mut hasher = Md5::new();
                         hasher.update(s.as_bytes());
                         let result = hasher.finalize();
-                        let hex = result.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                        let hex = result.iter().fold(String::new(), |mut acc, b| { use std::fmt::Write; let _ = write!(acc, "{:02x}", b); acc });
                         Ok(GcValue::String(heap.alloc_string(hex)))
                     },
                     None => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
@@ -13347,7 +13348,7 @@ impl AsyncVM {
                 };
                 let mut bytes = vec![0u8; n];
                 rand::thread_rng().fill_bytes(&mut bytes);
-                let hex = bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                let hex = bytes.iter().fold(String::new(), |mut acc, b| { use std::fmt::Write; let _ = write!(acc, "{:02x}", b); acc });
                 Ok(GcValue::String(heap.alloc_string(hex)))
             }),
         }));

@@ -522,7 +522,7 @@ impl SendableValue {
             GcValue::Int64List(int_list) => {
                 // Convert Int64List to a regular list of Int64 SendableValues
                 let items: Vec<SendableValue> = int_list.iter()
-                    .map(|n| SendableValue::Int64(n))
+                    .map(SendableValue::Int64)
                     .collect();
                 SendableValue::List(items)
             }
@@ -531,6 +531,7 @@ impl SendableValue {
         }
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn gc_map_key_to_sendable(key: &GcMapKey, heap: &Heap) -> Option<SendableMapKey> {
         match key {
             GcMapKey::Unit => Some(SendableMapKey::Unit),
@@ -617,6 +618,7 @@ impl SendableValue {
         }
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn shared_value_to_sendable(value: &SharedMapValue, heap: &Heap) -> SendableValue {
         match value {
             SharedMapValue::Unit => SendableValue::Unit,

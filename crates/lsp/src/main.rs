@@ -1,3 +1,23 @@
+#![allow(
+    clippy::collapsible_if,
+    clippy::collapsible_else_if,
+    clippy::needless_borrow,
+    clippy::redundant_closure,
+    clippy::unnecessary_map_or,
+    clippy::type_complexity,
+    clippy::ptr_arg,
+    clippy::needless_lifetimes,
+    clippy::needless_borrows_for_generic_args,
+    clippy::clone_on_copy,
+    clippy::collapsible_match,
+    clippy::redundant_pattern_matching,
+    clippy::manual_strip,
+    clippy::match_result_ok,
+    clippy::manual_pattern_char_comparison,
+    clippy::writeln_empty_string,
+    dead_code
+)]
+
 use tower_lsp::{LspService, Server};
 use std::io::Write;
 
