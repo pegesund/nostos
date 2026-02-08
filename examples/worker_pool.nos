@@ -1,18 +1,18 @@
 # Worker Pool
-# 
+#
 # Demonstrates a pool of worker processes:
 # - worker: receives Task messages, executes work, returns Result
 # - start_workers: spawns n worker processes
 # - submit_task: sends work to a worker in the pool
-# 
+#
 # Pattern for distributing work across multiple concurrent workers.
 
 type Message = Task(Pid, Int) | Result(Int) | Stop
 
-# Worker process
+# Worker process - receives a number and computes fib of it
 worker(pool) = receive {
-    Task(client, work) -> {
-        result = work()
+    Task(client, n) -> {
+        result = fib(n)
         client <- Result(result)
         worker(pool)
     }
@@ -27,17 +27,10 @@ start_workers(n, pool) = [spawn { worker(pool) } | start_workers(n - 1, pool)]
 submit_task([], _, _) = ()
 submit_task([w | _], client, work) = w <- Task(client, work)
 
-# Simple work functions
-compute_fib() = fib(10)
-
+# Fibonacci
 fib(0) = 0
 fib(1) = 1
 fib(n) = fib(n - 1) + fib(n - 2)
-
-compute_fact() = fact(5)
-
-fact(0) = 1
-fact(n) = n * fact(n - 1)
 
 main() = {
     me = self()
@@ -46,7 +39,7 @@ main() = {
     workers = start_workers(2, me)
 
     # Submit fib(10) task
-    submit_task(workers, me, () => compute_fib())
+    submit_task(workers, me, 10)
 
     # Wait for result
     result = receive {
@@ -56,16 +49,16 @@ main() = {
     # fib(10) = 55
     assert_eq(55, result)
 
-    # Submit fact(5) task
-    submit_task(workers, me, () => compute_fact())
+    # Submit fib(8) task
+    submit_task(workers, me, 8)
 
     result2 = receive {
         Result(r2) -> r2
     }
 
-    # fact(5) = 120
-    assert_eq(120, result2)
+    # fib(8) = 21
+    assert_eq(21, result2)
 
     println("Worker pool tests passed!")
-    result + result2  # 55 + 120 = 175
+    result + result2  # 55 + 21 = 76
 }

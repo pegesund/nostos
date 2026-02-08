@@ -1,31 +1,29 @@
 # Counter Server
-use stdlib.server.*
-
-# 
+#
 # Demonstrates stateful server processes:
 # - counter_loop: maintains state via recursive message handling
 # - Inc/Dec/Get/Stop messages for state manipulation
 # - Client functions for clean API (increment, decrement, get_value)
-# 
+#
 # This is the OTP GenServer pattern: state as function arguments.
 
-type Message = Inc(Pid) | Dec(Pid) | Get(Pid) | Stop | CounterOk(Int) | Value(Int)
+type Message = Inc(Pid) | Dec(Pid) | Get(Pid) | Stop | CounterReply(Int) | CounterValue(Int)
 
 # Counter loop with state
 counter_loop(state) = receive {
     Inc(sender) -> {
-        sender <- CounterOk(state + 1)
+        sender <- CounterReply(state + 1)
         counter_loop(state + 1)
     }
     Dec(sender) -> {
-        sender <- CounterOk(state - 1)
+        sender <- CounterReply(state - 1)
         counter_loop(state - 1)
     }
     Get(sender) -> {
-        sender <- Value(state)
+        sender <- CounterValue(state)
         counter_loop(state)
     }
-    Stop -> state
+    Stop -> ()
 }
 
 # Start a counter with initial value
@@ -35,25 +33,25 @@ start_counter(initial) = spawn { counter_loop(initial) }
 increment(counter) = {
     counter <- Inc(self())
     receive {
-        CounterOk(val) -> val
+        CounterReply(val) -> val
     }
 }
 
 decrement(counter) = {
     counter <- Dec(self())
     receive {
-        CounterOk(val) -> val
+        CounterReply(val) -> val
     }
 }
 
 get_value(counter) = {
     counter <- Get(self())
     receive {
-        Value(val) -> val
+        CounterValue(val) -> val
     }
 }
 
-stop(counter) = {
+stopCounter(counter) = {
     counter <- Stop
     ()
 }
@@ -80,8 +78,8 @@ main() = {
     assert_eq(100, get_value(c2))
     assert_eq(99, decrement(c2))
 
-    stop(c)
-    stop(c2)
+    stopCounter(c)
+    stopCounter(c2)
 
     println("Counter server tests passed!")
     5  # 3 + 2

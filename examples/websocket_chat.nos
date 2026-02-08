@@ -93,7 +93,7 @@ handleMessage(client, msg) = {
             # Send list of connected users
             list = clients
             names = list.map(c => c.username)
-            namesStr = String.join(", ", names)
+            namesStr = names.join(", ")
             response = makeMessage("users", namesStr)
             WebSocket.sendShared(client.writerId, response)
             true

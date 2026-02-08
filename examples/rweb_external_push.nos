@@ -82,9 +82,11 @@ updateRoomMessages(n) = {
 }
 
 # Send triggers to writers (no MVar writes here, so no lock held)
+doTrigger(wid: Int) = rwebTrigger(wid)
+
 triggerWriters(writersA, writersB, n) = {
-    writersA.each(writerId => rwebTrigger(writerId))
-    writersB.each(writerId => rwebTrigger(writerId))
+    writersA.map(w => { doTrigger(w); w })
+    writersB.map(w => { doTrigger(w); w })
 
     totalWriters = length(writersA) + length(writersB)
     if totalWriters > 0 then
@@ -93,7 +95,7 @@ triggerWriters(writersA, writersB, n) = {
 }
 
 # Background pusher - sends different messages to different rooms
-backgroundPusher(n) = {
+backgroundPusher(n: Int) = {
     sleep(2000)
 
     # Update messages first (holds MVar lock only during this call)
