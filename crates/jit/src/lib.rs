@@ -899,6 +899,17 @@ impl JitCompiler {
                     bool_regs.insert(*dst);
                 }
 
+                // Math functions - integer
+                Instruction::AbsInt(_, _) |
+                Instruction::MinInt(_, _, _) |
+                Instruction::MaxInt(_, _, _) => {}
+
+                // Math functions - float
+                Instruction::AbsFloat(_, _) |
+                Instruction::SqrtFloat(_, _) |
+                Instruction::MinFloat(_, _, _) |
+                Instruction::MaxFloat(_, _, _) => {}
+
                 // IntTableJump - integer switch table (used in match on ints)
                 Instruction::IntTableJump(_, _) => {}
 
@@ -1397,6 +1408,67 @@ impl JitCompiler {
                         let vb = builder.use_var(regs[*b as usize]);
                         let cmp = builder.ins().fcmp(FloatCC::LessThanOrEqual, va, vb);
                         let result = builder.ins().uextend(cl_type, cmp);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    // Math functions - integer
+                    Instruction::AbsInt(dst, src) => {
+                        let v = builder.use_var(regs[*src as usize]);
+                        if num_type.is_unsigned() {
+                            // Unsigned values are always non-negative
+                            builder.def_var(regs[*dst as usize], v);
+                        } else {
+                            // abs(x) = x >= 0 ? x : -x
+                            let zero = builder.ins().iconst(cl_type, 0);
+                            let neg = builder.ins().ineg(v);
+                            let is_neg = builder.ins().icmp(IntCC::SignedLessThan, v, zero);
+                            let result = builder.ins().select(is_neg, neg, v);
+                            builder.def_var(regs[*dst as usize], result);
+                        }
+                    }
+
+                    Instruction::MinInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cc = if num_type.is_unsigned() { IntCC::UnsignedLessThan } else { IntCC::SignedLessThan };
+                        let cmp = builder.ins().icmp(cc, va, vb);
+                        let result = builder.ins().select(cmp, va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::MaxInt(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let cc = if num_type.is_unsigned() { IntCC::UnsignedGreaterThan } else { IntCC::SignedGreaterThan };
+                        let cmp = builder.ins().icmp(cc, va, vb);
+                        let result = builder.ins().select(cmp, va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    // Math functions - float
+                    Instruction::AbsFloat(dst, src) => {
+                        let v = builder.use_var(regs[*src as usize]);
+                        let result = builder.ins().fabs(v);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::SqrtFloat(dst, src) => {
+                        let v = builder.use_var(regs[*src as usize]);
+                        let result = builder.ins().sqrt(v);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::MinFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().fmin(va, vb);
+                        builder.def_var(regs[*dst as usize], result);
+                    }
+
+                    Instruction::MaxFloat(dst, a, b) => {
+                        let va = builder.use_var(regs[*a as usize]);
+                        let vb = builder.use_var(regs[*b as usize]);
+                        let result = builder.ins().fmax(va, vb);
                         builder.def_var(regs[*dst as usize], result);
                     }
 
