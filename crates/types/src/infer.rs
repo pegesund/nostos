@@ -2826,8 +2826,56 @@ impl<'a> InferCtx<'a> {
                                         for (expected_p, actual_p) in expected_params.iter().zip(actual_fn.params.iter()) {
                                             self.unify_types(actual_p, expected_p)?;
                                         }
-                                        // Unify return types
-                                        self.unify_types(&actual_fn.ret, &expected_ret)?;
+                                        // Unify return types - catch structural mismatches
+                                        match self.unify_types(&actual_fn.ret, &expected_ret) {
+                                            Ok(()) => {}
+                                            Err(TypeError::UnificationFailed(ref a, ref b)) => {
+                                                let resolved_ret = self.env.apply_subst(&actual_fn.ret);
+                                                let resolved_expected_ret = self.env.apply_subst(&expected_ret);
+                                                let ret_is_simple = matches!(&resolved_ret,
+                                                    Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 |
+                                                    Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64 |
+                                                    Type::Float | Type::Float32 | Type::Float64 |
+                                                    Type::BigInt | Type::Decimal | Type::String | Type::Bool | Type::Char |
+                                                    Type::Unit);
+                                                let expected_is_wrapper = matches!(&resolved_expected_ret,
+                                                    Type::Named { .. } | Type::List(_) | Type::Set(_) |
+                                                    Type::Map(_, _) | Type::Tuple(_));
+                                                if ret_is_simple && expected_is_wrapper {
+                                                    self.last_error_span = call.span;
+                                                    return Err(TypeError::Mismatch {
+                                                        expected: resolved_expected_ret.display(),
+                                                        found: resolved_ret.display(),
+                                                    });
+                                                }
+                                                // Also handle wrapper vs simple (e.g., List vs Int)
+                                                let ret_is_wrapper = matches!(&resolved_ret,
+                                                    Type::Named { .. } | Type::List(_) | Type::Set(_) |
+                                                    Type::Map(_, _) | Type::Tuple(_));
+                                                let expected_is_simple = matches!(&resolved_expected_ret,
+                                                    Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 |
+                                                    Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64 |
+                                                    Type::Float | Type::Float32 | Type::Float64 |
+                                                    Type::BigInt | Type::Decimal | Type::String | Type::Bool | Type::Char |
+                                                    Type::Unit);
+                                                if ret_is_wrapper && expected_is_simple {
+                                                    self.last_error_span = call.span;
+                                                    return Err(TypeError::Mismatch {
+                                                        expected: resolved_expected_ret.display(),
+                                                        found: resolved_ret.display(),
+                                                    });
+                                                }
+                                                // Both-concrete case
+                                                if !a.contains('?') && !b.contains('?') {
+                                                    self.last_error_span = call.span;
+                                                    return Err(TypeError::Mismatch {
+                                                        expected: b.clone(),
+                                                        found: a.clone(),
+                                                    });
+                                                }
+                                            }
+                                            Err(_) => {}
+                                        }
                                         continue; // Skip the normal unification below
                                     }
                                 }
@@ -2858,8 +2906,40 @@ impl<'a> InferCtx<'a> {
                                                     Err(_) => {}
                                                 }
                                             }
-                                            // Unify return types
-                                            self.unify_types(&actual_fn.ret, &expected_fn.ret)?;
+                                            // Unify return types - catch structural mismatches
+                                            match self.unify_types(&actual_fn.ret, &expected_fn.ret) {
+                                                Ok(()) => {}
+                                                Err(TypeError::UnificationFailed(ref a, ref b)) => {
+                                                    // Check structural incompatibility: simple type vs wrapper
+                                                    let resolved_ret = self.env.apply_subst(&actual_fn.ret);
+                                                    let resolved_expected_ret = self.env.apply_subst(&expected_fn.ret);
+                                                    let ret_is_simple = matches!(&resolved_ret,
+                                                        Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 |
+                                                        Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64 |
+                                                        Type::Float | Type::Float32 | Type::Float64 |
+                                                        Type::BigInt | Type::Decimal | Type::String | Type::Bool | Type::Char |
+                                                        Type::Unit);
+                                                    let expected_is_wrapper = matches!(&resolved_expected_ret,
+                                                        Type::Named { .. } | Type::List(_) | Type::Set(_) |
+                                                        Type::Map(_, _) | Type::Tuple(_));
+                                                    if ret_is_simple && expected_is_wrapper {
+                                                        self.last_error_span = call.span;
+                                                        return Err(TypeError::Mismatch {
+                                                            expected: resolved_expected_ret.display(),
+                                                            found: resolved_ret.display(),
+                                                        });
+                                                    }
+                                                    // Also check both-concrete case
+                                                    if !a.contains('?') && !b.contains('?') {
+                                                        self.last_error_span = call.span;
+                                                        return Err(TypeError::Mismatch {
+                                                            expected: b.clone(),
+                                                            found: a.clone(),
+                                                        });
+                                                    }
+                                                }
+                                                Err(_) => {}
+                                            }
                                             continue; // Done with this param
                                         }
                                     }
@@ -2939,8 +3019,10 @@ impl<'a> InferCtx<'a> {
 
                                         // Check if return type structures are incompatible
                                         // E.g., Int cannot unify with Option[?1] even though Option has a var
-                                        let arg_ret = &*arg_fn.ret;
-                                        let param_ret = &*param_fn.ret;
+                                        // Apply substitution because unify_types may have partially succeeded
+                                        // (setting type vars) before failing on the return type.
+                                        let arg_ret = self.env.apply_subst(&arg_fn.ret);
+                                        let param_ret = self.env.apply_subst(&param_fn.ret);
                                         let arg_is_concrete_simple = matches!(arg_ret,
                                             Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 |
                                             Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64 |
@@ -2951,6 +3033,23 @@ impl<'a> InferCtx<'a> {
                                             Type::Named { .. } | Type::List(_) | Type::Set(_) |
                                             Type::Map(_, _) | Type::Tuple(_));
                                         if arg_is_concrete_simple && param_is_wrapper {
+                                            self.last_error_span = call.span;
+                                            return Err(TypeError::Mismatch {
+                                                expected: param_ret.display(),
+                                                found: arg_ret.display(),
+                                            });
+                                        }
+                                        // Also check reverse: wrapper return where simple expected
+                                        let arg_is_wrapper = matches!(&arg_ret,
+                                            Type::Named { .. } | Type::List(_) | Type::Set(_) |
+                                            Type::Map(_, _) | Type::Tuple(_));
+                                        let param_is_simple = matches!(&param_ret,
+                                            Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 |
+                                            Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64 |
+                                            Type::Float | Type::Float32 | Type::Float64 |
+                                            Type::BigInt | Type::Decimal | Type::String | Type::Bool | Type::Char |
+                                            Type::Unit);
+                                        if arg_is_wrapper && param_is_simple {
                                             self.last_error_span = call.span;
                                             return Err(TypeError::Mismatch {
                                                 expected: param_ret.display(),
