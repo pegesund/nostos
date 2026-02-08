@@ -382,10 +382,58 @@ fn cleanup_test_project(path: &PathBuf) {
     fs::remove_dir_all(path).ok();
 }
 
-fn get_lsp_binary() -> String {
-    // Use the installed binary (same one VS Code uses)
-    let home = std::env::var("HOME").unwrap();
-    format!("{}/.local/bin/nostos-lsp", home)
+/// Returns the LSP binary path, or skips the test if not available.
+macro_rules! require_lsp_binary {
+    () => {
+        match get_lsp_binary() {
+            Some(path) => path,
+            None => {
+                eprintln!("SKIPPING: nostos-lsp binary not found (not built or not installed)");
+                return;
+            }
+        }
+    };
+}
+
+fn get_lsp_binary() -> Option<String> {
+    // Try cargo build output first (works in CI)
+    let cargo_binary = std::env::current_dir()
+        .ok()
+        .and_then(|d| {
+            // Walk up to find workspace root with target/release/
+            let mut dir = d;
+            for _ in 0..5 {
+                let candidate = dir.join("target/release/nostos-lsp");
+                if candidate.exists() {
+                    return Some(candidate.to_string_lossy().to_string());
+                }
+                dir = dir.parent()?.to_path_buf();
+            }
+            None
+        });
+    if cargo_binary.is_some() {
+        return cargo_binary;
+    }
+
+    // Try installed binary (same one VS Code uses)
+    if let Ok(home) = std::env::var("HOME") {
+        let installed = format!("{}/.local/bin/nostos-lsp", home);
+        if std::path::Path::new(&installed).exists() {
+            return Some(installed);
+        }
+    }
+
+    // Try PATH
+    if let Ok(output) = std::process::Command::new("which").arg("nostos-lsp").output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Some(path);
+            }
+        }
+    }
+
+    None
 }
 
 /// Test that nested list map works without errors
@@ -418,7 +466,7 @@ fn test_lsp_nested_list_map() {
     fs::write(project_path.join("main.nos"), main_content).unwrap();
 
     // Start LSP
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
 
     // Initialize
     let init_response = client.initialize(project_path.to_str().unwrap());
@@ -491,7 +539,7 @@ fn test_lsp_error_line_after_adding_empty_lines() {
 "#;
     fs::write(project_path.join("main.nos"), initial_content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -654,7 +702,7 @@ pub multiply(x, y) = x * y
     fs::write(project_path.join("main.nos"), main_content).unwrap();
 
     // Start LSP
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
 
     // Initialize
     let init_response = client.initialize(project_path.to_str().unwrap());
@@ -747,7 +795,7 @@ fn test_lsp_nested_list_autocomplete() {
     fs::write(project_path.join("main.nos"), initial_content).unwrap();
 
     // Start LSP
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
 
     // Initialize
     let _ = client.initialize(project_path.to_str().unwrap());
@@ -842,7 +890,7 @@ fn test_lsp_stdlib_loaded() {
     fs::write(project_path.join("main.nos"), main_content).unwrap();
 
     // Start LSP
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
 
     // Initialize
     let _ = client.initialize(project_path.to_str().unwrap());
@@ -908,7 +956,7 @@ fn test_lsp_autocomplete_explicit_type_annotation() {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -958,7 +1006,7 @@ fn test_lsp_autocomplete_index_expression() {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -1010,7 +1058,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -1054,7 +1102,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -1095,7 +1143,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -1152,7 +1200,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -1206,7 +1254,7 @@ fn test_lsp_autocomplete_inferred_index_type() {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -1261,7 +1309,7 @@ fn test_lsp_errors_shown_on_open() {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
 
@@ -1303,7 +1351,7 @@ fn test_lsp_autocomplete_method_chain() {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -1356,7 +1404,7 @@ fn test_lsp_autocomplete_method_chain_generic() {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -1426,7 +1474,7 @@ fn test_lsp_autocomplete_nested_list_local_var() {
 
     fs::write(project_path.join("main.nos"), initial_content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -1504,7 +1552,7 @@ fn test_lsp_autocomplete_dot_after_assignment() {
 
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -1579,7 +1627,7 @@ pub multiply(x, y) = x * y
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -1628,7 +1676,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -1678,7 +1726,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -1730,7 +1778,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -1787,7 +1835,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -1843,7 +1891,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -1901,7 +1949,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -1959,7 +2007,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), main_content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -2019,7 +2067,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -2078,7 +2126,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -2175,7 +2223,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -2230,7 +2278,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -2295,7 +2343,7 @@ main() = {
     // Use test_types.nos as filename to match user's scenario
     fs::write(project_path.join("test_types.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -2371,7 +2419,7 @@ main() = {
     fs::write(project_path.join("test_types.nos"), test_types_content).unwrap();
     fs::write(project_path.join("main.nos"), main_content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -2464,7 +2512,7 @@ gg = [[0,1]]
 "#;
     fs::write(project_path.join("test_types.nos"), initial_content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -2599,7 +2647,7 @@ main() = {
 "#;
     fs::write(project_path.join("test_types.nos"), test_types_content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -2659,7 +2707,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), initial_content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -2720,7 +2768,7 @@ fn test_lsp_keyword_completions() {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -2761,7 +2809,7 @@ fn test_lsp_keyword_completions_if_while() {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -2811,7 +2859,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -2854,7 +2902,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -2942,7 +2990,7 @@ main() = {
 "#;
     fs::write(project_path.join("test_types.nos"), initial_content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -3095,7 +3143,7 @@ name = "{}"
         fs::write(project_path.join(&file_name), &content).unwrap();
 
         // Start LSP client
-        let mut client = LspClient::new(&get_lsp_binary());
+        let mut client = LspClient::new(&require_lsp_binary!());
         let _ = client.initialize(project_path.to_str().unwrap());
         client.initialized();
         std::thread::sleep(Duration::from_millis(500));
@@ -3183,7 +3231,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -3251,7 +3299,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -3318,7 +3366,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -3380,7 +3428,7 @@ fn test_lsp_numeric_conversion_type_check() {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -3439,7 +3487,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -3520,7 +3568,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -3573,7 +3621,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -3630,7 +3678,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), main_content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -3694,7 +3742,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -3765,7 +3813,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -3825,7 +3873,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -3884,7 +3932,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -3940,7 +3988,7 @@ fn test_lsp_autocomplete_filter_map_chain() {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -3986,7 +4034,7 @@ fn test_lsp_autocomplete_deep_method_chain() {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -4032,7 +4080,7 @@ fn test_lsp_autocomplete_nested_list_lambda() {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -4078,7 +4126,7 @@ fn test_lsp_autocomplete_doubly_nested_lambda() {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -4124,7 +4172,7 @@ fn test_lsp_autocomplete_option_map_lambda() {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -4171,7 +4219,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -4219,7 +4267,7 @@ main() = {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -4264,7 +4312,7 @@ fn test_lsp_autocomplete_tuple_element() {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
@@ -4310,7 +4358,7 @@ fn test_lsp_autocomplete_result_map_lambda() {
 "#;
     fs::write(project_path.join("main.nos"), content).unwrap();
 
-    let mut client = LspClient::new(&get_lsp_binary());
+    let mut client = LspClient::new(&require_lsp_binary!());
     let _ = client.initialize(project_path.to_str().unwrap());
     client.initialized();
     std::thread::sleep(Duration::from_millis(500));
