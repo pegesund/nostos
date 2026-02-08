@@ -2942,8 +2942,14 @@ impl Compiler {
                                     } else {
                                         // Extract field name from "has no field X"
                                         let field_name = message[pos + "has no field ".len()..].trim();
+                                        // Strip type arguments for lookup: "Wrapper[Int]" -> "Wrapper"
+                                        let base_type_name = if let Some(bracket_pos) = type_name.find('[') {
+                                            &type_name[..bracket_pos]
+                                        } else {
+                                            type_name
+                                        };
                                         // Look up the type to verify field existence
-                                        match self.type_defs.get(type_name) {
+                                        match self.type_defs.get(base_type_name) {
                                             Some(td) => {
                                                 if td.reactive {
                                                     true // Reactive types have runtime intrinsic methods - suppress
@@ -10216,7 +10222,13 @@ impl Compiler {
                                     true
                                 } else {
                                     let field_name = message[pos + "has no field ".len()..].trim();
-                                    match self.type_defs.get(type_name) {
+                                    // Strip type arguments for lookup: "Wrapper[Int]" -> "Wrapper"
+                                    let base_type_name = if let Some(bracket_pos) = type_name.find('[') {
+                                        &type_name[..bracket_pos]
+                                    } else {
+                                        type_name
+                                    };
+                                    match self.type_defs.get(base_type_name) {
                                         Some(td) => {
                                             if td.reactive {
                                                 true // Reactive types have runtime intrinsic methods
