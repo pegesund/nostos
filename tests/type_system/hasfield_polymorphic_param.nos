@@ -1,0 +1,46 @@
+# expect: 0
+# Regression test: HasField type inference for polymorphic function parameters.
+# When a polymorphic function with HasField constraints (e.g., accessing .value
+# on a record) is passed as a first-class parameter and called multiple times,
+# duplicate HasField constraints must have their result types unified to avoid
+# incorrect type inference (e.g., "Type Int has no method contains").
+type Cell = { value: Int }
+cell_out() = Cell(-1)
+is_out(cell) = cell.value == -1
+cell_row(cell) = if cell.value == -1 then -1 else cell.value / 6
+cell_col(cell) = if cell.value == -1 then -1 else cell.value % 6
+cell_for_coords(row, col) = if row < 0 || col < 0 then cell_out() else Cell(row * 6 + col)
+is_on_board(cell) = !is_out(cell) && cell.value >= 0 && cell.value <= 20
+
+neighbour_left(cell) = if is_out(cell) then cell_out() else cell_for_coords(cell_row(cell), cell_col(cell) - 1)
+neighbour_right(cell) = if is_out(cell) then cell_out() else cell_for_coords(cell_row(cell), cell_col(cell) + 1)
+
+type Pawn = { value: Int }
+type Move = Pass | Board(Pawn, List[Cell])
+
+# Key pattern: dir_fn is a polymorphic function parameter with HasField constraints.
+# Calling dir_fn twice creates duplicate HasField(var, "value") constraints.
+# On the buggy compiler, the independent result type vars cause type confusion,
+# making Cell be inferred as Int, leading to "Type Int has no method contains".
+try_jump(pawn, cell, dir_fn, occupied) = {
+    middle = dir_fn(cell)
+    dest = dir_fn(middle)
+    can_jump = is_on_board(middle) && occupied.contains(middle) && is_on_board(dest) && !occupied.contains(dest)
+    if can_jump then [Board(pawn, [middle, dest])] else []
+}
+
+jumps(pawn, cell, occupied) =
+    try_jump(pawn, cell, neighbour_left, occupied) ++
+    try_jump(pawn, cell, neighbour_right, occupied)
+
+singles(pawn, cell, occupied) =
+    [neighbour_left(cell), neighbour_right(cell)]
+    .filter(n => is_on_board(n) && !occupied.contains(n))
+    .map(n => Board(pawn, [n]))
+
+on_board(pawn, cell, occupied) =
+    singles(pawn, cell, occupied) ++ jumps(pawn, cell, occupied)
+
+# main() = 0: verify compilation succeeds without executing the functions
+# at runtime (avoids a separate VM limitation with .contains on records).
+main() = 0

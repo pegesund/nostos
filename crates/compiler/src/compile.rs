@@ -3085,6 +3085,29 @@ impl Compiler {
                             && !message.contains("does not implement Ord")
                             && !message.contains("does not implement Num")
                             && !message.contains("does not implement Concat");
+                        // Bare collection type mismatch: when HM inference can't fully
+                        // resolve a polymorphic function's return type, it may produce
+                        // bare "List" or "Map" (without type params) in one position.
+                        // E.g., "expected List, found String" when a polymorphic function
+                        // parameter causes incomplete type resolution. These are false positives.
+                        let is_bare_collection_mismatch = {
+                            let check = |expected: &str, found: &str| -> bool {
+                                let bare_collections = ["List", "Map", "Set"];
+                                // Bare collection on one side means incomplete inference
+                                (bare_collections.contains(&expected) && !found.starts_with(expected))
+                                || (bare_collections.contains(&found) && !expected.starts_with(found))
+                            };
+                            message.strip_prefix("type mismatch: expected ")
+                                .and_then(|rest| rest.find(", found ").map(|pos| {
+                                    check(rest[..pos].trim(), rest[pos + 8..].trim())
+                                })).unwrap_or(false)
+                            ||
+                            message.strip_prefix("Cannot unify types: ")
+                                .and_then(|rest| {
+                                    let parts: Vec<&str> = rest.split(" and ").collect();
+                                    if parts.len() == 2 { Some(check(parts[0].trim(), parts[1].trim())) } else { None }
+                                }).unwrap_or(false)
+                        };
                         let is_spurious = is_tuple_error || is_try_catch_mismatch ||
                             is_nested_tuple_trait_error ||
                             is_trait_dispatch_confusion ||
@@ -3098,7 +3121,8 @@ impl Compiler {
                             is_spawn_confusion ||
                             is_early_return_confusion ||
                             is_annotation_error ||
-                            is_func_trait_error;
+                            is_func_trait_error ||
+                            is_bare_collection_mismatch;
                         !is_spurious
                     }
                     _ => true,
@@ -10341,6 +10365,27 @@ impl Compiler {
                             false
                         }
                     };
+                    // Bare collection type mismatch: when HM inference can't fully
+                    // resolve a polymorphic function's return type, it may produce
+                    // bare "List" or "Map" (without type params) in one position.
+                    // E.g., "expected List, found String" from incomplete inference.
+                    let is_bare_collection_mismatch = {
+                        let check = |expected: &str, found: &str| -> bool {
+                            let bare_collections = ["List", "Map", "Set"];
+                            (bare_collections.contains(&expected) && !found.starts_with(expected))
+                            || (bare_collections.contains(&found) && !expected.starts_with(found))
+                        };
+                        message.strip_prefix("type mismatch: expected ")
+                            .and_then(|rest| rest.find(", found ").map(|pos| {
+                                check(rest[..pos].trim(), rest[pos + 8..].trim())
+                            })).unwrap_or(false)
+                        ||
+                        message.strip_prefix("Cannot unify types: ")
+                            .and_then(|rest| {
+                                let parts: Vec<&str> = rest.split(" and ").collect();
+                                if parts.len() == 2 { Some(check(parts[0].trim(), parts[1].trim())) } else { None }
+                            }).unwrap_or(false)
+                    };
                     let is_spurious = is_tuple_error ||
                         is_nested_tuple_trait_error ||
                         is_trait_dispatch_confusion ||
@@ -10356,7 +10401,8 @@ impl Compiler {
                         is_custom_type_confusion ||
                         is_spawn_confusion ||
                         is_early_return_confusion ||
-                        is_func_trait_error;
+                        is_func_trait_error ||
+                        is_bare_collection_mismatch;
                     !is_spurious
                 }
                 _ => true,

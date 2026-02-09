@@ -95,6 +95,12 @@ pub struct InferCtx<'a> {
     /// These are saved when the type is still unresolved (Var) so they can be
     /// re-checked after check_pending_method_calls resolves more types.
     deferred_has_field: Vec<(Type, String, Type)>,
+    /// Cache for HasField result types: maps (var_id, field_name) to the result type.
+    /// When multiple HasField constraints target the same type variable with the same
+    /// field name, their result types must be identical (a field has a single type).
+    /// This cache ensures duplicate constraints unify their result types instead of
+    /// creating independent type vars that can cause conflicting unification.
+    has_field_result_cache: HashMap<(u32, String), Type>,
     /// Deferred length/len checks: the argument type and call span.
     /// length() only works on collections (List, String, Map, Set, arrays).
     deferred_length_checks: Vec<(Type, Span)>,
@@ -172,6 +178,7 @@ impl<'a> InferCtx<'a> {
             solve_completed: false,
             deferred_has_trait: Vec::new(),
             deferred_has_field: Vec::new(),
+            has_field_result_cache: HashMap::new(),
             deferred_length_checks: Vec::new(),
             deferred_concat_checks: Vec::new(),
             deferred_collection_ret_checks: Vec::new(),
@@ -1499,6 +1506,7 @@ impl<'a> InferCtx<'a> {
         const MAX_ITERATIONS: usize = 1000;
         let mut iteration = 0;
         let mut deferred_count = 0;
+        self.has_field_result_cache.clear();
 
         while let Some(constraint) = self.constraints.pop() {
             iteration += 1;
@@ -1750,19 +1758,29 @@ impl<'a> InferCtx<'a> {
                                 });
                             }
                         }
-                        Type::Var(_) => {
-                            // Defer: we don't know the type yet
-                            deferred_count += 1;
-                            if deferred_count > self.constraints.len() + 1 {
-                                // We've gone around the entire queue without progress
-                                // Save this constraint for post-method-call re-check
-                                // Don't drop it - it may become checkable after
-                                // check_pending_method_calls resolves more types
-                                self.deferred_has_field.push((ty, field, expected_ty));
-                                continue;
+                        Type::Var(var_id) => {
+                            // Deduplicate HasField on same (var, field): a field on a type
+                            // can only have one result type. If we've seen this combination
+                            // before, unify the result types to avoid conflicting constraints.
+                            let cache_key = (*var_id, field.clone());
+                            if let Some(existing_result) = self.has_field_result_cache.get(&cache_key).cloned() {
+                                self.unify_types(&expected_ty, &existing_result)?;
+                                deferred_count = 0; // Made progress
+                            } else {
+                                self.has_field_result_cache.insert(cache_key, expected_ty.clone());
+                                // Defer: we don't know the type yet
+                                deferred_count += 1;
+                                if deferred_count > self.constraints.len() + 1 {
+                                    // We've gone around the entire queue without progress
+                                    // Save this constraint for post-method-call re-check
+                                    // Don't drop it - it may become checkable after
+                                    // check_pending_method_calls resolves more types
+                                    self.deferred_has_field.push((ty, field, expected_ty));
+                                    continue;
+                                }
+                                self.constraints
+                                    .push(Constraint::HasField(resolved, field, expected_ty));
                             }
-                            self.constraints
-                                .push(Constraint::HasField(resolved, field, expected_ty));
                         }
                         Type::Tuple(elems) => {
                             // Handle tuple field access like .0, .1, etc.
