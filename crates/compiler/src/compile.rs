@@ -17336,6 +17336,88 @@ impl Compiler {
                             }
                         }
                     }
+
+                    // Infer return types for known collection/string methods based on receiver type.
+                    // This handles cases where HM inference has unresolved vars (e.g., cross-module
+                    // function returns with instantiate_function creating disconnected fresh vars).
+                    let method_name = method.node.as_str();
+                    let base_type = if let Some(bracket_pos) = obj_type.find('[') {
+                        &obj_type[..bracket_pos]
+                    } else {
+                        obj_type.as_str()
+                    };
+                    match base_type {
+                        "Set" => match method_name {
+                            // Methods that return the same Set type
+                            "union" | "intersection" | "difference" | "symmetricDifference"
+                            | "insert" | "remove" | "filter" => return Some(obj_type),
+                            // Methods with known return types
+                            "size" => return Some("Int".to_string()),
+                            "isEmpty" => return Some("Bool".to_string()),
+                            "contains" | "isSubset" | "isProperSubset" => return Some("Bool".to_string()),
+                            "toList" => {
+                                // Set[X] -> List[X]
+                                if let Some(bracket_pos) = obj_type.find('[') {
+                                    return Some(format!("List{}", &obj_type[bracket_pos..]));
+                                }
+                                return Some("List".to_string());
+                            }
+                            _ => {}
+                        }
+                        "Map" => match method_name {
+                            // Methods that return the same Map type
+                            "union" | "intersection" | "difference" | "insert" | "remove"
+                            | "filter" => return Some(obj_type),
+                            // Methods with known return types
+                            "size" => return Some("Int".to_string()),
+                            "isEmpty" => return Some("Bool".to_string()),
+                            "contains" => return Some("Bool".to_string()),
+                            "keys" => {
+                                // Map[K, V] -> List[K]
+                                if obj_type.starts_with("Map[") {
+                                    if let Some(comma_pos) = obj_type.find(',') {
+                                        let key_type = &obj_type[4..comma_pos];
+                                        return Some(format!("List[{}]", key_type.trim()));
+                                    }
+                                }
+                                return Some("List".to_string());
+                            }
+                            "values" => {
+                                // Map[K, V] -> List[V]
+                                if obj_type.starts_with("Map[") {
+                                    if let Some(comma_pos) = obj_type.find(',') {
+                                        let val_part = &obj_type[comma_pos + 1..obj_type.len()-1];
+                                        return Some(format!("List[{}]", val_part.trim()));
+                                    }
+                                }
+                                return Some("List".to_string());
+                            }
+                            _ => {}
+                        }
+                        "List" => match method_name {
+                            // Methods that return the same List type
+                            "filter" | "sort" | "sortBy" | "reverse" | "take" | "drop"
+                            | "unique" | "intersperse" | "tail" | "init" => return Some(obj_type),
+                            // Methods with known return types
+                            "length" => return Some("Int".to_string()),
+                            "isEmpty" => return Some("Bool".to_string()),
+                            "contains" => return Some("Bool".to_string()),
+                            "join" => return Some("String".to_string()),
+                            _ => {}
+                        }
+                        "String" => match method_name {
+                            "length" => return Some("Int".to_string()),
+                            "toUpper" | "toLower" | "trim" | "trimStart" | "trimEnd"
+                            | "reverse" | "padLeft" | "padRight" | "replace" | "replaceAll"
+                            | "substring" | "slice" => return Some("String".to_string()),
+                            "split" => return Some("List[String]".to_string()),
+                            "chars" => return Some("List[Char]".to_string()),
+                            "contains" | "startsWith" | "endsWith" => return Some("Bool".to_string()),
+                            "indexOf" => return Some("Int".to_string()),
+                            _ => {}
+                        }
+                        _ => {}
+                    }
                 }
 
                 // Try to find a user-defined function that matches this method call
