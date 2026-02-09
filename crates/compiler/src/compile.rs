@@ -7314,6 +7314,13 @@ impl Compiler {
 
     /// Check if an expression is of String type.
     fn is_string_expr(&self, expr: &Expr) -> bool {
+        // Check HM-inferred type first - this handles field access, method calls,
+        // and any expression where type inference resolved to String
+        if let Some(ty) = self.inferred_expr_types.get(&expr.span()) {
+            if matches!(ty, nostos_types::Type::String) {
+                return true;
+            }
+        }
         match expr {
             Expr::String(_, _) => true,
             Expr::Var(ident) => {
@@ -7332,6 +7339,21 @@ impl Compiler {
                 if let Expr::Var(ident) = func.as_ref() {
                     if let Some(ret_type) = self.get_function_return_type(&ident.node) {
                         return ret_type == "String";
+                    }
+                }
+                false
+            }
+            Expr::FieldAccess(obj, field, _) => {
+                // Check field type from record/tuple definitions
+                if let Some(obj_type) = self.expr_type_name(obj) {
+                    if let Some(type_info) = self.types.get(&obj_type) {
+                        if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
+                            for (fname, ftype) in fields {
+                                if fname == &field.node {
+                                    return ftype == "String";
+                                }
+                            }
+                        }
                     }
                 }
                 false
@@ -11536,6 +11558,7 @@ impl Compiler {
                     // Check if it's a compile-time constant
                     let const_name = self.resolve_name(name);
                     if let Some(const_info) = self.constants.get(&const_name).cloned() {
+                        self.check_const_visibility(&const_name, &const_info, Span { start: line, end: line, file_id: 0 })?;
                         return self.emit_const_value(&const_info.value, line);
                     }
 
@@ -11707,6 +11730,7 @@ impl Compiler {
 
                     // Check for constant
                     if let Some(const_info) = self.constants.get(&full_path).cloned() {
+                        self.check_const_visibility(&full_path, &const_info, Span { start: line, end: line, file_id: 0 })?;
                         return self.emit_const_value(&const_info.value, line);
                     }
 
@@ -11866,6 +11890,7 @@ impl Compiler {
                 if fields.is_empty() {
                     let const_name = self.resolve_name(&type_name.node);
                     if let Some(const_info) = self.constants.get(&const_name).cloned() {
+                        self.check_const_visibility(&const_name, &const_info, *span)?;
                         return self.emit_const_value(&const_info.value, self.span_line(*span));
                     }
                 }
@@ -19576,6 +19601,17 @@ impl Compiler {
                     || self.mvars.keys().any(|k| k.starts_with(&prefix)) {
                     Some(ident.node.clone())
                 } else {
+                    // Also check if this is a sub-module relative to current module path
+                    // e.g., inside module Outer, "Inner" should resolve to "Outer.Inner"
+                    if !self.module_path.is_empty() {
+                        let qualified = format!("{}.{}", self.module_path.join("."), ident.node);
+                        let qprefix = format!("{}.", qualified);
+                        if self.known_modules.contains(&qualified)
+                            || self.function_prefixes.contains(&qprefix)
+                            || self.mvars.keys().any(|k| k.starts_with(&qprefix)) {
+                            return Some(qualified);
+                        }
+                    }
                     None
                 }
             }
@@ -19589,6 +19625,15 @@ impl Compiler {
                     || self.function_prefixes.contains(&prefix) {
                     Some(type_name.node.clone())
                 } else {
+                    // Also check if this is a sub-module relative to current module path
+                    if !self.module_path.is_empty() {
+                        let qualified = format!("{}.{}", self.module_path.join("."), type_name.node);
+                        let qprefix = format!("{}.", qualified);
+                        if self.known_modules.contains(&qualified)
+                            || self.function_prefixes.contains(&qprefix) {
+                            return Some(qualified);
+                        }
+                    }
                     None
                 }
             }
@@ -19724,6 +19769,56 @@ impl Compiler {
 
         Err(CompileError::PrivateAccess {
             function: function_name.to_string(),
+            module: module_name,
+            span,
+        })
+    }
+
+    /// Check if a constant can be accessed from the current module.
+    /// Returns Ok(()) if access is allowed, Err with PrivateAccess otherwise.
+    fn check_const_visibility(&self, qualified_name: &str, const_info: &ConstInfo, span: Span) -> Result<(), CompileError> {
+        // REPL mode bypasses all visibility checks
+        if self.repl_mode {
+            return Ok(());
+        }
+
+        // Public constants are always accessible
+        if const_info.visibility.is_public() {
+            return Ok(());
+        }
+
+        // Private constant - check if we're in the same module
+        let parts: Vec<&str> = qualified_name.rsplitn(2, '.').collect();
+        let const_module = if parts.len() > 1 {
+            parts[1].split('.').collect::<Vec<_>>()
+        } else {
+            vec![] // Root module
+        };
+        let const_name = parts[0];
+
+        let current_module: Vec<&str> = self.module_path.iter().map(|s| s.as_str()).collect();
+
+        // Both in root module: allow access (top-level constants are accessible from main)
+        if const_module.is_empty() && current_module.is_empty() {
+            return Ok(());
+        }
+
+        // Same module (or sub-module of const's module): allow access
+        if !const_module.is_empty()
+            && current_module.len() >= const_module.len()
+            && current_module[..const_module.len()] == const_module[..] {
+            return Ok(());
+        }
+
+        // Private constant from different module - access denied
+        let module_name = if const_module.is_empty() {
+            "<root>".to_string()
+        } else {
+            const_module.join(".")
+        };
+
+        Err(CompileError::PrivateAccess {
+            function: const_name.to_string(),
             module: module_name,
             span,
         })
