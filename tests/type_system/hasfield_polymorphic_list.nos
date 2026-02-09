@@ -1,0 +1,25 @@
+# expect: true
+# Regression test: HasField constraints on polymorphic functions stored in lists.
+# When multiple helper functions access the same record field (.value) and are
+# stored in a list as first-class values, duplicate HasField constraints must
+# be deduplicated to avoid incorrect unification failures.
+type Cell = { value: Int }
+cell_out() = Cell(-1)
+is_out(cell) = cell.value == -1
+cell_row(cell) = if cell.value == -1 then -1 else cell.value / 6
+cell_col(cell) = if cell.value == -1 then -1 else cell.value % 6
+cell_for_coords(row, col) = if row < 0 || col < 0 then cell_out() else Cell(row * 6 + col)
+neighbour_left(cell) = if is_out(cell) then cell_out() else cell_for_coords(cell_row(cell), cell_col(cell) - 1)
+neighbour_right(cell) = if is_out(cell) then cell_out() else cell_for_coords(cell_row(cell), cell_col(cell) + 1)
+valid_jumps() = [neighbour_left, neighbour_right]
+check_jump(from_cell, target, jumps) = {
+    if jumps.isEmpty() then false
+    else {
+        jump_fn = head(jumps)
+        rest = tail(jumps)
+        if jump_fn(from_cell) == target then true
+        else check_jump(from_cell, target, rest)
+    }
+}
+can_jump_over(from_cell: Cell, target: Cell) = check_jump(from_cell, target, valid_jumps())
+main() = can_jump_over(Cell(0), Cell(1))
