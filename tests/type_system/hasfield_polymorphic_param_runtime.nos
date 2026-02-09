@@ -1,0 +1,70 @@
+# expect: 5
+# Regression test: Polymorphic functions passed as parameters with HasField constraints
+# at runtime. Tests that vm_try_jump (which takes dir_fn as a polymorphic parameter
+# and calls it twice) works correctly when called through vm_on_board, with
+# record equality via .contains on List[Cell].
+type Cell = { value: Int }
+type Pawn = { value: Int }
+type Move = Pass | Score(Int) | Board(Pawn, List[Cell])
+
+cell_out() = Cell(-1)
+is_out(cell) = cell.value == -1
+cell_row(cell) = if cell.value == -1 then -1 else cell.value / 6
+cell_col(cell) = if cell.value == -1 then -1 else cell.value % 6
+cell_for_coords(row, col) = if row < 0 || col < 0 then cell_out() else Cell(row * 6 + col)
+is_on_board(cell) = !is_out(cell) && cell.value >= 0 && cell.value <= 20
+
+neighbour_left(cell) = if is_out(cell) then cell_out() else cell_for_coords(cell_row(cell), cell_col(cell) - 1)
+neighbour_right(cell) = if is_out(cell) then cell_out() else cell_for_coords(cell_row(cell), cell_col(cell) + 1)
+neighbour_up_left(cell) = if is_out(cell) then cell_out() else cell_for_coords(cell_row(cell) + 1, cell_col(cell) - 1)
+neighbour_up_right(cell) = if is_out(cell) then cell_out() else cell_for_coords(cell_row(cell) + 1, cell_col(cell))
+
+vm_try_jump(pawn, cell, dir_fn, occupied, visited) = {
+    middle = dir_fn(cell)
+    if !is_on_board(middle) || !occupied.contains(middle) then []
+    else {
+        dest = dir_fn(middle)
+        if visited.contains(dest) || (is_on_board(dest) && occupied.contains(dest)) then []
+        else if is_out(dest) then [Board(pawn, [middle, dest])]
+        else {
+            chains = vm_jumps(pawn, dest, occupied, [dest | visited])
+            [Board(pawn, [middle, dest])] ++ chains.map(m => match m {
+                Board(p, ds) -> Board(p, [middle, dest] ++ ds)
+                _ -> m
+            })
+        }
+    }
+}
+
+vm_jumps(pawn, cell, occupied, visited) =
+    vm_try_jump(pawn, cell, neighbour_left, occupied, visited) ++
+    vm_try_jump(pawn, cell, neighbour_right, occupied, visited) ++
+    vm_try_jump(pawn, cell, neighbour_up_left, occupied, visited) ++
+    vm_try_jump(pawn, cell, neighbour_up_right, occupied, visited)
+
+vm_singles(pawn, cell, occupied) =
+    [neighbour_left(cell), neighbour_right(cell),
+     neighbour_up_left(cell), neighbour_up_right(cell)]
+    .filter(n => is_on_board(n) && !occupied.contains(n))
+    .map(n => Board(pawn, [n]))
+
+vm_on_board(positions, pawn_offset, occupied, idx) =
+    if idx >= positions.length() then []
+    else {
+        cell = positions[idx]
+        pawn = Pawn(pawn_offset + idx)
+        moves = if is_on_board(cell) then
+            vm_singles(pawn, cell, occupied) ++ vm_jumps(pawn, cell, occupied, [])
+        else []
+        moves ++ vm_on_board(positions, pawn_offset, occupied, idx + 1)
+    }
+
+main() = {
+    # Cell(8): row=1, col=2. Occupied: Cell(7) is to the left.
+    # Singles: 3 non-occupied neighbours on board
+    # Jumps: jump left over Cell(7) to Cell(6) = 1 valid jump, plus chain possibilities
+    positions = [Cell(8)]
+    occupied = [Cell(7)]
+    result = vm_on_board(positions, 0, occupied, 0)
+    result.length()
+}
