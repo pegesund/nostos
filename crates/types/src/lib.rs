@@ -501,57 +501,71 @@ impl TypeEnv {
             name
         };
 
-        if !resolved_name.contains('/') {
-            // First check wildcard entry (untyped overload)
-            let arity_suffix = if arity == 0 {
-                "/".to_string()
-            } else {
-                format!("/{}", vec!["_"; arity].join(","))
-            };
-            let qualified_name = format!("{}{}", resolved_name, arity_suffix);
-            if let Some(ft) = self.functions.get(&qualified_name) {
-                results.push(ft);
-            }
+        // Collect candidates from both the resolved (imported) name AND the original name.
+        // This allows local functions with different arities to coexist with imported functions.
+        let names_to_check: Vec<&str> = if resolved_name != name {
+            vec![resolved_name, name]
+        } else {
+            vec![resolved_name]
+        };
 
-            // Check higher arities for functions with optional params
-            for extra in 1..=10 {
-                let total_arity = arity + extra;
-                let arity_suffix = format!("/{}", vec!["_"; total_arity].join(","));
-                let qualified_name = format!("{}{}", resolved_name, arity_suffix);
+        for check_name in &names_to_check {
+            if !check_name.contains('/') {
+                // First check wildcard entry (untyped overload)
+                let arity_suffix = if arity == 0 {
+                    "/".to_string()
+                } else {
+                    format!("/{}", vec!["_"; arity].join(","))
+                };
+                let qualified_name = format!("{}{}", check_name, arity_suffix);
                 if let Some(ft) = self.functions.get(&qualified_name) {
-                    let min_required = ft.required_params.unwrap_or(ft.params.len());
-                    if arity >= min_required && arity <= ft.params.len() {
+                    if !results.contains(&ft) {
                         results.push(ft);
                     }
                 }
-            }
 
-            // Collect ALL typed overloads with matching prefix and arity
-            // Use O(1) index lookup instead of iterating all functions
-            let prefix = format!("{}/", resolved_name);
-            if let Some(keys) = self.functions_by_base.get(resolved_name) {
-                for fn_name in keys {
-                    if let Some(ft) = self.functions.get(fn_name) {
-                        if fn_name.starts_with(&prefix) && ft.params.len() == arity {
-                            let suffix = &fn_name[prefix.len()..];
-                            // Only include typed entries (not wildcard entries already checked)
-                            if !suffix.chars().all(|c| c == '_' || c == ',') {
+                // Check higher arities for functions with optional params
+                for extra in 1..=10 {
+                    let total_arity = arity + extra;
+                    let arity_suffix = format!("/{}", vec!["_"; total_arity].join(","));
+                    let qualified_name = format!("{}{}", check_name, arity_suffix);
+                    if let Some(ft) = self.functions.get(&qualified_name) {
+                        let min_required = ft.required_params.unwrap_or(ft.params.len());
+                        if arity >= min_required && arity <= ft.params.len() {
+                            if !results.contains(&ft) {
                                 results.push(ft);
                             }
                         }
                     }
                 }
-            }
-        }
 
-        // Check exact match - but only if arity is compatible
-        if let Some(ft) = self.functions.get(resolved_name) {
-            if !results.contains(&ft) {
-                // Only add if the provided arity matches the function's parameter count
-                // or if the arity is within the valid range for optional parameters
-                let min_required = ft.required_params.unwrap_or(ft.params.len());
-                if arity >= min_required && arity <= ft.params.len() {
-                    results.push(ft);
+                // Collect ALL typed overloads with matching prefix and arity
+                // Use O(1) index lookup instead of iterating all functions
+                let prefix = format!("{}/", check_name);
+                if let Some(keys) = self.functions_by_base.get(*check_name) {
+                    for fn_name in keys {
+                        if let Some(ft) = self.functions.get(fn_name) {
+                            if fn_name.starts_with(&prefix) && ft.params.len() == arity {
+                                let suffix = &fn_name[prefix.len()..];
+                                // Only include typed entries (not wildcard entries already checked)
+                                if !suffix.chars().all(|c| c == '_' || c == ',') {
+                                    if !results.contains(&ft) {
+                                        results.push(ft);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Check exact match - but only if arity is compatible
+            if let Some(ft) = self.functions.get(*check_name) {
+                if !results.contains(&ft) {
+                    let min_required = ft.required_params.unwrap_or(ft.params.len());
+                    if arity >= min_required && arity <= ft.params.len() {
+                        results.push(ft);
+                    }
                 }
             }
         }
@@ -573,18 +587,30 @@ impl TypeEnv {
             name
         };
 
-        if !resolved_name.contains('/') {
-            // Try to find any function with this base name
-            if let Some(keys) = self.functions_by_base.get(resolved_name) {
-                for fn_name in keys {
-                    if let Some(ft) = self.functions.get(fn_name) {
-                        return Some(ft);
+        // Check both the resolved (imported) name and the original name.
+        // This ensures local functions are found even when an import alias exists.
+        let names_to_check: Vec<&str> = if resolved_name != name {
+            vec![resolved_name, name]
+        } else {
+            vec![resolved_name]
+        };
+
+        for check_name in &names_to_check {
+            if !check_name.contains('/') {
+                if let Some(keys) = self.functions_by_base.get(*check_name) {
+                    for fn_name in keys {
+                        if let Some(ft) = self.functions.get(fn_name) {
+                            return Some(ft);
+                        }
                     }
                 }
             }
+            // Try exact match
+            if let Some(ft) = self.functions.get(*check_name) {
+                return Some(ft);
+            }
         }
-        // Fall back to exact match
-        self.functions.get(resolved_name)
+        None
     }
 
     /// Look up the field types for a variant constructor.

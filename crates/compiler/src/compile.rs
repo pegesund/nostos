@@ -25923,18 +25923,21 @@ impl Compiler {
                 .unwrap_or_else(|| base_name.rfind('.').is_none());
 
             if in_current_module {
-                if let Some(dot_pos) = base_name.rfind('.') {
-                    let local_name_base = &base_name[dot_pos + 1..];
-                    // Extract arity suffix from full function name
-                    let arity_suffix = if let Some(slash_pos) = fn_name.find('/') {
-                        &fn_name[slash_pos..]
-                    } else {
-                        ""
-                    };
-                    let local_name = format!("{}{}", local_name_base, arity_suffix);
-                    if let Some(fn_type) = env.functions.get(fn_name).cloned() {
-                        env.insert_function(local_name, fn_type);
-                    }
+                // Extract local name base: for "Mod.func" use "func", for "func" use "func"
+                let local_name_base = if let Some(dot_pos) = base_name.rfind('.') {
+                    &base_name[dot_pos + 1..]
+                } else {
+                    base_name
+                };
+                // Extract arity suffix from full function name
+                let arity_suffix = if let Some(slash_pos) = fn_name.find('/') {
+                    &fn_name[slash_pos..]
+                } else {
+                    ""
+                };
+                let local_name = format!("{}{}", local_name_base, arity_suffix);
+                if let Some(fn_type) = env.functions.get(fn_name).cloned() {
+                    env.insert_function(local_name, fn_type);
                 }
             }
         }
