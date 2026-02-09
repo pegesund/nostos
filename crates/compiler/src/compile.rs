@@ -1214,6 +1214,10 @@ pub struct Compiler {
     current_function_name: Option<String>,
     /// Current function's type parameters (for checking nested trait bounds)
     current_fn_type_params: Vec<TypeParam>,
+    /// Whether the current function has a generic HM-inferred signature (unresolved type vars).
+    /// Used to detect polymorphic functions that need monomorphization even without explicit
+    /// type params. For example, process(xs) where xs: List[a] has type vars but no trait bounds.
+    current_fn_generic_hm: bool,
     /// Type parameter bindings for current monomorphization: T -> Sum
     /// Used to substitute type parameters with concrete types in expressions
     current_type_bindings: HashMap<String, String>,
@@ -1536,6 +1540,7 @@ impl Compiler {
             polymorphic_fns: HashSet::new(),
             current_function_name: None,
             current_fn_type_params: Vec::new(),
+            current_fn_generic_hm: false,
             current_type_bindings: HashMap::new(),
             loop_stack: Vec::new(),
             line_starts: vec![0],
@@ -2587,6 +2592,12 @@ impl Compiler {
         // Collect function info for type validation later (fn_name -> (fn_def, imports, source_name, source))
         let mut pending_fn_info: Vec<(String, FnDef, HashMap<String, String>, String, Arc<String>)> = Vec::new();
 
+        // Save polymorphic_fns state before compilation to detect newly discovered polymorphic functions
+        let poly_fns_before: std::collections::HashSet<String> = self.polymorphic_fns.clone();
+
+        // Store all function compilation info for potential recompilation pass
+        let mut fn_compile_info: Vec<(FnDef, Vec<String>, HashMap<String, String>, Vec<usize>, Arc<String>, String)> = Vec::new();
+
         for (fn_def, module_path, imports, line_starts, source, source_name) in pending {
             let saved_path = self.module_path.clone();
             let saved_imports = self.imports.clone();
@@ -2603,6 +2614,8 @@ impl Compiler {
 
             // Store for type validation
             pending_fn_info.push((fn_name.clone(), fn_def.clone(), imports.clone(), source_name.clone(), source.clone()));
+            // Store for potential recompilation
+            fn_compile_info.push((fn_def.clone(), module_path.clone(), imports.clone(), line_starts.clone(), source.clone(), source_name.clone()));
 
             self.module_path = module_path;
             // Merge imports instead of replacing, to be safe.
@@ -2621,6 +2634,78 @@ impl Compiler {
             self.line_starts = saved_line_starts;
             self.current_source = saved_source;
             self.current_source_name = saved_source_name;
+        }
+
+        // Recompilation pass: if new polymorphic functions were discovered during the first pass,
+        // recompile callers that emitted CallDirect to them instead of monomorphizing.
+        // This handles cross-module cases where a caller is compiled before its polymorphic callee.
+        let new_poly_fns: Vec<String> = self.polymorphic_fns.difference(&poly_fns_before).cloned().collect();
+        if !new_poly_fns.is_empty() {
+            // Extract base names of newly-polymorphic functions for matching
+            // e.g., "helper.process/_" → "helper.process"
+            let new_poly_bases: Vec<String> = new_poly_fns.iter()
+                .map(|n| n.split('/').next().unwrap_or(n).to_string())
+                .collect();
+
+            // Only recompile functions that might call a newly-polymorphic function.
+            // Check if the function's code contains a CallDirect to any of the new poly functions.
+            for (fn_def, module_path, imports, line_starts, source, source_name) in &fn_compile_info {
+                let fn_name = if module_path.is_empty() {
+                    fn_def.name.node.clone()
+                } else {
+                    format!("{}.{}", module_path.join("."), fn_def.name.node)
+                };
+                let is_fn_stdlib = source_name.contains("stdlib/") || source_name.starts_with("stdlib");
+                let arity = fn_def.clauses[0].params.len();
+                let fn_key = if arity == 0 {
+                    format!("{}/", fn_name)
+                } else {
+                    format!("{}/{}", fn_name, vec!["_"; arity].join(","))
+                };
+                // Skip stdlib functions and polymorphic functions themselves
+                if is_fn_stdlib || self.polymorphic_fns.contains(&fn_key) {
+                    continue;
+                }
+
+                // Check if this function's compiled code calls any of the new polymorphic functions
+                let calls_poly_fn = if let Some(func_val) = self.functions.get(&fn_key) {
+                    let code = &func_val.code;
+                    code.code.iter().any(|instr| {
+                        if let Instruction::CallDirect(_, idx, _) = instr {
+                            if let Some(called_name) = self.function_list.get(*idx as usize) {
+                                let called_base = called_name.split('/').next().unwrap_or(called_name);
+                                new_poly_bases.iter().any(|b| called_base == b)
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    })
+                } else {
+                    false
+                };
+
+                if !calls_poly_fn {
+                    continue;
+                }
+
+                let saved_path = std::mem::replace(&mut self.module_path, module_path.clone());
+                let saved_imports = self.imports.clone();
+                self.imports.extend(imports.clone());
+                let saved_line_starts = std::mem::replace(&mut self.line_starts, line_starts.clone());
+                let saved_source = std::mem::replace(&mut self.current_source, Some(source.clone()));
+                let saved_source_name = std::mem::replace(&mut self.current_source_name, Some(source_name.clone()));
+
+                // Recompile to replace CallDirect with monomorphized variant calls
+                let _ = self.compile_fn_def(fn_def);
+
+                self.module_path = saved_path;
+                self.imports = saved_imports;
+                self.line_starts = saved_line_starts;
+                self.current_source = saved_source;
+                self.current_source_name = saved_source_name;
+            }
         }
 
         // Clear pending_functions now that we've processed them
@@ -3860,6 +3945,7 @@ impl Compiler {
             polymorphic_fns: HashSet::new(),
             current_function_name: None,
             current_fn_type_params: Vec::new(),
+            current_fn_generic_hm: false,
             current_type_bindings: HashMap::new(),
             loop_stack: Vec::new(),
             line_starts,
@@ -10425,6 +10511,10 @@ impl Compiler {
                             false
                         }
                     };
+                    // "no method X for type unknown" is spurious from type_check_fn
+                    // because HM inference can't resolve cross-module qualified calls
+                    // (e.g., helper.process(names) where helper is a module)
+                    let is_unknown_method = message.contains("no method") && message.contains("type `unknown`");
                     let is_spurious = is_tuple_error ||
                         is_nested_tuple_trait_error ||
                         is_trait_dispatch_confusion ||
@@ -10440,7 +10530,8 @@ impl Compiler {
                         is_custom_type_confusion ||
                         is_spawn_confusion ||
                         is_early_return_confusion ||
-                        is_func_trait_error;
+                        is_func_trait_error ||
+                        is_unknown_method;
                     !is_spurious
                 }
                 _ => true,
@@ -10583,8 +10674,29 @@ impl Compiler {
             self.fn_type_params.insert(name.clone(), def.type_params.clone());
         }
 
-        // Set current function's type parameters for nested trait bound checking
+        // Check if this function has a generic HM-inferred signature (type vars in params/ret).
+        // This covers functions like process(xs) where xs: List[a] that need monomorphization
+        // for UFCS method calls (e.g., xs.filter(), s.toUpper()). We track this separately
+        // from explicit type_params because simple generic functions like add3(a,b,c) = a+b+c
+        // should NOT be treated as needing monomorphization - they work fine with primitive dispatch.
+        // We do NOT populate current_fn_type_params from pending_fn_signatures because that would
+        // make operator dispatch (e.g., +) trigger UnresolvedTraitMethod for simple arithmetic functions.
+        let fn_key = if arity == 0 {
+            format!("{}/", base_name)
+        } else {
+            format!("{}/{}", base_name, vec!["_"; arity].join(","))
+        };
+        // Only consider a function as having a generic signature if its PARAMETERS have type vars.
+        // A function with type vars only in its return type (like main() -> Var(1)) is not
+        // truly generic - it just means inference couldn't fully resolve the return. Only
+        // functions with generic parameters can be monomorphized (specialized at call sites).
+        let has_generic_hm_signature = if let Some(fn_sig) = self.pending_fn_signatures.get(&fn_key) {
+            fn_sig.params.iter().any(|p| p.has_any_type_var())
+        } else {
+            false
+        };
         let saved_fn_type_params = std::mem::replace(&mut self.current_fn_type_params, def.type_params.clone());
+        let saved_fn_generic_hm = std::mem::replace(&mut self.current_fn_generic_hm, has_generic_hm_signature);
 
         // Check if we need pattern matching dispatch
         let needs_dispatch = def.clauses.len() > 1 || def.clauses.iter().any(|clause| {
@@ -10838,9 +10950,10 @@ impl Compiler {
                 let result_reg = match self.compile_expr_tail(&clause.body, true) {
                     Ok(reg) => reg,
                     Err(CompileError::UnresolvedTraitMethod { method, span }) => {
-                        // Only mark as polymorphic if the function actually has type parameters
-                        // Otherwise, this is a real error that should be reported
-                        if !def.type_params.is_empty() {
+                        // Mark as polymorphic if the function has type parameters
+                        // (either explicit from AST, inferred from HM via pending_fn_signatures,
+                        // or has a generic HM signature with unresolved type vars)
+                        if !self.current_fn_type_params.is_empty() || has_generic_hm_signature {
                             // Mark this function as needing monomorphization
                             self.polymorphic_fns.insert(name.clone());
                             // Restore state and return success
@@ -10850,6 +10963,7 @@ impl Compiler {
                             self.current_function_name = saved_function_name;
                             self.param_types = saved_param_types;
                             self.current_fn_type_params = saved_fn_type_params;
+                            self.current_fn_generic_hm = saved_fn_generic_hm;
                             return Ok(());
                         } else {
                             // Non-polymorphic function with unresolved trait method - real error
@@ -10919,10 +11033,11 @@ impl Compiler {
             let result_reg = match self.compile_expr_tail(&clause.body, true) {
                 Ok(reg) => reg,
                 Err(CompileError::UnresolvedTraitMethod { method, span }) => {
-                    // Only mark as polymorphic if the function actually has type parameters
-                    // Otherwise, this is a real error that should be reported
-                    if !def.type_params.is_empty() {
-                            // Mark this function as needing monomorphization
+                    // Mark as polymorphic if the function has type parameters
+                    // (either explicit from AST, inferred from HM via pending_fn_signatures,
+                    // or has a generic HM signature with unresolved type vars)
+                    if !self.current_fn_type_params.is_empty() || has_generic_hm_signature {
+                        // Mark this function as needing monomorphization
                         self.polymorphic_fns.insert(name.clone());
                         // Restore state and return success
                         self.chunk = saved_chunk;
@@ -10931,6 +11046,7 @@ impl Compiler {
                         self.current_function_name = saved_function_name;
                         self.param_types = saved_param_types;
                         self.current_fn_type_params = saved_fn_type_params;
+                        self.current_fn_generic_hm = saved_fn_generic_hm;
                         self.current_fn_mvar_reads = saved_mvar_reads;
                         self.current_fn_mvar_writes = saved_mvar_writes;
                         self.current_fn_calls = saved_fn_calls;
@@ -11055,6 +11171,7 @@ impl Compiler {
         self.current_function_name = saved_function_name;
         self.param_types = saved_param_types;
         self.current_fn_type_params = saved_fn_type_params;
+        self.current_fn_generic_hm = saved_fn_generic_hm;
         self.current_fn_mvar_reads = saved_mvar_reads;
         self.current_fn_mvar_writes = saved_mvar_writes;
         self.current_fn_calls = saved_fn_calls;
@@ -14224,9 +14341,16 @@ impl Compiler {
                         // Also check current_type_bindings keys (type params being substituted)
                         let is_type_param = is_type_param || (!is_polymorphic && self.current_type_bindings.contains_key(&receiver_type));
 
+                        // If receiver type is "unknown" and we're in a function with a generic
+                        // HM signature, this is likely a method call on a value derived from a
+                        // type parameter (e.g., lambda param `s` in `xs.map(s => s.toUpper())`
+                        // where xs has a generic type). Treat as unresolved trait method.
+                        let is_unknown_in_generic = receiver_type == "unknown"
+                            && (self.current_fn_generic_hm || !self.current_fn_type_params.is_empty());
+
                         // If the receiver is a type parameter, this is an unresolved trait method
                         // that needs monomorphization - not a real error
-                        if is_polymorphic || is_type_param {
+                        if is_polymorphic || is_type_param || is_unknown_in_generic {
                             return Err(CompileError::UnresolvedTraitMethod {
                                 method: name.clone(),
                                 span,
@@ -20823,8 +20947,6 @@ impl Compiler {
         let explicit_type = binding.ty.as_ref().map(|t| self.type_expr_name(t));
         let inferred_type = self.expr_type_name(&binding.value);
         let value_type = explicit_type.clone().or_else(|| inferred_type.clone());
-
-
 
         // Type annotation validation: if explicit type is provided and we can infer the value type,
         // check that they are compatible. Only check primitive type mismatches to avoid
