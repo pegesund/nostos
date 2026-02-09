@@ -5608,6 +5608,19 @@ impl<'a> InferCtx<'a> {
 
     /// Infer types for a binary operation.
     fn infer_binop(&mut self, left: &Expr, op: BinOp, right: &Expr, span: Span) -> Result<Type, TypeError> {
+        // For Pipe operator, handle RHS Call specially: a |> f(b) => f(a, b)
+        if op == BinOp::Pipe {
+            if let Expr::Call(func, type_args, call_args, call_span) = right {
+                let left_ty = self.infer_expr(left)?;
+                // Build new args: [piped_value, ...original_args]
+                let mut new_args = vec![CallArg::Positional(left.clone())];
+                new_args.extend(call_args.iter().cloned());
+                // Create a synthetic Call expression with the piped value prepended
+                let new_call = Expr::Call(func.clone(), type_args.clone(), new_args, *call_span);
+                return self.infer_expr(&new_call);
+            }
+        }
+
         let left_ty = self.infer_expr(left)?;
         let right_ty = self.infer_expr(right)?;
 

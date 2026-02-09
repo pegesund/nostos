@@ -14743,6 +14743,12 @@ impl Compiler {
             BinOp::And => return self.compile_and(left, right),
             BinOp::Or => return self.compile_or(left, right),
             BinOp::Pipe => {
+                // a |> f(b, c) is f(a, b, c) — prepend piped value to call args
+                if let Expr::Call(func, type_args, call_args, _) = right {
+                    let mut new_args = vec![CallArg::Positional(left.clone())];
+                    new_args.extend(call_args.iter().cloned());
+                    return self.compile_call(func, type_args, &new_args, false);
+                }
                 // a |> f is f(a)
                 return self.compile_call(right, &[], &[CallArg::Positional(left.clone())], false);
             }
