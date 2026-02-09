@@ -105,7 +105,7 @@ impl InlineOp {
 use rust_decimal::Decimal;
 
 use crate::value::{
-    ClosureValue, FunctionValue, MapKey, Pid, ReactiveRecordValue, ReactiveVariantValue, RecordValue, RuntimeError, TypeValue, Value, VariantValue,
+    ClosureValue, FunctionValue, MapKey, Pid, ReactiveRecordValue, ReactiveVariantValue, RecordValue, RuntimeError, TypeValue, Value, VariantTemplate, VariantValue,
 };
 
 /// Raw index into the heap. Used for type-erased operations.
@@ -717,8 +717,8 @@ pub struct GcRecord {
 /// A GC-managed variant.
 #[derive(Clone, Debug)]
 pub struct GcVariant {
-    pub type_name: Arc<String>,
-    pub constructor: Arc<String>,
+    pub type_name: Arc<str>,
+    pub constructor: Arc<str>,
     pub fields: Vec<GcValue>,
     /// Cached discriminant for fast pattern matching (hash of constructor name)
     pub discriminant: u16,
@@ -1133,7 +1133,7 @@ impl GcValue {
             GcValue::ReactiveRecord(r) => r.type_name.as_str(),
             GcValue::Variant(ptr) => {
                 heap.get_variant(*ptr)
-                    .map(|v| v.type_name.as_str())
+                    .map(|v| &*v.type_name)
                     .unwrap_or("Variant")
             }
             GcValue::ReactiveVariant(v) => v.type_name.as_str(),
@@ -1213,8 +1213,8 @@ impl GcValue {
                     .map(|f| f.to_gc_map_key(heap))
                     .collect();
                 key_fields.map(|fields| GcMapKey::Variant {
-                    type_name: (*variant.type_name).clone(),
-                    constructor: (*variant.constructor).clone(),
+                    type_name: variant.type_name.to_string(),
+                    constructor: variant.constructor.to_string(),
                     fields,
                 })
             }
@@ -1502,6 +1502,9 @@ pub struct Heap {
     config: GcConfig,
     /// Statistics
     stats: GcStats,
+    /// Cache for unit variants (0-field variants): discriminant → pre-allocated GcPtr.
+    /// Avoids repeated heap allocation for common variants like None, Red, Green, etc.
+    unit_variant_cache: HashMap<u16, GcPtr<GcVariant>>,
 }
 
 // Heap is safe to Send between threads:
@@ -1527,6 +1530,7 @@ impl Heap {
             live_count: 0,
             config,
             stats: GcStats::default(),
+            unit_variant_cache: HashMap::new(),
         }
     }
 
@@ -1748,10 +1752,62 @@ impl Heap {
     ) -> GcPtr<GcVariant> {
         let discriminant = constructor_discriminant(constructor.as_ref());
         let data = HeapData::Variant(GcVariant {
+            type_name: Arc::from(type_name.as_str()),
+            constructor: Arc::from(constructor.as_str()),
+            fields,
+            discriminant,
+        });
+        GcPtr::from_raw(self.alloc(data))
+    }
+
+    /// Allocate a variant reusing shared Arc metadata (avoids Arc<String>→Arc<str> conversion).
+    pub fn alloc_variant_shared(
+        &mut self,
+        type_name: Arc<str>,
+        constructor: Arc<str>,
+        fields: Vec<GcValue>,
+        discriminant: u16,
+    ) -> GcPtr<GcVariant> {
+        let data = HeapData::Variant(GcVariant {
             type_name,
             constructor,
             fields,
             discriminant,
+        });
+        GcPtr::from_raw(self.alloc(data))
+    }
+
+    /// Allocate a variant from a pre-computed template.
+    /// For unit variants (0 fields), returns a cached pointer to avoid heap allocation.
+    /// For variants with fields, does Arc ref-count bumps + GC slot alloc (no string clones).
+    pub fn alloc_variant_from_template(
+        &mut self,
+        template: &VariantTemplate,
+        fields: Vec<GcValue>,
+    ) -> GcPtr<GcVariant> {
+        // Unit variant optimization: reuse cached pointer
+        if fields.is_empty() {
+            if let Some(&cached) = self.unit_variant_cache.get(&template.discriminant) {
+                return cached;
+            }
+            // First time seeing this unit variant - allocate and cache
+            let data = HeapData::Variant(GcVariant {
+                type_name: Arc::clone(&template.type_name),
+                constructor: Arc::clone(&template.constructor),
+                fields,
+                discriminant: template.discriminant,
+            });
+            let ptr = GcPtr::from_raw(self.alloc(data));
+            // Mark as root so GC never collects cached unit variants
+            self.roots.push(ptr.as_raw());
+            self.unit_variant_cache.insert(template.discriminant, ptr);
+            return ptr;
+        }
+        let data = HeapData::Variant(GcVariant {
+            type_name: Arc::clone(&template.type_name),
+            constructor: Arc::clone(&template.constructor),
+            fields,
+            discriminant: template.discriminant,
         });
         GcPtr::from_raw(self.alloc(data))
     }
@@ -2849,10 +2905,11 @@ impl Heap {
                         .iter()
                         .map(|v| self.deep_copy(v, source))
                         .collect();
-                    GcValue::Variant(self.alloc_variant(
+                    GcValue::Variant(self.alloc_variant_shared(
                         Arc::clone(&var.type_name),
                         Arc::clone(&var.constructor),
                         fields,
+                        var.discriminant,
                     ))
                 } else {
                     GcValue::Unit
@@ -3111,11 +3168,13 @@ impl Heap {
             }
             GcValue::Variant(ptr) => {
                 let var_data = self.get_variant(*ptr).map(|v| {
-                    (Arc::clone(&v.type_name), Arc::clone(&v.constructor), v.fields.clone())
+                    (Arc::clone(&v.type_name), Arc::clone(&v.constructor), v.fields.clone(), v.discriminant)
                 });
-                if let Some((type_name, constructor, fields)) = var_data {
+                if let Some((type_name, constructor, fields, discriminant)) = var_data {
                     let cloned: Vec<GcValue> = fields.iter().map(|v| self.clone_value(v)).collect();
-                    GcValue::Variant(self.alloc_variant(type_name, constructor, cloned))
+                    GcValue::Variant(self.alloc_variant_shared(
+                        type_name, constructor, cloned, discriminant,
+                    ))
                 } else {
                     GcValue::Unit
                 }
@@ -3389,6 +3448,8 @@ impl Heap {
             // RecordTemplate is internal - should not be converted to GcValue at runtime
             // It's only used as a constant pool entry, accessed via get_const_ref
             Value::RecordTemplate(_) => GcValue::Unit,
+            // VariantTemplate is internal - should not be converted to GcValue at runtime
+            Value::VariantTemplate(_) => GcValue::Unit,
         }
     }
 
@@ -3566,8 +3627,8 @@ impl Heap {
                 let fields: Vec<Value> =
                     variant.fields.iter().map(|v| self.gc_to_value(v)).collect();
                 Value::Variant(Arc::new(VariantValue {
-                    type_name: Arc::clone(&variant.type_name),
-                    constructor: Arc::clone(&variant.constructor),
+                    type_name: Arc::new(variant.type_name.to_string()),
+                    constructor: Arc::new(variant.constructor.to_string()),
                     fields,
                     named_fields: None,
                 }))

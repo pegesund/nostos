@@ -2138,7 +2138,7 @@ dependencies = [
 
 [[package]]
 name = "nostos-cli"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "crossbeam-channel",
  "crossterm 0.27.0",
@@ -2190,7 +2190,7 @@ dependencies = [
 
 [[package]]
 name = "nostos-jit"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "cranelift-codegen",
  "cranelift-frontend",
@@ -2229,7 +2229,7 @@ dependencies = [
 
 [[package]]
 name = "nostos-repl"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "dirs",
  "imbl",
@@ -2263,7 +2263,7 @@ dependencies = [
 
 [[package]]
 name = "nostos-syntax"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "ariadne",
  "chumsky",

@@ -45,6 +45,12 @@ pub enum CachedValue {
         mutable_fields: Vec<bool>,
         discriminant: u16,
     },
+    // Pre-computed variant template for fast MakeVariantCached
+    VariantTemplate {
+        type_name: String,
+        constructor: String,
+        discriminant: u16,
+    },
 }
 
 // ============================================================================
@@ -247,6 +253,11 @@ impl CachedValue {
                 mutable_fields: t.mutable_fields.to_vec(),
                 discriminant: t.discriminant,
             }),
+            Value::VariantTemplate(t) => Some(CachedValue::VariantTemplate {
+                type_name: t.type_name.to_string(),
+                constructor: t.constructor.to_string(),
+                discriminant: t.discriminant,
+            }),
             // Other types (closures, records, variants) are not stored in constant pools
             _ => None,
         }
@@ -300,6 +311,13 @@ impl CachedValue {
                     type_name: Arc::from(type_name.as_str()),
                     field_names: Arc::from(field_names.clone()),
                     mutable_fields: Arc::from(mutable_fields.clone()),
+                    discriminant: *discriminant,
+                }))
+            }
+            CachedValue::VariantTemplate { type_name, constructor, discriminant } => {
+                Value::VariantTemplate(Arc::new(crate::value::VariantTemplate {
+                    type_name: Arc::from(type_name.as_str()),
+                    constructor: Arc::from(constructor.as_str()),
                     discriminant: *discriminant,
                 }))
             }

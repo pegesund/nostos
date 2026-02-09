@@ -15241,9 +15241,13 @@ impl Compiler {
 
                 // Construct Component(name) variant - just the name, content comes from renderers
                 let dst = self.alloc_reg();
-                let type_idx = self.chunk.add_constant(Value::String(Arc::new("stdlib.rhtml.RNode".to_string())));
-                let ctor_idx = self.chunk.add_constant(Value::String(Arc::new("Component".to_string())));
-                self.chunk.emit(Instruction::MakeVariant(dst, type_idx, ctor_idx, vec![name_reg].into()), line);
+                let template = VariantTemplate {
+                    type_name: Arc::from("stdlib.rhtml.RNode"),
+                    constructor: Arc::from("Component"),
+                    discriminant: constructor_discriminant("Component"),
+                };
+                let tmpl_idx = self.chunk.add_constant(Value::VariantTemplate(Arc::new(template)));
+                self.chunk.emit(Instruction::MakeVariantCached(dst, tmpl_idx, vec![name_reg].into()), line);
                 return Ok(dst);
             }
         }
@@ -22016,14 +22020,21 @@ impl Compiler {
             // Check type visibility for variant constructors
             self.check_type_visibility(&parent_type, Span::default())?;
 
-            let type_idx = self.chunk.add_constant(Value::String(Arc::new(parent_type)));
             // Use local constructor name (without module path) for better user experience
             let local_ctor = type_name.rsplit('.').next().unwrap_or(type_name);
-            let ctor_idx = self.chunk.add_constant(Value::String(Arc::new(local_ctor.to_string())));
             if is_reactive_variant {
+                let type_idx = self.chunk.add_constant(Value::String(Arc::new(parent_type)));
+                let ctor_idx = self.chunk.add_constant(Value::String(Arc::new(local_ctor.to_string())));
                 self.chunk.emit(Instruction::MakeReactiveVariant(dst, type_idx, ctor_idx, field_regs.into()), 0);
             } else {
-                self.chunk.emit(Instruction::MakeVariant(dst, type_idx, ctor_idx, field_regs.into()), 0);
+                // Use cached variant template for fast allocation
+                let template = VariantTemplate {
+                    type_name: Arc::from(parent_type.as_str()),
+                    constructor: Arc::from(local_ctor),
+                    discriminant: constructor_discriminant(local_ctor),
+                };
+                let tmpl_idx = self.chunk.add_constant(Value::VariantTemplate(Arc::new(template)));
+                self.chunk.emit(Instruction::MakeVariantCached(dst, tmpl_idx, field_regs.into()), 0);
             }
         } else {
             let type_idx = self.chunk.add_constant(Value::String(Arc::new(type_name.to_string())));

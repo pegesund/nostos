@@ -730,8 +730,8 @@ impl ThreadSafeValue {
                     .map(|v| ThreadSafeValue::from_gc_value(v, heap))
                     .collect();
                 ThreadSafeValue::Variant {
-                    type_name: variant.type_name.clone(),
-                    constructor: variant.constructor.clone(),
+                    type_name: Arc::new(variant.type_name.to_string()),
+                    constructor: Arc::new(variant.constructor.to_string()),
                     fields: fields?,
                 }
             }

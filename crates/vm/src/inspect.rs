@@ -145,7 +145,7 @@ impl Value {
             Value::BigInt(_) | Value::Decimal(_) |
             Value::Function(_) | Value::NativeFunction(_) |
             Value::Pid(_) | Value::Ref(_) | Value::Type(_) | Value::Pointer(_) |
-            Value::RecordTemplate(_) => true,
+            Value::RecordTemplate(_) | Value::VariantTemplate(_) => true,
 
             Value::String(s) => s.len() <= DEFAULT_MAX_PREVIEW_LEN,
             Value::List(l) => l.is_empty(),
@@ -298,6 +298,7 @@ impl Value {
             Value::NativeHandle(h) => format!("<native type={}>", h.type_id),
             Value::Ast(ast) => format!("<ast {}>", ast),
             Value::RecordTemplate(t) => format!("<template {}>", t.type_name),
+            Value::VariantTemplate(t) => format!("<variant-template {}::{}>", t.type_name, t.constructor),
         }
     }
 
@@ -312,7 +313,7 @@ impl Value {
             Value::BigInt(_) | Value::Decimal(_) |
             Value::Function(_) | Value::NativeFunction(_) |
             Value::Pid(_) | Value::Ref(_) | Value::Type(_) | Value::Pointer(_) |
-            Value::NativeHandle(_) | Value::Ast(_) | Value::RecordTemplate(_) => vec![],
+            Value::NativeHandle(_) | Value::Ast(_) | Value::RecordTemplate(_) | Value::VariantTemplate(_) => vec![],
 
             // String: only has slots if long (for chunked viewing)
             Value::String(_) => vec![],

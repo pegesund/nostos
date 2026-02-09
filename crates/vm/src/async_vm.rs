@@ -3263,7 +3263,7 @@ impl AsyncProcess {
                 let result = match val {
                     GcValue::Variant(ptr) => {
                         if let Some(var) = self.heap.get_variant(*ptr) {
-                            var.constructor.as_str() == expected_ctor.as_str()
+                            &*var.constructor == expected_ctor.as_str()
                         } else {
                             false
                         }
@@ -3987,8 +3987,8 @@ impl AsyncProcess {
                                     .ok_or_else(|| RuntimeError::Panic("Invalid variant pointer".into()))?;
                                 // Convert GcValue variant to Value variant for storage
                                 let new_value_variant = Arc::new(VariantValue {
-                                    type_name: var_data.type_name.clone(),
-                                    constructor: var_data.constructor.clone(),
+                                    type_name: Arc::new(var_data.type_name.to_string()),
+                                    constructor: Arc::new(var_data.constructor.to_string()),
                                     fields: var_data.fields.iter().map(|f| self.heap.gc_to_value(f)).collect(),
                                     named_fields: None,
                                 });
@@ -5115,6 +5115,19 @@ impl AsyncProcess {
                     tmpl.discriminant,
                 );
                 set_reg!(dst, GcValue::Record(ptr));
+            }
+
+            MakeVariantCached(dst, tmpl_idx, ref field_regs) => {
+                let tmpl = match get_const_ref!(tmpl_idx) {
+                    Value::VariantTemplate(t) => t,
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "VariantTemplate".to_string(),
+                        found: "non-template".to_string(),
+                    }),
+                };
+                let fields: Vec<GcValue> = field_regs.iter().map(|&r| reg!(r)).collect();
+                let ptr = self.heap.alloc_variant_from_template(tmpl, fields);
+                set_reg!(dst, GcValue::Variant(ptr));
             }
 
             MakeRecord(dst, type_idx, ref field_regs) => {
@@ -8713,7 +8726,7 @@ impl AsyncProcess {
                 let tag = match reg!(val_reg) {
                     GcValue::Variant(ptr) => {
                         self.heap.get_variant(ptr)
-                            .map(|v| v.constructor.as_ref().clone())
+                            .map(|v| v.constructor.to_string())
                             .unwrap_or_default()
                     }
                     _ => String::new(),
@@ -9641,7 +9654,7 @@ impl AsyncProcess {
                 let var = self.heap.get_variant(*ptr)
                     .ok_or_else(|| RuntimeError::IOError("Invalid variant pointer".to_string()))?;
 
-                match var.constructor.as_str() {
+                match &*var.constructor {
                     "Null" => Ok("null".to_string()),
                     "Bool" => {
                         if let Some(GcValue::Bool(b)) = var.fields.first() {
@@ -9941,7 +9954,7 @@ impl AsyncProcess {
             GcValue::Variant(var_ptr) => {
                 let (constructor, fields) = self.heap.get_variant(var_ptr)
                     .map(|v| {
-                        (v.constructor.as_ref().clone(), v.fields.clone())
+                        (v.constructor.to_string(), v.fields.clone())
                     })
                     .unwrap_or_else(|| ("Unknown".to_string(), vec![]));
 
@@ -10436,7 +10449,7 @@ impl AsyncProcess {
                 let variant = self.heap.get_variant(*var_ptr)
                     .ok_or_else(|| RuntimeError::Panic("Invalid variant".to_string()))?;
 
-                let ctor = variant.constructor.as_str();
+                let ctor: &str = &variant.constructor;
                 if ctor == "Null" {
                     Ok(GcValue::Unit)
                 } else if ctor == "Bool" {
@@ -15145,7 +15158,7 @@ impl AsyncVM {
                     match val {
                         GcValue::Variant(ptr) => {
                             if let Some(var) = heap.get_variant(*ptr) {
-                                match var.constructor.as_str() {
+                                match &*var.constructor {
                                     "Null" => Ok(serde_json::Value::Null),
                                     "Bool" => {
                                         if let Some(GcValue::Bool(b)) = var.fields.first() {
