@@ -14299,6 +14299,23 @@ impl Compiler {
                 }
 
                 // Check for Map type - use Map.get builtin for map[key] syntax
+                // First try structural type from HM inference
+                if let Some(ty) = self.expr_type(coll) {
+                    if matches!(ty, nostos_types::Type::Map(_, _)) {
+                        let coll_reg = self.compile_expr_tail(coll, false)?;
+                        let idx_reg = self.compile_expr_tail(index, false)?;
+                        let dst = self.alloc_reg();
+                        self.emit_call_native(dst, "Map.get", vec![coll_reg, idx_reg].into(), line);
+                        return Ok(dst);
+                    }
+                    if matches!(ty, nostos_types::Type::Set(_)) {
+                        let coll_reg = self.compile_expr_tail(coll, false)?;
+                        let idx_reg = self.compile_expr_tail(index, false)?;
+                        let dst = self.alloc_reg();
+                        self.emit_call_native(dst, "Set.contains", vec![coll_reg, idx_reg].into(), line);
+                        return Ok(dst);
+                    }
+                }
                 if let Some(coll_type) = self.expr_type_name(coll) {
                     if coll_type.starts_with("Map[") || coll_type == "Map" {
                         let coll_reg = self.compile_expr_tail(coll, false)?;
@@ -17077,6 +17094,30 @@ impl Compiler {
                     // because the inferred signature can be wrong for mutually recursive functions.
                     // This prevents false positive type errors. The signature fallback is still
                     // available in other code paths for autocomplete features.
+
+                    // Fallback: check pending_fn_signatures for the resolved return type.
+                    // This is needed for unannotated cross-module functions whose return type
+                    // was resolved by HM inference but whose expr_types contain unresolved Vars
+                    // (because instantiate_function creates fresh vars disconnected from the body inference).
+                    let arity_suffix = if args.is_empty() {
+                        "/".to_string()
+                    } else {
+                        format!("/{}", vec!["_"; args.len()].join(","))
+                    };
+                    for try_name in &[&ident.node, &resolved_name] {
+                        let qualified = format!("{}{}", try_name, arity_suffix);
+                        if let Some(fn_type) = self.pending_fn_signatures.get(&qualified) {
+                            let ret_display = fn_type.ret.display();
+                            // Only use if the return type is concrete (not a type variable or type parameter)
+                            if !ret_display.starts_with('?') && !ret_display.contains("(polymorphic)") {
+                                let is_single_letter_type_param = ret_display.len() == 1
+                                    && ret_display.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false);
+                                if !is_single_letter_type_param {
+                                    return Some(ret_display);
+                                }
+                            }
+                        }
+                    }
                 }
                 // Handle FieldAccess as function (e.g., module.function())
                 // This handles calls like nalgebra.vec([1, 2, 3])
@@ -17368,14 +17409,20 @@ impl Compiler {
 
                 hm_fallback.clone()
             }
-            // Index expressions - unwrap List element type
+            // Index expressions - unwrap List element type or Map value type
             Expr::Index(collection, _, _) => {
                 // Try structural type extraction first using expr_type helper
                 if let Some(coll_ty) = self.expr_type(collection) {
-                    // Use get_element_type_from_type for List/Array
+                    // Use get_element_type_from_type for List/Array/Set
                     if let Some(elem) = self.get_element_type_from_type(coll_ty) {
                         if self.is_type_structurally_resolved(elem) {
                             return Some(elem.display());
+                        }
+                    }
+                    // Map indexing: Map[K, V] -> V (return value type)
+                    if let Some((_key_ty, val_ty)) = self.get_map_types_from_type(coll_ty) {
+                        if self.is_type_structurally_resolved(val_ty) {
+                            return Some(val_ty.display());
                         }
                     }
                     // String indexing returns Char
@@ -17389,6 +17436,26 @@ impl Compiler {
                     if coll_type.starts_with("List[") && coll_type.ends_with(']') {
                         let elem_type = &coll_type[5..coll_type.len()-1];
                         return Some(elem_type.to_string());
+                    }
+                    // Unwrap Map[K, V] -> V (return value type, not key type)
+                    if coll_type.starts_with("Map[") && coll_type.ends_with(']') {
+                        // Map[K, V] - find the comma separating K and V
+                        let inner = &coll_type[4..coll_type.len()-1];
+                        // Handle nested types by tracking bracket depth
+                        let mut depth = 0;
+                        let mut comma_pos = None;
+                        for (i, ch) in inner.char_indices() {
+                            match ch {
+                                '[' | '(' => depth += 1,
+                                ']' | ')' => depth -= 1,
+                                ',' if depth == 0 => { comma_pos = Some(i); break; }
+                                _ => {}
+                            }
+                        }
+                        if let Some(pos) = comma_pos {
+                            let val_type = inner[pos+1..].trim();
+                            return Some(val_type.to_string());
+                        }
                     }
                     // String indexing returns Char
                     if coll_type == "String" {

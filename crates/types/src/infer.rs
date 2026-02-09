@@ -144,6 +144,11 @@ pub struct InferCtx<'a> {
     /// paired with the shared result type variable. After solve(), check for
     /// structural container mismatches (e.g., List vs Set in different branches).
     deferred_branch_type_checks: Vec<(Type, Type, Span)>,
+    /// Deferred index access checks: (container_type, index_type, elem_type, span).
+    /// When an Index expression's container is an unresolved Var, defer the check
+    /// until after solve() resolves the container type. This correctly handles
+    /// Map[K,V] indexing where m["key"] should return V, not assume List indexing.
+    deferred_index_checks: Vec<(Type, Type, Type, Span)>,
     /// Known implicit conversion function names (e.g., "tensorFromList").
     /// Populated by the compiler from functions matching the naming convention.
     known_implicit_fns: HashSet<String>,
@@ -183,6 +188,7 @@ impl<'a> InferCtx<'a> {
             deferred_indirect_call_checks: Vec::new(),
             deferred_typed_binding_checks: Vec::new(),
             deferred_branch_type_checks: Vec::new(),
+            deferred_index_checks: Vec::new(),
             known_implicit_fns: HashSet::new(),
             implicit_conversions: Vec::new(),
         }
@@ -2080,6 +2086,54 @@ impl<'a> InferCtx<'a> {
                             trait_name: trait_name.clone(),
                         });
                     }
+                }
+            }
+        }
+
+        // Process deferred index access checks.
+        // When Index expressions had unresolved container types (Var), we deferred them.
+        // Now that solve() has run, resolve the container and add proper constraints.
+        for (container_ty, index_ty, elem_ty, span) in std::mem::take(&mut self.deferred_index_checks) {
+            let resolved = self.env.apply_subst(&container_ty);
+            match &resolved {
+                Type::Map(key_ty, val_ty) => {
+                    // Map[K,V] indexing: index must be K, result is V
+                    let _ = self.unify_types(&self.env.apply_subst(&index_ty), key_ty);
+                    let _ = self.unify_types(&self.env.apply_subst(&elem_ty), val_ty);
+                }
+                Type::Set(set_elem_ty) => {
+                    // Set[T] indexing: index must be T, result is Bool
+                    let _ = self.unify_types(&self.env.apply_subst(&index_ty), set_elem_ty);
+                    let _ = self.unify_types(&self.env.apply_subst(&elem_ty), &Type::Bool);
+                }
+                Type::List(list_elem_ty) => {
+                    // List[T] indexing: index must be Int, result is T
+                    let _ = self.unify_types(&self.env.apply_subst(&index_ty), &Type::Int);
+                    let _ = self.unify_types(&self.env.apply_subst(&elem_ty), list_elem_ty);
+                }
+                Type::Tuple(_) | Type::Named { .. } => {
+                    // Tuple or custom type indexing: index must be Int
+                    let _ = self.unify_types(&self.env.apply_subst(&index_ty), &Type::Int);
+                }
+                Type::Var(_) => {
+                    // Still unresolved - fall back to List assumption (original behavior)
+                    let _ = self.unify_types(&self.env.apply_subst(&index_ty), &Type::Int);
+                    let list_ty = Type::List(Box::new(elem_ty.clone()));
+                    self.constraints.push(Constraint::Equal(
+                        container_ty,
+                        list_ty,
+                        Some(span),
+                    ));
+                }
+                _ => {
+                    // Default: assume List-like (String, Array, etc.)
+                    let _ = self.unify_types(&self.env.apply_subst(&index_ty), &Type::Int);
+                    let list_ty = Type::List(Box::new(elem_ty.clone()));
+                    self.constraints.push(Constraint::Equal(
+                        container_ty,
+                        list_ty,
+                        Some(span),
+                    ));
                 }
             }
         }
@@ -5098,8 +5152,15 @@ impl<'a> InferCtx<'a> {
                 // Check if container is a custom Named type - allow indexing without List unification
                 // The compiler will dispatch to {typeLower}Get function
                 match &resolved_container {
-                    Type::Named { .. } | Type::Var(_) => {
-                        // Custom type or unresolved type variable - allow Int indexing
+                    Type::Var(_) => {
+                        // Unresolved type variable - defer the index check until after solve()
+                        // This correctly handles cases like m["key"] where m is a Map returned
+                        // from a function call whose return type hasn't been resolved yet.
+                        self.deferred_index_checks.push((container_ty.clone(), index_ty, elem_ty.clone(), *span));
+                        Ok(elem_ty)
+                    }
+                    Type::Named { .. } => {
+                        // Custom type - allow Int indexing
                         // The compiler will handle dispatch to typeGet function
                         self.unify(index_ty, Type::Int);
                         Ok(elem_ty)
