@@ -17148,6 +17148,28 @@ impl Compiler {
                                 return Some(ret_type);
                             }
                         }
+
+                        // Fallback: check pending_fn_signatures for the resolved return type.
+                        // This is needed for cross-module functions whose return types
+                        // were resolved by HM inference but not stored in compiled function metadata.
+                        let arity_suffix = if args.is_empty() {
+                            "/".to_string()
+                        } else {
+                            format!("/{}", vec!["_"; args.len()].join(","))
+                        };
+                        for try_name in &[&qualified_name, &resolved_name] {
+                            let qualified_sig = format!("{}{}", try_name, arity_suffix);
+                            if let Some(fn_type) = self.pending_fn_signatures.get(&qualified_sig) {
+                                let ret_display = fn_type.ret.display();
+                                if !ret_display.starts_with('?') && !ret_display.contains("(polymorphic)") {
+                                    let is_single_letter_type_param = ret_display.len() == 1
+                                        && ret_display.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false);
+                                    if !is_single_letter_type_param {
+                                        return Some(ret_display);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 hm_fallback.clone()
@@ -17306,6 +17328,28 @@ impl Compiler {
                             let return_type = sig[arrow_pos + 2..].trim().to_string();
                             if !return_type.is_empty() {
                                 return Some(return_type);
+                            }
+                        }
+                    }
+
+                    // Fallback: check pending_fn_signatures for the resolved return type.
+                    // This is needed for cross-module functions whose return types
+                    // were resolved by HM inference but not stored in compiled function metadata.
+                    let arity_suffix = if _args.is_empty() {
+                        "/".to_string()
+                    } else {
+                        format!("/{}", vec!["_"; _args.len()].join(","))
+                    };
+                    for try_name in &[&qualified_name, &resolved_name] {
+                        let qualified_sig = format!("{}{}", try_name, arity_suffix);
+                        if let Some(fn_type) = self.pending_fn_signatures.get(&qualified_sig) {
+                            let ret_display = fn_type.ret.display();
+                            if !ret_display.starts_with('?') && !ret_display.contains("(polymorphic)") {
+                                let is_single_letter_type_param = ret_display.len() == 1
+                                    && ret_display.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false);
+                                if !is_single_letter_type_param {
+                                    return Some(ret_display);
+                                }
                             }
                         }
                     }
