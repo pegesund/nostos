@@ -9862,6 +9862,40 @@ impl Compiler {
         matches!(method_name, "show" | "hash" | "copy")
     }
 
+    /// Find a builtin method that is unique to exactly one type.
+    /// Used for speculative dispatch when receiver type is unknown.
+    /// Returns the native function name (e.g., "String.toUpper") if the method
+    /// belongs to exactly one builtin type AND does NOT exist as a stdlib UFCS
+    /// function (which would make it ambiguous between String and List).
+    fn find_unique_builtin_method(method_name: &str) -> Option<&'static str> {
+        // Only include String-specific methods that do NOT exist as stdlib List functions.
+        // Excluded: take, drop, reverse, contains, indexOf, split, length, isEmpty
+        // (these exist on both String and List/collections)
+        match method_name {
+            // String-only builtins (no List equivalent)
+            "chars" => Some("String.chars"),
+            "toInt" => Some("String.toInt"),
+            "toFloat" => Some("String.toFloat"),
+            "trim" => Some("String.trim"),
+            "trimStart" => Some("String.trimStart"),
+            "trimEnd" => Some("String.trimEnd"),
+            "toUpper" => Some("String.toUpper"),
+            "toLower" => Some("String.toLower"),
+            "startsWith" => Some("String.startsWith"),
+            "endsWith" => Some("String.endsWith"),
+            "replace" => Some("String.replace"),
+            "replaceAll" => Some("String.replaceAll"),
+            "lastIndexOf" => Some("String.lastIndexOf"),
+            "substring" => Some("String.substring"),
+            "repeat" => Some("String.repeat"),
+            "padStart" => Some("String.padStart"),
+            "padEnd" => Some("String.padEnd"),
+            "lines" => Some("String.lines"),
+            "words" => Some("String.words"),
+            _ => None,
+        }
+    }
+
     /// Map a binary operator to its trait and method name.
     /// Returns (trait_name, method_name) for operators that can be overloaded.
     fn operator_to_trait_method(op: &BinOp) -> Option<(&'static str, &'static str)> {
@@ -14255,6 +14289,22 @@ impl Compiler {
                                 }
                             }
                         }
+                    }
+
+                    // Type unknown - try speculative builtin dispatch.
+                    // When receiver type is unknown (e.g., lambda param), try to find the method
+                    // as a builtin on known types (String, Map, Set). If exactly one type has
+                    // this method as a builtin, dispatch to it speculatively.
+                    if let Some(native_name) = Self::find_unique_builtin_method(&method.node) {
+                        let obj_reg = self.compile_expr_tail(obj, false)?;
+                        let mut arg_regs = vec![obj_reg];
+                        for arg in args {
+                            let reg = self.compile_expr_tail(Self::call_arg_expr(arg), false)?;
+                            arg_regs.push(reg);
+                        }
+                        let dst = self.alloc_reg();
+                        self.emit_call_native(dst, native_name, arg_regs.into(), line);
+                        return Ok(dst);
                     }
 
                     // Type unknown - check if this is a trait method that needs monomorphization
