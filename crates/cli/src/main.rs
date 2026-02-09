@@ -3057,7 +3057,11 @@ fn main() -> ExitCode {
 
                 if let Ok(source) = fs::read_to_string(&path) {
                     let (module_opt, _errors) = parse(&source);
-                    if let Some(module) = module_opt {
+                    if let Some(mut module) = module_opt {
+                        // Assign unique file_id for extension modules (20000+)
+                        static EXT_FILE_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                        module.set_file_id(20000 + EXT_FILE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+
                         // Module path is just the extension name (e.g., "glam")
                         let module_path = vec![ext_name.clone()];
 
@@ -3114,7 +3118,11 @@ fn main() -> ExitCode {
                                         continue;
                                     }
 
-                                    if let Some(module) = module_opt {
+                                    if let Some(mut module) = module_opt {
+                                        // Assign unique file_id for package modules (30000+)
+                                        static PKG_FILE_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                                        module.set_file_id(30000 + PKG_FILE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+
                                         // Module path: package_name.file_name (without .nos)
                                         let file_stem = file_path.file_stem()
                                             .and_then(|s| s.to_str())
@@ -3207,13 +3215,21 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
 
-            let module = match module_opt {
+            let mut module = match module_opt {
                 Some(m) => m,
                 None => {
                     eprintln!("Failed to parse '{}'", path.display());
                     return ExitCode::FAILURE;
                 }
             };
+
+            // Assign unique file_id to each user module to prevent span collisions
+            // in inferred_expr_types. Stdlib uses file_ids starting from 1, so user
+            // modules start from 10000 to avoid overlap.
+            {
+                let file_idx = parsed_modules.len() as u32;
+                module.set_file_id(10000 + file_idx);
+            }
 
             // Determine module path based on file location relative to project root
             // For single file, module path is empty (top-level)

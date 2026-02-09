@@ -4846,7 +4846,12 @@ impl ReplEngine {
                 continue; // Skip files with parse errors
             }
 
-            if let Some(module) = module_opt {
+            if let Some(mut module) = module_opt {
+                // Assign unique file_id to each user module to prevent span collisions
+                // in inferred_expr_types. Stdlib uses file_ids starting from 1, so user
+                // modules start from 10000 to avoid overlap.
+                module.set_file_id(10000 + parsed_modules.len() as u32);
+
                 let relative = file_path.strip_prefix(&path_buf).unwrap();
                 let mut components: Vec<String> = relative
                     .components()
