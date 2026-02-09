@@ -3011,7 +3011,15 @@ impl Compiler {
                                             type_name
                                         };
                                         // Look up the type to verify field existence
-                                        match self.type_defs.get(base_type_name) {
+                                        // Try direct lookup first, then search for qualified versions
+                                        let type_def_lookup = self.type_defs.get(base_type_name).or_else(|| {
+                                            // Try qualified names (e.g., "Config" -> "types.Config")
+                                            let suffix = format!(".{}", base_type_name);
+                                            self.type_defs.iter()
+                                                .find(|(k, _)| k.ends_with(&suffix))
+                                                .map(|(_, v)| v)
+                                        });
+                                        match type_def_lookup {
                                             Some(td) => {
                                                 if td.reactive {
                                                     true // Reactive types have runtime intrinsic methods - suppress
@@ -10293,7 +10301,14 @@ impl Compiler {
                                     } else {
                                         type_name
                                     };
-                                    match self.type_defs.get(base_type_name) {
+                                    // Try direct lookup first, then search for qualified versions
+                                    let type_def_lookup = self.type_defs.get(base_type_name).or_else(|| {
+                                        let suffix = format!(".{}", base_type_name);
+                                        self.type_defs.iter()
+                                            .find(|(k, _)| k.ends_with(&suffix))
+                                            .map(|(_, v)| v)
+                                    });
+                                    match type_def_lookup {
                                         Some(td) => {
                                             if td.reactive {
                                                 true // Reactive types have runtime intrinsic methods
