@@ -7255,6 +7255,13 @@ impl Compiler {
     }
 
     fn is_float_expr(&self, expr: &Expr) -> bool {
+        // Check HM-inferred type first - this handles function calls, method calls,
+        // and any expression where type inference resolved to a float type
+        if let Some(ty) = self.inferred_expr_types.get(&expr.span()) {
+            if matches!(ty, nostos_types::Type::Float | nostos_types::Type::Float32 | nostos_types::Type::Float64) {
+                return true;
+            }
+        }
         match expr {
             Expr::Float(_, _) | Expr::Float32(_, _) => true,
             Expr::Int(_, _) | Expr::Int8(_, _) | Expr::Int16(_, _) | Expr::Int32(_, _)
@@ -7312,10 +7319,23 @@ impl Compiler {
                     _ => false,
                 }).unwrap_or(false)
             }
-            // Function calls: assume non-float by default.
-            // We can't know the return type without proper type inference,
-            // and assuming float based on arguments is incorrect (e.g., show(3.14) returns String).
-            Expr::Call(_, _, _, _) => false,
+            // Function calls: check the function's return type
+            Expr::Call(func, _, _, _) => {
+                if let Expr::Var(ident) = func.as_ref() {
+                    // Try bare name first
+                    if let Some(ret_type) = self.get_function_return_type(&ident.node) {
+                        return Self::is_float_type_name(&ret_type);
+                    }
+                    // Try qualified name via resolve_name
+                    let resolved = self.resolve_name(&ident.node);
+                    if resolved != ident.node {
+                        if let Some(ret_type) = self.get_function_return_type(&resolved) {
+                            return Self::is_float_type_name(&ret_type);
+                        }
+                    }
+                }
+                false
+            }
             _ => false, // Assume non-float by default for other expressions
         }
     }
@@ -7399,6 +7419,18 @@ impl Compiler {
 
     /// Check if an expression is known to be an integer at compile time.
     fn is_int_expr(&self, expr: &Expr) -> bool {
+        // Check HM-inferred type first - this handles function calls, method calls,
+        // and any expression where type inference resolved to an int type
+        if let Some(ty) = self.inferred_expr_types.get(&expr.span()) {
+            if matches!(ty, nostos_types::Type::Int | nostos_types::Type::Int64
+                | nostos_types::Type::Int32 | nostos_types::Type::Int16 | nostos_types::Type::Int8
+                | nostos_types::Type::UInt8 | nostos_types::Type::UInt16 | nostos_types::Type::UInt32 | nostos_types::Type::UInt64) {
+                return true;
+            }
+            if matches!(ty, nostos_types::Type::Float | nostos_types::Type::Float32 | nostos_types::Type::Float64) {
+                return false;
+            }
+        }
         match expr {
             Expr::Int(_, _) | Expr::Int8(_, _) | Expr::Int16(_, _) | Expr::Int32(_, _)
             | Expr::UInt8(_, _) | Expr::UInt16(_, _) | Expr::UInt32(_, _) | Expr::UInt64(_, _)
@@ -7459,8 +7491,23 @@ impl Compiler {
                     _ => false,
                 }).unwrap_or(false)
             }
-            // Function calls: assume non-int by default
-            Expr::Call(_, _, _, _) => false,
+            // Function calls: check the function's return type
+            Expr::Call(func, _, _, _) => {
+                if let Expr::Var(ident) = func.as_ref() {
+                    // Try bare name first
+                    if let Some(ret_type) = self.get_function_return_type(&ident.node) {
+                        return Self::is_int_type_name(&ret_type);
+                    }
+                    // Try qualified name via resolve_name
+                    let resolved = self.resolve_name(&ident.node);
+                    if resolved != ident.node {
+                        if let Some(ret_type) = self.get_function_return_type(&resolved) {
+                            return Self::is_int_type_name(&ret_type);
+                        }
+                    }
+                }
+                false
+            }
             _ => false,
         }
     }
