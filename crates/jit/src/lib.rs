@@ -244,7 +244,10 @@ pub struct CompiledStringMatchFunction {
 
 /// External helper for string equality comparison, called from JIT code.
 /// Returns 1 if strings are equal, 0 otherwise.
-pub extern "C" fn nos_str_eq(a_ptr: *const u8, a_len: i64, b_ptr: *const u8, b_len: i64) -> i64 {
+///
+/// # Safety
+/// Caller must ensure a_ptr and b_ptr are valid pointers to at least a_len/b_len bytes.
+pub unsafe extern "C" fn nos_str_eq(a_ptr: *const u8, a_len: i64, b_ptr: *const u8, b_len: i64) -> i64 {
     if a_len != b_len {
         return 0;
     }
