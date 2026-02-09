@@ -1700,6 +1700,8 @@ impl Compiler {
             } else {
                 format!("{}.{}", module_path.join("."), fn_def.name.node)
             };
+            // Set module_path so type_name_to_type can resolve unqualified type names
+            let saved_module_path = std::mem::replace(&mut self.module_path, module_path.clone());
             if let Some(clause) = fn_def.clauses.first() {
                 let param_types: Vec<nostos_types::Type> = clause.params
                     .iter()
@@ -1756,6 +1758,7 @@ impl Compiler {
                     },
                 );
             }
+            self.module_path = saved_module_path;
         }
 
         // TYPE INFERENCE PRE-PASS: Resolve type variables for mutual recursion support
@@ -2698,6 +2701,13 @@ impl Compiler {
                     });
 
                     if has_type_var {
+                        // Set module_path from function name for correct type resolution
+                        let module_path: Vec<String> = fn_name.split('.')
+                            .take(fn_name.matches('.').count())
+                            .map(|s| s.to_string())
+                            .collect();
+                        let saved_path = std::mem::replace(&mut self.module_path, module_path);
+
                         // Try HM inference again now that all dependencies are compiled
                         // Use reference to fn_ast - no need to clone the entire AST
                         let inferred = self.fn_asts.get(fn_name)
@@ -2716,6 +2726,8 @@ impl Compiler {
                                 }
                             }
                         }
+
+                        self.module_path = saved_path;
                     }
                 }
             }
@@ -2759,6 +2771,14 @@ impl Compiler {
                fn_name.starts_with("Set.") || fn_name.starts_with("Json.") {
                 continue;
             }
+
+            // Set module_path from function name for correct type resolution
+            let fn_base = fn_name.split('/').next().unwrap_or(fn_name);
+            let module_path: Vec<String> = fn_base.split('.')
+                .take(fn_base.matches('.').count())
+                .map(|s| s.to_string())
+                .collect();
+            let saved_path = std::mem::replace(&mut self.module_path, module_path);
 
             // Run type checking with full knowledge of all function signatures
             if let Err(e) = self.type_check_fn(fn_ast, fn_name) {
@@ -3113,6 +3133,8 @@ impl Compiler {
                     errors.push((base_name, e, source_name, source));
                 }
             }
+
+            self.module_path = saved_path;
         }
 
         // NOTE: Don't clear pending_fn_signatures yet - the REPL needs them to get variable types
@@ -24383,20 +24405,8 @@ impl Compiler {
             }
         }
 
-        // Also add aliases for all types with their short names (e.g., "RNode" -> "stdlib.rhtml.RNode")
-        // This ensures that within-module type references resolve correctly
-        // Sort keys for deterministic alias assignment when multiple types have the same short name
-        let mut type_names: Vec<_> = self.types.keys().collect();
-        type_names.sort();
-        for type_name in type_names {
-            if let Some(dot_pos) = type_name.rfind('.') {
-                let short_name = &type_name[dot_pos + 1..];
-                // Only add if there isn't already an alias
-                if !env.type_aliases.contains_key(short_name) {
-                    env.add_type_alias(short_name.to_string(), type_name.clone());
-                }
-            }
-        }
+        // Add type aliases with current module's types taking priority
+        self.add_type_aliases_to_env(&mut env);
 
         // Register user-defined traits in the type environment
         // This enables trait method lookup when receiver is a type variable with trait bounds
@@ -25042,20 +25052,8 @@ impl Compiler {
             }
         }
 
-        // Also add aliases for all types with their short names (e.g., "RNode" -> "stdlib.rhtml.RNode")
-        // This ensures that within-module type references resolve correctly
-        // Sort keys for deterministic alias assignment when multiple types have the same short name
-        let mut type_names: Vec<_> = self.types.keys().collect();
-        type_names.sort();
-        for type_name in type_names {
-            if let Some(dot_pos) = type_name.rfind('.') {
-                let short_name = &type_name[dot_pos + 1..];
-                // Only add if there isn't already an alias
-                if !env.type_aliases.contains_key(short_name) {
-                    env.add_type_alias(short_name.to_string(), type_name.clone());
-                }
-            }
-        }
+        // Add type aliases with current module's types taking priority
+        self.add_type_aliases_to_env(&mut env);
 
         // Register trait implementations for custom types
         // All types implement Hash, Show, Eq, and Copy automatically
@@ -26439,9 +26437,22 @@ impl Compiler {
                     "IO" if args.len() == 1 => {
                         nostos_types::Type::IO(Box::new(args.into_iter().next().expect("IO should have 1 type arg")))
                     }
-                    _ => nostos_types::Type::Named {
-                        name: name.to_string(),
-                        args,
+                    _ => {
+                        // Resolve unqualified type names using module context
+                        let resolved_name = if !name.contains('.') && !self.module_path.is_empty() {
+                            let qualified = format!("{}.{}", self.module_path.join("."), name);
+                            if self.types.contains_key(&qualified) {
+                                qualified
+                            } else {
+                                name.to_string()
+                            }
+                        } else {
+                            name.to_string()
+                        };
+                        nostos_types::Type::Named {
+                            name: resolved_name,
+                            args,
+                        }
                     },
                 };
             }
@@ -26476,9 +26487,22 @@ impl Compiler {
                 "IO" if args.len() == 1 => {
                     nostos_types::Type::IO(Box::new(args.into_iter().next().expect("IO should have 1 type arg")))
                 }
-                _ => nostos_types::Type::Named {
-                    name: name.to_string(),
-                    args,
+                _ => {
+                    // Resolve unqualified type names using module context
+                    let resolved_name = if !name.contains('.') && !self.module_path.is_empty() {
+                        let qualified = format!("{}.{}", self.module_path.join("."), name);
+                        if self.types.contains_key(&qualified) {
+                            qualified
+                        } else {
+                            name.to_string()
+                        }
+                    } else {
+                        name.to_string()
+                    };
+                    nostos_types::Type::Named {
+                        name: resolved_name,
+                        args,
+                    }
                 },
             };
         }
@@ -26520,7 +26544,55 @@ impl Compiler {
                         nostos_types::Type::TypeParam(ty.to_string())
                     }
                 } else {
-                    nostos_types::Type::Named { name: ty.to_string(), args: vec![] }
+                    // Try to resolve the type name using module context:
+                    // If unqualified and module_path is set, check qualified version first
+                    let resolved_name = if !ty.contains('.') && !self.module_path.is_empty() {
+                        let qualified = format!("{}.{}", self.module_path.join("."), ty);
+                        if self.types.contains_key(&qualified) {
+                            qualified
+                        } else {
+                            ty.to_string()
+                        }
+                    } else {
+                        ty.to_string()
+                    };
+                    nostos_types::Type::Named { name: resolved_name, args: vec![] }
+                }
+            }
+        }
+    }
+
+    /// Add type aliases to an inference environment, with current module's types taking priority.
+    /// This ensures that within-module type references like `Config` resolve to the local
+    /// module's `mod_b.Config` rather than another module's `mod_a.Config`.
+    fn add_type_aliases_to_env(&self, env: &mut nostos_types::TypeEnv) {
+        let mut type_names: Vec<_> = self.types.keys().collect();
+        type_names.sort();
+        let current_module_prefix = if self.module_path.is_empty() {
+            String::new()
+        } else {
+            format!("{}.", self.module_path.join("."))
+        };
+        // First pass: add non-current-module aliases
+        for type_name in &type_names {
+            if let Some(dot_pos) = type_name.rfind('.') {
+                let short_name = &type_name[dot_pos + 1..];
+                if !current_module_prefix.is_empty() && type_name.starts_with(&current_module_prefix) {
+                    continue;
+                }
+                if !env.type_aliases.contains_key(short_name) {
+                    env.add_type_alias(short_name.to_string(), type_name.to_string());
+                }
+            }
+        }
+        // Second pass: current module's types override (take priority)
+        if !current_module_prefix.is_empty() {
+            for type_name in &type_names {
+                if type_name.starts_with(&current_module_prefix) {
+                    if let Some(dot_pos) = type_name.rfind('.') {
+                        let short_name = &type_name[dot_pos + 1..];
+                        env.add_type_alias(short_name.to_string(), type_name.to_string());
+                    }
                 }
             }
         }
