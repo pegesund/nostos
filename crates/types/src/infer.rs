@@ -5244,16 +5244,18 @@ impl<'a> InferCtx<'a> {
                                 None
                             };
                             if let Some(ref var_ty) = mvar_type {
-                                // Only check concrete types - bare container names like Map without
-                                // type params can't meaningfully unify with parameterized versions.
-                                let is_checkable = !var_ty.has_any_type_var() && !matches!(var_ty,
-                                    Type::Named { args, .. } if args.is_empty());
-                                if is_checkable {
-                                    let value_ty = self.infer_expr(&binding.value)?;
-                                    self.unify(value_ty, var_ty.clone());
-                                } else {
-                                    self.infer_binding(binding)?;
-                                }
+                                // Infer the value expression type
+                                let value_ty = self.infer_expr(&binding.value)?;
+                                // Unify immediately (may be caught by solve)
+                                self.unify(value_ty.clone(), var_ty.clone());
+                                // Also register as deferred typed binding check so that
+                                // after solve() resolves type vars, the mismatch is caught.
+                                // This is needed because batch unify errors are often dropped.
+                                self.deferred_typed_binding_checks.push((
+                                    value_ty,
+                                    var_ty.clone(),
+                                    binding.span,
+                                ));
                             } else {
                                 self.infer_binding(binding)?;
                             }
