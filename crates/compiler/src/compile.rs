@@ -17565,7 +17565,26 @@ impl Compiler {
                         // Check all explicit types are concrete
                         let all_explicit_concrete = explicit_type_names.iter().all(|t| self.is_type_concrete(t));
 
-                        if all_explicit_concrete && explicit_type_names.len() == fn_def.type_params.len() {
+                        // Check for type argument count mismatch
+                        if explicit_type_names.len() != fn_def.type_params.len() {
+                            let param_list = fn_def.type_params.iter()
+                                .map(|tp| tp.name.node.as_str())
+                                .collect::<Vec<_>>().join(", ");
+                            return Err(CompileError::TypeError {
+                                message: format!(
+                                    "wrong number of type arguments: `{}` expects {} type parameter{} [{}], but {} {} provided",
+                                    base_name,
+                                    fn_def.type_params.len(),
+                                    if fn_def.type_params.len() == 1 { "" } else { "s" },
+                                    param_list,
+                                    explicit_type_names.len(),
+                                    if explicit_type_names.len() == 1 { "was" } else { "were" },
+                                ),
+                                span: func.span(),
+                            });
+                        }
+
+                        if all_explicit_concrete {
                             // Get parameter names (may be empty for zero-arg functions)
                             let param_names: Vec<String> = fn_def.clauses[0].params.iter()
                                 .filter_map(|p| self.pattern_binding_name(&p.pattern))
