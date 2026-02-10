@@ -266,7 +266,16 @@ fn type_expr() -> impl Parser<Token, TypeExpr, Error = Simple<Token>> + Clone {
             .delimited_by(just(Token::LParen), just(Token::RParen))
             .map(TypeExpr::Tuple);
 
-        let atom = choice((unit, generic, simple, record, tuple));
+        // List type shorthand: [Int] -> List[Int]
+        let list_type = ty
+            .clone()
+            .delimited_by(just(Token::LBracket), just(Token::RBracket))
+            .map(|inner| {
+                let list_name = Spanned::new("List".to_string(), Span::default());
+                TypeExpr::Generic(list_name, vec![inner])
+            });
+
+        let atom = choice((unit, generic, simple, record, tuple, list_type));
 
         // Function type: T -> U or (T, U) -> V
         let params = ty
