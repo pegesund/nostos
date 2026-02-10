@@ -18552,7 +18552,13 @@ impl Compiler {
         // Generate mangled name: fnbase$Type1_Type2/Type1,Type2
         // The $ identifies this as a monomorphized variant
         // The /signature matches what compile_fn_def generates
-        let type_suffix = arg_type_names.join("_");
+        // IMPORTANT: Replace dots in type names with '~' in the name part (before /)
+        // to avoid confusion with module separators. The signature part (after /)
+        // keeps dots since it's only used for function resolution matching.
+        let type_suffix = arg_type_names.iter()
+            .map(|t| t.replace('.', "~"))
+            .collect::<Vec<_>>()
+            .join("_");
         let sig_suffix = arg_type_names.join(",");
         let mangled_name = format!("{}${}/{}", fn_base, type_suffix, sig_suffix);
 
