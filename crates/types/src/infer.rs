@@ -101,6 +101,11 @@ pub struct InferCtx<'a> {
     /// Deferred concat (++) checks: (left_type, right_type, span).
     /// ++ only works on String ++ String or List[T] ++ List[T].
     deferred_concat_checks: Vec<(Type, Type, Span)>,
+    /// Var IDs that are the result type of a HasField constraint (field access).
+    /// When `x.name` creates HasField(?X, "name", ?Y), ?Y's ID is recorded here.
+    /// In BinOp::Add, we avoid eagerly unifying field-result Vars with Int,
+    /// so the Num trait bound can be checked after HasField resolves the actual type.
+    field_result_vars: HashSet<u32>,
     /// Deferred Set/Map return type checks: function call return types that may
     /// resolve to Set[X] or Map[K, V], requiring Hash+Eq on element/key type.
     deferred_collection_ret_checks: Vec<(Type, Span)>,
@@ -179,6 +184,7 @@ impl<'a> InferCtx<'a> {
             deferred_has_field: Vec::new(),
             deferred_length_checks: Vec::new(),
             deferred_concat_checks: Vec::new(),
+            field_result_vars: HashSet::new(),
             deferred_collection_ret_checks: Vec::new(),
             deferred_fn_call_checks: Vec::new(),
             deferred_generic_trait_checks: Vec::new(),
@@ -446,6 +452,11 @@ impl<'a> InferCtx<'a> {
 
     /// Add a field constraint.
     pub fn require_field(&mut self, ty: Type, field: &str, field_ty: Type) {
+        // Track the result Var ID so BinOp::Add can avoid eager unification
+        // on field-result variables (prevents ?Y=Int before HasField resolves ?Y=String)
+        if let Type::Var(id) = &field_ty {
+            self.field_result_vars.insert(*id);
+        }
         self.constraints
             .push(Constraint::HasField(ty, field.to_string(), field_ty));
     }
@@ -5800,11 +5811,32 @@ impl<'a> InferCtx<'a> {
                         self.require_trait(left_ty.clone(), "Num");
                         Ok(left_ty)
                     }
-                    // Type variable + concrete numeric → unify for lambda parameter inference
-                    (Type::Var(_), Type::Float | Type::Int | Type::Float64 | Type::Int64) => {
-                        self.unify(left_ty.clone(), right_ty.clone());
-                        self.require_trait(left_ty.clone(), "Num");
-                        Ok(left_ty)
+                    // Type variable + concrete numeric
+                    (Type::Var(id), Type::Float | Type::Int | Type::Float64 | Type::Int64) => {
+                        if self.field_result_vars.contains(id) {
+                            // This Var is from a field access (HasField result) - DON'T unify.
+                            // Premature ?Y=Int would lock the wrong type before HasField
+                            // resolves ?Y to the actual field type (e.g., String).
+                            // The Num trait bound will be captured by enrichment and
+                            // checked at call sites after HasField resolution.
+                            self.require_trait(left_ty.clone(), "Num");
+                            Ok(left_ty)
+                        } else {
+                            // Normal Var (lambda param, etc.) - unify to infer the type
+                            self.unify(left_ty.clone(), right_ty.clone());
+                            self.require_trait(left_ty.clone(), "Num");
+                            Ok(left_ty)
+                        }
+                    }
+                    (Type::Float | Type::Int | Type::Float64 | Type::Int64, Type::Var(id)) => {
+                        if self.field_result_vars.contains(id) {
+                            self.require_trait(right_ty.clone(), "Num");
+                            Ok(right_ty)
+                        } else {
+                            self.unify(left_ty.clone(), right_ty.clone());
+                            self.require_trait(left_ty.clone(), "Num");
+                            Ok(left_ty)
+                        }
                     }
                     _ => {
                         // Same type or type variables - standard unification
