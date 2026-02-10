@@ -10130,6 +10130,11 @@ impl Compiler {
                     // 3. It's public and imported (in self.imports)
                     let is_accessible = if self.is_builtin_derivable_trait(trait_name) {
                         true
+                    } else if !trait_name.contains('.') {
+                        // Top-level traits (no module prefix) are always accessible
+                        // from any module context. This enables UFCS dispatch for
+                        // types implementing top-level traits inside module functions.
+                        true
                     } else if let Some(trait_info) = self.trait_defs.get(trait_name) {
                         // Check if trait is from current module
                         let current_module = self.module_path.join(".");
