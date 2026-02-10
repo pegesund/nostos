@@ -5146,6 +5146,20 @@ impl<'a> InferCtx<'a> {
                         // Return the function type, instantiated with fresh type variables
                         return Ok(self.instantiate_function(&fn_type));
                     }
+                    // Fallback: try arity-suffixed lookup for module-qualified functions.
+                    // Functions are registered as "Module.func/_" (with arity suffix) but
+                    // FieldAccess references use bare "Module.func". Search for any arity
+                    // match so module functions can be used as first-class values and in
+                    // pipeline operators (|>).
+                    {
+                        let prefix = format!("{}/", qualified_name);
+                        let found = self.env.functions.iter()
+                            .find(|(k, _)| k.starts_with(&prefix))
+                            .map(|(_, v)| v.clone());
+                        if let Some(fn_type) = found {
+                            return Ok(self.instantiate_function(&fn_type));
+                        }
+                    }
                     // Also check if this is a module-qualified constructor (e.g., MyModule.Blank)
                     // Unit variant constructors don't appear in env.functions since they take no args,
                     // but they should be resolvable via lookup_constructor using the field name.

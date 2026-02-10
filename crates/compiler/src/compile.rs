@@ -1952,8 +1952,19 @@ impl Compiler {
             // types for inner expressions (e.g., method calls inside the function body).
             // The stdlib is only compiled once and cached, so this cost is acceptable.
             let mut ctx = InferCtx::new(&mut env);
-            for (_, (fn_def, _, _, _, _, _)) in &stdlib_fns {
-                let _ = ctx.infer_function(fn_def);
+            for (_, (fn_def, module_path, _, _, _, _)) in &stdlib_fns {
+                // Use qualified name for batch inference (same as Phase 2)
+                if !module_path.is_empty() {
+                    let qualified_name = format!("{}.{}", module_path.join("."), fn_def.name.node);
+                    let mut qualified_def = fn_def.clone();
+                    qualified_def.name = nostos_syntax::Ident {
+                        node: qualified_name,
+                        span: fn_def.name.span,
+                    };
+                    let _ = ctx.infer_function(&qualified_def);
+                } else {
+                    let _ = ctx.infer_function(fn_def);
+                }
             }
 
             // Solve stdlib constraints
@@ -2193,8 +2204,21 @@ impl Compiler {
             if !implicit_fns.is_empty() {
                 ctx.set_known_implicit_fns(implicit_fns);
             }
-            for (_, (fn_def, _, _, _, _, _)) in &user_fns {
-                let _ = ctx.infer_function(fn_def);
+            for (_, (fn_def, module_path, _, _, _, _)) in &user_fns {
+                // Use qualified name for batch inference to prevent cross-module
+                // type variable collision when different modules define functions
+                // with the same bare name (e.g., IntOps.combine vs StrOps.combine).
+                if !module_path.is_empty() {
+                    let qualified_name = format!("{}.{}", module_path.join("."), fn_def.name.node);
+                    let mut qualified_def = fn_def.clone();
+                    qualified_def.name = nostos_syntax::Ident {
+                        node: qualified_name,
+                        span: fn_def.name.span,
+                    };
+                    let _ = ctx.infer_function(&qualified_def);
+                } else {
+                    let _ = ctx.infer_function(fn_def);
+                }
             }
 
             // Solve user constraints - capture trait-bound errors for reporting
