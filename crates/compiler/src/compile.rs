@@ -3905,7 +3905,7 @@ impl Compiler {
             // Build parameter signature for fn_asts key
             let param_types: Vec<String> = clause.params.iter()
                 .map(|p| p.ty.as_ref()
-                    .map(|ty| format!("{:?}", ty))
+                    .map(|ty| self.type_expr_to_string(ty))
                     .unwrap_or_else(|| "_".to_string()))
                 .collect();
             let signature = param_types.join(",");
