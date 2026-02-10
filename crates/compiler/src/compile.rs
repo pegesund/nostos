@@ -9867,9 +9867,22 @@ impl Compiler {
                         };
                         if is_local {
                             true
+                        } else if trait_info.visibility == Visibility::Public {
+                            // Public trait - accessible if:
+                            // 1. Explicitly imported
+                            if self.imports.values().any(|v| v == trait_name) {
+                                true
+                            } else {
+                                // 2. Trait is from the same module as the type being queried
+                                // e.g., type is "Shapes.Circle", trait is "Shapes.Describable"
+                                // If you can access the type qualified, you should be able
+                                // to use its trait methods from the same module.
+                                let type_module = type_name_to_try.rfind('.').map(|p| &type_name_to_try[..p]);
+                                let trait_module = trait_name.rfind('.').map(|p| &trait_name[..p]);
+                                type_module.is_some() && type_module == trait_module
+                            }
                         } else {
-                            // Check if it's public and imported
-                            trait_info.visibility == Visibility::Public && self.imports.values().any(|v| v == trait_name)
+                            false
                         }
                     } else {
                         false
@@ -26482,6 +26495,21 @@ impl Compiler {
             }
         }
 
+        // Register compile-time constants in the type inference environment
+        // so that constant references (e.g., Config.MAX ++ "hello") get proper type checking.
+        for (const_name, const_info) in &self.constants {
+            let const_type = Self::mvar_init_value_to_type(&const_info.value);
+            // Register with qualified name (e.g., "Config.MAX")
+            env.bind(const_name.clone(), const_type.clone(), false);
+            // Also register with local name if it's been imported
+            if let Some(dot_pos) = const_name.rfind('.') {
+                let local_name = &const_name[dot_pos + 1..];
+                if self.imports.get(local_name) == Some(const_name) {
+                    env.bind(local_name.to_string(), const_type, false);
+                }
+            }
+        }
+
         // NOTE: throw/panic are intentionally NOT added to type_check_fn's env.
         // They ARE in try_hm_inference (for signature inference) but not here (for error detection).
         // Reason: throw's `a -> b` type allows HM inference to proceed further in functions
@@ -27338,6 +27366,54 @@ impl Compiler {
 
     /// Convert a type name string to a nostos_types::Type.
     /// Handles parameterized types like "List[Int]" and "Map[String, Int]".
+    /// Convert a compile-time constant value to its corresponding type.
+    /// Used to register constants in the HM inference environment.
+    fn mvar_init_value_to_type(value: &MvarInitValue) -> nostos_types::Type {
+        match value {
+            MvarInitValue::Unit => nostos_types::Type::Unit,
+            MvarInitValue::Bool(_) => nostos_types::Type::Bool,
+            MvarInitValue::Int(_) => nostos_types::Type::Int,
+            MvarInitValue::Float(_) => nostos_types::Type::Float,
+            MvarInitValue::String(_) => nostos_types::Type::String,
+            MvarInitValue::Char(_) => nostos_types::Type::Char,
+            MvarInitValue::EmptyList => nostos_types::Type::List(Box::new(nostos_types::Type::Var(0))),
+            MvarInitValue::IntList(_) => nostos_types::Type::List(Box::new(nostos_types::Type::Int)),
+            MvarInitValue::FloatList(_) => nostos_types::Type::List(Box::new(nostos_types::Type::Float)),
+            MvarInitValue::BoolList(_) => nostos_types::Type::List(Box::new(nostos_types::Type::Bool)),
+            MvarInitValue::StringList(_) => nostos_types::Type::List(Box::new(nostos_types::Type::String)),
+            MvarInitValue::Tuple(items) => {
+                nostos_types::Type::Tuple(items.iter().map(Self::mvar_init_value_to_type).collect())
+            }
+            MvarInitValue::List(items) => {
+                if let Some(first) = items.first() {
+                    nostos_types::Type::List(Box::new(Self::mvar_init_value_to_type(first)))
+                } else {
+                    nostos_types::Type::List(Box::new(nostos_types::Type::Var(0)))
+                }
+            }
+            MvarInitValue::Record(type_name, _) => {
+                nostos_types::Type::Named { name: type_name.clone(), args: vec![] }
+            }
+            MvarInitValue::EmptyMap => nostos_types::Type::Map(
+                Box::new(nostos_types::Type::Var(0)),
+                Box::new(nostos_types::Type::Var(0)),
+            ),
+            MvarInitValue::Map(entries) => {
+                if let Some((k, v)) = entries.first() {
+                    nostos_types::Type::Map(
+                        Box::new(Self::mvar_init_value_to_type(k)),
+                        Box::new(Self::mvar_init_value_to_type(v)),
+                    )
+                } else {
+                    nostos_types::Type::Map(
+                        Box::new(nostos_types::Type::Var(0)),
+                        Box::new(nostos_types::Type::Var(0)),
+                    )
+                }
+            }
+        }
+    }
+
     fn type_name_to_type(&self, ty: &str) -> nostos_types::Type {
         let ty = ty.trim();
 
