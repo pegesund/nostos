@@ -12149,8 +12149,84 @@ impl Compiler {
                             .clone();
                         // Check if this is a placeholder (empty code) - can't use it directly
                         if func.code.code.is_empty() {
-                            // This is a forward reference to a function not yet compiled
-                            // We need to load it by name at runtime instead
+                            // This might be a polymorphic function stub. Try to monomorphize
+                            // using the HM-inferred type for this expression.
+                            if let Some(inferred_ty) = self.inferred_expr_types.get(&ident.span).cloned() {
+                                if let nostos_types::Type::Function(ref ft) = inferred_ty {
+                                    let param_types: Vec<String> = ft.params.iter()
+                                        .map(|t| t.display())
+                                        .collect();
+                                    let all_concrete = param_types.iter().all(|t| self.is_type_concrete(t));
+
+                                    if all_concrete && !param_types.is_empty() {
+                                        if let Some(fn_def) = self.fn_asts.get(&key).cloned() {
+                                            let param_names: Vec<String> = fn_def.clauses[0].params.iter()
+                                                .filter_map(|p| self.pattern_binding_name(&p.pattern))
+                                                .collect();
+                                            if let Ok(mangled_name) = self.compile_monomorphized_variant(&key, &param_types, &param_names) {
+                                                if let Some(mono_func) = self.functions.get(&mangled_name).cloned() {
+                                                    if !mono_func.code.code.is_empty() {
+                                                        let dst = self.alloc_reg();
+                                                        let idx = self.chunk.add_constant(Value::Function(mono_func));
+                                                        self.chunk.emit(Instruction::LoadConst(dst, idx), line);
+                                                        return Ok(dst);
+                                                    }
+                                                }
+                                                // Even if function object isn't available yet, use the mangled name
+                                                let dst = self.alloc_reg();
+                                                let name_idx = self.chunk.add_constant(Value::String(Arc::new(mangled_name)));
+                                                self.chunk.emit(Instruction::LoadFunctionByName(dst, name_idx), line);
+                                                return Ok(dst);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Also try current_type_bindings (during monomorphization)
+                            if !self.current_type_bindings.is_empty() {
+                                // The key has type params like "recSum/List[T]" - substitute them
+                                let fn_base = key.split('/').next().unwrap_or(&key);
+                                if let Some(fn_def) = self.fn_asts.get(&key).cloned() {
+                                    let param_names: Vec<String> = fn_def.clauses[0].params.iter()
+                                        .filter_map(|p| self.pattern_binding_name(&p.pattern))
+                                        .collect();
+                                    let param_types: Vec<Option<String>> = fn_def.clauses[0].params.iter()
+                                        .map(|p| {
+                                            if let Some(ty_expr) = &p.ty {
+                                                let type_str = self.type_expr_to_string_with_bindings(ty_expr);
+                                                let substituted = self.substitute_type_params_in_string(&type_str);
+                                                if self.is_type_concrete(&substituted) {
+                                                    return Some(substituted);
+                                                }
+                                            }
+                                            None
+                                        })
+                                        .collect();
+                                    let concrete: Vec<String> = param_types.iter().filter_map(|t| t.clone()).collect();
+                                    if concrete.len() == param_types.len() && !concrete.is_empty()
+                                        && concrete.iter().all(|t| self.is_type_concrete(t))
+                                    {
+                                        let _ = fn_base; // used above for context
+                                        if let Ok(mangled_name) = self.compile_monomorphized_variant(&key, &concrete, &param_names) {
+                                            if let Some(mono_func) = self.functions.get(&mangled_name).cloned() {
+                                                if !mono_func.code.code.is_empty() {
+                                                    let dst = self.alloc_reg();
+                                                    let idx = self.chunk.add_constant(Value::Function(mono_func));
+                                                    self.chunk.emit(Instruction::LoadConst(dst, idx), line);
+                                                    return Ok(dst);
+                                                }
+                                            }
+                                            let dst = self.alloc_reg();
+                                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(mangled_name)));
+                                            self.chunk.emit(Instruction::LoadFunctionByName(dst, name_idx), line);
+                                            return Ok(dst);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Fallback: load by name at runtime
                             let dst = self.alloc_reg();
                             let name_idx = self.chunk.add_constant(Value::String(Arc::new(key)));
                             self.chunk.emit(Instruction::LoadFunctionByName(dst, name_idx), line);

@@ -1,0 +1,33 @@
+# expect: 0
+# Test that a recursive + generic + trait-bounded function can be passed
+# as a function reference (not lambda-wrapped) to a higher-order function.
+# Previously, the monomorphized variant had empty code because the compiler
+# loaded the polymorphic stub instead of compiling a concrete variant.
+
+trait Summable
+    val(self) -> Int
+end
+
+Int: Summable
+    val(self) = self
+end
+
+# Recursive + generic + trait-bounded
+recSum[T: Summable](lst: List[T]) -> Int =
+    match lst {
+        [] -> 0
+        [x | xs] -> x.val() + recSum(xs)
+    }
+
+applyToList(f: (List[Int]) -> Int, lst: List[Int]) -> Int = f(lst)
+
+main() = {
+    # Direct call works
+    assert_eq(6, recSum([1, 2, 3]))
+
+    # Passing as function reference to HOF
+    result = applyToList(recSum, [1, 2, 3])
+    assert_eq(6, result)
+
+    0
+}
