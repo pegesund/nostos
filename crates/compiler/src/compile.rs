@@ -11869,6 +11869,44 @@ impl Compiler {
                     if self.known_constructors.contains(&full_path) {
                         return self.compile_record(&full_path, &[]);
                     }
+
+                    // Check for module-qualified function reference (e.g., Transform.double)
+                    // used as a first-class value (passed to map, filter, etc.)
+                    if self.functions.contains_key(&full_path) {
+                        let func = self.functions.get(&full_path)
+                            .expect("function must exist after contains_key check")
+                            .clone();
+                        let dst = self.alloc_reg();
+                        if func.code.code.is_empty() {
+                            // Forward reference - load by name at runtime
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(full_path)));
+                            self.chunk.emit(Instruction::LoadFunctionByName(dst, name_idx), line);
+                        } else {
+                            let idx = self.chunk.add_constant(Value::Function(func));
+                            self.chunk.emit(Instruction::LoadConst(dst, idx), line);
+                        }
+                        return Ok(dst);
+                    } else {
+                        // Try with signature suffix (new naming convention: name/param_types)
+                        let prefix = format!("{}/", full_path);
+                        let func_key = self.functions.keys()
+                            .find(|k| k.starts_with(&prefix))
+                            .cloned();
+                        if let Some(key) = func_key {
+                            let func = self.functions.get(&key)
+                                .expect("function key was just found in functions map")
+                                .clone();
+                            let dst = self.alloc_reg();
+                            if func.code.code.is_empty() {
+                                let name_idx = self.chunk.add_constant(Value::String(Arc::new(key)));
+                                self.chunk.emit(Instruction::LoadFunctionByName(dst, name_idx), line);
+                            } else {
+                                let idx = self.chunk.add_constant(Value::Function(func));
+                                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
+                            }
+                            return Ok(dst);
+                        }
+                    }
                 }
 
                 // Regular field access on a record
@@ -19954,7 +19992,7 @@ impl Compiler {
         };
 
         // Extract the module path from the qualified name (everything before the last dot)
-        let function_module: Vec<&str> = qualified_name.rsplitn(2, '.').collect();
+        let function_module: Vec<&str> = base_name.rsplitn(2, '.').collect();
         let function_module = if function_module.len() > 1 {
             function_module[1].split('.').collect::<Vec<_>>()
         } else {
@@ -19974,7 +20012,7 @@ impl Compiler {
 
         // Different module - check if it's imported
         let function_module_string = function_module.join(".");
-        let function_name_with_sig = qualified_name.rsplit('.').next().unwrap_or(qualified_name);
+        let function_name_with_sig = base_name.rsplit('.').next().unwrap_or(base_name);
         let function_name = function_name_with_sig.split('/').next().unwrap_or(function_name_with_sig);
 
         // Check if this is a trait method call (Type.Trait.method pattern)

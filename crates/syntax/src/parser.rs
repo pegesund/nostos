@@ -119,6 +119,29 @@ fn type_name() -> impl Parser<Token, Ident, Error = Simple<Token>> + Clone {
     })
 }
 
+/// Parser for qualified type names (e.g., Module.Type or just Type).
+/// Supports dotted paths like M.Pt for module-qualified type annotations.
+fn qualified_type_name() -> impl Parser<Token, Ident, Error = Simple<Token>> + Clone {
+    type_name()
+        .then(
+            just(Token::Dot)
+                .ignore_then(type_name())
+                .repeated()
+        )
+        .map_with_span(|(first, rest), span| {
+            if rest.is_empty() {
+                first
+            } else {
+                let mut name = first.node;
+                for part in rest {
+                    name.push('.');
+                    name.push_str(&part.node);
+                }
+                make_ident(name, to_span(span))
+            }
+        })
+}
+
 /// Parser for any identifier (lower or upper).
 fn any_ident() -> impl Parser<Token, Ident, Error = Simple<Token>> + Clone {
     filter_map(|span, tok| match tok {
@@ -216,9 +239,9 @@ fn type_expr() -> impl Parser<Token, TypeExpr, Error = Simple<Token>> + Clone {
             .then(just(Token::RParen))
             .map(|_| TypeExpr::Unit);
 
-        let simple = type_name().map(TypeExpr::Name);
+        let simple = qualified_type_name().map(TypeExpr::Name);
 
-        let generic = type_name()
+        let generic = qualified_type_name()
             .then(
                 ty.clone()
                     .separated_by(just(Token::Comma))

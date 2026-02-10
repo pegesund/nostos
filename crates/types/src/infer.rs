@@ -6276,10 +6276,21 @@ impl<'a> InferCtx<'a> {
 
             if let TypeDef::Variant { params, constructors } = def {
                 for ctor in constructors {
-                    let matches = match ctor {
-                        Constructor::Unit(n) => n == name,
-                        Constructor::Positional(n, _) => n == name,
-                        Constructor::Named(n, _) => n == name,
+                    let ctor_name = match ctor {
+                        Constructor::Unit(n) => n.as_str(),
+                        Constructor::Positional(n, _) => n.as_str(),
+                        Constructor::Named(n, _) => n.as_str(),
+                    };
+                    // Match by exact name, or by local part of a qualified name
+                    // e.g., "Shapes.Circle" matches constructor "Circle" in type "Shapes.Shape"
+                    let matches = if ctor_name == name {
+                        true
+                    } else if let Some(dot_pos) = name.rfind('.') {
+                        let module_prefix = &name[..dot_pos];
+                        let local_name = &name[dot_pos + 1..];
+                        local_name == ctor_name && type_name.starts_with(&format!("{}.", module_prefix))
+                    } else {
+                        false
                     };
                     if !matches {
                         continue;
@@ -6356,7 +6367,17 @@ impl<'a> InferCtx<'a> {
             if let TypeDef::Variant { params, constructors } = def {
                 for ctor in constructors {
                     if let Constructor::Named(ctor_name, fields) = ctor {
-                        if ctor_name == name {
+                        // Match by exact name, or by local part of a qualified name
+                        let name_matches = ctor_name == name || {
+                            if let Some(dot_pos) = name.rfind('.') {
+                                let module_prefix = &name[..dot_pos];
+                                let local_name = &name[dot_pos + 1..];
+                                local_name == ctor_name && type_name.starts_with(&format!("{}.", module_prefix))
+                            } else {
+                                false
+                            }
+                        };
+                        if name_matches {
                             let substitution: HashMap<String, Type> = params
                                 .iter()
                                 .map(|p| (p.name.clone(), self.fresh()))
