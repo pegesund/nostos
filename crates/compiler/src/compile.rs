@@ -14455,6 +14455,16 @@ impl Compiler {
                                     call_name.clone()
                                 }
                             } else {
+                                // If calling a polymorphic function with non-concrete types
+                                // (type parameters), and the current function also has type params,
+                                // propagate polymorphism so the current function gets monomorphized too.
+                                // Without this, the current function would call the empty polymorphic stub.
+                                if !all_concrete && !self.current_fn_type_params.is_empty() {
+                                    return Err(CompileError::UnresolvedTraitMethod {
+                                        method: call_name.clone(),
+                                        span: method.span,
+                                    });
+                                }
                                 call_name.clone()
                             }
                         } else {
