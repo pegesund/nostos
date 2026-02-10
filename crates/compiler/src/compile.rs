@@ -14527,7 +14527,20 @@ impl Compiler {
                                     let reg = self.compile_expr_tail(Self::call_arg_expr(&args[i]), false)?;
                                     arg_regs.push(reg);
                                 } else if let Some(Some(default_expr)) = param_defaults.get(i) {
+                                    // Compile default in function definer's import context
+                                    let resolved_qname = self.resolve_name(&qualified_name);
+                                    let prefix = format!("{}/", resolved_qname);
+                                    let saved_imports = self.fn_ast_imports.get(resolved_qname.as_str())
+                                        .or_else(|| self.fn_ast_imports.iter()
+                                            .find(|(k, _)| k.starts_with(&prefix))
+                                            .map(|(_, v)| v))
+                                        .map(|fn_imports| {
+                                            let saved = self.imports.clone();
+                                            self.imports.extend(fn_imports.iter().map(|(k, v)| (k.clone(), v.clone())));
+                                            saved
+                                        });
                                     let reg = self.compile_expr_tail(default_expr, false)?;
+                                    if let Some(saved) = saved_imports { self.imports = saved; }
                                     arg_regs.push(reg);
                                 }
                             }
@@ -16689,15 +16702,41 @@ impl Compiler {
         // Compile arguments, handling polymorphic function arguments specially
         let mut arg_regs = Vec::new();
         for (i, arg) in resolved_args.iter().enumerate() {
+            let is_default = matches!(arg, ResolvedArg::Default(_));
             let expr = match arg {
                 ResolvedArg::Provided(ca) => Self::call_arg_expr(ca),
                 ResolvedArg::Default(e) => e,
             };
+
+            // For default args, temporarily merge the function definer's imports
+            // so that names used in the default expression are resolved correctly
+            let saved_imports_for_default = if is_default {
+                if let Some(ref qname) = maybe_qualified_name {
+                    // Resolve the function name through imports to get the qualified name
+                    let resolved = self.resolve_name(qname);
+                    let prefix = format!("{}/", resolved);
+                    let fn_imports = self.fn_ast_imports.get(resolved.as_str())
+                        .or_else(|| {
+                            self.fn_ast_imports.iter()
+                                .find(|(k, _)| k.starts_with(&prefix))
+                                .map(|(_, v)| v)
+                        });
+                    if let Some(fn_imports) = fn_imports {
+                        let saved = self.imports.clone();
+                        self.imports.extend(fn_imports.iter().map(|(k, v)| (k.clone(), v.clone())));
+                        Some(saved)
+                    } else { None }
+                } else { None }
+            } else { None };
+
             // Get the expected parameter type and substitute any type parameters
             let expected_type = expected_param_types.get(i)
                 .and_then(|t| t.as_ref())
                 .map(|t| self.substitute_type_params(t, &type_param_map));
             let reg = self.compile_arg_with_expected_type(expr, expected_type.as_ref())?;
+
+            // Restore imports after default arg compilation
+            if let Some(saved) = saved_imports_for_default { self.imports = saved; }
 
             // Check for implicit conversion: if the argument expression has a different type
             // than expected, wrap it in a conversion function call.
