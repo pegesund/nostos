@@ -10107,17 +10107,23 @@ impl Compiler {
     /// Find the implementation of a trait method for a given type.
     pub fn find_trait_method(&self, type_name: &str, method_name: &str) -> Option<String> {
         // Look through all traits this type implements
-        // Try both the exact type name and qualified version
+        // Try both the exact type name, qualified version, and import-resolved version
         let type_names_to_try = if type_name.contains('.') {
             vec![type_name.to_string()]
         } else {
-            // Try unqualified first, then try with module prefix
+            let mut names = vec![type_name.to_string()];
+            // Try with module prefix
             let qualified = self.qualify_name(type_name);
-            if qualified == type_name {
-                vec![type_name.to_string()]
-            } else {
-                vec![type_name.to_string(), qualified]
+            if !names.contains(&qualified) {
+                names.push(qualified);
             }
+            // Try resolving through imports (e.g., "Item" -> "Core.Item")
+            if let Some(imported) = self.imports.get(type_name) {
+                if !names.contains(imported) {
+                    names.push(imported.clone());
+                }
+            }
+            names
         };
 
         for type_name_to_try in &type_names_to_try {
