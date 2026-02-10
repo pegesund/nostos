@@ -4636,11 +4636,9 @@ impl<'a> InferCtx<'a> {
                 } else if let Expr::FieldAccess(base_expr, field, _) = func.as_ref() {
                     // Special handling for qualified function calls like good.addf(1, 2)
                     // Also handle module names parsed as unit Record: Expr::Record("Module", [])
-                    let base_name_opt = match base_expr.as_ref() {
-                        Expr::Var(ident) => Some(ident.node.clone()),
-                        Expr::Record(ident, fields, _) if fields.is_empty() => Some(ident.node.clone()),
-                        _ => None,
-                    };
+                    // Recursively extract qualified name to support nested modules:
+                    // Outer.Inner.func(...) => base_expr = FieldAccess(Var("Outer"), "Inner")
+                    let base_name_opt = Self::extract_qualified_name(base_expr);
                     if let Some(ref base_name) = base_name_opt {
                         let qualified_name = format!("{}.{}", base_name, field.node);
                         // Clone to avoid borrow issues
@@ -5130,13 +5128,9 @@ impl<'a> InferCtx<'a> {
 
             // Field access
             Expr::FieldAccess(expr, field, _) => {
-                // Extract the base name from Var or unit Record (module name parsed as Record)
-                // e.g., Expr::Var("panel") or Expr::Record("Status", []) for module names
-                let base_name = match expr.as_ref() {
-                    Expr::Var(ident) => Some(ident.node.clone()),
-                    Expr::Record(ident, fields, _) if fields.is_empty() => Some(ident.node.clone()),
-                    _ => None,
-                };
+                // Extract the base name from Var, unit Record, or nested FieldAccess.
+                // Supports nested modules: Outer.Inner.func => "Outer.Inner"
+                let base_name = Self::extract_qualified_name(expr);
 
                 // Check if this is a qualified function name like "Panel.show"
                 // In this case, look up "Panel.show" in the functions environment
@@ -5446,6 +5440,41 @@ impl<'a> InferCtx<'a> {
                                 self.deferred_fn_call_checks.push((param_ty.clone(), arg_ty.clone(), *call_span));
                             }
                             // Save return type for post-solve Set/Map Hash+Eq checking
+                            self.deferred_collection_ret_checks.push(((*ft.ret).clone(), *call_span));
+                            return Ok(*ft.ret);
+                        }
+                    }
+                }
+
+                // Check if receiver is a nested module path: Outer.Inner.func(args)
+                // This handles deeply qualified function calls via FieldAccess chain
+                if let Some(receiver_base) = Self::extract_qualified_name(receiver) {
+                    let qualified_name = format!("{}.{}", receiver_base, method.node);
+                    let overloads: Vec<FunctionType> = self.env.lookup_all_functions_with_arity(&qualified_name, args.len())
+                        .into_iter().cloned().collect();
+                    if let Some(fn_type) = overloads.into_iter().next() {
+                        let mut arg_types = Vec::new();
+                        for arg in args {
+                            let expr = match arg {
+                                CallArg::Positional(e) | CallArg::Named(_, e) => e,
+                            };
+                            arg_types.push(self.infer_expr(expr)?);
+                        }
+                        let func_ty = self.instantiate_function(&fn_type);
+                        if let Type::Function(ft) = func_ty {
+                            let min_args = ft.required_params.unwrap_or(ft.params.len());
+                            let max_args = ft.params.len();
+                            if arg_types.len() < min_args || arg_types.len() > max_args {
+                                self.last_error_span = Some(*call_span);
+                                return Err(TypeError::ArityMismatch {
+                                    expected: if min_args == max_args { max_args } else { min_args },
+                                    found: arg_types.len(),
+                                });
+                            }
+                            for (param_ty, arg_ty) in ft.params.iter().zip(arg_types.iter()) {
+                                self.unify_at(arg_ty.clone(), param_ty.clone(), *call_span);
+                                self.deferred_fn_call_checks.push((param_ty.clone(), arg_ty.clone(), *call_span));
+                            }
                             self.deferred_collection_ret_checks.push(((*ft.ret).clone(), *call_span));
                             return Ok(*ft.ret);
                         }
@@ -5772,7 +5801,6 @@ impl<'a> InferCtx<'a> {
                         Ok(left_ty)
                     }
                     // Type variable + concrete numeric → unify for lambda parameter inference
-                    // This case handles lambdas where the parameter type needs to be inferred
                     (Type::Var(_), Type::Float | Type::Int | Type::Float64 | Type::Int64) => {
                         self.unify(left_ty.clone(), right_ty.clone());
                         self.require_trait(left_ty.clone(), "Num");
@@ -6241,6 +6269,21 @@ impl<'a> InferCtx<'a> {
     }
 
     /// Look up a constructor and return its type.
+    /// Extract a fully-qualified module path from nested FieldAccess expressions.
+    /// E.g., FieldAccess(FieldAccess(Var("Outer"), "Inner"), "func") => Some("Outer.Inner.func")
+    fn extract_qualified_name(expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Var(ident) => Some(ident.node.clone()),
+            Expr::Record(ident, fields, _) if fields.is_empty() => Some(ident.node.clone()),
+            Expr::FieldAccess(base, field, _) => {
+                Self::extract_qualified_name(base).map(|base_name| {
+                    format!("{}.{}", base_name, field.node)
+                })
+            }
+            _ => None,
+        }
+    }
+
     fn lookup_constructor(&mut self, name: &str) -> Option<Type> {
         // Search through all types for this constructor
         // Sort type names to prioritize user-defined types over stdlib types
