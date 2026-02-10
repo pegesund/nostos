@@ -26671,6 +26671,16 @@ impl Compiler {
                             env.insert_function(local_name, fn_type);
                         }
                     }
+                } else {
+                    // Top-level function (no module dots): register under bare name
+                    // This ensures functions like "getWidth" are available when type-checking
+                    // trait methods that call them (since trait methods are compiled before
+                    // regular functions, self.functions entries have no signature yet).
+                    if !env.functions.contains_key(base_name) {
+                        if let Some(fn_type) = env.functions.get(fn_name).cloned() {
+                            env.insert_function(base_name.to_string(), fn_type);
+                        }
+                    }
                 }
             }
         }
@@ -29588,6 +29598,12 @@ impl Compiler {
                 self.function_visibility.insert(full_name, *vis);
             }
         }
+
+        // Pre-fourth pass: register function signatures in pending_fn_signatures
+        // so that type_check_fn (called from compile_trait_impl) can find all
+        // functions defined in this scope. Without this, trait method return type
+        // mismatches aren't caught because HM inference can't resolve function calls.
+        self.register_function_signatures(items)?;
 
         // Fourth pass: compile trait implementations (NOW functions are visible!)
         for item in items {
