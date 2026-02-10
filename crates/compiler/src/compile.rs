@@ -10152,19 +10152,13 @@ impl Compiler {
                         if is_local {
                             true
                         } else if trait_info.visibility == Visibility::Public {
-                            // Public trait - accessible if:
-                            // 1. Explicitly imported
-                            if self.imports.values().any(|v| v == trait_name) {
-                                true
-                            } else {
-                                // 2. Trait is from the same module as the type being queried
-                                // e.g., type is "Shapes.Circle", trait is "Shapes.Describable"
-                                // If you can access the type qualified, you should be able
-                                // to use its trait methods from the same module.
-                                let type_module = type_name_to_try.rfind('.').map(|p| &type_name_to_try[..p]);
-                                let trait_module = trait_name.rfind('.').map(|p| &trait_name[..p]);
-                                type_module.is_some() && type_module == trait_module
-                            }
+                            // Public traits are always accessible for method dispatch.
+                            // If a type's trait implementation is registered in type_traits,
+                            // it was validated at compile time. The trait being public means
+                            // its methods should be callable from any context, including
+                            // during monomorphization where the caller's imports may differ
+                            // from the original function's module imports.
+                            true
                         } else {
                             false
                         }
