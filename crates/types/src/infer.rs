@@ -1904,7 +1904,7 @@ impl<'a> InferCtx<'a> {
         for (ty, trait_name) in &self.deferred_has_trait.clone() {
             let resolved = self.env.apply_subst(ty);
             match &resolved {
-                Type::Var(_) => {} // Still unresolved, skip
+                Type::Var(_) | Type::TypeParam(_) => {} // Still unresolved or polymorphic, skip
                 Type::Function(_) => {
                     return Err(TypeError::MissingTraitImpl {
                         ty: resolved.display(),
@@ -2089,7 +2089,7 @@ impl<'a> InferCtx<'a> {
         for (ty, trait_name) in &self.deferred_has_trait.clone() {
             let resolved = self.env.apply_subst(ty);
             match &resolved {
-                Type::Var(_) => {} // Still unresolved, skip
+                Type::Var(_) | Type::TypeParam(_) => {} // Still unresolved or polymorphic, skip
                 Type::Function(_) => {
                     return Err(TypeError::MissingTraitImpl {
                         ty: resolved.display(),
