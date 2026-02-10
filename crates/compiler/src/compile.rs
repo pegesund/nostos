@@ -2150,32 +2150,40 @@ impl Compiler {
             // Register top-level bindings in TypeEnv so functions can reference them.
             // For annotated bindings, use the annotation. For unannotated bindings, infer the type.
             {
-                let mut to_infer: Vec<(&str, &nostos_syntax::Expr)> = Vec::new();
+                let mut to_infer: Vec<(&str, &str, &nostos_syntax::Expr)> = Vec::new();
                 for (binding_name, (binding, _, _)) in &self.top_level_bindings {
                     if let Pattern::Var(ident) = &binding.pattern {
                         let bind_name = ident.node.as_str();
                         if let Some(ty_expr) = &binding.ty {
                             let type_str = self.type_expr_to_string(ty_expr);
                             let binding_type = self.type_name_to_type(&type_str);
-                            env.bind(bind_name.to_string(), binding_type, false);
+                            env.bind(bind_name.to_string(), binding_type.clone(), false);
+                            // Also register with qualified name so Module.binding lookups work
+                            if binding_name != bind_name {
+                                env.bind(binding_name.clone(), binding_type, false);
+                            }
                         } else {
-                            to_infer.push((bind_name, &binding.value));
+                            to_infer.push((bind_name, binding_name.as_str(), &binding.value));
                         }
                     }
                 }
                 if !to_infer.is_empty() {
                     let mut tmp_env = env.clone();
                     let mut tmp_ctx = InferCtx::new(&mut tmp_env);
-                    let mut inferred: Vec<(String, nostos_types::Type)> = Vec::new();
-                    for (name, expr) in &to_infer {
+                    let mut inferred: Vec<(String, String, nostos_types::Type)> = Vec::new();
+                    for (name, qualified, expr) in &to_infer {
                         if let Ok(ty) = tmp_ctx.infer_expr(expr) {
-                            inferred.push((name.to_string(), ty));
+                            inferred.push((name.to_string(), qualified.to_string(), ty));
                         }
                     }
                     let _ = tmp_ctx.solve();
-                    for (name, ty) in inferred {
+                    for (name, qualified, ty) in inferred {
                         let resolved = tmp_ctx.apply_full_subst(&ty);
-                        env.bind(name, resolved, false);
+                        env.bind(name.clone(), resolved.clone(), false);
+                        // Also register with qualified name so Module.binding lookups work
+                        if qualified != name {
+                            env.bind(qualified, resolved, false);
+                        }
                     }
                 }
             }
@@ -26429,17 +26437,21 @@ impl Compiler {
         // Using a separate context avoids binding errors leaking into function type checking.
         {
             // Collect unannotated bindings to infer
-            let mut to_infer: Vec<(&str, &nostos_syntax::Expr)> = Vec::new();
-            for (_binding_name, (binding, _, _)) in &self.top_level_bindings {
+            let mut to_infer: Vec<(&str, &str, &nostos_syntax::Expr)> = Vec::new();
+            for (binding_name, (binding, _, _)) in &self.top_level_bindings {
                 if let Pattern::Var(ident) = &binding.pattern {
                     let bind_name = ident.node.as_str();
                     if let Some(ty_expr) = &binding.ty {
                         // Annotated binding - use the annotation directly
                         let type_str = self.type_expr_to_string(ty_expr);
                         let binding_type = self.type_name_to_type(&type_str);
-                        env.bind(bind_name.to_string(), binding_type, false);
+                        env.bind(bind_name.to_string(), binding_type.clone(), false);
+                        // Also register with qualified name so Module.binding lookups work
+                        if binding_name.as_str() != bind_name {
+                            env.bind(binding_name.clone(), binding_type, false);
+                        }
                     } else {
-                        to_infer.push((bind_name, &binding.value));
+                        to_infer.push((bind_name, binding_name.as_str(), &binding.value));
                     }
                 }
             }
@@ -26447,16 +26459,20 @@ impl Compiler {
             if !to_infer.is_empty() {
                 let mut tmp_env = env.clone();
                 let mut tmp_ctx = InferCtx::new(&mut tmp_env);
-                let mut inferred: Vec<(String, nostos_types::Type)> = Vec::new();
-                for (name, expr) in &to_infer {
+                let mut inferred: Vec<(String, String, nostos_types::Type)> = Vec::new();
+                for (name, qualified, expr) in &to_infer {
                     if let Ok(ty) = tmp_ctx.infer_expr(expr) {
-                        inferred.push((name.to_string(), ty));
+                        inferred.push((name.to_string(), qualified.to_string(), ty));
                     }
                 }
                 let _ = tmp_ctx.solve();
-                for (name, ty) in inferred {
+                for (name, qualified, ty) in inferred {
                     let resolved = tmp_ctx.apply_full_subst(&ty);
-                    env.bind(name, resolved, false);
+                    env.bind(name.clone(), resolved.clone(), false);
+                    // Also register with qualified name so Module.binding lookups work
+                    if qualified != name {
+                        env.bind(qualified, resolved, false);
+                    }
                 }
             }
         }
@@ -27499,7 +27515,31 @@ impl Compiler {
                     if self.types.contains_key(ty) {
                         nostos_types::Type::Named { name: ty.to_string(), args: vec![] }
                     } else {
-                        nostos_types::Type::TypeParam(ty.to_string())
+                        // Also check module-qualified version (e.g., "B" -> "M.B")
+                        let qualified = self.qualify_name(ty);
+                        if qualified != ty && self.types.contains_key(&qualified) {
+                            nostos_types::Type::Named { name: qualified, args: vec![] }
+                        } else if let Some(qualified_name) = self.imports.get(ty) {
+                            // Check imports (e.g., "use M.*" maps "B" -> "M.B")
+                            if self.types.contains_key(qualified_name) {
+                                nostos_types::Type::Named { name: qualified_name.clone(), args: vec![] }
+                            } else {
+                                nostos_types::Type::TypeParam(ty.to_string())
+                            }
+                        } else {
+                            // Check if any registered type has this as its short name
+                            // (handles cases where module types exist but aren't imported)
+                            let found_qualified = self.types.keys()
+                                .find(|k| {
+                                    k.rsplit('.').next() == Some(ty)
+                                })
+                                .cloned();
+                            if let Some(qualified_name) = found_qualified {
+                                nostos_types::Type::Named { name: qualified_name, args: vec![] }
+                            } else {
+                                nostos_types::Type::TypeParam(ty.to_string())
+                            }
+                        }
                     }
                 } else {
                     // Try to resolve the type name using module context:

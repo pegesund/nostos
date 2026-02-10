@@ -5175,6 +5175,11 @@ impl<'a> InferCtx<'a> {
                     if let Some(ty) = self.lookup_constructor(&field.node) {
                         return Ok(ty);
                     }
+                    // Check if this is a module-qualified binding (e.g., Constants.greeting)
+                    // Module bindings are registered in env.bindings with their qualified name
+                    if let Some((ty, _)) = self.env.lookup(&qualified_name) {
+                        return Ok(ty.clone());
+                    }
                 }
 
                 // Regular field access on a value
