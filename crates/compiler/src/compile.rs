@@ -2769,6 +2769,61 @@ impl Compiler {
             }
         }
 
+        // Additional recompilation pass: retry functions that FAILED during the first pass
+        // if their error involves any of the newly-polymorphic functions. This handles cases
+        // where main() calls a newly-polymorphic function and monomorphization failed because
+        // the function's code wasn't available yet (e.g., lambdas calling polymorphic functions).
+        if !new_poly_fns.is_empty() && !errors.is_empty() {
+            let new_poly_bases: Vec<String> = new_poly_fns.iter()
+                .map(|n| n.split('/').next().unwrap_or(n).to_string())
+                .collect();
+            let error_fn_names: Vec<String> = errors.iter()
+                .filter(|(_, e, _, _)| {
+                    // Check if the error is UnresolvedTraitMethod or related to a poly function
+                    if let CompileError::UnresolvedTraitMethod { method, .. } = e {
+                        let method_base = method.split('/').next().unwrap_or(method);
+                        new_poly_bases.iter().any(|b| method_base == b)
+                    } else {
+                        false
+                    }
+                })
+                .map(|(name, _, _, _)| name.clone())
+                .collect();
+
+            for fn_name in &error_fn_names {
+                // Find the function in fn_compile_info
+                for (fn_def, module_path, imports, line_starts, source, source_name) in &fn_compile_info {
+                    let compiled_name = if module_path.is_empty() {
+                        fn_def.name.node.clone()
+                    } else {
+                        format!("{}.{}", module_path.join("."), fn_def.name.node)
+                    };
+                    if &compiled_name != fn_name {
+                        continue;
+                    }
+
+                    let saved_path = std::mem::replace(&mut self.module_path, module_path.clone());
+                    let saved_imports = self.imports.clone();
+                    self.imports.extend(imports.clone());
+                    let saved_line_starts = std::mem::replace(&mut self.line_starts, line_starts.clone());
+                    let saved_source = std::mem::replace(&mut self.current_source, Some(source.clone()));
+                    let saved_source_name = std::mem::replace(&mut self.current_source_name, Some(source_name.clone()));
+
+                    if self.compile_fn_def(fn_def).is_ok() {
+                        // Successfully recompiled - remove from errors
+                        errors.retain(|(name, _, _, _)| name != fn_name);
+                    }
+
+                    self.module_path = saved_path;
+                    self.imports = saved_imports;
+                    self.line_starts = saved_line_starts;
+                    self.current_source = saved_source;
+                    self.current_source_name = saved_source_name;
+                    break;
+                }
+            }
+        }
+
         // Clear pending_functions now that we've processed them
         // Note: pending_fn_signatures is kept until after the third pass type-check
         self.pending_functions.clear();
@@ -14514,6 +14569,105 @@ impl Compiler {
                                 } else {
                                     call_name.clone()
                                 }
+                            } else if !self.current_type_bindings.is_empty() {
+                                // During monomorphization (e.g., inside a lambda in a monomorphized
+                                // function), arg types may not be directly known. Try to resolve them
+                                // by looking up HM-inferred types and substituting type bindings.
+                                let resolved_arg_types: Vec<Option<String>> = args.iter()
+                                    .enumerate()
+                                    .map(|(i, a)| {
+                                        // First check if we already have a concrete type
+                                        if let Some(ty) = mod_arg_types.get(i).and_then(|t| t.as_ref()) {
+                                            let substituted = self.substitute_type_params_in_string(ty);
+                                            if self.is_type_concrete(&substituted) {
+                                                return Some(substituted);
+                                            }
+                                        }
+                                        // Try HM-inferred type with substitution
+                                        let arg_expr = Self::call_arg_expr(a);
+                                        if let Some(ty) = self.inferred_expr_types.get(&arg_expr.span()) {
+                                            let type_str = ty.display();
+                                            let substituted = self.substitute_type_params_in_string(&type_str);
+                                            if self.is_type_concrete(&substituted) {
+                                                return Some(substituted);
+                                            }
+                                        }
+                                        None
+                                    })
+                                    .collect();
+                                let resolved_concrete: Vec<String> = resolved_arg_types.iter()
+                                    .filter_map(|t| t.clone())
+                                    .collect();
+                                let all_resolved = resolved_concrete.len() == resolved_arg_types.len();
+                                let all_resolved_concrete = resolved_concrete.iter().all(|t| self.is_type_concrete(t));
+                                if all_resolved && all_resolved_concrete && !resolved_concrete.is_empty() {
+                                    if let Some(fn_def) = self.fn_asts.get(&call_name).cloned() {
+                                        let param_names_mono: Vec<String> = fn_def.clauses[0].params.iter()
+                                            .filter_map(|p| self.pattern_binding_name(&p.pattern))
+                                            .collect();
+                                        match self.compile_monomorphized_variant(&call_name, &resolved_concrete, &param_names_mono) {
+                                            Ok(mangled_name) => mangled_name,
+                                            Err(e) => {
+                                                if matches!(e, CompileError::TypeError { .. }
+                                                    | CompileError::UnresolvedTraitMethod { .. }
+                                                    | CompileError::UnknownFunction { .. }
+                                                    | CompileError::UnknownVariable { .. }) {
+                                                    return Err(e);
+                                                }
+                                                call_name.clone()
+                                            }
+                                        }
+                                    } else {
+                                        call_name.clone()
+                                    }
+                                } else {
+                                    // HM-based resolution failed. Try target function's declared param types.
+                                    if let Some(fn_def) = self.fn_asts.get(&call_name).cloned() {
+                                        let param_names_mono: Vec<String> = fn_def.clauses[0].params.iter()
+                                            .filter_map(|p| self.pattern_binding_name(&p.pattern))
+                                            .collect();
+                                        let resolved_from_decl: Vec<Option<String>> = fn_def.clauses[0].params.iter()
+                                            .map(|p| {
+                                                if let Some(ty_expr) = &p.ty {
+                                                    let type_str = self.type_expr_to_string_with_bindings(ty_expr);
+                                                    if self.is_type_concrete(&type_str) {
+                                                        return Some(type_str);
+                                                    }
+                                                }
+                                                None
+                                            })
+                                            .collect();
+                                        let decl_concrete: Vec<String> = resolved_from_decl.iter()
+                                            .filter_map(|t| t.clone()).collect();
+                                        if decl_concrete.len() == resolved_from_decl.len() && !decl_concrete.is_empty()
+                                            && decl_concrete.iter().all(|t| self.is_type_concrete(t))
+                                        {
+                                            match self.compile_monomorphized_variant(&call_name, &decl_concrete, &param_names_mono) {
+                                                Ok(mangled_name) => {
+                                                    if let Some(&func_idx) = self.function_indices.get(&mangled_name) {
+                                                        let dst = self.alloc_reg();
+                                                        if is_tail {
+                                                            for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                                                                self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+                                                            }
+                                                            self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
+                                                            return Ok(0);
+                                                        } else {
+                                                            self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), line);
+                                                            return Ok(dst);
+                                                        }
+                                                    }
+                                                    mangled_name
+                                                }
+                                                Err(_) => call_name.clone(),
+                                            }
+                                        } else {
+                                            call_name.clone()
+                                        }
+                                    } else {
+                                        call_name.clone()
+                                    }
+                                }
                             } else {
                                 // If calling a polymorphic function with non-concrete types
                                 // (type parameters), and the current function also has type params,
@@ -14524,6 +14678,17 @@ impl Compiler {
                                         method: call_name.clone(),
                                         span: method.span,
                                     });
+                                }
+                                // Check for empty polymorphic stub - propagate error
+                                if self.polymorphic_fns.contains(&call_name) {
+                                    let has_empty_code = self.functions.get(&call_name)
+                                        .map(|f| f.code.code.is_empty()).unwrap_or(false);
+                                    if has_empty_code {
+                                        return Err(CompileError::UnresolvedTraitMethod {
+                                            method: call_name.clone(),
+                                            span: method.span,
+                                        });
+                                    }
                                 }
                                 call_name.clone()
                             }
@@ -17426,6 +17591,105 @@ impl Compiler {
                 } else {
                     call_name.clone()
                 }
+            } else if is_polymorphic && !self.current_type_bindings.is_empty() {
+                // During monomorphization (e.g., inside a lambda in a monomorphized function),
+                // arg types may not be directly resolved. Try using HM-inferred types with
+                // type parameter substitution from current_type_bindings.
+                let resolved_arg_types: Vec<Option<String>> = args.iter()
+                    .enumerate()
+                    .map(|(i, a)| {
+                        // First check if we already have a concrete type
+                        if let Some(ty) = arg_types.get(i).and_then(|t| t.as_ref()) {
+                            let substituted = self.substitute_type_params_in_string(ty);
+                            if self.is_type_concrete(&substituted) {
+                                return Some(substituted);
+                            }
+                        }
+                        // Try HM-inferred type with substitution
+                        let arg_expr = Self::call_arg_expr(a);
+                        if let Some(ty) = self.inferred_expr_types.get(&arg_expr.span()) {
+                            let type_str = ty.display();
+                            let substituted = self.substitute_type_params_in_string(&type_str);
+                            if self.is_type_concrete(&substituted) {
+                                return Some(substituted);
+                            }
+                        }
+                        None
+                    })
+                    .collect();
+                let resolved_concrete: Vec<String> = resolved_arg_types.iter()
+                    .filter_map(|t| t.clone())
+                    .collect();
+                let all_resolved = resolved_concrete.len() == resolved_arg_types.len();
+                let all_resolved_concrete = resolved_concrete.iter().all(|t| self.is_type_concrete(t));
+                if all_resolved && all_resolved_concrete && !resolved_concrete.is_empty() {
+                    if let Some(fn_def) = self.fn_asts.get(&call_name).cloned() {
+                        let param_names: Vec<String> = fn_def.clauses[0].params.iter()
+                            .filter_map(|p| self.pattern_binding_name(&p.pattern))
+                            .collect();
+                        match self.compile_monomorphized_variant(&call_name, &resolved_concrete, &param_names) {
+                            Ok(mangled_name) => mangled_name,
+                            Err(e) => {
+                                if matches!(e, CompileError::TypeError { .. }
+                                    | CompileError::UnresolvedTraitMethod { .. }
+                                    | CompileError::UnknownFunction { .. }
+                                    | CompileError::UnknownVariable { .. }) {
+                                    return Err(e);
+                                }
+                                call_name.clone()
+                            }
+                        }
+                    } else {
+                        call_name.clone()
+                    }
+                } else {
+                    // HM-based resolution failed. Try target function's declared param types.
+                    if let Some(fn_def) = self.fn_asts.get(&call_name).cloned() {
+                        let param_names: Vec<String> = fn_def.clauses[0].params.iter()
+                            .filter_map(|p| self.pattern_binding_name(&p.pattern))
+                            .collect();
+                        let resolved_from_decl: Vec<Option<String>> = fn_def.clauses[0].params.iter()
+                            .map(|p| {
+                                if let Some(ty_expr) = &p.ty {
+                                    let type_str = self.type_expr_to_string_with_bindings(ty_expr);
+                                    if self.is_type_concrete(&type_str) {
+                                        return Some(type_str);
+                                    }
+                                }
+                                None
+                            })
+                            .collect();
+                        let decl_concrete: Vec<String> = resolved_from_decl.iter()
+                            .filter_map(|t| t.clone()).collect();
+                        if decl_concrete.len() == resolved_from_decl.len() && !decl_concrete.is_empty()
+                            && decl_concrete.iter().all(|t| self.is_type_concrete(t))
+                        {
+                            match self.compile_monomorphized_variant(&call_name, &decl_concrete, &param_names) {
+                                Ok(mangled_name) => {
+                                    if let Some(&func_idx) = self.function_indices.get(&mangled_name) {
+                                        let dst = self.alloc_reg();
+                                        if is_tail {
+                                            for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                                                self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+                                            }
+                                            self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
+                                            return Ok(0);
+                                        } else {
+                                            self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), line);
+                                            return Ok(dst);
+                                        }
+                                    }
+                                    mangled_name
+                                }
+                                Err(_) => call_name.clone(),
+                            }
+                        } else {
+                            call_name.clone()
+                        }
+                    } else {
+                        call_name.clone()
+                    }
+                }
             } else {
                 // If calling a polymorphic function with type parameters (not concrete types),
                 // we need to propagate the polymorphism. This happens when a polymorphic function
@@ -17438,6 +17702,79 @@ impl Compiler {
                         method: call_name.clone(),
                         span: func.span(),
                     });
+                }
+                // If the target function is polymorphic (has empty code stub), we need to handle
+                // two cases:
+                // 1. During normal compilation: propagate UnresolvedTraitMethod so the enclosing
+                //    function gets marked as polymorphic too.
+                // 2. During monomorphization (current_type_bindings is non-empty): try to
+                //    determine arg types from the target function's type params + type bindings.
+                if is_polymorphic {
+                    let has_empty_code = self.functions.get(&call_name)
+                        .map(|f| f.code.code.is_empty()).unwrap_or(false);
+                    if has_empty_code {
+                        if !self.current_type_bindings.is_empty() {
+                            // During monomorphization: try to resolve arg types from the
+                            // target function's declared parameter types + type bindings.
+                            // E.g., doubled[T: Num](x: T) with T->Int => monomorphize with [Int]
+                            if let Some(fn_def) = self.fn_asts.get(&call_name).cloned() {
+                                let param_names: Vec<String> = fn_def.clauses[0].params.iter()
+                                    .filter_map(|p| self.pattern_binding_name(&p.pattern))
+                                    .collect();
+                                // Get declared param types and substitute type bindings
+                                let resolved_types: Vec<Option<String>> = fn_def.clauses[0].params.iter()
+                                    .map(|p| {
+                                        if let Some(ty_expr) = &p.ty {
+                                            let type_str = self.type_expr_to_string_with_bindings(ty_expr);
+                                            if self.is_type_concrete(&type_str) {
+                                                return Some(type_str);
+                                            }
+                                        }
+                                        // Try type param names directly from fn type params
+                                        if let Some(ty_expr) = &p.ty {
+                                            if let nostos_syntax::TypeExpr::Name(ident) = ty_expr {
+                                                if let Some(concrete) = self.current_type_bindings.get(&ident.node) {
+                                                    return Some(concrete.clone());
+                                                }
+                                            }
+                                        }
+                                        None
+                                    })
+                                    .collect();
+                                let resolved_concrete: Vec<String> = resolved_types.iter()
+                                    .filter_map(|t| t.clone()).collect();
+                                if resolved_concrete.len() == resolved_types.len() && !resolved_concrete.is_empty()
+                                    && resolved_concrete.iter().all(|t| self.is_type_concrete(t))
+                                {
+                                    match self.compile_monomorphized_variant(&call_name, &resolved_concrete, &param_names) {
+                                        Ok(mangled_name) => {
+                                            // Successfully monomorphized - use the new variant
+                                            if let Some(&func_idx) = self.function_indices.get(&mangled_name) {
+                                                let dst = self.alloc_reg();
+                                                if is_tail {
+                                                    for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                                                        self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+                                                    }
+                                                    self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
+                                                    return Ok(0);
+                                                } else {
+                                                    self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), line);
+                                                    return Ok(dst);
+                                                }
+                                            }
+                                        }
+                                        Err(_) => {} // Fall through
+                                    }
+                                }
+                            }
+                        }
+                        // Not during monomorphization, or monomorphization failed.
+                        // Propagate error so enclosing function gets marked as polymorphic.
+                        return Err(CompileError::UnresolvedTraitMethod {
+                            method: call_name.clone(),
+                            span: func.span(),
+                        });
+                    }
                 }
                 call_name.clone()
             };
