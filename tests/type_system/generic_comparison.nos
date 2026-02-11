@@ -1,0 +1,14 @@
+# expect: true
+# Test that generic comparison operators work with non-Int types
+myMin(a, b) = if a < b then a else b
+myMax(a, b) = if a > b then a else b
+
+main() = {
+    # String comparison
+    s = myMin("apple", "banana")
+    # Int comparison
+    i = myMax(3, 7)
+    # Float comparison
+    f = myMin(1.5, 2.5)
+    s == "apple" && i == 7 && f == 1.5
+}

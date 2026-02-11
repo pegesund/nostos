@@ -16357,12 +16357,18 @@ impl Compiler {
         let is_bigint = left_is_bigint || right_is_bigint;
         let is_string = self.is_string_expr(left) || self.is_string_expr(right);
 
-        // Check if either operand is a type parameter (unknown concrete type at compile time)
+        // Check if either operand is a type parameter or polymorphic (unknown concrete type at compile time)
         let is_type_param = {
             let lt = self.expr_type_name(left);
             let rt = self.expr_type_name(right);
-            (lt.as_ref().map_or(false, |t| self.is_current_type_param(t)))
-                || (rt.as_ref().map_or(false, |t| self.is_current_type_param(t)))
+            let is_polymorphic = |t: &str| t.ends_with("(polymorphic)") || t.ends_with("(type parameter)");
+            // If we can't determine the type (None), and the op is a comparison,
+            // treat as polymorphic to avoid emitting Int-specific ops that fail on String/Float
+            let lt_unknown = lt.is_none() && !is_float && !is_string;
+            let rt_unknown = rt.is_none() && !is_float && !is_string;
+            (lt.as_ref().map_or(false, |t| self.is_current_type_param(t) || is_polymorphic(t)))
+                || (rt.as_ref().map_or(false, |t| self.is_current_type_param(t) || is_polymorphic(t)))
+                || (lt_unknown && rt_unknown)
         };
 
         // Compile-time coercion: if one side is float and the other is an int literal,
