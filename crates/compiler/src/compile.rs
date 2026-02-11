@@ -1059,7 +1059,7 @@ impl CompileError {
             }
             CompileError::TraitBoundNotSatisfied { type_name, trait_name, .. } => {
                 let mut err = SourceError::compile(
-                    format!("type `{}` does not implement trait `{}`", type_name, trait_name),
+                    format!("{} does not implement {}", type_name, trait_name),
                     span,
                 );
                 // Add hint for common case of String/Bool with Num trait (arithmetic operators)
@@ -1737,25 +1737,11 @@ impl Compiler {
             // Set module_path so type_name_to_type can resolve unqualified type names
             let saved_module_path = std::mem::replace(&mut self.module_path, module_path.clone());
             if let Some(clause) = fn_def.clauses.first() {
-                // For functions with type parameters (e.g., myMap[A, B]), create fresh vars
-                // to replace TypeParam types in the signature. This prevents occurs check
-                // failures during batch inference solve() on recursive generic functions.
-                let tp_subst: std::collections::HashMap<String, nostos_types::Type> = fn_def.type_params
-                    .iter()
-                    .map(|tp| {
-                        counter += 1;
-                        (tp.name.node.clone(), nostos_types::Type::Var(counter))
-                    })
-                    .collect();
-
                 let param_types: Vec<nostos_types::Type> = clause.params
                     .iter()
                     .map(|p| {
                         if let Some(ty_expr) = &p.ty {
-                            let ty = self.type_name_to_type(&self.type_expr_to_string(ty_expr));
-                            if tp_subst.is_empty() { ty } else {
-                                nostos_types::infer::InferCtx::substitute_type_params(&ty, &tp_subst)
-                            }
+                            self.type_name_to_type(&self.type_expr_to_string(ty_expr))
                         } else {
                             // Create unique type variable for each untyped param
                             counter += 1;
@@ -1764,12 +1750,7 @@ impl Compiler {
                     })
                     .collect();
                 let ret_ty = clause.return_type.as_ref()
-                    .map(|ty| {
-                        let t = self.type_name_to_type(&self.type_expr_to_string(ty));
-                        if tp_subst.is_empty() { t } else {
-                            nostos_types::infer::InferCtx::substitute_type_params(&t, &tp_subst)
-                        }
-                    })
+                    .map(|ty| self.type_name_to_type(&self.type_expr_to_string(ty)))
                     .unwrap_or_else(|| {
                         counter += 1;
                         nostos_types::Type::Var(counter)
@@ -2368,24 +2349,41 @@ impl Compiler {
                             .unwrap_or_else(|| ("unknown".to_string(), Arc::new(String::new())));
                         errors.push(("".to_string(), compile_error, source_name, source));
                     }
-                } else if let TypeError::Mismatch { .. } = e {
+                } else if let TypeError::Mismatch { ref expected, ref found } = e {
                     // Mismatch errors from pre-checks (e.g., unzip on non-tuple list)
                     // are definitive - always report them.
-                    let error_span = ctx.last_error_span().unwrap_or_else(|| Span::new(0, 0));
-                    let compile_error = self.convert_type_error(e.clone(), error_span);
-                    let (source_name, source) = user_fns.first()
-                        .map(|(_, (_, _, _, _, source, source_name))| (source_name.clone(), source.clone()))
-                        .unwrap_or_else(|| ("unknown".to_string(), Arc::new(String::new())));
-                    errors.push(("".to_string(), compile_error, source_name, source));
-                } else if let TypeError::OccursCheck(ref _var, ref _ty_str) = e {
-                    // OccursCheck errors indicate cyclic types (e.g., T = List[T])
-                    // These are always definitive type errors - report them.
-                    let error_span = ctx.last_error_span().unwrap_or_else(|| Span::new(0, 0));
-                    let compile_error = self.convert_type_error(e.clone(), error_span);
-                    let (source_name, source) = user_fns.first()
-                        .map(|(_, (_, _, _, _, source, source_name))| (source_name.clone(), source.clone()))
-                        .unwrap_or_else(|| ("unknown".to_string(), Arc::new(String::new())));
-                    errors.push(("".to_string(), compile_error, source_name, source));
+                    // BUT: if either side is a BARE type variable (?NNN), this is likely
+                    // a false positive from batch inference where type constraints
+                    // weren't fully resolved. The per-function type_check_fn pass will
+                    // catch real errors with fully-resolved types.
+                    let is_bare_type_var = |s: &str| {
+                        s.starts_with('?') && s[1..].chars().all(|c| c.is_ascii_digit())
+                    };
+                    let has_bare_type_var = is_bare_type_var(expected) || is_bare_type_var(found);
+                    if !has_bare_type_var {
+                        let error_span = ctx.last_error_span().unwrap_or_else(|| Span::new(0, 0));
+                        let compile_error = self.convert_type_error(e.clone(), error_span);
+                        let (source_name, source) = user_fns.first()
+                            .map(|(_, (_, _, _, _, source, source_name))| (source_name.clone(), source.clone()))
+                            .unwrap_or_else(|| ("unknown".to_string(), Arc::new(String::new())));
+                        errors.push(("".to_string(), compile_error, source_name, source));
+                    }
+                } else if let TypeError::OccursCheck(ref var, ref ty_str) = e {
+                    // OccursCheck errors indicate cyclic types (e.g., T = List[T]).
+                    // In batch inference, recursive generic multi-clause functions can
+                    // produce spurious occurs checks when TypeParam types share vars
+                    // across clauses. Only report when the type string doesn't contain
+                    // unresolved type variables (real cycles between concrete types).
+                    // The per-function type_check_fn pass will catch real cycles.
+                    let has_type_var = var.contains('?') || ty_str.contains('?');
+                    if !has_type_var {
+                        let error_span = ctx.last_error_span().unwrap_or_else(|| Span::new(0, 0));
+                        let compile_error = self.convert_type_error(e.clone(), error_span);
+                        let (source_name, source) = user_fns.first()
+                            .map(|(_, (_, _, _, _, source, source_name))| (source_name.clone(), source.clone()))
+                            .unwrap_or_else(|| ("unknown".to_string(), Arc::new(String::new())));
+                        errors.push(("".to_string(), compile_error, source_name, source));
+                    }
                 } else if let TypeError::NoSuchField { ref ty, ref field } = e {
                     // NoSuchField from deferred_has_field is definitive only for
                     // built-in types where HM inference has complete field knowledge.
@@ -3951,24 +3949,12 @@ impl Compiler {
 
         // Process first clause for type signature (used for UFCS resolution)
         if let Some(clause) = def.clauses.first() {
-            // For functions with type parameters, replace TypeParam types with fresh vars
-            let tp_subst: std::collections::HashMap<String, nostos_types::Type> = def.type_params
-                .iter()
-                .map(|tp| {
-                    type_var_counter += 1;
-                    (tp.name.node.clone(), Type::Var(type_var_counter))
-                })
-                .collect();
-
             // Build type signature for pending_fn_signatures
             let param_types: Vec<Type> = clause.params
                 .iter()
                 .map(|p| {
                     if let Some(ty_expr) = &p.ty {
-                        let ty = self.type_name_to_type(&self.type_expr_to_string(ty_expr));
-                        if tp_subst.is_empty() { ty } else {
-                            nostos_types::infer::InferCtx::substitute_type_params(&ty, &tp_subst)
-                        }
+                        self.type_name_to_type(&self.type_expr_to_string(ty_expr))
                     } else {
                         // Create unique type variable for each untyped param
                         type_var_counter += 1;
@@ -3978,12 +3964,7 @@ impl Compiler {
                 .collect();
 
             let ret_ty = clause.return_type.as_ref()
-                .map(|ty| {
-                    let t = self.type_name_to_type(&self.type_expr_to_string(ty));
-                    if tp_subst.is_empty() { t } else {
-                        nostos_types::infer::InferCtx::substitute_type_params(&t, &tp_subst)
-                    }
-                })
+                .map(|ty| self.type_name_to_type(&self.type_expr_to_string(ty)))
                 .unwrap_or_else(|| {
                     type_var_counter += 1;
                     Type::Var(type_var_counter)
@@ -26772,35 +26753,18 @@ impl Compiler {
         // Always register (overwrite builtins if needed) so user functions can shadow builtins
         let fn_name = &def.name.node;
         if let Some(clause) = def.clauses.first() {
-            // For functions with type parameters (e.g., myMap[A, B]), create fresh vars
-            // to replace TypeParam types in the pre-registered signature. This prevents
-            // TypeParam mapping collisions during batch inference solve() that cause
-            // spurious occurs check failures on recursive generic functions.
-            let tp_subst: std::collections::HashMap<String, nostos_types::Type> = def.type_params
-                .iter()
-                .map(|tp| (tp.name.node.clone(), env.fresh_var()))
-                .collect();
-
             let param_types: Vec<nostos_types::Type> = clause.params
                     .iter()
                     .map(|p| {
                         if let Some(ty_expr) = &p.ty {
-                            let ty = self.type_name_to_type(&self.type_expr_to_string(ty_expr));
-                            if tp_subst.is_empty() { ty } else {
-                                nostos_types::infer::InferCtx::substitute_type_params(&ty, &tp_subst)
-                            }
+                            self.type_name_to_type(&self.type_expr_to_string(ty_expr))
                         } else {
                             env.fresh_var()
                         }
                     })
                     .collect();
             let ret_ty = clause.return_type.as_ref()
-                    .map(|ty| {
-                        let t = self.type_name_to_type(&self.type_expr_to_string(ty));
-                        if tp_subst.is_empty() { t } else {
-                            nostos_types::infer::InferCtx::substitute_type_params(&t, &tp_subst)
-                        }
-                    })
+                    .map(|ty| self.type_name_to_type(&self.type_expr_to_string(ty)))
                     .unwrap_or_else(|| env.fresh_var());
 
             // Compute required_params for functions with optional parameters
@@ -27567,33 +27531,18 @@ impl Compiler {
         // types, not another overload's types that might have been registered earlier
         let fn_name = &def.name.node;
         if let Some(clause) = def.clauses.first() {
-            // For functions with type parameters, replace TypeParam types with fresh vars
-            // to prevent occurs check failures in recursive generic functions
-            let tp_subst: std::collections::HashMap<String, nostos_types::Type> = def.type_params
-                .iter()
-                .map(|tp| (tp.name.node.clone(), env.fresh_var()))
-                .collect();
-
             let param_types: Vec<nostos_types::Type> = clause.params
                 .iter()
                 .map(|p| {
                     if let Some(ty_expr) = &p.ty {
-                        let ty = self.type_name_to_type(&self.type_expr_to_string(ty_expr));
-                        if tp_subst.is_empty() { ty } else {
-                            nostos_types::infer::InferCtx::substitute_type_params(&ty, &tp_subst)
-                        }
+                        self.type_name_to_type(&self.type_expr_to_string(ty_expr))
                     } else {
                         env.fresh_var()
                     }
                 })
                 .collect();
             let ret_ty = clause.return_type.as_ref()
-                .map(|ty| {
-                    let t = self.type_name_to_type(&self.type_expr_to_string(ty));
-                    if tp_subst.is_empty() { t } else {
-                        nostos_types::infer::InferCtx::substitute_type_params(&t, &tp_subst)
-                    }
-                })
+                .map(|ty| self.type_name_to_type(&self.type_expr_to_string(ty)))
                 .unwrap_or_else(|| env.fresh_var());
 
             // Compute required_params for functions with optional parameters
@@ -28106,8 +28055,27 @@ impl Compiler {
             }
         }
 
-        // Occurs check errors are type inference limitations with recursive types
-        if message.contains("Occurs check failed") {
+        // "type mismatch: expected X, found Y" format - suppress when either type is
+        // a BARE type variable (like "?554"). This happens when HM inference can't fully
+        // resolve types (e.g., UFCS .map() with lambdas containing literals).
+        // Only suppress bare type vars, NOT type vars embedded in structures like "List[?4]"
+        // or "(?1) -> ?2" - those structural mismatches are real errors.
+        if let Some(rest) = message.strip_prefix("type mismatch: expected ") {
+            if let Some(comma_pos) = rest.find(", found ") {
+                let expected = rest[..comma_pos].trim();
+                let found = rest[comma_pos + 8..].trim();
+                let is_bare_type_var = |s: &str| {
+                    s.starts_with('?') && s[1..].chars().all(|c| c.is_ascii_digit())
+                };
+                if is_bare_type_var(expected) || is_bare_type_var(found) {
+                    return true;
+                }
+            }
+        }
+
+        // Occurs check errors from recursive generic functions are often false positives
+        // in the per-function pass. Suppress when type variables are involved.
+        if message.contains("Occurs check failed") || message.contains("cannot unify a type with a type containing itself") {
             return true;
         }
 

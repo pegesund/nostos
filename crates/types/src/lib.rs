@@ -955,6 +955,24 @@ impl Type {
         }
     }
 
+    /// Check if this type contains any TypeParam (explicit generic type parameter).
+    pub fn has_type_params(&self) -> bool {
+        match self {
+            Type::TypeParam(_) => true,
+            Type::Tuple(elems) => elems.iter().any(|t| t.has_type_params()),
+            Type::List(elem) | Type::Array(elem) | Type::Set(elem) | Type::IO(elem) => {
+                elem.has_type_params()
+            }
+            Type::Map(k, v) => k.has_type_params() || v.has_type_params(),
+            Type::Record(rec) => rec.fields.iter().any(|(_, t, _)| t.has_type_params()),
+            Type::Function(f) => {
+                f.params.iter().any(|t| t.has_type_params()) || f.ret.has_type_params()
+            }
+            Type::Named { args, .. } => args.iter().any(|t| t.has_type_params()),
+            _ => false,
+        }
+    }
+
     /// Check if this type is fully concrete (no type variables or type parameters).
     /// A concrete type can be used in type annotations.
     pub fn is_concrete(&self) -> bool {

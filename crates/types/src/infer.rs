@@ -1024,6 +1024,46 @@ impl<'a> InferCtx<'a> {
         }
     }
 
+    /// Collect unique TypeParam names from a type.
+    fn collect_type_param_names(ty: &Type, names: &mut Vec<String>) {
+        match ty {
+            Type::TypeParam(name) => {
+                if !names.contains(name) {
+                    names.push(name.clone());
+                }
+            }
+            Type::List(elem) | Type::Array(elem) | Type::Set(elem) | Type::IO(elem) => {
+                Self::collect_type_param_names(elem, names);
+            }
+            Type::Map(k, v) => {
+                Self::collect_type_param_names(k, names);
+                Self::collect_type_param_names(v, names);
+            }
+            Type::Tuple(elems) => {
+                for elem in elems {
+                    Self::collect_type_param_names(elem, names);
+                }
+            }
+            Type::Function(ft) => {
+                for p in &ft.params {
+                    Self::collect_type_param_names(p, names);
+                }
+                Self::collect_type_param_names(&ft.ret, names);
+            }
+            Type::Named { args, .. } => {
+                for arg in args {
+                    Self::collect_type_param_names(arg, names);
+                }
+            }
+            Type::Record(rec) => {
+                for (_, field_ty, _) in &rec.fields {
+                    Self::collect_type_param_names(field_ty, names);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Parse a simple type string from a signature encoding back into a Type.
     /// Handles primitives (Int, String, Bool, etc.), single-letter type params,
     /// and basic compound types (List[X], (X, Y)).
@@ -4436,13 +4476,6 @@ impl<'a> InferCtx<'a> {
                 let name = &ident.node;
                 // Check if this is a type parameter in the explicit scope
                 if type_params.contains(name) {
-                    // If we have an eager mapping for this type param, use the mapped var
-                    // directly. This avoids TypeParam types leaking into deferred constraints
-                    // which break when type_param_mappings are cleared between functions
-                    // in batch inference.
-                    if let Some(mapped) = self.type_param_mappings.get(name) {
-                        return mapped.clone();
-                    }
                     return Type::TypeParam(name.clone());
                 }
                 match name.as_str() {
@@ -4662,17 +4695,9 @@ impl<'a> InferCtx<'a> {
                             };
                             let sig = overloads[best_idx.unwrap_or(0)].clone();
                             if is_recursive {
-                                // For recursive calls to functions WITH type params, use
-                                // instantiate_function to create fresh vars. This prevents
-                                // occurs check failures when multi-clause pre-registration
-                                // creates independent param vars (e.g., myMap[A,B](MyCons(h,t), f)).
-                                // For recursive calls WITHOUT type params, use instantiate_type_params
-                                // to preserve the existing var connections.
-                                if sig.type_params.is_empty() {
-                                    self.instantiate_type_params(&Type::Function(sig))
-                                } else {
-                                    self.instantiate_function(&sig)
-                                }
+                                // Convert TypeParams to type variables using consistent mappings
+                                // This ensures the same TypeParam (e.g., "a") always maps to the same var
+                                self.instantiate_type_params(&Type::Function(sig))
                             } else {
                                 self.instantiate_function(&sig)
                             }
@@ -6730,20 +6755,8 @@ impl<'a> InferCtx<'a> {
             // Store constraints for this type param (e.g., T: Sizeable -> ["Sizeable"])
             let constraints: Vec<String> = tp.constraints.iter().map(|b| b.node.clone()).collect();
             if !constraints.is_empty() {
-                self.current_type_param_constraints.insert(tp.name.node.clone(), constraints.clone());
+                self.current_type_param_constraints.insert(tp.name.node.clone(), constraints);
             }
-            // Eagerly create type_param_mappings for declared type params.
-            // This ensures that TypeParam("A") produced by type_from_ast during clause
-            // inference always resolves to the same fresh var, preventing occurs check
-            // failures on recursive generic functions (e.g., myMap[A,B] over MyList[T]).
-            let fresh = self.fresh();
-            // Apply declared trait constraints to the fresh var
-            if let Type::Var(var_id) = fresh {
-                for constraint in &constraints {
-                    self.add_trait_bound(var_id, constraint.clone());
-                }
-            }
-            self.type_param_mappings.insert(tp.name.node.clone(), fresh);
         }
 
         // Get pre-registered type if available (for recursive calls to use the same vars)
@@ -6762,6 +6775,49 @@ impl<'a> InferCtx<'a> {
                 let all_overloads = self.env.lookup_all_functions_with_arity(name, arity);
                 all_overloads.first().cloned().cloned()
             });
+
+        // For functions with explicit type parameters (e.g., myMap[A, B]),
+        // replace TypeParam types in the pre-registered signature with fresh Vars
+        // and store these in type_param_mappings. This prevents occurs check failures
+        // in recursive generic multi-clause functions, where TypeParam mappings
+        // shared across clauses would create cyclic unification constraints.
+        if !func.type_params.is_empty() && func.clauses.len() > 1 {
+            if let Some(ref pre_reg) = pre_registered {
+                let func_ty = Type::Function(pre_reg.clone());
+                if func_ty.has_type_params() {
+                    let mut tp_names = Vec::new();
+                    Self::collect_type_param_names(&func_ty, &mut tp_names);
+                    let mut tp_subst: HashMap<String, Type> = HashMap::new();
+                    for tp_name in &tp_names {
+                        let fresh = self.fresh();
+                        // Apply trait constraints to the fresh var
+                        if let Type::Var(var_id) = fresh {
+                            if let Some(constraints) = self.current_type_param_constraints.get(tp_name) {
+                                for constraint in constraints.clone() {
+                                    self.add_trait_bound(var_id, constraint);
+                                }
+                            }
+                        }
+                        tp_subst.insert(tp_name.clone(), fresh);
+                    }
+                    // Replace TypeParam types with fresh vars in the pre-registered signature
+                    let substituted = Self::substitute_type_params(&func_ty, &tp_subst);
+                    if let Type::Function(sub_sig) = substituted {
+                        // Update the environment entry so recursive calls see Var types
+                        self.env.insert_function(name.clone(), sub_sig);
+                        if self.env.functions.get(&qualified_name).is_some() {
+                            if let Some(updated) = self.env.functions.get(name).cloned() {
+                                self.env.insert_function(qualified_name.clone(), updated);
+                            }
+                        }
+                    }
+                    // Store the mappings so type_from_ast resolves TypeParam to the same vars
+                    for (tp_name, fresh_var) in &tp_subst {
+                        self.type_param_mappings.insert(tp_name.clone(), fresh_var.clone());
+                    }
+                }
+            }
+        }
 
         // Infer the first clause
         let (clause_params, clause_ret) = self.infer_clause(&func.clauses[0])?;

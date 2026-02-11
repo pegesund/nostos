@@ -1,4 +1,4 @@
-# expect_error: does not implement trait
+# expect_error: does not implement Scorable
 # Trait bound violation caught through non-generic wrapper function
 trait Scorable
     score(self) -> Int
