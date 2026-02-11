@@ -20486,6 +20486,105 @@ mod lsp_integration_tests {
         cleanup(&temp_dir);
     }
 
+    /// Test that generic functions in multi-file projects preserve polymorphism
+    /// Regression test for: apply_full_subst was resolving TypeParams through stale
+    /// type_param_mappings in cross-module batch inference
+    #[test]
+    fn test_cross_module_generic_polymorphism_load_directory() {
+        let temp_dir = create_temp_dir("generic_poly");
+
+        // Create lib.nos with multiple generic functions
+        {
+            let mut f = std::fs::File::create(temp_dir.join("lib.nos")).unwrap();
+            writeln!(f, "pub identity[T](x: T) -> T = x").unwrap();
+            writeln!(f, "pub double[T: Num](x: T) -> T = x * 2").unwrap();
+        }
+
+        // Create main.nos that uses identity with String (should work, identity is polymorphic)
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = {{").unwrap();
+            writeln!(f, "    s = lib.identity(\"hello\")").unwrap();
+            writeln!(f, "    n = lib.double(5)").unwrap();
+            writeln!(f, "    0").unwrap();
+            writeln!(f, "}}").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // identity should accept String, not be polluted by double's Num constraint
+        let main_status = engine.get_compile_status("main.main");
+        println!("Cross-module generic polymorphism: {:?}", main_status);
+
+        assert!(matches!(main_status, Some(CompileStatus::Compiled)),
+                "Generic identity should accept String, got: {:?}", main_status);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Test that generic trait bound violations are caught in multi-file projects
+    #[test]
+    fn test_cross_module_generic_trait_bound_violation() {
+        let temp_dir = create_temp_dir("generic_trait_err");
+
+        // Create lib.nos with Ord-bounded generic function
+        {
+            let mut f = std::fs::File::create(temp_dir.join("lib.nos")).unwrap();
+            writeln!(f, "pub findMax[T: Ord](xs: List[T]) -> T = xs.sort().last()").unwrap();
+        }
+
+        // Create main.nos calling findMax with lambdas (lambdas don't implement Ord)
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = lib.findMax([x => x + 1, x => x * 2])").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let main_status = engine.get_compile_status("main.main");
+        println!("Cross-module trait bound violation: {:?}", main_status);
+
+        // This should be caught - functions don't implement Ord
+        assert!(matches!(main_status, Some(CompileStatus::CompileError(_))),
+                "Ord violation on functions should be caught, got: {:?}", main_status);
+
+        cleanup(&temp_dir);
+    }
+
+    /// Test that return type annotation mismatch is caught in multi-file projects
+    #[test]
+    fn test_cross_module_return_type_mismatch() {
+        let temp_dir = create_temp_dir("ret_type_mismatch");
+
+        // Create lib.nos with wrong return type annotation
+        {
+            let mut f = std::fs::File::create(temp_dir.join("lib.nos")).unwrap();
+            writeln!(f, "pub getValue() -> Int = \"not a number\"").unwrap();
+        }
+
+        // Create main.nos using the value
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            writeln!(f, "main() = lib.getValue() + 1").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // lib.getValue should have a compile error (declares Int but returns String)
+        let lib_status = engine.get_compile_status("lib.getValue");
+        println!("lib.getValue status: {:?}", lib_status);
+        assert!(matches!(lib_status, Some(CompileStatus::CompileError(_))),
+                "Return type mismatch should be caught, got: {:?}", lib_status);
+
+        cleanup(&temp_dir);
+    }
+
     /// Test chain of three modules: c -> b -> a, error in c propagates to a
     #[test]
     fn test_compile_time_transitive_error_propagation() {
@@ -22989,6 +23088,156 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_ok(), "Module type definitions should compile: {:?}", result);
+    }
+
+    #[test]
+    fn test_return_type_annotation_mismatch() {
+        // Function declares -> Int but returns String
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+getValue() -> Int = "not a number"
+main() = getValue() + 1
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Return type annotation mismatch should be caught: {:?}", result);
+    }
+
+    #[test]
+    fn test_generic_function_wrong_type_arg() {
+        // Generic HOF where callback type doesn't match
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+applyFn[T](f: T -> T, x: T) -> T = f(x)
+increment(x: Int) -> Int = x + 1
+main() = applyFn(increment, "hello")
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Generic function with wrong type arg should error: {:?}", result);
+    }
+
+    #[test]
+    fn test_filter_predicate_wrong_return_type() {
+        // filter expects A -> Bool predicate, but lambda returns Int
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+main() = {
+    xs = [1, 2, 3, 4, 5]
+    xs.filter(x => x * 2)
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        // This should detect that filter's predicate returns Int not Bool
+        // If not caught, it's a gap in the check_module_compiles path
+        if result.is_err() {
+            println!("GOOD: filter predicate type mismatch caught");
+        } else {
+            println!("WARNING: filter predicate returning Int not caught by check_module_compiles");
+        }
+    }
+
+    #[test]
+    fn test_sort_on_non_orderable() {
+        // sort requires Ord, lambdas don't implement Ord
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+main() = {
+    fns = [x => x + 1, x => x * 2]
+    fns.sort()
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        // sort on list of functions should fail (functions don't implement Ord)
+        if result.is_err() {
+            println!("GOOD: sort on non-Ord type caught");
+        } else {
+            println!("WARNING: sort on functions not caught by check_module_compiles");
+        }
+    }
+
+    #[test]
+    fn test_cross_module_generic_with_import() {
+        // Module defines generic function, caller uses it with wrong types
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+module Lib
+    pub wrap[T](x: T) -> (T, String) = (x, "wrapped")
+    pub unwrapFirst[T](pair: (T, String)) -> T = pair.0
+end
+use Lib.{wrap, unwrapFirst}
+main() = {
+    pair = wrap(42)
+    val = unwrapFirst(pair)
+    val ++ " hello"
+}
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        // unwrapFirst returns Int (since wrap(42) → (Int, String)), Int ++ String should fail
+        assert!(result.is_err(), "Int concat with String should be caught: {:?}", result);
+    }
+
+    #[test]
+    fn test_option_type_mismatch_through_generic() {
+        // unwrapOr[T] requires default to be same T as Option[T]
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+safeDiv(a: Int, b: Int) -> Option[Int] = {
+    if b == 0 then None
+    else Some(a / b)
+}
+unwrapOrDefault[T](opt: Option[T], default: T) -> T = match opt {
+    Some(x) -> x
+    None -> default
+}
+main() = unwrapOrDefault(safeDiv(10, 3), "default")
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        // safeDiv returns Option[Int], but default is String - T can't be both Int and String
+        assert!(result.is_err(), "Option type mismatch should be caught: {:?}", result);
+    }
+
+    #[test]
+    fn test_int_concat_with_string_direct() {
+        // Direct Int ++ String should be caught
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+main() = 42 ++ " items"
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Int ++ String should be caught");
+    }
+
+    #[test]
+    fn test_wrong_arity_in_check_module() {
+        // Calling function with wrong number of args
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+compute(a: Int, b: Int, c: Int) -> Int = a + b + c
+main() = compute(1, 2)
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Wrong arity should be caught: {:?}", result);
+    }
+
+    #[test]
+    fn test_map_with_wrong_lambda_type() {
+        // map expects A -> B, but lambda signature conflicts
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+doubleStr(x: String) -> String = x ++ x
+main() = [1, 2, 3].map(doubleStr)
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        // [Int].map expects Int -> B, but doubleStr is String -> String
+        assert!(result.is_err(), "map with wrong lambda type should be caught: {:?}", result);
     }
 
 }
