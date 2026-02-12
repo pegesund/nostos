@@ -171,6 +171,8 @@ pub struct ReplEngine {
     current_module: String,
     /// Module name -> source file path (for file-backed modules)
     module_sources: HashMap<String, PathBuf>,
+    /// Module name -> file_id (for span-based type lookups in LSP)
+    module_file_ids: HashMap<String, u32>,
     /// Variable bindings: name -> VarBinding
     var_bindings: HashMap<String, VarBinding>,
     /// Counter for unique variable thunk names
@@ -766,6 +768,7 @@ impl ReplEngine {
             eval_counter: 0,
             current_module: "repl".to_string(),
             module_sources: HashMap::new(),
+            module_file_ids: HashMap::new(),
             var_bindings: HashMap::new(),
             var_counter: 0,
             source_manager: None,
@@ -2984,6 +2987,12 @@ impl ReplEngine {
         self.compiler.get_inferred_type_at_position(file_id, byte_offset)
     }
 
+    /// Get the file_id assigned to a module during load_directory.
+    /// Used by LSP to pass the correct file_id to type lookups.
+    pub fn get_file_id_for_module(&self, module_name: &str) -> Option<u32> {
+        self.module_file_ids.get(module_name).copied()
+    }
+
     /// Get inferred types within a byte range for inlay hints.
     /// Returns a list of (span, type_string) for expressions in the range.
     pub fn get_inferred_types_in_range(&self, file_id: u32, start_offset: usize, end_offset: usize) -> Vec<(nostos_syntax::Span, String)> {
@@ -4850,7 +4859,8 @@ impl ReplEngine {
                 // Assign unique file_id to each user module to prevent span collisions
                 // in inferred_expr_types. Stdlib uses file_ids starting from 1, so user
                 // modules start from 10000 to avoid overlap.
-                module.set_file_id(10000 + parsed_modules.len() as u32);
+                let file_id = 10000 + parsed_modules.len() as u32;
+                module.set_file_id(file_id);
 
                 let relative = file_path.strip_prefix(&path_buf).unwrap();
                 let mut components: Vec<String> = relative
@@ -4872,6 +4882,10 @@ impl ReplEngine {
                         let _ = writeln!(f, "load_directory: forward declaration error for {:?}: {}", file_path, e);
                     }
                 }
+
+                // Store file_id mapping for LSP type lookups
+                let module_name = components.join(".");
+                self.module_file_ids.insert(module_name, file_id);
 
                 parsed_modules.push(ParsedModule {
                     module,
@@ -5920,10 +5934,16 @@ impl ReplEngine {
             return Err("Parse error".to_string());
         }
 
-        let module = match maybe_module {
+        let mut module = match maybe_module {
             Some(m) => m,
             None => return Err("Failed to parse module".to_string()),
         };
+
+        // Set the file_id to match what was assigned during load_directory
+        // so that inferred types can be looked up by the LSP hover handler
+        if let Some(&file_id) = self.module_file_ids.get(module_name) {
+            module.set_file_id(file_id);
+        }
 
         // Extract function sources from new content
         let new_sources = Self::extract_function_sources(content, &module);
@@ -21616,6 +21636,146 @@ main() = {
             "good.addff should compile, got: {:?}",
             addff_status
         );
+
+        cleanup(&temp_dir);
+    }
+
+    /// Test that file_id mapping works so HM-inferred types are found by position
+    #[test]
+    fn test_hover_file_id_returns_inferred_types() {
+        let temp_dir = create_temp_dir("hover_file_id");
+
+        // Create a simple module with a binding whose type we can check
+        let main_code = r#"main() = {
+    x = 42
+    y = "hello"
+    z = [1, 2, 3]
+    x + 1
+}"#;
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            write!(f, "{}", main_code).unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        // Verify the module got a file_id assigned
+        let file_id = engine.get_file_id_for_module("main");
+        println!("main file_id: {:?}", file_id);
+        assert!(file_id.is_some(), "main module should have a file_id");
+        let file_id = file_id.unwrap();
+        assert!(file_id >= 10000, "user module file_id should be >= 10000, got {}", file_id);
+
+        // Try to get inferred types at various positions
+        // We can't know exact byte offsets without parsing, but we can verify
+        // that SOME types are found with the correct file_id (and NOT with file_id 0)
+        let mut found_with_correct_id = false;
+        let mut found_with_zero = false;
+
+        // Scan through all byte offsets in the source to find any inferred types
+        for offset in 0..main_code.len() {
+            if let Some(ty) = engine.get_inferred_type_at_position(file_id, offset) {
+                println!("  offset {}: type = {}", offset, ty);
+                found_with_correct_id = true;
+                // Verify the type doesn't contain unresolved vars
+                if !ty.contains('?') {
+                    println!("  -> clean type (no ?) at offset {}: {}", offset, ty);
+                }
+            }
+            if let Some(ty) = engine.get_inferred_type_at_position(0, offset) {
+                println!("  offset {} with file_id=0: type = {}", offset, ty);
+                found_with_zero = true;
+            }
+        }
+
+        println!("\nFound types with correct file_id: {}", found_with_correct_id);
+        println!("Found types with file_id=0: {}", found_with_zero);
+
+        // With the fix, the correct file_id should find types
+        assert!(found_with_correct_id,
+                "Should find inferred types using the correct file_id ({})", file_id);
+
+        // file_id=0 should NOT find types for user modules
+        assert!(!found_with_zero,
+                "file_id=0 should NOT find types for user modules (that was the bug)");
+
+        cleanup(&temp_dir);
+    }
+
+    /// Test that recompile_module_with_content preserves file_id mapping
+    #[test]
+    fn test_recompile_preserves_file_id() {
+        let temp_dir = create_temp_dir("recompile_file_id");
+
+        let initial_code = "main() = 42";
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            write!(f, "{}", initial_code).unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let file_id_before = engine.get_file_id_for_module("main").unwrap();
+        println!("file_id before recompile: {}", file_id_before);
+
+        // Simulate an edit (this is what happens when the user types in VS Code)
+        let new_code = "main() = 43";
+        engine.recompile_module_with_content("main", new_code).unwrap();
+
+        let file_id_after = engine.get_file_id_for_module("main").unwrap();
+        println!("file_id after recompile: {}", file_id_after);
+
+        // file_id should be the same after recompile
+        assert_eq!(file_id_before, file_id_after,
+                   "file_id should be preserved after recompile");
+
+        // Types should still be findable with the same file_id
+        let mut found_type = false;
+        for offset in 0..new_code.len() {
+            if let Some(ty) = engine.get_inferred_type_at_position(file_id_after, offset) {
+                println!("  offset {}: type = {}", offset, ty);
+                found_type = true;
+            }
+        }
+
+        assert!(found_type, "Should find inferred types after recompile with same file_id");
+
+        cleanup(&temp_dir);
+    }
+
+    /// Test that multi-module project has correct file_ids for each module
+    #[test]
+    fn test_multi_module_file_ids() {
+        let temp_dir = create_temp_dir("multi_file_id");
+
+        {
+            let mut f = std::fs::File::create(temp_dir.join("helper.nos")).unwrap();
+            write!(f, "pub double(x: Int) -> Int = x * 2").unwrap();
+        }
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            write!(f, "main() = helper.double(21)").unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let helper_id = engine.get_file_id_for_module("helper");
+        let main_id = engine.get_file_id_for_module("main");
+        println!("helper file_id: {:?}", helper_id);
+        println!("main file_id: {:?}", main_id);
+
+        assert!(helper_id.is_some(), "helper should have a file_id");
+        assert!(main_id.is_some(), "main should have a file_id");
+
+        // They should be different
+        assert_ne!(helper_id.unwrap(), main_id.unwrap(),
+                   "Different modules should have different file_ids");
 
         cleanup(&temp_dir);
     }

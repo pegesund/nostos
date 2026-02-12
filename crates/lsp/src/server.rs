@@ -1203,10 +1203,19 @@ impl LanguageServer for NostosLanguageServer {
         let engine_ref = engine_guard.as_ref();
         let local_vars = Self::extract_local_bindings(&content, line_num + 1, engine_ref);
 
+        // Derive module name from URI for file_id lookup
+        let uri_path = uri.path().to_string();
+        let module_name = std::path::Path::new(&uri_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("main")
+            .to_string();
+
         // Try HM-inferred type first (uses position-based lookup)
         let hm_type = if let Some(engine) = engine_ref {
-            // Use file_id 0 since that's what the parser uses by default
-            engine.get_inferred_type_at_position(0, byte_offset)
+            // Look up the file_id assigned to this module during load_directory
+            let file_id = engine.get_file_id_for_module(&module_name).unwrap_or(0);
+            engine.get_inferred_type_at_position(file_id, byte_offset)
         } else {
             None
         };
@@ -1258,6 +1267,15 @@ impl LanguageServer for NostosLanguageServer {
             return Ok(None);
         };
 
+        // Look up file_id for this module
+        let uri_path = uri.path().to_string();
+        let module_name = std::path::Path::new(&uri_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("main")
+            .to_string();
+        let file_id = engine.get_file_id_for_module(&module_name).unwrap_or(0);
+
         // Find all simple bindings in the visible range (lines with "name = value")
         // and get their types from HM inference
         let mut hints = Vec::new();
@@ -1283,7 +1301,7 @@ impl LanguageServer for NostosLanguageServer {
                 let rhs_start = line_start + binding.rhs_start;
 
                 // Get type at the RHS position
-                if let Some(ty) = engine.get_inferred_type_at_position(0, rhs_start) {
+                if let Some(ty) = engine.get_inferred_type_at_position(file_id, rhs_start) {
                     // Skip unresolved types (containing ?)
                     if !ty.contains('?') && Self::should_show_type_hint(&ty) {
                         let position = Position {
