@@ -21640,6 +21640,147 @@ main() = {
         cleanup(&temp_dir);
     }
 
+    /// Test hover types for real stdlib calls like File.readAll, File.exists
+    #[test]
+    fn test_hover_types_for_stdlib_calls() {
+        let temp_dir = create_temp_dir("hover_stdlib");
+
+        let main_code = r#"main() = {
+    path = "/tmp/nostos_hello.txt"
+    File.writeAll(path, "Hello from Nostos!")
+    content = File.readAll(path)
+    exists = File.exists(path)
+    File.remove(path)
+    exists2 = File.exists(path)
+    println("done")
+    0
+}"#;
+        {
+            let mut f = std::fs::File::create(temp_dir.join("main.nos")).unwrap();
+            write!(f, "{}", main_code).unwrap();
+        }
+
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+        engine.load_directory(temp_dir.to_str().unwrap()).unwrap();
+
+        let file_id = engine.get_file_id_for_module("main").unwrap();
+        println!("file_id: {}", file_id);
+
+        // Find byte offsets for key bindings by searching in the source
+        let lines: Vec<&str> = main_code.lines().collect();
+        for (line_idx, line) in lines.iter().enumerate() {
+            // Calculate byte offset for start of this line
+            let line_start: usize = main_code.lines()
+                .take(line_idx)
+                .map(|l| l.len() + 1) // +1 for newline
+                .sum();
+
+            // Check each character position in the line
+            let mut last_type = String::new();
+            for col in 0..line.len() {
+                let offset = line_start + col;
+                if let Some(ty) = engine.get_inferred_type_at_position(file_id, offset) {
+                    if ty != last_type {
+                        let ch = &line[col..col+1];
+                        println!("  line {}:{} (byte {}) '{}...' -> {}", line_idx+1, col, offset, ch, ty);
+                        last_type = ty;
+                    }
+                }
+            }
+        }
+
+        // Now check specific positions for key expressions:
+        // "content = File.readAll(path)" - content should be String
+        // "exists = File.exists(path)" - exists should be Bool
+        let check_binding = |name: &str, expected_type: &str| {
+            // Find "name = " in source
+            let pattern = format!("{} = ", name);
+            if let Some(pos) = main_code.find(&pattern) {
+                // Check the RHS (after "name = ")
+                let rhs_start = pos + pattern.len();
+                // Scan a few bytes to find a type
+                let mut found_type = None;
+                for offset in rhs_start..rhs_start.min(main_code.len()).max(rhs_start) + 40 {
+                    if offset >= main_code.len() { break; }
+                    if let Some(ty) = engine.get_inferred_type_at_position(file_id, offset) {
+                        found_type = Some(ty);
+                        break;
+                    }
+                }
+                println!("Binding '{}': found type = {:?}, expected = {}", name, found_type, expected_type);
+                if let Some(ty) = &found_type {
+                    assert!(!ty.contains('?'),
+                            "Binding '{}' has unresolved type var: {}", name, ty);
+                    assert_eq!(ty, expected_type,
+                            "Binding '{}' has wrong type: {} (expected {})", name, ty, expected_type);
+                } else {
+                    panic!("Binding '{}' has no inferred type at RHS position", name);
+                }
+            } else {
+                panic!("Could not find binding '{}' in source", name);
+            }
+        };
+
+        check_binding("content", "String");
+        check_binding("exists", "Bool");
+        check_binding("exists2", "Bool");
+        check_binding("path", "String");
+
+        // Simulate the LSP hover handler's LHS→RHS redirect logic.
+        // When hovering over a binding name like "exists" in "exists = File.exists(path)",
+        // the hover handler detects the "word = RHS" pattern and looks up the RHS type.
+        let simulate_hover = |word: &str, expected_type: &str| {
+            let lines: Vec<&str> = main_code.lines().collect();
+            for (line_idx, line) in lines.iter().enumerate() {
+                let line_start: usize = main_code.lines()
+                    .take(line_idx)
+                    .map(|l| l.len() + 1)
+                    .sum();
+
+                // Find word in line
+                if let Some(name_pos) = line.find(word) {
+                    let after_word = &line[name_pos + word.len()..];
+                    let after_ws = after_word.trim_start();
+                    if after_ws.starts_with('=') && !after_ws.starts_with("==") {
+                        // This line has "word = RHS" - simulate the hover redirect
+                        let eq_col = name_pos + word.len() + (after_word.len() - after_ws.len());
+                        let after_eq = &line[eq_col + 1..];
+                        let rhs_col = eq_col + 1 + (after_eq.len() - after_eq.trim_start().len());
+                        let rhs_byte_offset = line_start + rhs_col;
+
+                        let mut best_type = None;
+                        let rhs_len = line.len().saturating_sub(rhs_col);
+                        for delta in 0..rhs_len.min(80) {
+                            if let Some(ty) = engine.get_inferred_type_at_position(file_id, rhs_byte_offset + delta) {
+                                if !ty.contains('?') {
+                                    best_type = Some(ty);
+                                    break;
+                                }
+                                if best_type.is_none() {
+                                    best_type = Some(ty);
+                                }
+                            }
+                        }
+
+                        println!("Hover '{}' (LHS→RHS redirect): {:?} (expected {})", word, best_type, expected_type);
+                        assert_eq!(best_type.as_deref(), Some(expected_type),
+                                   "Hovering over '{}' should show {}", word, expected_type);
+                        return;
+                    }
+                }
+            }
+            panic!("Could not find binding '{}' in source", word);
+        };
+
+        simulate_hover("content", "String");
+        simulate_hover("exists", "Bool");
+        simulate_hover("exists2", "Bool");
+        simulate_hover("path", "String");
+
+        cleanup(&temp_dir);
+    }
+
     /// Test that file_id mapping works so HM-inferred types are found by position
     #[test]
     fn test_hover_file_id_returns_inferred_types() {

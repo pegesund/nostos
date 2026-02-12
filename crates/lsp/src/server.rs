@@ -1213,17 +1213,66 @@ impl LanguageServer for NostosLanguageServer {
 
         // Try HM-inferred type first (uses position-based lookup)
         let hm_type = if let Some(engine) = engine_ref {
-            // Look up the file_id assigned to this module during load_directory
             let file_id = engine.get_file_id_for_module(&module_name).unwrap_or(0);
-            engine.get_inferred_type_at_position(file_id, byte_offset)
+
+            // Check if we're hovering over a LHS binding name: "word = RHS"
+            // If so, look up the type at the RHS position instead, because the
+            // LHS name doesn't have its own span - it falls within the enclosing
+            // function body span and would return the function's return type.
+            // Detect "word = RHS" pattern on the original line
+            let rhs_type = {
+                let mut result = None;
+                // Find "word" in line, then check if followed by " = "
+                if let Some(name_pos) = line.find(&*word) {
+                    let after_word = &line[name_pos + word.len()..];
+                    let after_ws = after_word.trim_start();
+                    if after_ws.starts_with('=') && !after_ws.starts_with("==") {
+                        // Found "word = RHS" - compute byte offset of RHS start
+                        let eq_col = name_pos + word.len() + (after_word.len() - after_ws.len());
+                        let after_eq = &line[eq_col + 1..];
+                        let rhs_col = eq_col + 1 + (after_eq.len() - after_eq.trim_start().len());
+                        let line_start = Self::line_col_to_byte_offset(&content, position.line as usize, 0);
+                        let rhs_byte_offset = line_start + rhs_col;
+
+                        // Scan positions in the RHS to find the best type
+                        let rhs_len = line.len().saturating_sub(rhs_col);
+                        for delta in 0..rhs_len.min(80) {
+                            if let Some(ty) = engine.get_inferred_type_at_position(file_id, rhs_byte_offset + delta) {
+                                if !ty.contains('?') {
+                                    result = Some(ty);
+                                    break;
+                                }
+                                if result.is_none() {
+                                    result = Some(ty);
+                                }
+                            }
+                        }
+                    }
+                }
+                result
+            };
+
+            if rhs_type.is_some() {
+                rhs_type
+            } else {
+                engine.get_inferred_type_at_position(file_id, byte_offset)
+            }
         } else {
             None
         };
 
         // Try to get type/signature information
-        let hover_info = if let Some(ty) = hm_type {
-            // Got an HM-inferred type - use it
-            Some(format!("```nostos\n{}: {}\n```\n*(inferred)*", word, ty))
+        let hover_info = if let Some(ty) = &hm_type {
+            if !ty.contains('?') {
+                // Got a clean HM-inferred type - use it
+                Some(format!("```nostos\n{}: {}\n```\n*(inferred)*", word, ty))
+            } else if let Some(engine) = engine_ref {
+                // Type has unresolved vars - try fallback
+                self.get_hover_info(engine, &word, &local_vars, line)
+                    .or_else(|| Some(format!("```nostos\n{}: {}\n```\n*(inferred)*", word, ty)))
+            } else {
+                Some(format!("```nostos\n{}: {}\n```\n*(inferred)*", word, ty))
+            }
         } else if let Some(engine) = engine_ref {
             self.get_hover_info(engine, &word, &local_vars, line)
         } else {
