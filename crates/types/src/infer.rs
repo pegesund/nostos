@@ -7031,6 +7031,22 @@ impl<'a> InferCtx<'a> {
             if let Type::Var(ret_var_id) = &*pre_reg.ret {
                 self.clause_ret_types.insert(*ret_var_id, clause_ret.clone());
             }
+
+            // Update env with inferred structural types so subsequent functions see
+            // the actual return type structure. Without this, wrap(x) = [x] would
+            // have ret=Var(2) in the env, and doubleWrap(x) = wrap(wrap(x)) would
+            // get independent fresh vars for Var(1) and Var(2), losing the List
+            // relationship. With this update, the env has ret=List(clause_param_var),
+            // so instantiate_function correctly produces ret=List(?A) for a call site.
+            let updated_fn_type = FunctionType {
+                type_params: pre_reg.type_params.clone(),
+                params: clause_params.clone(),
+                ret: Box::new(clause_ret.clone()),
+                required_params: pre_reg.required_params,
+            };
+            self.env.insert_function(name.clone(), updated_fn_type.clone());
+            self.env.insert_function(qualified_name.clone(), updated_fn_type);
+
             // Use pre-registered types (they're now unified)
             (pre_reg.params.clone(), (*pre_reg.ret).clone())
         } else {
