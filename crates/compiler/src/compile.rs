@@ -9768,9 +9768,15 @@ impl Compiler {
                 for clause in &mut modified_def.clauses {
                     for (i, param) in clause.params.iter_mut().enumerate() {
                         if param.ty.is_none() {
-                            if let Some((_, trait_ty)) = tpts.get(i) {
-                                // Skip: untyped ("_"), function types ("->"), self param
-                                if trait_ty != "_" && !trait_ty.contains("->") && trait_ty != "Self" {
+                            if let Some((pname, trait_ty)) = tpts.get(i) {
+                                if pname == "self" {
+                                    // For "self" parameter, inject the implementing type
+                                    // This is critical for type_check_fn to resolve field access
+                                    // on self and catch return type mismatches
+                                    if let Some(type_expr) = self.parse_return_type_expr(&unqualified_type_name) {
+                                        param.ty = Some(type_expr);
+                                    }
+                                } else if trait_ty != "_" && !trait_ty.contains("->") {
                                     // Substitute Self with the implementing type
                                     let resolved_ty = trait_ty.replace("Self", &unqualified_type_name);
                                     if let Some(type_expr) = self.parse_return_type_expr(&resolved_ty) {
@@ -26871,6 +26877,47 @@ impl Compiler {
                 let local_name = &mvar_name[dot_pos + 1..];
                 if !env.bindings.contains_key(local_name) {
                     env.bindings.insert(local_name.to_string(), (mvar_type, true));
+                }
+            }
+        }
+
+        // Register top-level bindings so functions referencing module-level values
+        // get correct type inference. Without this, `baseUrl = "http://..."; makeUrl(path) = baseUrl ++ path`
+        // would fail because baseUrl is unknown, causing try_hm_inference to bail out
+        // and miss the Concat trait bound on `path`.
+        {
+            let mut to_infer: Vec<(&str, &str, &nostos_syntax::Expr)> = Vec::new();
+            for (binding_name, (binding, _, _)) in &self.top_level_bindings {
+                if let Pattern::Var(ident) = &binding.pattern {
+                    let bind_name = ident.node.as_str();
+                    if let Some(ty_expr) = &binding.ty {
+                        let type_str = self.type_expr_to_string(ty_expr);
+                        let binding_type = self.type_name_to_type(&type_str);
+                        env.bind(bind_name.to_string(), binding_type.clone(), false);
+                        if binding_name.as_str() != bind_name {
+                            env.bind(binding_name.clone(), binding_type, false);
+                        }
+                    } else {
+                        to_infer.push((bind_name, binding_name.as_str(), &binding.value));
+                    }
+                }
+            }
+            if !to_infer.is_empty() {
+                let mut tmp_env = env.clone();
+                let mut tmp_ctx = InferCtx::new(&mut tmp_env);
+                let mut inferred: Vec<(String, String, nostos_types::Type)> = Vec::new();
+                for (name, qualified, expr) in &to_infer {
+                    if let Ok(ty) = tmp_ctx.infer_expr(expr) {
+                        inferred.push((name.to_string(), qualified.to_string(), ty));
+                    }
+                }
+                let _ = tmp_ctx.solve();
+                for (name, qualified, ty) in inferred {
+                    let resolved = tmp_ctx.apply_full_subst(&ty);
+                    env.bind(name.clone(), resolved.clone(), false);
+                    if qualified != name {
+                        env.bind(qualified, resolved, false);
+                    }
                 }
             }
         }

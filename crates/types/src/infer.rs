@@ -2498,24 +2498,29 @@ impl<'a> InferCtx<'a> {
                     let _ = self.unify_types(&self.env.apply_subst(&index_ty), &Type::Int);
                 }
                 Type::Var(_) => {
-                    // Still unresolved - fall back to List assumption (original behavior)
-                    let _ = self.unify_types(&self.env.apply_subst(&index_ty), &Type::Int);
-                    let list_ty = Type::List(Box::new(elem_ty.clone()));
-                    self.constraints.push(Constraint::Equal(
-                        container_ty,
-                        list_ty,
-                        Some(span),
-                    ));
+                    // Container type is still unresolved. Check if the index type
+                    // is Int (suggesting List access like xs[0]) vs a type variable
+                    // (suggesting Map access like m[k]).
+                    let resolved_idx = self.env.apply_subst(&index_ty);
+                    if matches!(&resolved_idx, Type::Int) {
+                        // Index is Int - assume List. Use unify_types directly (not
+                        // constraint push) because the main constraint loop has already
+                        // exited. This ensures the container var gets unified with
+                        // List[elem], linking element type to trait bounds
+                        // (e.g., Num from `xs[0] + 1`).
+                        let list_ty = Type::List(Box::new(elem_ty.clone()));
+                        let _ = self.unify_types(&container_ty, &list_ty);
+                    }
+                    // If index is non-Int (e.g., a type variable), leave unresolved -
+                    // could be Map[K,V] indexing where we can't assume List.
                 }
                 _ => {
                     // Default: assume List-like (String, Array, etc.)
+                    // Use unify_types directly (not constraint push) because the main
+                    // constraint loop has already exited.
                     let _ = self.unify_types(&self.env.apply_subst(&index_ty), &Type::Int);
                     let list_ty = Type::List(Box::new(elem_ty.clone()));
-                    self.constraints.push(Constraint::Equal(
-                        container_ty,
-                        list_ty,
-                        Some(span),
-                    ));
+                    let _ = self.unify_types(&container_ty, &list_ty);
                 }
             }
         }
