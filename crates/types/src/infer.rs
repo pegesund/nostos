@@ -176,6 +176,10 @@ pub struct InferCtx<'a> {
     /// because they don't have body constraints in the current inference scope.
     /// Vars from lambda body inference are NOT in this set and should not be freshened.
     polymorphic_vars: HashSet<u32>,
+    /// Freshened var pairs from instantiate_local_binding: (original_var_id, fresh_var_id, call_span).
+    /// After solve(), if original and fresh both resolve to concrete but different types,
+    /// the freshening was incorrect (let-polymorphism was applied to a monomorphic binding).
+    freshened_binding_vars: Vec<(u32, u32, Span)>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -215,6 +219,7 @@ impl<'a> InferCtx<'a> {
             clause_ret_types: HashMap::new(),
             clause_param_types: HashMap::new(),
             polymorphic_vars: HashSet::new(),
+            freshened_binding_vars: Vec::new(),
         }
     }
 
@@ -1072,7 +1077,7 @@ impl<'a> InferCtx<'a> {
     /// call from locking the parameter type for all subsequent calls.
     /// `exclude_binding` is the name of the binding being looked up, which should
     /// be excluded from the scope scan to avoid counting its own Vars as "shared".
-    fn instantiate_local_binding(&mut self, ty: &Type, _exclude_binding: &str) -> Type {
+    fn instantiate_local_binding(&mut self, ty: &Type, _exclude_binding: &str, call_span: Option<Span>) -> Type {
         let resolved = self.env.apply_subst(ty);
 
         // Only freshen types with unresolved Vars
@@ -1117,6 +1122,18 @@ impl<'a> InferCtx<'a> {
 
         if var_subst.is_empty() {
             return resolved; // All vars are shared with environment
+        }
+
+        // Record freshened var pairs for post-solve verification.
+        // If the original var resolves to a concrete type after solve(),
+        // but the fresh var was used with a different type, we have a
+        // type error that let-polymorphism obscured.
+        if let Some(span) = call_span {
+            for (orig_id, fresh_ty) in &var_subst {
+                if let Type::Var(fresh_id) = fresh_ty {
+                    self.freshened_binding_vars.push((*orig_id, *fresh_id, span));
+                }
+            }
         }
 
         let empty_param_subst: HashMap<String, Type> = HashMap::new();
@@ -1586,6 +1603,35 @@ impl<'a> InferCtx<'a> {
                         }
                     }
                 }
+            }
+        }
+        None
+    }
+
+    /// Check freshened binding vars for post-solve type conflicts.
+    /// When instantiate_local_binding freshens polymorphic vars for let-bindings,
+    /// the freshened vars may end up with different types than the originals after
+    /// solve() processes deferred constraints. This catches cases like:
+    ///   g = wrap(identity(inc))  -- original vars resolve to Int after solve
+    ///   g("hello")               -- freshened vars resolve to String
+    /// Without this check, let-polymorphism incorrectly allows the second call.
+    pub fn check_freshened_binding_conflicts(&mut self) -> Option<TypeError> {
+        for (orig_id, fresh_id, span) in &self.freshened_binding_vars {
+            let resolved_orig = self.env.apply_subst(&Type::Var(*orig_id));
+            let resolved_fresh = self.env.apply_subst(&Type::Var(*fresh_id));
+
+            // Skip if either is still unresolved (truly polymorphic)
+            if resolved_orig.has_any_type_var() || resolved_fresh.has_any_type_var() {
+                continue;
+            }
+
+            // Both are concrete - if they differ, the freshening was incorrect
+            if resolved_orig != resolved_fresh {
+                self.last_error_span = Some(*span);
+                return Some(TypeError::Mismatch {
+                    expected: resolved_orig.display(),
+                    found: resolved_fresh.display(),
+                });
             }
         }
         None
@@ -5180,7 +5226,7 @@ impl<'a> InferCtx<'a> {
                         // with unresolved type variables, create fresh copies on each use.
                         // This prevents polymorphic bindings like `always42 = constFn(42)`
                         // from locking their param types to the first call's arguments.
-                        self.instantiate_local_binding(&ty, name)
+                        self.instantiate_local_binding(&ty, name, Some(*call_span))
                     } else {
                         // Get ALL overloads and find the best match based on argument types
                         // Clone to avoid borrow issues with instantiate_function
@@ -5369,8 +5415,27 @@ impl<'a> InferCtx<'a> {
                         // the function's params AND its return type. Vars that appear
                         // only in the return type (e.g., constFn(42) returns _ => 42,
                         // the _ parameter is not constrained) should stay polymorphic.
+                        //
+                        // Resolve args through apply_subst to handle nested calls
+                        // like wrap(identity(inc)) where the arg is a Var that resolves
+                        // to a concrete type through eager return-type unification.
                         let has_concrete_arg = arg_types_clone.iter().any(|arg| {
-                            !matches!(arg, Type::Var(_) | Type::TypeParam(_))
+                            let resolved = self.env.apply_subst(arg);
+                            match &resolved {
+                                Type::Var(_) | Type::TypeParam(_) => false,
+                                Type::Function(_) => {
+                                    // A function arg is "concrete" if it has no vars,
+                                    // or has at least one non-polymorphic var.
+                                    let mut inner_ids = Vec::new();
+                                    self.collect_var_ids(&resolved, &mut inner_ids);
+                                    if inner_ids.is_empty() {
+                                        true // No vars → fully concrete (e.g., Int -> Int)
+                                    } else {
+                                        inner_ids.iter().any(|id| !self.polymorphic_vars.contains(id))
+                                    }
+                                }
+                                _ => true,
+                            }
                         });
                         if has_concrete_arg {
                             // Collect var IDs from the param types (constrained by args)
@@ -5378,14 +5443,14 @@ impl<'a> InferCtx<'a> {
                             for p in &ft.params {
                                 self.collect_var_ids(p, &mut param_var_ids);
                             }
-                            // Only de-polymorphize return vars that also appear in params
-                            if let Type::Function(ref ret_ft) = *ft.ret {
-                                let mut ret_var_ids = Vec::new();
-                                self.collect_var_ids(&Type::Function(ret_ft.clone()), &mut ret_var_ids);
-                                for var_id in ret_var_ids {
-                                    if param_var_ids.contains(&var_id) {
-                                        self.polymorphic_vars.remove(&var_id);
-                                    }
+                            // Only de-polymorphize return vars that also appear in params.
+                            // Collect from entire return type, not just Function returns,
+                            // to handle cases like identity(inc) where ret is a Var.
+                            let mut ret_var_ids = Vec::new();
+                            self.collect_var_ids(&*ft.ret, &mut ret_var_ids);
+                            for var_id in ret_var_ids {
+                                if param_var_ids.contains(&var_id) {
+                                    self.polymorphic_vars.remove(&var_id);
                                 }
                             }
                         }

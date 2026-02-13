@@ -2973,8 +2973,15 @@ impl Compiler {
                 let calls_poly_fn = if let Some(func_val) = self.functions.get(&fn_key) {
                     let code = &func_val.code;
                     code.code.iter().any(|instr| {
-                        if let Instruction::CallDirect(_, idx, _) = instr {
-                            if let Some(called_name) = self.function_list.get(*idx as usize) {
+                        // Check both CallDirect and TailCallDirect - tail calls also
+                        // need recompilation when the callee becomes polymorphic
+                        let func_idx = match instr {
+                            Instruction::CallDirect(_, idx, _) => Some(*idx),
+                            Instruction::TailCallDirect(idx, _) => Some(*idx),
+                            _ => None,
+                        };
+                        if let Some(idx) = func_idx {
+                            if let Some(called_name) = self.function_list.get(idx as usize) {
                                 let called_base = called_name.split('/').next().unwrap_or(called_name);
                                 new_poly_bases.iter().any(|b| called_base == b)
                             } else {
@@ -2999,8 +3006,17 @@ impl Compiler {
                 let saved_source = std::mem::replace(&mut self.current_source, Some(source.clone()));
                 let saved_source_name = std::mem::replace(&mut self.current_source_name, Some(source_name.clone()));
 
-                // Recompile to replace CallDirect with monomorphized variant calls
-                let _ = self.compile_fn_def(fn_def);
+                // Recompile to replace CallDirect/TailCallDirect with monomorphized variant calls.
+                // If monomorphization reveals a real error (e.g., method not found on concrete type),
+                // collect it so it's reported to the user instead of silently calling the empty stub.
+                if let Err(e) = self.compile_fn_def(fn_def) {
+                    // Only collect TypeError and similar errors that indicate real bugs.
+                    // UnresolvedTraitMethod is expected when a function itself is polymorphic.
+                    if matches!(e, CompileError::TypeError { .. }
+                        | CompileError::TraitBoundNotSatisfied { .. }) {
+                        errors.push((fn_name.clone(), e, source_name.clone(), source.clone()));
+                    }
+                }
 
                 self.module_path = saved_path;
                 self.imports = saved_imports;
@@ -28118,6 +28134,11 @@ impl Compiler {
                 let error_span = ctx.last_error_span().unwrap_or(span);
                 return Err(self.convert_type_error(mismatch_err, error_span));
             }
+            // Check freshened binding var conflicts (let-polymorphism on monomorphic HOF results)
+            if let Some(freshened_err) = ctx.check_freshened_binding_conflicts() {
+                let error_span = ctx.last_error_span().unwrap_or(span);
+                return Err(self.convert_type_error(freshened_err, error_span));
+            }
             // Check generic function trait bounds (e.g., Num constraint on String arg).
             // The solve may fail with an UnificationFailed error that gets filtered,
             // but the underlying cause is a trait bound violation which should be reported.
@@ -28151,6 +28172,12 @@ impl Compiler {
         if let Some(mismatch_err) = ctx.check_indirect_call_mismatches() {
             let error_span = ctx.last_error_span().unwrap_or(span);
             return Err(self.convert_type_error(mismatch_err, error_span));
+        }
+
+        // Check freshened binding var conflicts (let-polymorphism applied to monomorphic HOF results)
+        if let Some(freshened_err) = ctx.check_freshened_binding_conflicts() {
+            let error_span = ctx.last_error_span().unwrap_or(span);
+            return Err(self.convert_type_error(freshened_err, error_span));
         }
 
         // Check generic function trait bounds (e.g., equal[T: Eq] called with functions)

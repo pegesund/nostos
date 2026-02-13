@@ -1,0 +1,8 @@
+# expect_error: type mismatch
+# Double wrapping HOF through binding should be caught at compile time
+wrap(f) = x => f(x)
+inc(x: Int) = x + 1
+main() = {
+  g = wrap(wrap(inc))
+  g("hello")
+}
