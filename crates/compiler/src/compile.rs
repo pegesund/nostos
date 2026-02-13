@@ -3147,10 +3147,13 @@ impl Compiler {
                     .and_then(|fv| fv.signature.clone());
 
                 if let Some(sig) = sig_to_check {
-                    // Check if signature has standalone single-letter type variables (like 'a', 'b', 'k', 'v')
-                    // A standalone type var is a lowercase letter NOT adjacent to other alphanumeric chars.
-                    // This distinguishes 'a' in "List[a]" (type var) from 'n' in "Int" (part of type name).
-                    let has_type_var = sig.as_bytes().iter().enumerate().any(|(i, &b)| {
+                    // Check if signature has unresolved type variables:
+                    // 1. Standalone single-letter type variables (like 'a', 'b', 'k', 'v')
+                    //    A standalone type var is a lowercase letter NOT adjacent to other alphanumeric chars.
+                    //    This distinguishes 'a' in "List[a]" (type var) from 'n' in "Int" (part of type name).
+                    // 2. Compiler-generated type variables in ?N format (e.g., ?1, ?23)
+                    //    These appear when params are annotated but return type is unresolved.
+                    let has_type_var = sig.contains('?') || sig.as_bytes().iter().enumerate().any(|(i, &b)| {
                         let c = b as char;
                         if !c.is_ascii_lowercase() { return false; }
                         let prev_ok = i == 0 || !(sig.as_bytes()[i-1] as char).is_ascii_alphanumeric();
@@ -27739,7 +27742,60 @@ impl Compiler {
         // The per-function try_hm_inference correctly infers ((a)->b)->((a)->b).
         for (fn_name, fn_type) in &self.pending_fn_signatures {
             if !fn_name.starts_with("stdlib.") {
-                if self.functions.get(fn_name).and_then(|fv| fv.signature.as_ref()).is_some() {
+                // Check exact key match first
+                let has_compiled_sig = self.functions.get(fn_name)
+                    .and_then(|fv| fv.signature.as_ref()).is_some();
+                // Also check base name match: pending may have "wrapper/_" while
+                // self.functions has "wrapper/Int" (different arity suffix after compilation
+                // resolved the param types). Both refer to the same function.
+                // BUT: only skip if the pending entry has "dangling" TypeParams in its return
+                // type - TypeParams that don't appear in any parameter. This indicates batch
+                // enrichment couldn't determine the return type (e.g., wrapper(x: Int) = double(x)
+                // gets ret=TypeParam("a") but no param has TypeParam("a")).
+                // For properly generic functions like pair[A,B](a: A, b: B), the TypeParams in
+                // the return type also appear in params, so they're linked and useful.
+                let has_compiled_sig = has_compiled_sig || {
+                    let base_name = fn_name.split('/').next().unwrap_or(fn_name);
+                    let base_prefix = format!("{}/", base_name);
+                    let another_key_has_sig = self.functions.keys().any(|k| {
+                        k.starts_with(&base_prefix) && k != fn_name &&
+                        self.functions.get(k).and_then(|fv| fv.signature.as_ref()).is_some()
+                    });
+                    if another_key_has_sig {
+                        // Check if return type has TypeParams that don't appear in params
+                        fn collect_type_params(ty: &nostos_types::Type, out: &mut std::collections::HashSet<String>) {
+                            match ty {
+                                nostos_types::Type::TypeParam(name) => { out.insert(name.clone()); }
+                                nostos_types::Type::List(inner) | nostos_types::Type::Set(inner) |
+                                nostos_types::Type::IO(inner) | nostos_types::Type::Array(inner) => collect_type_params(inner, out),
+                                nostos_types::Type::Map(k, v) => { collect_type_params(k, out); collect_type_params(v, out); }
+                                nostos_types::Type::Tuple(elems) => elems.iter().for_each(|e| collect_type_params(e, out)),
+                                nostos_types::Type::Named { args, .. } => args.iter().for_each(|a| collect_type_params(a, out)),
+                                nostos_types::Type::Function(ft) => {
+                                    ft.params.iter().for_each(|p| collect_type_params(p, out));
+                                    collect_type_params(&ft.ret, out);
+                                }
+                                _ => {}
+                            }
+                        }
+                        let mut ret_params = std::collections::HashSet::new();
+                        collect_type_params(fn_type.ret.as_ref(), &mut ret_params);
+                        if ret_params.is_empty() {
+                            true // No TypeParams in return - compiled version is better
+                        } else {
+                            // Check if any return TypeParam also appears in a parameter
+                            let mut param_params = std::collections::HashSet::new();
+                            for p in &fn_type.params {
+                                collect_type_params(p, &mut param_params);
+                            }
+                            // If return has TypeParams NOT in params, it's dangling - skip
+                            ret_params.iter().all(|rp| !param_params.contains(rp))
+                        }
+                    } else {
+                        false
+                    }
+                };
+                if has_compiled_sig {
                     continue; // Per-function HM inference is always more accurate than batch
                 }
             }
