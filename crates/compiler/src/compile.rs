@@ -9775,10 +9775,31 @@ impl Compiler {
             return Ok(());
         }
 
+        // Merge same-named methods into multi-clause functions.
+        // When a trait impl has multiple clauses for the same method (e.g., pattern matching
+        // on variant constructors like `speak(Cat) = "meow"` and `speak(Dog) = "woof"`),
+        // they are parsed as separate FnDefs. We need to merge them into a single FnDef
+        // with multiple clauses so that compile_fn_def generates proper multi-clause dispatch.
+        let merged_methods: Vec<FnDef> = {
+            let mut method_groups: Vec<(String, FnDef)> = Vec::new();
+            for method in &impl_def.methods {
+                let name = method.name.node.clone();
+                if let Some(existing) = method_groups.iter_mut().find(|(n, _)| *n == name) {
+                    // Merge clauses into existing group
+                    existing.1.clauses.extend(method.clauses.clone());
+                    // Extend the span to cover all clauses
+                    existing.1.span = Span::new(existing.1.span.start, method.span.end);
+                } else {
+                    method_groups.push((name, method.clone()));
+                }
+            }
+            method_groups.into_iter().map(|(_, def)| def).collect()
+        };
+
         // Compile each method as a function with a special qualified name: Type.Trait.method
         // Use unqualified type name here because compile_fn_def will add module prefix
         let mut method_names = Vec::new();
-        for method in &impl_def.methods {
+        for method in &merged_methods {
             let method_name = method.name.node.clone();
             // Use unqualified type name for method - compile_fn_def adds module prefix
             let local_method_name = format!("{}.{}.{}", unqualified_type_name, trait_name, method_name);

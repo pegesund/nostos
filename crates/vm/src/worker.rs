@@ -3067,19 +3067,24 @@ impl Worker {
             }
 
             // === Pattern matching ===
-            Instruction::TestTag(dst, value, discriminant) => {
-                // Discriminant is computed at compile time - just compare u16 directly!
+            Instruction::TestTag(dst, value, ctor_idx) => {
+                // Third operand is a constant table index pointing to the constructor name string.
+                // Look up the name and compare against the variant's constructor.
                 let val = get_reg!(value);
+                let expected_ctor = match constants.get(ctor_idx as usize) {
+                    Some(Value::String(s)) => s.as_str().to_string(),
+                    _ => return Err(RuntimeError::Panic("TestTag: expected string constant".to_string())),
+                };
                 let result = self.scheduler.with_process(pid, |proc| {
                     match &val {
                         GcValue::Variant(ptr) => {
                             proc.heap.get_variant(*ptr)
-                                .map(|v| v.discriminant == discriminant)
+                                .map(|v| &*v.constructor == expected_ctor.as_str())
                                 .unwrap_or(false)
                         }
                         GcValue::Record(ptr) => {
                             proc.heap.get_record(*ptr)
-                                .map(|r| constructor_discriminant(&r.type_name) == discriminant)
+                                .map(|r| &*r.type_name == expected_ctor.as_str())
                                 .unwrap_or(false)
                         }
                         _ => false,
