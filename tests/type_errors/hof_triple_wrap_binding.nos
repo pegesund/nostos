@@ -1,0 +1,10 @@
+# expect_error: type mismatch
+# Three levels of wrapping - type error must propagate through the chain
+wrap1(f) = x => f(x)
+wrap2(f) = wrap1(f)
+wrap3(f) = wrap2(f)
+inc(x: Int) = x + 1
+main() = {
+  g = wrap3(inc)
+  g("hello")
+}

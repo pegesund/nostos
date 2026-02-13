@@ -27731,30 +27731,16 @@ impl Compiler {
 
         // Then register pending function signatures (for functions not yet compiled)
         // For mutual recursion support, we need to register these signatures.
-        // However, for UNTYPED functions (where params have type variables), the pre-pass
-        // creates independent type variables for each param, while HM inference correctly
-        // shares them (e.g., "a -> a -> a"). So:
-        // - If pre-pass signature has type variables: prefer HM-inferred signature (if available)
-        // - If pre-pass signature is fully typed: always use it (mutual recursion support)
+        // However, for non-stdlib functions that already have a compiled signature
+        // (from try_hm_inference), always prefer the compiled version. The batch
+        // enrichment (pending) can be contaminated by call-site types, e.g.:
+        //   wrap3(f) = wrap2(f)  -- batch sees wrap3 as a->b due to call-site leak
+        //   main() = g = wrap3(inc); g("hello")  -- inc:Int->Int contaminates wrap3
+        // The per-function try_hm_inference correctly infers ((a)->b)->((a)->b).
         for (fn_name, fn_type) in &self.pending_fn_signatures {
-            // For non-stdlib functions with concrete compiled signatures (no type vars),
-            // skip the pending entry. The per-function HM inference (try_hm_inference)
-            // produces more accurate concrete types than batch enrichment, which may
-            // produce generic TypeParam types when batch solve() exits early on errors
-            // in OTHER functions. For generic functions, allow the pending entry through
-            // since it preserves the correct type parameter structure from annotations.
             if !fn_name.starts_with("stdlib.") {
-                if let Some(sig) = self.functions.get(fn_name).and_then(|fv| fv.signature.as_ref()) {
-                    let sig_has_type_var = sig.as_bytes().iter().enumerate().any(|(i, &b)| {
-                        let c = b as char;
-                        if !c.is_ascii_lowercase() { return false; }
-                        let prev_ok = i == 0 || !(sig.as_bytes()[i-1] as char).is_ascii_alphanumeric();
-                        let next_ok = i + 1 >= sig.len() || !(sig.as_bytes()[i+1] as char).is_ascii_alphanumeric();
-                        prev_ok && next_ok
-                    });
-                    if !sig_has_type_var {
-                        continue; // Concrete compiled sig is more accurate than pending
-                    }
+                if self.functions.get(fn_name).and_then(|fv| fv.signature.as_ref()).is_some() {
+                    continue; // Per-function HM inference is always more accurate than batch
                 }
             }
             // Check for type variables anywhere in the type (not just top-level)
