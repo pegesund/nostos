@@ -623,7 +623,23 @@ impl<'a> InferCtx<'a> {
             if compatible {
                 // Higher score = better match
                 // Prefer exact matches over generic matches
-                if best_match.is_none() || score > best_match.unwrap().1 {
+                // When scores are tied, prefer overloads with fewer type_params.
+                // This ensures builtin functions (no type_params, e.g., range: Int -> Int -> [Int])
+                // win over stdlib functions with the same name but generic return types
+                // (e.g., stdlib.validation.range: Concat a => Int -> Int -> ((a, String) -> Option[String])).
+                let is_better = if let Some((prev_idx, prev_score)) = best_match {
+                    if score > prev_score {
+                        true
+                    } else if score == prev_score {
+                        // Tiebreaker: prefer overloads with fewer type_params (more concrete)
+                        overload.type_params.len() < overloads[prev_idx].type_params.len()
+                    } else {
+                        false
+                    }
+                } else {
+                    true
+                };
+                if is_better {
                     best_match = Some((idx, score));
                 }
             }
