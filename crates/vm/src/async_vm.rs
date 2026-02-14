@@ -1720,6 +1720,51 @@ impl AsyncProcess {
                 };
                 set_reg!(dst, result);
             }
+            FloorFloat(dst, src) => {
+                let v = reg_ref!(src);
+                let result = match v {
+                    GcValue::Float64(n) => GcValue::Int64(n.floor() as i64),
+                    GcValue::Float32(n) => GcValue::Int64(n.floor() as i64),
+                    _ => return Err(RuntimeError::Panic("FloorFloat: expected Float".into())),
+                };
+                set_reg!(dst, result);
+            }
+            CeilFloat(dst, src) => {
+                let v = reg_ref!(src);
+                let result = match v {
+                    GcValue::Float64(n) => GcValue::Int64(n.ceil() as i64),
+                    GcValue::Float32(n) => GcValue::Int64(n.ceil() as i64),
+                    _ => return Err(RuntimeError::Panic("CeilFloat: expected Float".into())),
+                };
+                set_reg!(dst, result);
+            }
+            RoundFloat(dst, src) => {
+                let v = reg_ref!(src);
+                let result = match v {
+                    GcValue::Float64(n) => GcValue::Int64(n.round() as i64),
+                    GcValue::Float32(n) => GcValue::Int64(n.round() as i64),
+                    _ => return Err(RuntimeError::Panic("RoundFloat: expected Float".into())),
+                };
+                set_reg!(dst, result);
+            }
+            LogFloat(dst, src) => {
+                let v = reg_ref!(src);
+                let result = match v {
+                    GcValue::Float64(n) => GcValue::Float64(n.ln()),
+                    GcValue::Float32(n) => GcValue::Float32(n.ln()),
+                    _ => return Err(RuntimeError::Panic("LogFloat: expected Float".into())),
+                };
+                set_reg!(dst, result);
+            }
+            Log10Float(dst, src) => {
+                let v = reg_ref!(src);
+                let result = match v {
+                    GcValue::Float64(n) => GcValue::Float64(n.log10()),
+                    GcValue::Float32(n) => GcValue::Float32(n.log10()),
+                    _ => return Err(RuntimeError::Panic("Log10Float: expected Float".into())),
+                };
+                set_reg!(dst, result);
+            }
 
             // === Float comparisons ===
             EqFloat(dst, a, b) => {
