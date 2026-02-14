@@ -182,7 +182,7 @@ fn resolve_params_from_call_sites(
 }
 
 /// Split function call arguments by comma, respecting nested parens/brackets.
-fn split_call_args(args: &str) -> Vec<String> {
+pub fn split_call_args(args: &str) -> Vec<String> {
     let mut result = Vec::new();
     let mut current = String::new();
     let mut paren_depth = 0;

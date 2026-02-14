@@ -26384,6 +26384,40 @@ impl Compiler {
         None
     }
 
+    /// Find a concrete type that has ALL the given field names.
+    /// Searches user-defined types and builtin types.
+    /// Returns None if no unique match or multiple types match.
+    fn find_type_with_fields(&self, required_fields: &[String]) -> Option<String> {
+        let mut matches = Vec::new();
+
+        // Search user-defined types
+        for (name, type_info) in &self.types {
+            if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
+                let field_names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+                if required_fields.iter().all(|rf| field_names.contains(&rf.as_str())) {
+                    matches.push(name.clone());
+                }
+            }
+        }
+
+        // Search builtin types
+        for (name, type_info) in &self.builtin_types {
+            if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
+                let field_names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+                if required_fields.iter().all(|rf| field_names.contains(&rf.as_str())) {
+                    matches.push(name.clone());
+                }
+            }
+        }
+
+        // Only resolve if exactly one type matches (unambiguous)
+        if matches.len() == 1 {
+            Some(matches.into_iter().next().unwrap())
+        } else {
+            None
+        }
+    }
+
     /// Get constructor names for a variant type.
     /// Returns empty vec for non-variant types or unknown types.
     pub fn get_type_constructors(&self, type_name: &str) -> Vec<String> {
@@ -26947,10 +26981,10 @@ impl Compiler {
 
         // Format with normalized type variables (handles both Var and TypeParam)
         let combined_map = (var_map.clone(), type_param_map.clone());
-        let param_types: Vec<String> = resolved_params.iter()
+        let mut param_types: Vec<String> = resolved_params.iter()
             .map(|ty| self.format_type_normalized_both(ty, &combined_map.0, &combined_map.1))
             .collect();
-        let ret_type = self.format_type_normalized_both(&resolved_ret, &combined_map.0, &combined_map.1);
+        let mut ret_type = self.format_type_normalized_both(&resolved_ret, &combined_map.0, &combined_map.1);
 
         // Collect trait bounds for type variables that appear in the signature
         let mut bounds: Vec<String> = Vec::new();
@@ -27077,6 +27111,66 @@ impl Compiler {
         }
         bounds.sort(); // Deterministic ordering
         bounds.dedup(); // Remove duplicate bounds (e.g., multiple Ord from multiple < operators)
+
+        // Resolve HasField constraints to concrete types where possible.
+        // If a type variable 'a' has HasField(body) a, HasField(id) a, HasField(path) a,
+        // find the concrete type that has all those fields (e.g., HttpRequest),
+        // substitute 'a' → 'HttpRequest' in param_types/ret_type, and remove those bounds.
+        let mut resolved_vars: HashMap<String, String> = HashMap::new(); // letter → concrete type
+        {
+            // Collect field requirements per type variable letter
+            let mut var_fields: HashMap<String, Vec<String>> = HashMap::new();
+            for bound in &bounds {
+                // Parse "HasField(fieldname) x" or "HasField(fieldname,y) x"
+                if bound.starts_with("HasField(") {
+                    if let Some(paren_end) = bound.find(')') {
+                        let inner = &bound[9..paren_end]; // field name (and optional result param)
+                        let field_name = inner.split(',').next().unwrap_or(inner).trim();
+                        let after_paren = bound[paren_end + 1..].trim();
+                        // The variable letter is the last token
+                        if let Some(var_letter) = after_paren.split_whitespace().last() {
+                            var_fields.entry(var_letter.to_string())
+                                .or_default()
+                                .push(field_name.to_string());
+                        }
+                    }
+                }
+            }
+
+            // For each type variable with field requirements, find a matching concrete type
+            for (var_letter, required_fields) in &var_fields {
+                if let Some(concrete) = self.find_type_with_fields(required_fields) {
+                    resolved_vars.insert(var_letter.clone(), concrete);
+                }
+            }
+
+            // Apply substitutions to param_types and ret_type
+            if !resolved_vars.is_empty() {
+                for pt in param_types.iter_mut() {
+                    for (letter, concrete) in &resolved_vars {
+                        if pt == letter {
+                            *pt = concrete.clone();
+                        }
+                    }
+                }
+                if let Some(concrete) = resolved_vars.get(&ret_type) {
+                    ret_type = concrete.clone();
+                }
+
+                // Remove resolved HasField bounds
+                bounds.retain(|b| {
+                    if b.starts_with("HasField(") {
+                        if let Some(paren_end) = b.find(')') {
+                            let after_paren = b[paren_end + 1..].trim();
+                            if let Some(var_letter) = after_paren.split_whitespace().last() {
+                                return !resolved_vars.contains_key(var_letter);
+                            }
+                        }
+                    }
+                    true
+                });
+            }
+        }
 
         // Format the signature with constraint prefix if there are bounds
         let type_sig = if param_types.is_empty() {

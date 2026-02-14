@@ -4172,6 +4172,150 @@ impl ReplEngine {
         Compiler::get_builtin_signature(name).map(String::from)
     }
 
+    /// Refine a generic signature by resolving single-letter type variables
+    /// from call sites in the module source code.
+    ///
+    /// e.g., `serverLoop :: a -> b -> c` — find call `serverLoop(server, mainPid)`
+    /// where `server: Server`, `mainPid: Pid` → `Server -> Pid -> ()`
+    pub fn refine_signature(&self, qualified_name: &str, sig: &str) -> String {
+        use crate::inference;
+        // Only refine if the signature has single-letter type variables
+        let has_generic = sig.split(" -> ").any(|part| {
+            let p = part.trim();
+            p.len() == 1 && p.chars().next().map_or(false, |c| c.is_lowercase())
+        });
+        if !has_generic {
+            return sig.to_string();
+        }
+
+        // For zero-param functions with just a single-letter return type (like `a`),
+        // the return type is almost always () since these are side-effecting functions.
+        if !sig.contains(" -> ") {
+            let trimmed = sig.trim();
+            if trimmed.len() == 1 && trimmed.chars().next().map_or(false, |c| c.is_lowercase()) {
+                return "()".to_string();
+            }
+        }
+
+        // Extract module name from qualified name
+        let module_name = if let Some(dot_pos) = qualified_name.find('.') {
+            &qualified_name[..dot_pos]
+        } else {
+            return sig.to_string(); // No module → can't find source
+        };
+        let fn_name = if let Some(dot_pos) = qualified_name.rfind('.') {
+            &qualified_name[dot_pos + 1..]
+        } else {
+            qualified_name
+        };
+
+        // Read module source
+        let source = if let Some(file_path) = self.module_sources.get(module_name) {
+            std::fs::read_to_string(file_path).unwrap_or_default()
+        } else {
+            return sig.to_string();
+        };
+
+        if source.is_empty() {
+            return sig.to_string();
+        }
+
+        // Get function params from compiler
+        let params = match self.compiler.get_function_params(qualified_name) {
+            Some(p) => p,
+            None => return sig.to_string(),
+        };
+
+        // Parse signature: "a -> b -> c" → params ["a", "b"], return "c"
+        let sig_parts: Vec<&str> = sig.split(" -> ").collect();
+        if sig_parts.is_empty() {
+            return sig.to_string();
+        }
+
+        // Build mapping: letter → concrete type (from call sites)
+        let mut letter_to_type: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+        // Scan for call sites: fn_name(arg1, arg2, ...)
+        let call_pattern = format!("{}(", fn_name);
+        for line in source.lines() {
+            let trimmed = line.trim();
+            let Some(call_pos) = trimmed.find(&call_pattern) else { continue };
+
+            // Skip function definition lines
+            let before_call = trimmed[..call_pos].trim();
+            if before_call.is_empty() || before_call == "pub" {
+                let after = &trimmed[call_pos + fn_name.len()..];
+                if let Some(close) = after.find(')') {
+                    if after[close + 1..].trim().starts_with('=') {
+                        continue; // Definition, not call
+                    }
+                }
+            }
+
+            // Extract arguments
+            let args_start = call_pos + call_pattern.len();
+            let rest = &trimmed[args_start..];
+            let mut depth = 1;
+            let mut end = None;
+            for (i, ch) in rest.char_indices() {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => { depth -= 1; if depth == 0 { end = Some(i); break; } }
+                    _ => {}
+                }
+            }
+            let Some(end) = end else { continue };
+            let args_str = &rest[..end];
+            let args_owned = inference::split_call_args(args_str);
+            let args: Vec<&str> = args_owned.iter().map(|s| s.trim()).collect();
+
+            // Build call-site bindings to resolve argument types
+            let call_site_bindings = inference::extract_local_bindings(&source, source.lines().count(), Some(self));
+
+            // Match each argument to its parameter's type letter
+            for (i, arg) in args.iter().enumerate() {
+                if i >= params.len() || i >= sig_parts.len() {
+                    break;
+                }
+                let sig_type = sig_parts[i].trim();
+                // Only resolve single-letter type variables
+                if sig_type.len() == 1 && sig_type.chars().next().map_or(false, |c| c.is_lowercase()) {
+                    if letter_to_type.contains_key(sig_type) {
+                        continue;
+                    }
+                    let arg = arg.trim();
+                    // Try to infer the argument type
+                    if let Some(ty) = inference::infer_rhs_type(arg, Some(self), &call_site_bindings) {
+                        letter_to_type.insert(sig_type.to_string(), ty);
+                    }
+                }
+            }
+
+            if !letter_to_type.is_empty() {
+                break; // Found enough info from one call site
+            }
+        }
+
+        if letter_to_type.is_empty() {
+            return sig.to_string();
+        }
+
+        // Apply substitutions
+        let refined_parts: Vec<String> = sig_parts.iter().map(|part| {
+            let p = part.trim();
+            if let Some(concrete) = letter_to_type.get(p) {
+                concrete.clone()
+            } else if p.len() == 1 && p.chars().next().map_or(false, |c| c.is_lowercase()) {
+                // Unresolved return type — for recursive functions returning unit, use ()
+                "()".to_string()
+            } else {
+                p.to_string()
+            }
+        }).collect();
+
+        refined_parts.join(" -> ")
+    }
+
     /// Get the doc comment for a function (for autocomplete display)
     pub fn get_function_doc(&self, name: &str) -> Option<String> {
         // Try user-defined functions first
@@ -8178,9 +8322,10 @@ impl ReplEngine {
             }
         }
 
-        // Fall back to string signature
-        self.compiler.get_function_signature(qualified_name)
-            .unwrap_or_default()
+        // Fall back to string signature, then refine generic parts from call sites
+        let sig = self.compiler.get_function_signature(qualified_name)
+            .unwrap_or_default();
+        self.refine_signature(qualified_name, &sig)
     }
 
     /// Get child items (functions, types, traits) for a source file,
@@ -8462,6 +8607,7 @@ impl ReplEngine {
                 } else {
                     // Direct function at root
                     let sig = self.compiler.get_function_signature(name).unwrap_or_default();
+                    let sig = self.refine_signature(name, &sig);
                     let doc = self.compiler.get_function_doc(name);
                     let is_public = self.compiler.is_function_public(name);
                     functions.insert((base_name.to_string(), sig, doc, is_eval, is_public));
@@ -8480,6 +8626,7 @@ impl ReplEngine {
                 } else {
                     // Direct function in this module
                     let sig = self.compiler.get_function_signature(name).unwrap_or_default();
+                    let sig = self.refine_signature(name, &sig);
                     let doc = self.compiler.get_function_doc(name);
                     let is_public = self.compiler.is_function_public(name);
                     functions.insert((rest.to_string(), sig, doc, is_eval, is_public));
@@ -21968,6 +22115,62 @@ main() = {
         assert_eq!(local_vars.get("spawned"), Some(&"Int".to_string()), "spawned should be Int");
         assert_eq!(local_vars.get("exited"), Some(&"Int".to_string()), "exited should be Int");
         assert_eq!(local_vars.get("active"), Some(&"Int".to_string()), "active should be Int");
+    }
+
+    /// Test browser signatures for loaded http_server file
+    #[test]
+    fn test_browser_signatures_http_server() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        let temp_dir = create_temp_dir("browser_sig_test");
+        let file_content = std::fs::read_to_string("/tmp/n2/http_server.nos")
+            .unwrap_or_else(|_| {
+                // Fallback content if file doesn't exist
+                r#"use stdlib.server.*
+
+handleRequest(req, mainPid) = {
+    path = req.path
+    Server.respond(req.id, 200, [("Content-Type", "text/plain")], path)
+}
+
+serverLoop(server, mainPid) = {
+    req = Server.accept(server)
+    spawn { handleRequest(req, mainPid) }
+    serverLoop(server, mainPid)
+}
+
+main() = {
+    mainPid = self()
+    server = Server.bind(8080)
+    spawn { serverLoop(server, mainPid) }
+    receive { "shutdown" -> Server.close(server) }
+}
+"#.to_string()
+            });
+        std::fs::write(temp_dir.join("http_server.nos"), &file_content).unwrap();
+        let _ = engine.load_directory(temp_dir.to_str().unwrap());
+
+        // Check signatures for all functions
+        for name in ["http_server.handleRequest", "http_server.serverLoop", "http_server.main",
+                      "handleRequest", "serverLoop", "main"] {
+            let sig = engine.get_function_signature(name);
+            println!("Signature for '{}': {:?}", name, sig);
+        }
+
+        // Also check browser items
+        let items = engine.get_browser_items(&["http_server".to_string()]);
+        for item in &items {
+            match item {
+                BrowserItem::Function { name, signature, .. } => {
+                    println!("Browser function: {} :: {}", name, signature);
+                }
+                BrowserItem::FileChild { name, signature, .. } => {
+                    println!("Browser file child: {} :: {}", name, signature);
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Test that simulates exactly what the LSP does on file open
