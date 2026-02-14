@@ -3670,7 +3670,7 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                         drop(engine);
                         s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| {
                             v.mark_saved();
-                            v.set_compile_error(None); // Clear error, show OK status
+                            v.set_compiled_ok();
                         });
                         refresh_browser_if_open(s);
                     }
@@ -3792,7 +3792,10 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                                 drop(engine);
 
                                 // Update editor compile status
-                                s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| v.mark_saved());
+                                s.call_on_name(&editor_id_compile, |v: &mut CodeEditor| {
+                                    v.mark_saved();
+                                    v.set_compiled_ok();
+                                });
 
                                 // Refresh browser to show updated compile status
                                 refresh_browser_if_open(s);

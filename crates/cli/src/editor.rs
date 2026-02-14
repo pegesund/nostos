@@ -22,6 +22,8 @@ pub enum CompileStatus {
     Unknown,
     /// Code parses and compiles OK
     Ok,
+    /// Just compiled successfully (shows "Compiled ✓", reverts to Ok on next edit)
+    Compiled,
     /// Parse error (syntax)
     ParseError(String),
     /// Compile error (type error, etc.)
@@ -521,6 +523,10 @@ impl CodeEditor {
     /// Called on each edit to track timing for debounced compile
     fn on_edit(&mut self) {
         self.last_edit_time = Some(Instant::now());
+        // Revert "Compiled ✓" back to plain "✓" on next edit
+        if matches!(self.compile_status, CompileStatus::Compiled) {
+            self.compile_status = CompileStatus::Ok;
+        }
     }
 
     /// Set the function name being edited (e.g., "utils.bar" or "Math.add")
@@ -788,6 +794,11 @@ impl CodeEditor {
             Some(msg) => self.compile_status = CompileStatus::CompileError(msg),
             None => self.compile_status = CompileStatus::Ok,
         }
+    }
+
+    /// Mark as successfully compiled (shows "Compiled ✓" until next edit)
+    pub fn set_compiled_ok(&mut self) {
+        self.compile_status = CompileStatus::Compiled;
     }
 
     /// Get the number of characters in a line
@@ -1357,6 +1368,7 @@ impl CodeEditor {
         let (indicator, color) = match &self.compile_status {
             CompileStatus::Unknown => ("?", Color::Rgb(128, 128, 128)),
             CompileStatus::Ok => ("✓", Color::Rgb(0, 255, 0)),
+            CompileStatus::Compiled => ("Compiled ✓", Color::Rgb(0, 255, 0)),
             CompileStatus::ParseError(msg) => {
                 // Truncate message for display
                 let short_msg: String = msg.chars().take(40).collect();
