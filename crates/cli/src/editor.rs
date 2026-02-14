@@ -24,6 +24,8 @@ pub enum CompileStatus {
     Ok,
     /// Just compiled successfully (shows "Compiled ✓", reverts to Ok on next edit)
     Compiled,
+    /// Eval result (shows "=> value", reverts to Ok on next edit)
+    EvalResult(String),
     /// Parse error (syntax)
     ParseError(String),
     /// Compile error (type error, etc.)
@@ -523,8 +525,8 @@ impl CodeEditor {
     /// Called on each edit to track timing for debounced compile
     fn on_edit(&mut self) {
         self.last_edit_time = Some(Instant::now());
-        // Revert "Compiled ✓" back to plain "✓" on next edit
-        if matches!(self.compile_status, CompileStatus::Compiled) {
+        // Revert "Compiled ✓" or eval result back to plain "✓" on next edit
+        if matches!(self.compile_status, CompileStatus::Compiled | CompileStatus::EvalResult(_)) {
             self.compile_status = CompileStatus::Ok;
         }
     }
@@ -799,6 +801,11 @@ impl CodeEditor {
     /// Mark as successfully compiled (shows "Compiled ✓" until next edit)
     pub fn set_compiled_ok(&mut self) {
         self.compile_status = CompileStatus::Compiled;
+    }
+
+    /// Show eval result in status bar (reverts on next edit)
+    pub fn set_eval_result(&mut self, result: String) {
+        self.compile_status = CompileStatus::EvalResult(result);
     }
 
     /// Get the number of characters in a line
@@ -1369,6 +1376,19 @@ impl CodeEditor {
             CompileStatus::Unknown => ("?", Color::Rgb(128, 128, 128)),
             CompileStatus::Ok => ("✓", Color::Rgb(0, 255, 0)),
             CompileStatus::Compiled => ("Compiled ✓", Color::Rgb(0, 255, 0)),
+            CompileStatus::EvalResult(msg) => {
+                let short_msg: String = msg.chars().take(60).collect();
+                let display = format!("=> {}", short_msg);
+                let style = Style::from(ColorStyle::new(
+                    Color::Rgb(100, 200, 255),
+                    Color::Rgb(0, 20, 40)
+                ));
+                let x = printer.size.x.saturating_sub(display.len() + 1);
+                printer.with_style(style, |p| {
+                    p.print((x, 0), &display);
+                });
+                return;
+            }
             CompileStatus::ParseError(msg) => {
                 // Truncate message for display
                 let short_msg: String = msg.chars().take(40).collect();

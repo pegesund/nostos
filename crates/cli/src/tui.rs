@@ -3177,8 +3177,12 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
     let engine_compile = engine.clone();
     let editor_id_compile = editor_id.clone();
     let editor_id_paste = editor_id.clone();
+    let editor_id_eval = editor_id.clone();
+    let editor_id_eval_status = editor_id.clone();
+    let engine_eval = engine.clone();
+    let name_for_eval = name.to_string();
 
-    // Ctrl+S to save, Ctrl+W to close, Ctrl+Y to copy, Ctrl+V to paste, Ctrl+G for graph, Ctrl+O to compile, Esc to close
+    // Ctrl+S to save, Ctrl+W to close, Ctrl+Y to copy, Ctrl+V to paste, Ctrl+G for graph, Ctrl+O to compile, Ctrl+L to eval selection, Esc to close
     let editor_with_events = OnEventView::new(editor.with_name(&editor_id))
         .on_event(Event::CtrlChar('y'), move |s| {
             // Copy selection to clipboard, or entire content if no selection (Ctrl+Y)
@@ -3210,6 +3214,76 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
                 }
                 Ok(_) => log_to_repl(s, "Clipboard empty"),
                 Err(e) => log_to_repl(s, &format!("Paste failed: {}", e)),
+            }
+        })
+        .on_event(Event::CtrlChar('l'), move |s| {
+            // Evaluate selected code (Ctrl+L)
+            let selected = s.call_on_name(&editor_id_eval, |v: &mut CodeEditor| {
+                v.get_selected_text()
+            }).flatten();
+
+            let code = match selected {
+                Some(text) if !text.trim().is_empty() => text,
+                _ => {
+                    log_to_repl(s, "No text selected (use Shift+Arrow to select)");
+                    return;
+                }
+            };
+
+            // Determine module context from the editor name
+            let module_name = if name_for_eval.starts_with("file:") {
+                let file_path = &name_for_eval[5..];
+                let stem = std::path::Path::new(file_path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("main");
+                format!("{}._file", stem)
+            } else {
+                name_for_eval.clone()
+            };
+
+            let mut engine = engine_eval.borrow_mut();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                engine.eval_in_module(&code, Some(&module_name))
+            }));
+
+            drop(engine);
+
+            match result {
+                Ok(Ok(output)) => {
+                    let display = output.trim().to_string();
+                    if display.is_empty() || display == "()" {
+                        log_to_repl(s, "Eval: OK");
+                        s.call_on_name(&editor_id_eval_status, |v: &mut CodeEditor| {
+                            v.set_compiled_ok();
+                        });
+                    } else {
+                        log_to_repl(s, &format!("=> {}", display));
+                        let result_clone = display.clone();
+                        s.call_on_name(&editor_id_eval_status, |v: &mut CodeEditor| {
+                            v.set_eval_result(result_clone);
+                        });
+                    }
+                }
+                Ok(Err(e)) => {
+                    log_to_repl(s, &format!("Eval error: {}", e));
+                    s.call_on_name(&editor_id_eval_status, |v: &mut CodeEditor| {
+                        v.set_compile_error(Some(e));
+                    });
+                }
+                Err(panic_info) => {
+                    let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "Unknown panic".to_string()
+                    };
+                    log_to_repl(s, &format!("Eval error: {}", panic_msg));
+                    s.call_on_name(&editor_id_eval_status, |v: &mut CodeEditor| {
+                        v.set_compile_error(Some(panic_msg));
+                    });
+                }
             }
         })
         .on_event(Event::CtrlChar('w'), move |s| {
