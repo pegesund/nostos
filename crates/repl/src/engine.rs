@@ -8345,11 +8345,17 @@ impl ReplEngine {
         };
 
         let mut items = Vec::new();
+        // Track function names we've already added to deduplicate multi-clause functions
+        // (e.g., evaluate(Num(n)) = ..., evaluate(Add(a,b)) = ... → show only once)
+        let mut seen_functions: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for item in &module.items {
             match item {
                 Item::FnDef(fn_def) => {
                     let name = fn_def.name.node.to_string();
+                    if !seen_functions.insert(name.clone()) {
+                        continue; // Already added this function
+                    }
                     let qualified_name = if module_name.is_empty() {
                         name.clone()
                     } else {
@@ -22171,6 +22177,37 @@ main() = {
                 _ => {}
             }
         }
+    }
+
+    /// Test that multi-clause functions only appear once in the browser.
+    #[test]
+    fn test_browser_dedup_multi_clause_functions() {
+        let config = ReplConfig { enable_jit: false, num_threads: 1 };
+        let mut engine = ReplEngine::new(config);
+
+        let temp_dir = create_temp_dir("browser_dedup_test");
+        std::fs::copy(
+            "/home/petter/dev/rust/nostos_duplicate/examples/calculator.nos",
+            temp_dir.join("calculator.nos"),
+        ).unwrap();
+        let _ = engine.load_directory(temp_dir.to_str().unwrap());
+
+        let items = engine.get_browser_items(&["calculator".to_string()]);
+        let fn_names: Vec<&str> = items.iter().filter_map(|item| {
+            match item {
+                BrowserItem::FileChild { name, kind: FileChildKind::Function, .. } => Some(name.as_str()),
+                _ => None,
+            }
+        }).collect();
+        println!("Function names in browser: {:?}", fn_names);
+
+        // evaluate and simplify should appear exactly once each
+        assert_eq!(fn_names.iter().filter(|&&n| n == "evaluate").count(), 1,
+            "evaluate should appear only once");
+        assert_eq!(fn_names.iter().filter(|&&n| n == "simplify").count(), 1,
+            "simplify should appear only once");
+        assert_eq!(fn_names.iter().filter(|&&n| n == "main").count(), 1,
+            "main should appear only once");
     }
 
     /// Test that simulates exactly what the LSP does on file open
