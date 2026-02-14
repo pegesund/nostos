@@ -782,6 +782,9 @@ pub fn run_tui(args: &[String]) -> ExitCode {
         open_editor(&mut siv, &file_name);
     }
 
+    // Show keybinding help on startup (dismissed by any key)
+    show_startup_help(&mut siv);
+
     siv.run();
 
     // After TUI exits, persist module cache if enabled
@@ -2825,58 +2828,57 @@ fn show_help_dialog(s: &mut Cursive) {
         ("Ctrl+H", "Show this help"),
         ("Ctrl+B", "Open file browser"),
         ("Ctrl+N", "Open nostlet picker"),
-        ("Ctrl+R", "Open new REPL panel"),
+        ("Alt+R", "Open new REPL panel"),
+        ("Alt+P", "Toggle fullscreen"),
         ("Alt+I / F9", "Toggle inspector panel"),
         ("Alt+C", "Toggle console"),
-        ("Alt+T", "Open Nostos test panel"),
+        ("Ctrl+D", "Toggle debug panel"),
         ("Shift+Tab", "Cycle focus between windows"),
+    ], header_style, key_style);
+
+    add_section(&mut styled, "CODE EDITOR - Editing", &[
+        ("Ctrl+O", "Compile file"),
+        ("Ctrl+S", "Save file"),
+        ("Ctrl+Z", "Undo"),
+        ("Ctrl+R", "Redo"),
+        ("Ctrl+K", "Delete current line"),
+        ("Ctrl+X", "Cut selection"),
+        ("Ctrl+Y", "Copy (selection or all)"),
+        ("Ctrl+V", "Paste from clipboard"),
+        ("Ctrl+L", "Evaluate selected code"),
+        ("Tab", "Indent / accept completion"),
+    ], header_style, key_style);
+
+    add_section(&mut styled, "CODE EDITOR - Selection", &[
+        ("Shift+Arrows", "Select text"),
+        ("Shift+Home/End", "Select to line start/end"),
+        ("Arrows (no Shift)", "Clear selection & move"),
+    ], header_style, key_style);
+
+    add_section(&mut styled, "CODE EDITOR - Navigation", &[
+        ("Ctrl+A", "Go to start of line"),
+        ("Ctrl+E", "Go to end of line"),
+        ("Ctrl+G", "Go to definition"),
+        ("Ctrl+F", "Show module functions"),
+        ("Alt+E", "Jump to error line"),
+        ("Ctrl+Space", "Show autocomplete"),
+        ("Ctrl+W / Esc", "Close editor"),
+        ("PageUp/Down", "Scroll"),
     ], header_style, key_style);
 
     add_section(&mut styled, "REPL PANEL", &[
         ("Enter", "Execute code"),
         ("Alt+Enter", "Insert newline (multiline)"),
-        ("Tab", "Autocomplete / cycle suggestions"),
-        ("Shift+Tab", "Cycle suggestions backward"),
-        ("Ctrl+Space", "Show autocomplete menu"),
+        ("Tab", "Autocomplete / cycle"),
         ("Ctrl+S", "Save session to file"),
         ("Ctrl+Y", "Copy output to clipboard"),
         ("Ctrl+W", "Close REPL panel"),
-        ("Up/Down", "Navigate history / autocomplete"),
+        ("Up/Down", "Navigate history"),
         ("PageUp/Down", "Scroll output"),
-        ("Esc", "Cancel autocomplete"),
-    ], header_style, key_style);
-
-    add_section(&mut styled, "CODE EDITOR", &[
-        ("Ctrl+S", "Save file"),
-        ("Ctrl+G", "Go to definition"),
-        ("Ctrl+F", "Search in file"),
-        ("Ctrl+A", "Go to start of line"),
-        ("Ctrl+K", "Delete current line"),
-        ("Ctrl+Y", "Copy to clipboard"),
-        ("Ctrl+W", "Close editor"),
-        ("Tab", "Indent / autocomplete"),
-        ("Shift+Tab", "Dedent / cycle backward"),
-        ("Ctrl+Space", "Show autocomplete menu"),
-        ("PageUp/Down", "Scroll"),
-        ("Esc", "Cancel autocomplete / close"),
-    ], header_style, key_style);
-
-    add_section(&mut styled, "CONSOLE", &[
-        ("Ctrl+Y", "Copy content to clipboard"),
-        ("Ctrl+W", "Close console"),
-    ], header_style, key_style);
-
-    add_section(&mut styled, "INSPECTOR PANEL", &[
-        ("Tab", "Switch between tabs"),
-        ("Up/Down", "Navigate values"),
-        ("Enter/Right", "Drill into value"),
-        ("Left/Bksp", "Go up one level"),
-        ("PageUp/Down", "Scroll list"),
-        ("Ctrl+Y", "Copy value to clipboard"),
     ], header_style, key_style);
 
     add_section(&mut styled, "FILE BROWSER (Ctrl+B)", &[
-        ("Enter", "Open file / Jump to definition"),
+        ("Enter", "Open file / jump to definition"),
         ("n", "Create new file"),
         ("r", "Rename file"),
         ("d", "Delete file"),
@@ -2886,7 +2888,7 @@ fn show_help_dialog(s: &mut Cursive) {
         ("Esc", "Close browser"),
     ], header_style, key_style);
 
-    styled.append_plain("          Press Esc or Enter to close\n");
+    styled.append_plain("        Press any key to close\n");
 
     let text_view = TextView::new(styled);
     let scroll_view = ScrollView::new(text_view)
@@ -2894,13 +2896,106 @@ fn show_help_dialog(s: &mut Cursive) {
         .scroll_y(true);
 
     let dialog = Dialog::around(scroll_view)
-        .title("Help")
-        .fixed_size((52, 32));
+        .title("Nostos Help  (Ctrl+H to reopen)")
+        .fixed_size((52, 36));
 
     let dialog_with_keys = OnEventView::new(dialog)
         .on_event(Key::Esc, |s| { s.pop_layer(); })
         .on_event(Key::Enter, |s| { s.pop_layer(); })
         .on_event(Event::CtrlChar('h'), |s| { s.pop_layer(); });
+
+    s.add_layer(dialog_with_keys);
+}
+
+/// Show keybinding help at startup — dismissed by any key press
+fn show_startup_help(s: &mut Cursive) {
+    use cursive::theme::{Effect, Style, ColorStyle, BaseColor, Color};
+
+    let mut styled = StyledString::new();
+    let header_style = Style::from(ColorStyle::new(
+        Color::Light(BaseColor::Yellow),
+        Color::TerminalDefault,
+    )).combine(Effect::Bold);
+    let key_style = Style::from(ColorStyle::new(
+        Color::Light(BaseColor::Cyan),
+        Color::TerminalDefault,
+    ));
+    let dim_style = Style::from(ColorStyle::new(
+        Color::Rgb(140, 140, 140),
+        Color::TerminalDefault,
+    ));
+
+    styled.append_plain("\n");
+
+    // Getting started
+    styled.append_styled("  Getting Started\n", header_style);
+    styled.append_plain("  ─────────────────────────────────────────────\n");
+    styled.append_plain("  ");
+    styled.append_styled("Ctrl+B      ", key_style);
+    styled.append_plain("  Open file browser\n");
+    styled.append_plain("  ");
+    styled.append_styled("Alt+R       ", key_style);
+    styled.append_plain("  Open REPL panel\n");
+    styled.append_plain("  ");
+    styled.append_styled("Shift+Tab   ", key_style);
+    styled.append_plain("  Switch between panels\n");
+    styled.append_plain("\n");
+
+    // Editor essentials
+    styled.append_styled("  Editor\n", header_style);
+    styled.append_plain("  ─────────────────────────────────────────────\n");
+    styled.append_plain("  ");
+    styled.append_styled("Ctrl+O      ", key_style);
+    styled.append_plain("  Compile file\n");
+    styled.append_plain("  ");
+    styled.append_styled("Ctrl+S      ", key_style);
+    styled.append_plain("  Save file\n");
+    styled.append_plain("  ");
+    styled.append_styled("Ctrl+Z / R  ", key_style);
+    styled.append_plain("  Undo / Redo\n");
+    styled.append_plain("  ");
+    styled.append_styled("Shift+Arrows", key_style);
+    styled.append_plain("  Select text\n");
+    styled.append_plain("  ");
+    styled.append_styled("Ctrl+Y / X  ", key_style);
+    styled.append_plain("  Copy / Cut\n");
+    styled.append_plain("  ");
+    styled.append_styled("Ctrl+V      ", key_style);
+    styled.append_plain("  Paste\n");
+    styled.append_plain("  ");
+    styled.append_styled("Ctrl+L      ", key_style);
+    styled.append_plain("  Evaluate selection\n");
+    styled.append_plain("  ");
+    styled.append_styled("Tab         ", key_style);
+    styled.append_plain("  Autocomplete\n");
+    styled.append_plain("\n");
+
+    // Window management
+    styled.append_styled("  Windows\n", header_style);
+    styled.append_plain("  ─────────────────────────────────────────────\n");
+    styled.append_plain("  ");
+    styled.append_styled("Alt+P       ", key_style);
+    styled.append_plain("  Toggle fullscreen\n");
+    styled.append_plain("  ");
+    styled.append_styled("Ctrl+W      ", key_style);
+    styled.append_plain("  Close panel\n");
+    styled.append_plain("  ");
+    styled.append_styled("Ctrl+H      ", key_style);
+    styled.append_plain("  Full keybinding reference\n");
+    styled.append_plain("\n");
+
+    styled.append_styled("        Press any key to start ...\n", dim_style);
+
+    let text_view = TextView::new(styled);
+
+    let dialog = Dialog::around(text_view)
+        .title("Welcome to Nostos");
+
+    // Dismiss on any event
+    let dialog_with_keys = OnEventView::new(dialog)
+        .on_pre_event_inner(EventTrigger::any(), |_view, _event| {
+            Some(EventResult::with_cb(|s| { s.pop_layer(); }))
+        });
 
     s.add_layer(dialog_with_keys);
 }
