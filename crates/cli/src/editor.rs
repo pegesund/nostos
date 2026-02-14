@@ -12,6 +12,7 @@ use nostos_repl::ReplEngine;
 use nostos_repl::inference;
 
 use crate::autocomplete::{Autocomplete, CompletionContext, CompletionItem, CompletionSource, parse_imports, extract_module_from_editor_name};
+use crate::tui::copy_to_system_clipboard;
 
 /// Compile status for the editor
 #[derive(Clone, Debug)]
@@ -373,6 +374,8 @@ pub struct CodeEditor {
     needs_full_compile: bool,
     /// Whether this is a file: mode editor (standalone file, not part of a module)
     is_file_mode: bool,
+    /// Selection anchor point (col, row). When Some, selection spans from anchor to cursor.
+    selection_anchor: Option<(usize, usize)>,
 }
 
 impl CodeEditor {
@@ -399,6 +402,7 @@ impl CodeEditor {
             last_edit_time: None,
             needs_full_compile: false,
             is_file_mode: false,
+            selection_anchor: None,
         }
     }
 
@@ -571,6 +575,150 @@ impl CodeEditor {
     /// Mark the current content as saved
     pub fn mark_saved(&mut self) {
         self.saved_content = self.get_content();
+    }
+
+    /// Whether there is an active text selection
+    pub fn has_selection(&self) -> bool {
+        self.selection_anchor.is_some()
+    }
+
+    /// Clear the current selection
+    pub fn clear_selection(&mut self) {
+        self.selection_anchor = None;
+    }
+
+    /// Start or continue a selection. Sets anchor if not already set.
+    fn ensure_selection_anchor(&mut self) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor);
+        }
+    }
+
+    /// Get ordered selection range: (start_col, start_row), (end_col, end_row)
+    /// Start is always before end in document order.
+    pub fn selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
+        let anchor = self.selection_anchor?;
+        let cursor = self.cursor;
+        // Order by row first, then column
+        if anchor.1 < cursor.1 || (anchor.1 == cursor.1 && anchor.0 <= cursor.0) {
+            Some((anchor, cursor))
+        } else {
+            Some((cursor, anchor))
+        }
+    }
+
+    /// Get the selected text, if any
+    pub fn get_selected_text(&self) -> Option<String> {
+        let ((start_col, start_row), (end_col, end_row)) = self.selection_range()?;
+        if start_row == end_row {
+            // Single line selection
+            let line = &self.content[start_row];
+            let start_byte = Self::char_to_byte_idx(line, start_col);
+            let end_byte = Self::char_to_byte_idx(line, end_col);
+            Some(line[start_byte..end_byte].to_string())
+        } else {
+            // Multi-line selection
+            let mut result = String::new();
+            // First line: from start_col to end
+            let first_line = &self.content[start_row];
+            let start_byte = Self::char_to_byte_idx(first_line, start_col);
+            result.push_str(&first_line[start_byte..]);
+            // Middle lines: full lines
+            for row in (start_row + 1)..end_row {
+                result.push('\n');
+                result.push_str(&self.content[row]);
+            }
+            // Last line: from start to end_col
+            result.push('\n');
+            let last_line = &self.content[end_row];
+            let end_byte = Self::char_to_byte_idx(last_line, end_col);
+            result.push_str(&last_line[..end_byte]);
+            Some(result)
+        }
+    }
+
+    /// Delete the selected text and place cursor at the start of the selection
+    pub fn delete_selection(&mut self) {
+        let ((start_col, start_row), (end_col, end_row)) = match self.selection_range() {
+            Some(r) => r,
+            None => return,
+        };
+
+        if start_row == end_row {
+            // Single line: remove characters between start and end
+            let line = &self.content[start_row];
+            let start_byte = Self::char_to_byte_idx(line, start_col);
+            let end_byte = Self::char_to_byte_idx(line, end_col);
+            let mut new_line = line[..start_byte].to_string();
+            new_line.push_str(&line[end_byte..]);
+            self.content[start_row] = new_line;
+        } else {
+            // Multi-line: keep start of first line + end of last line, remove middle lines
+            let first_line = &self.content[start_row];
+            let last_line = &self.content[end_row];
+            let start_byte = Self::char_to_byte_idx(first_line, start_col);
+            let end_byte = Self::char_to_byte_idx(last_line, end_col);
+            let mut new_line = first_line[..start_byte].to_string();
+            new_line.push_str(&last_line[end_byte..]);
+            // Remove lines from end_row down to start_row+1, then replace start_row
+            for _ in (start_row + 1)..=end_row {
+                self.content.remove(start_row + 1);
+            }
+            self.content[start_row] = new_line;
+        }
+
+        // Place cursor at start of deleted region
+        self.cursor = (start_col, start_row);
+        self.selection_anchor = None;
+    }
+
+    /// Insert text at cursor position (handles multi-line text for paste)
+    pub fn insert_text(&mut self, text: &str) {
+        // Normalize line endings (handle \r\n from clipboard)
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        let lines: Vec<&str> = normalized.split('\n').collect();
+        if lines.is_empty() {
+            return;
+        }
+
+        if lines.len() == 1 {
+            // Single line insert
+            let line = &self.content[self.cursor.1];
+            let byte_idx = Self::char_to_byte_idx(line, self.cursor.0);
+            let mut new_line = line[..byte_idx].to_string();
+            new_line.push_str(lines[0]);
+            new_line.push_str(&line[byte_idx..]);
+            self.content[self.cursor.1] = new_line;
+            self.cursor.0 += lines[0].chars().count();
+        } else {
+            // Multi-line insert
+            let current_line = &self.content[self.cursor.1];
+            let byte_idx = Self::char_to_byte_idx(current_line, self.cursor.0);
+            let before = current_line[..byte_idx].to_string();
+            let after = current_line[byte_idx..].to_string();
+
+            // First line: before + first paste line
+            self.content[self.cursor.1] = format!("{}{}", before, lines[0]);
+
+            // Middle lines
+            for (i, line) in lines[1..lines.len()-1].iter().enumerate() {
+                self.content.insert(self.cursor.1 + 1 + i, line.to_string());
+            }
+
+            // Last line: last paste line + after
+            let last_paste_line = lines[lines.len() - 1];
+            let new_last = format!("{}{}", last_paste_line, after);
+            let insert_row = self.cursor.1 + lines.len() - 1;
+            if insert_row < self.content.len() {
+                self.content.insert(insert_row, new_last);
+            } else {
+                self.content.push(new_last);
+            }
+
+            // Position cursor at end of pasted text
+            self.cursor.1 = self.cursor.1 + lines.len() - 1;
+            self.cursor.0 = last_paste_line.chars().count();
+        }
     }
 
     /// Set the compile error status directly (for Ctrl+E compile feedback)
@@ -1325,6 +1473,57 @@ impl View for CodeEditor {
             }
         }
 
+        // Draw selection highlight
+        if let Some(((sel_start_col, sel_start_row), (sel_end_col, sel_end_row))) = self.selection_range() {
+            let sel_style = Style::from(ColorStyle::new(
+                Color::Rgb(255, 255, 255),  // White foreground
+                Color::Rgb(50, 80, 160),    // Blue background
+            ));
+
+            for screen_y in 0..view_height {
+                let line_idx = scroll_y + screen_y;
+                if line_idx >= self.content.len() {
+                    break;
+                }
+
+                // Skip lines outside selection
+                if line_idx < sel_start_row || line_idx > sel_end_row {
+                    continue;
+                }
+
+                let line = &self.content[line_idx];
+                let line_chars: usize = line.chars().count();
+
+                // Determine the selection range within this line (in char indices)
+                let sel_col_start = if line_idx == sel_start_row { sel_start_col } else { 0 };
+                let sel_col_end = if line_idx == sel_end_row { sel_end_col } else { line_chars };
+
+                if sel_col_start >= sel_col_end && line_idx == sel_start_row && line_idx == sel_end_row {
+                    continue; // Empty selection on single line
+                }
+
+                // Render each selected character with highlight
+                for col in sel_col_start..sel_col_end {
+                    if col < scroll_x || col >= scroll_x + view_width {
+                        continue; // Off-screen
+                    }
+                    let screen_x_pos = col - scroll_x;
+                    let ch = line.chars().nth(col).unwrap_or(' ');
+                    printer.with_style(sel_style, |p| {
+                        p.print((screen_x_pos, screen_y), &ch.to_string());
+                    });
+                }
+
+                // If selection extends beyond line end on non-last selected line, highlight the trailing space
+                if line_idx != sel_end_row && line_chars >= scroll_x && line_chars < scroll_x + view_width {
+                    let screen_x_pos = line_chars - scroll_x;
+                    printer.with_style(sel_style, |p| {
+                        p.print((screen_x_pos, screen_y), " ");
+                    });
+                }
+            }
+        }
+
         // Draw matching bracket highlight
         if let Some((match_row, match_col)) = self.find_matching_bracket() {
             let bracket_style = Style::from(ColorStyle::new(Color::Rgb(0, 0, 0), Color::Rgb(0, 255, 255))); // Cyan background
@@ -1462,6 +1661,9 @@ impl View for CodeEditor {
                 EventResult::Ignored
             }
             Event::Char(c) => {
+                if self.has_selection() {
+                    self.delete_selection();
+                }
                 self.insert_char(c);
                 EventResult::Consumed(None)
             }
@@ -1470,6 +1672,9 @@ impl View for CodeEditor {
                 if self.ac_state.active && !self.ac_state.candidates.is_empty() {
                     self.accept_completion();
                     return EventResult::Consumed(None);
+                }
+                if self.has_selection() {
+                    self.delete_selection();
                 }
                 self.insert_newline();
                 EventResult::Consumed(None)
@@ -1480,18 +1685,32 @@ impl View for CodeEditor {
                     self.ac_state.reset();
                     return EventResult::Consumed(None);
                 }
+                // Clear selection
+                if self.has_selection() {
+                    self.clear_selection();
+                    return EventResult::Consumed(None);
+                }
                 EventResult::Ignored
             }
             Event::Key(Key::Backspace) => {
-                self.backspace();
+                if self.has_selection() {
+                    self.delete_selection();
+                } else {
+                    self.backspace();
+                }
                 EventResult::Consumed(None)
             }
             Event::Key(Key::Del) => {
-                self.delete();
+                if self.has_selection() {
+                    self.delete_selection();
+                } else {
+                    self.delete();
+                }
                 EventResult::Consumed(None)
             }
             Event::Key(Key::Left) => {
                 self.ac_state.reset();
+                self.clear_selection();
                 if self.cursor.0 > 0 {
                     self.cursor.0 -= 1;
                 } else if self.cursor.1 > 0 {
@@ -1502,6 +1721,7 @@ impl View for CodeEditor {
             }
             Event::Key(Key::Right) => {
                 self.ac_state.reset();
+                self.clear_selection();
                 let line_char_len = self.line_char_count(self.cursor.1);
                 if self.cursor.0 < line_char_len {
                     self.cursor.0 += 1;
@@ -1517,7 +1737,7 @@ impl View for CodeEditor {
                     self.ac_state.select_prev();
                     return EventResult::Consumed(None);
                 }
-                // Otherwise normal cursor movement
+                self.clear_selection();
                 if self.cursor.1 > 0 {
                     self.cursor.1 -= 1;
                     self.fix_cursor_x();
@@ -1530,11 +1750,65 @@ impl View for CodeEditor {
                     self.ac_state.select_next();
                     return EventResult::Consumed(None);
                 }
-                // Otherwise normal cursor movement
+                self.clear_selection();
                 if self.cursor.1 < self.content.len() - 1 {
                     self.cursor.1 += 1;
                     self.fix_cursor_x();
                 }
+                EventResult::Consumed(None)
+            }
+            // Shift+Arrow: extend selection
+            Event::Shift(Key::Left) => {
+                self.ac_state.reset();
+                self.ensure_selection_anchor();
+                if self.cursor.0 > 0 {
+                    self.cursor.0 -= 1;
+                } else if self.cursor.1 > 0 {
+                    self.cursor.1 -= 1;
+                    self.cursor.0 = self.line_char_count(self.cursor.1);
+                }
+                EventResult::Consumed(None)
+            }
+            Event::Shift(Key::Right) => {
+                self.ac_state.reset();
+                self.ensure_selection_anchor();
+                let line_char_len = self.line_char_count(self.cursor.1);
+                if self.cursor.0 < line_char_len {
+                    self.cursor.0 += 1;
+                } else if self.cursor.1 < self.content.len() - 1 {
+                    self.cursor.1 += 1;
+                    self.cursor.0 = 0;
+                }
+                EventResult::Consumed(None)
+            }
+            Event::Shift(Key::Up) => {
+                self.ac_state.reset();
+                self.ensure_selection_anchor();
+                if self.cursor.1 > 0 {
+                    self.cursor.1 -= 1;
+                    self.fix_cursor_x();
+                }
+                EventResult::Consumed(None)
+            }
+            Event::Shift(Key::Down) => {
+                self.ac_state.reset();
+                self.ensure_selection_anchor();
+                if self.cursor.1 < self.content.len() - 1 {
+                    self.cursor.1 += 1;
+                    self.fix_cursor_x();
+                }
+                EventResult::Consumed(None)
+            }
+            Event::Shift(Key::Home) => {
+                self.ac_state.reset();
+                self.ensure_selection_anchor();
+                self.cursor.0 = 0;
+                EventResult::Consumed(None)
+            }
+            Event::Shift(Key::End) => {
+                self.ac_state.reset();
+                self.ensure_selection_anchor();
+                self.cursor.0 = self.line_char_count(self.cursor.1);
                 EventResult::Consumed(None)
             }
             Event::Key(Key::PageUp) => {
@@ -1555,11 +1829,13 @@ impl View for CodeEditor {
             }
             Event::Key(Key::Home) => {
                 self.ac_state.reset();
+                self.clear_selection();
                 self.cursor.0 = 0;
                 EventResult::Consumed(None)
             }
             Event::Key(Key::End) => {
                 self.ac_state.reset();
+                self.clear_selection();
                 self.cursor.0 = self.line_char_count(self.cursor.1);
                 EventResult::Consumed(None)
             }
@@ -1580,12 +1856,14 @@ impl View for CodeEditor {
             // Ctrl+A to go to start of line
             Event::CtrlChar('a') => {
                 self.ac_state.reset();
+                self.clear_selection();
                 self.cursor.0 = 0;
                 EventResult::Consumed(None)
             }
             // Ctrl+E to go to end of line (common readline behavior)
             Event::CtrlChar('e') => {
                 self.ac_state.reset();
+                self.clear_selection();
                 self.cursor.0 = self.line_char_count(self.cursor.1);
                 EventResult::Consumed(None)
             }
@@ -1607,6 +1885,14 @@ impl View for CodeEditor {
                     // Only one line - clear it instead of removing
                     self.content[0].clear();
                     self.cursor.0 = 0;
+                }
+                EventResult::Consumed(None)
+            }
+            // Ctrl+X to cut selection to clipboard
+            Event::CtrlChar('x') => {
+                if let Some(text) = self.get_selected_text() {
+                    let _ = copy_to_system_clipboard(&text);
+                    self.delete_selection();
                 }
                 EventResult::Consumed(None)
             }

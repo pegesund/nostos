@@ -3176,18 +3176,39 @@ fn create_editor_view(_s: &mut Cursive, engine: &Rc<RefCell<ReplEngine>>, name: 
     let name_for_compile = name.to_string();
     let engine_compile = engine.clone();
     let editor_id_compile = editor_id.clone();
+    let editor_id_paste = editor_id.clone();
 
-    // Ctrl+S to save, Ctrl+W to close, Ctrl+Y to copy, Ctrl+G for graph, Ctrl+O to compile, Esc to close
+    // Ctrl+S to save, Ctrl+W to close, Ctrl+Y to copy, Ctrl+V to paste, Ctrl+G for graph, Ctrl+O to compile, Esc to close
     let editor_with_events = OnEventView::new(editor.with_name(&editor_id))
         .on_event(Event::CtrlChar('y'), move |s| {
-            // Copy editor content to clipboard (Ctrl+Y)
-            if let Some(text) = s.call_on_name(&editor_id_copy, |v: &mut CodeEditor| v.get_content()) {
+            // Copy selection to clipboard, or entire content if no selection (Ctrl+Y)
+            let text = s.call_on_name(&editor_id_copy, |v: &mut CodeEditor| {
+                v.get_selected_text().unwrap_or_else(|| v.get_content())
+            });
+            if let Some(text) = text {
                 if !text.is_empty() {
                     match copy_to_system_clipboard(&text) {
                         Ok(_) => log_to_repl(s, &format!("Copied {} chars", text.len())),
                         Err(e) => log_to_repl(s, &format!("Copy failed: {}", e)),
                     }
                 }
+            }
+        })
+        .on_event(Event::CtrlChar('v'), move |s| {
+            // Paste from clipboard (Ctrl+V)
+            match read_from_system_clipboard() {
+                Ok(text) if !text.is_empty() => {
+                    let char_count = text.chars().count();
+                    s.call_on_name(&editor_id_paste, |v: &mut CodeEditor| {
+                        if v.has_selection() {
+                            v.delete_selection();
+                        }
+                        v.insert_text(&text);
+                    });
+                    log_to_repl(s, &format!("Pasted {} chars", char_count));
+                }
+                Ok(_) => log_to_repl(s, "Clipboard empty"),
+                Err(e) => log_to_repl(s, &format!("Paste failed: {}", e)),
             }
         })
         .on_event(Event::CtrlChar('w'), move |s| {
@@ -5484,7 +5505,7 @@ fn cycle_window_backward(s: &mut Cursive) {
 }
 
 /// Copy text to system clipboard using xclip (X11) or wl-copy (Wayland)
-fn copy_to_system_clipboard(text: &str) -> Result<String, String> {
+pub(crate) fn copy_to_system_clipboard(text: &str) -> Result<String, String> {
     use std::process::{Command, Stdio};
     use std::io::Write;
 
@@ -5517,6 +5538,33 @@ fn copy_to_system_clipboard(text: &str) -> Result<String, String> {
     }
 
     Err("No clipboard tool found (tried wl-copy, xclip, xsel)".to_string())
+}
+
+pub(crate) fn read_from_system_clipboard() -> Result<String, String> {
+    use std::process::{Command, Stdio};
+
+    let commands = [
+        ("wl-paste", vec!["--no-newline"]),
+        ("xclip", vec!["-selection", "clipboard", "-o"]),
+        ("xsel", vec!["--clipboard", "--output"]),
+    ];
+
+    for (cmd, args) in &commands {
+        if let Ok(output) = Command::new(cmd)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+        {
+            if output.status.success() {
+                return String::from_utf8(output.stdout)
+                    .map_err(|e| format!("Clipboard content not valid UTF-8: {}", e));
+            }
+        }
+    }
+
+    Err("No clipboard tool found (tried wl-paste, xclip, xsel)".to_string())
 }
 
 /// Show call graph dialog for a function
