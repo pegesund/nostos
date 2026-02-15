@@ -3218,19 +3218,14 @@ impl Compiler {
                     .and_then(|fv| fv.signature.clone());
 
                 if let Some(sig) = sig_to_check {
-                    // Check if signature has unresolved type variables:
-                    // 1. Standalone single-letter type variables (like 'a', 'b', 'k', 'v')
-                    //    A standalone type var is a lowercase letter NOT adjacent to other alphanumeric chars.
-                    //    This distinguishes 'a' in "List[a]" (type var) from 'n' in "Int" (part of type name).
-                    // 2. Compiler-generated type variables in ?N format (e.g., ?1, ?23)
-                    //    These appear when params are annotated but return type is unresolved.
-                    let has_type_var = sig.contains('?') || sig.as_bytes().iter().enumerate().any(|(i, &b)| {
-                        let c = b as char;
-                        if !c.is_ascii_lowercase() { return false; }
-                        let prev_ok = i == 0 || !(sig.as_bytes()[i-1] as char).is_ascii_alphanumeric();
-                        let next_ok = i + 1 >= sig.len() || !(sig.as_bytes()[i+1] as char).is_ascii_alphanumeric();
-                        prev_ok && next_ok
-                    });
+                    // Check if signature has unresolved compiler-generated type variables
+                    // (?N format, e.g., ?1, ?23). Only these indicate genuinely unresolved types.
+                    // DO NOT match standalone lowercase letters (a, b, c) — these are TypeParam
+                    // letters from the enrichment phase and represent intentional polymorphism.
+                    // Re-inferring polymorphic functions is wasteful and causes massive slowdowns
+                    // on large projects (80+ functions × 5 iterations = hundreds of unnecessary
+                    // try_hm_inference calls, each creating a full inference context).
+                    let has_type_var = sig.contains('?');
 
                     if has_type_var {
                         // Set module_path from function name for correct type resolution
