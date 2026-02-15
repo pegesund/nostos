@@ -1,2 +1,2 @@
-# expect_error: type mismatch
+# expect_error: does not implement Num
 main() = sum(["a", "b", "c"])

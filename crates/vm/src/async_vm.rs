@@ -4484,17 +4484,39 @@ impl AsyncProcess {
                 let val = reg!(src);
                 match val {
                     GcValue::List(list) => {
-                        let mut sum: i64 = 0;
-                        for item in list.iter() {
-                            if let GcValue::Int64(n) = item {
-                                sum += n;
-                            } else {
-                                return Err(RuntimeError::Panic(
-                                    format!("listSum: expected Int64, got {:?}", item.type_name(&self.heap))
-                                ));
+                        if list.is_empty() {
+                            set_reg!(dst, GcValue::Int64(0));
+                        } else {
+                            // Detect element type from first element
+                            match list.get(0).unwrap() {
+                                GcValue::Float64(_) => {
+                                    let mut sum: f64 = 0.0;
+                                    for item in list.iter() {
+                                        if let GcValue::Float64(n) = item {
+                                            sum += n;
+                                        } else {
+                                            return Err(RuntimeError::Panic(
+                                                format!("listSum: mixed types, expected Float64, got {:?}", item.type_name(&self.heap))
+                                            ));
+                                        }
+                                    }
+                                    set_reg!(dst, GcValue::Float64(sum));
+                                }
+                                _ => {
+                                    let mut sum: i64 = 0;
+                                    for item in list.iter() {
+                                        if let GcValue::Int64(n) = item {
+                                            sum += n;
+                                        } else {
+                                            return Err(RuntimeError::Panic(
+                                                format!("listSum: expected Int64, got {:?}", item.type_name(&self.heap))
+                                            ));
+                                        }
+                                    }
+                                    set_reg!(dst, GcValue::Int64(sum));
+                                }
                             }
                         }
-                        set_reg!(dst, GcValue::Int64(sum));
                     }
                     GcValue::Int64List(list) => {
                         // Fast path for specialized Int64List
@@ -4512,17 +4534,38 @@ impl AsyncProcess {
                 let val = reg!(src);
                 match val {
                     GcValue::List(list) => {
-                        let mut product: i64 = 1;
-                        for item in list.iter() {
-                            if let GcValue::Int64(n) = item {
-                                product *= n;
-                            } else {
-                                return Err(RuntimeError::Panic(
-                                    format!("listProduct: expected Int64, got {:?}", item.type_name(&self.heap))
-                                ));
+                        if list.is_empty() {
+                            set_reg!(dst, GcValue::Int64(1));
+                        } else {
+                            match list.get(0).unwrap() {
+                                GcValue::Float64(_) => {
+                                    let mut product: f64 = 1.0;
+                                    for item in list.iter() {
+                                        if let GcValue::Float64(n) = item {
+                                            product *= n;
+                                        } else {
+                                            return Err(RuntimeError::Panic(
+                                                format!("listProduct: mixed types, expected Float64, got {:?}", item.type_name(&self.heap))
+                                            ));
+                                        }
+                                    }
+                                    set_reg!(dst, GcValue::Float64(product));
+                                }
+                                _ => {
+                                    let mut product: i64 = 1;
+                                    for item in list.iter() {
+                                        if let GcValue::Int64(n) = item {
+                                            product *= n;
+                                        } else {
+                                            return Err(RuntimeError::Panic(
+                                                format!("listProduct: expected Int64, got {:?}", item.type_name(&self.heap))
+                                            ));
+                                        }
+                                    }
+                                    set_reg!(dst, GcValue::Int64(product));
+                                }
                             }
                         }
-                        set_reg!(dst, GcValue::Int64(product));
                     }
                     GcValue::Int64List(list) => {
                         // Fast path for specialized Int64List

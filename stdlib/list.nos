@@ -390,11 +390,8 @@ minimum[T](list: List[T]) -> T = match list {
     }
 }
 
-# Sum all elements (requires numeric list)
-sum(list: List[Int]) -> Int = fold(list, 0, (acc, x) => acc + x)
-
-# Product of all elements (requires numeric list)
-product(list: List[Int]) -> Int = fold(list, 1, (acc, x) => acc * x)
+# sum and product are implemented as fast Rust builtins (ListSum/ListProduct)
+# that handle all numeric types (Int, Float, Int8, etc.)
 
 # Find index of first element equal to target
 indexOf[T](list: List[T], target: T) -> Option[Int] = indexOfAcc(list, target, 0)

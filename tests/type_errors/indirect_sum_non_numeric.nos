@@ -1,4 +1,4 @@
-# expect_error: type mismatch
+# expect_error: does not implement Num
 # Generic wrapper around sum should propagate Num constraint
 applySum(xs) = xs.sum()
 main() = show(applySum(["a", "b"]))
