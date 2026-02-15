@@ -3908,10 +3908,6 @@ impl Compiler {
     pub fn pre_register_module_metadata(&mut self, module: &Module, module_path: Vec<String>, source: std::sync::Arc<String>, source_name: String) -> Result<(), CompileError> {
         use nostos_syntax::ast::Item;
 
-        // Save gensym counter - compile_type_def with template decorators will increment it,
-        // and we need the same counter values when Pass 2 re-processes these types
-        let saved_gensym = self.gensym_counter.get();
-
         // Update line_starts for error reporting
         self.line_starts = vec![0];
         for (i, c) in source.char_indices() {
@@ -3970,8 +3966,15 @@ impl Compiler {
             }
         }
 
-        // Process trait definitions (NOT type definitions - those are handled by compile_items
-        // to avoid double template expansion which breaks gensym)
+        // Process type definitions (needed for cross-module constructor visibility
+        // in trait impls - compile_type_def is idempotent so Pass 2 won't re-process)
+        for item in &module.items {
+            if let Item::TypeDef(type_def) = item {
+                self.compile_type_def(type_def)?;
+            }
+        }
+
+        // Process trait definitions
         for item in &module.items {
             if let Item::TraitDef(trait_def) = item {
                 self.compile_trait_def(trait_def)?;
@@ -3991,6 +3994,13 @@ impl Compiler {
             if let Item::ModuleDef(module_def) = item {
                 let saved = self.module_path.clone();
                 self.module_path.push(module_def.name.node.clone());
+
+                // Register type definitions inside nested module
+                for inner_item in &module_def.items {
+                    if let Item::TypeDef(type_def) = inner_item {
+                        self.compile_type_def(type_def)?;
+                    }
+                }
 
                 // Register trait definitions inside nested module
                 for inner_item in &module_def.items {
@@ -4016,9 +4026,6 @@ impl Compiler {
         }
 
         self.module_path = old_module_path;
-
-        // Restore gensym counter so Pass 2 generates the same names
-        self.gensym_counter.set(saved_gensym);
 
         Ok(())
     }
@@ -9454,6 +9461,13 @@ impl Compiler {
 
     /// Compile a type definition.
     fn compile_type_def(&mut self, def: &TypeDef) -> Result<(), CompileError> {
+        // Skip if already registered (idempotent - avoids double registration
+        // when pre_register_module_metadata runs before compile_items)
+        let check_name = self.qualify_name(&def.name.node);
+        if self.types.contains_key(&check_name) {
+            return Ok(());
+        }
+
         // Apply type decorators if present
         let (def, generated) = if !def.decorators.is_empty() {
             self.apply_type_decorators(def)?
