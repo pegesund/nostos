@@ -3302,6 +3302,20 @@ fn main() -> ExitCode {
             }
         }
 
+        // Pass 1.75: Forward declare ALL functions from ALL modules.
+        // Creates placeholder entries in self.functions so that trait impl method
+        // bodies (compiled during compile_items) can resolve imported cross-module function calls.
+        // Note: Do NOT call register_local_name_aliases() here - aliases would clone the
+        // placeholder Arcs and become stale when compile_all overwrites them with real functions.
+        // Import resolution via `use` statements handles cross-module name lookup instead.
+        for parsed in &parsed_modules {
+            if let Err(e) = compiler.forward_declare_module_functions(&parsed.module, parsed.module_path.clone()) {
+                let source_error = e.to_source_error();
+                source_error.eprint(parsed.path.to_str().unwrap_or("unknown"), &parsed.source);
+                return ExitCode::FAILURE;
+            }
+        }
+
         // Pass 2: Compile all modules (forward declarations and trait impls already registered)
         for ParsedProjectModule { module, module_path, source, source_hash, path } in parsed_modules {
             // Track for caching (for directory projects)

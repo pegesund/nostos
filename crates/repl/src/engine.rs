@@ -5172,6 +5172,21 @@ impl ReplEngine {
             }
         }
 
+        // Pass 1.75: Forward declare ALL functions from ALL modules.
+        // This creates placeholder entries in self.functions so that trait impl method
+        // bodies (compiled during compile_items) can resolve imported cross-module function calls.
+        // Note: Do NOT call register_local_name_aliases() here - aliases would clone the
+        // placeholder Arcs and become stale when compile_all overwrites them with real functions.
+        // Import resolution via `use` statements handles cross-module name lookup instead.
+        for parsed in &parsed_modules {
+            if let Err(e) = self.compiler.forward_declare_module_functions(
+                &parsed.module,
+                parsed.components.clone(),
+            ) {
+                return Err(format!("{}", e));
+            }
+        }
+
         // Track monomorphized functions already cached to avoid duplicates across modules
         let mut cached_monomorph_names: HashSet<String> = HashSet::new();
 

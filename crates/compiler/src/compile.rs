@@ -4516,9 +4516,19 @@ impl Compiler {
         Ok(())
     }
 
+    /// Forward declare all functions in a module, creating placeholder entries in self.functions.
+    /// This must be called for all user modules BEFORE compile_items so that trait impl
+    /// method bodies can resolve imported cross-module function calls.
+    pub fn forward_declare_module_functions(&mut self, module: &Module, module_path: Vec<String>) -> Result<(), CompileError> {
+        let old_module_path = std::mem::replace(&mut self.module_path, module_path);
+        self.forward_declare_functions(&module.items)?;
+        self.module_path = old_module_path;
+        Ok(())
+    }
+
     /// Register local name aliases for all functions in self.functions.
     /// This allows functions to be called by their short names (e.g., "map" instead of "stdlib.list.map").
-    fn register_local_name_aliases(&mut self) {
+    pub fn register_local_name_aliases(&mut self) {
         use std::sync::Arc;
 
         let mut aliases: Vec<(String, Arc<FunctionValue>)> = Vec::new();
