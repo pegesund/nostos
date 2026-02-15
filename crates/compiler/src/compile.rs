@@ -3831,6 +3831,71 @@ impl Compiler {
                     });
                 }
             }
+            // Recurse into nested modules to register their functions, types, and traits
+            if let Item::ModuleDef(module_def) = item {
+                let saved = self.module_path.clone();
+                self.module_path.push(module_def.name.node.clone());
+
+                // Register nested module path as known
+                let nested_path = self.module_path.join(".");
+                self.known_modules.insert(nested_path);
+
+                for inner_item in &module_def.items {
+                    if let Item::FnDef(fn_def) = inner_item {
+                        if !fn_def.is_template {
+                            let qualified_name = self.qualify_name(&fn_def.name.node);
+                            self.function_visibility.insert(qualified_name, fn_def.visibility.clone());
+                        }
+                    }
+                    if let Item::TypeDef(type_def) = inner_item {
+                        let qualified_name = self.qualify_name(&type_def.name.node);
+                        if matches!(type_def.visibility, Visibility::Public) {
+                            self.function_visibility.insert(qualified_name, type_def.visibility.clone());
+                        }
+                    }
+                    if let Item::TraitDef(trait_def) = inner_item {
+                        if matches!(trait_def.visibility, Visibility::Public) {
+                            let qualified_name = self.qualify_name(&trait_def.name.node);
+                            let super_traits: Vec<String> = trait_def.super_traits
+                                .iter()
+                                .map(|t| t.node.clone())
+                                .collect();
+                            let methods: Vec<TraitMethodInfo> = trait_def.methods
+                                .iter()
+                                .map(|m| {
+                                    let param_types: Vec<(String, String)> = m.params.iter()
+                                        .map(|p| {
+                                            let pname = self.pattern_binding_name(&p.pattern)
+                                                .unwrap_or_else(|| "_".to_string());
+                                            let ptype = p.ty.as_ref()
+                                                .map(|ty| self.type_expr_to_string(ty))
+                                                .unwrap_or_else(|| "_".to_string());
+                                            (pname, ptype)
+                                        })
+                                        .collect();
+                                    TraitMethodInfo {
+                                        name: m.name.node.clone(),
+                                        param_count: m.params.len(),
+                                        has_default: m.default_impl.is_some(),
+                                        return_type: m.return_type.as_ref()
+                                            .map(|ty| self.type_expr_to_string(ty))
+                                            .unwrap_or_else(|| "()".to_string()),
+                                        param_types,
+                                    }
+                                })
+                                .collect();
+                            self.trait_defs.insert(qualified_name.clone(), TraitInfo {
+                                name: qualified_name,
+                                visibility: trait_def.visibility,
+                                super_traits,
+                                methods,
+                            });
+                        }
+                    }
+                }
+
+                self.module_path = saved;
+            }
         }
 
         // Restore module path
@@ -3981,15 +4046,10 @@ impl Compiler {
             }
         }
 
-        // Pre-register trait implementations (register type_traits + forward declare methods,
-        // but do NOT compile method bodies)
-        for item in &module.items {
-            if let Item::TraitImpl(trait_impl) = item {
-                self.pre_register_trait_impl(trait_impl)?;
-            }
-        }
-
-        // Process nested modules: register their traits and trait impls
+        // Process nested modules FIRST: register their types, traits, and trait impls.
+        // This must happen BEFORE deferred use stmts and top-level trait impls,
+        // because `use Geo.*` needs nested traits registered, and top-level trait impls
+        // like `Shape: HasArea` need to find traits imported from nested modules.
         for item in &module.items {
             if let Item::ModuleDef(module_def) = item {
                 let saved = self.module_path.clone();
@@ -4020,9 +4080,18 @@ impl Compiler {
             }
         }
 
-        // Process deferred use statements
+        // Process deferred use statements (e.g., `use Geo.*` after Geo's traits are registered)
         for use_stmt in deferred_use_stmts {
             self.compile_use_stmt(use_stmt)?;
+        }
+
+        // Pre-register trait implementations at top level (register type_traits + forward
+        // declare methods, but do NOT compile method bodies). This runs AFTER nested modules
+        // and deferred use stmts so that traits from nested modules are visible.
+        for item in &module.items {
+            if let Item::TraitImpl(trait_impl) = item {
+                self.pre_register_trait_impl(trait_impl)?;
+            }
         }
 
         self.module_path = old_module_path;
