@@ -1,0 +1,20 @@
+# expect: [Alice!]
+# UFCS .contains() on List[String] from imported record should resolve
+# to stdlib.list.contains, not String.contains.
+
+module Types
+    pub type Box = { items: List[String] }
+end
+
+use Types.*
+
+process(boxes, names) =
+    boxes.flatMap(b => {
+        own = b.items.filter(v => names.contains(v))
+        own.map(v => v ++ "!")
+    })
+
+main() = {
+    result = process([Box(["Alice", "Bob"])], ["Alice"])
+    show(result)
+}
