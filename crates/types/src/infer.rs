@@ -5310,18 +5310,51 @@ impl<'a> InferCtx<'a> {
                 if let Some((ty, _)) = self.env.lookup(name) {
                     Ok(ty.clone())
                 } else if let Some(sig) = self.env.functions.get(name).cloned() {
-                    // For recursive calls (calling the function being inferred),
-                    // DON'T instantiate with completely fresh vars - use consistent mappings
-                    // for TypeParams so that constraints are preserved
-                    let is_recursive = self.current_function.as_ref() == Some(name);
-                    if is_recursive {
-                        // Convert TypeParams to type variables using consistent mappings
-                        // This ensures the same TypeParam (e.g., "a") always maps to the same var
-                        let instantiated = self.instantiate_type_params(&Type::Function(sig));
-                        Ok(instantiated)
+                    // Check if there are multiple typed overloads for this function name.
+                    // When a function reference like `double` is used as a HOF argument
+                    // (e.g., `xs.map(double)`), we need to let the calling context determine
+                    // which overload to use via unification, rather than committing to whichever
+                    // overload was registered first under the bare name.
+                    let typed_overload_count = self.env.functions_by_base.get(name)
+                        .map_or(0, |keys| {
+                            let prefix = format!("{}/", name);
+                            keys.iter().filter(|k| {
+                                if !k.starts_with(&prefix) { return false; }
+                                let suffix = &k[prefix.len()..];
+                                // Exclude wildcard entries like "name/_" or "name/_,_"
+                                !suffix.chars().all(|c| c == '_' || c == ',')
+                            }).count()
+                        });
+
+                    if typed_overload_count > 1 {
+                        // Multiple typed overloads exist - return a fresh function type
+                        // so the calling context can constrain the params/return via unification.
+                        // The compilation phase will then use the resolved types to select
+                        // the correct overload.
+                        let arity = sig.params.len();
+                        let fresh_params: Vec<Type> = (0..arity).map(|_| self.fresh()).collect();
+                        let fresh_ret = self.fresh();
+                        Ok(Type::Function(FunctionType {
+                            type_params: vec![],
+                            params: fresh_params,
+                            ret: Box::new(fresh_ret),
+                            required_params: sig.required_params,
+                            var_bounds: vec![],
+                        }))
                     } else {
-                        // Instantiate polymorphic functions with fresh type variables
-                        Ok(self.instantiate_function(&sig))
+                        // For recursive calls (calling the function being inferred),
+                        // DON'T instantiate with completely fresh vars - use consistent mappings
+                        // for TypeParams so that constraints are preserved
+                        let is_recursive = self.current_function.as_ref() == Some(name);
+                        if is_recursive {
+                            // Convert TypeParams to type variables using consistent mappings
+                            // This ensures the same TypeParam (e.g., "a") always maps to the same var
+                            let instantiated = self.instantiate_type_params(&Type::Function(sig));
+                            Ok(instantiated)
+                        } else {
+                            // Instantiate polymorphic functions with fresh type variables
+                            Ok(self.instantiate_function(&sig))
+                        }
                     }
                 } else {
                     Err(TypeError::UnknownIdent(name.clone()))

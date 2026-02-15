@@ -3245,7 +3245,7 @@ impl Compiler {
                         let inferred = self.fn_asts.get(fn_name)
                             .and_then(|fn_ast| self.try_hm_inference(fn_ast));
 
-                        if let Some(inferred_sig) = inferred {
+                        if let Some((inferred_sig, _expr_types)) = inferred {
                             // Check if signature actually changed
                             if inferred_sig != sig {
                                 // Update the function's signature - need to clone and replace
@@ -3689,10 +3689,25 @@ impl Compiler {
         }
 
         // Merge resolved expression types from per-function inference.
-        // Only overwrite entries that are still unresolved (Var or TypeParam) from batch inference.
+        // Overwrite entries that are still unresolved (contain Var or TypeParam) from batch inference.
         for (span, ty) in additional_expr_types {
             let should_overwrite = self.inferred_expr_types.get(&span)
-                .map(|existing| matches!(existing, nostos_types::Type::Var(_) | nostos_types::Type::TypeParam(_)))
+                .map(|existing| {
+                    // Overwrite if existing entry contains ANY unresolved type variables
+                    fn has_unresolved(ty: &nostos_types::Type) -> bool {
+                        match ty {
+                            nostos_types::Type::Var(_) | nostos_types::Type::TypeParam(_) => true,
+                            nostos_types::Type::List(inner) | nostos_types::Type::Set(inner) |
+                            nostos_types::Type::IO(inner) | nostos_types::Type::Array(inner) => has_unresolved(inner),
+                            nostos_types::Type::Map(k, v) => has_unresolved(k) || has_unresolved(v),
+                            nostos_types::Type::Tuple(elems) => elems.iter().any(has_unresolved),
+                            nostos_types::Type::Named { args, .. } => args.iter().any(has_unresolved),
+                            nostos_types::Type::Function(ft) => ft.params.iter().any(has_unresolved) || has_unresolved(&ft.ret),
+                            _ => false,
+                        }
+                    }
+                    has_unresolved(existing)
+                })
                 .unwrap_or(true); // Also add if not present at all
             if should_overwrite {
                 self.inferred_expr_types.insert(span, ty);
@@ -12094,10 +12109,23 @@ impl Compiler {
         } else {
         match self.type_check_fn(def, &def.name.node) {
         Ok(resolved_types) => {
-            // Merge resolved types from per-function inference
+            // Merge resolved types from per-function inference.
+            // Overwrite entries that contain ANY unresolved type variables.
             for (span, ty) in resolved_types {
+                fn has_unresolved_pre(ty: &nostos_types::Type) -> bool {
+                    match ty {
+                        nostos_types::Type::Var(_) | nostos_types::Type::TypeParam(_) => true,
+                        nostos_types::Type::List(inner) | nostos_types::Type::Set(inner) |
+                        nostos_types::Type::IO(inner) | nostos_types::Type::Array(inner) => has_unresolved_pre(inner),
+                        nostos_types::Type::Map(k, v) => has_unresolved_pre(k) || has_unresolved_pre(v),
+                        nostos_types::Type::Tuple(elems) => elems.iter().any(has_unresolved_pre),
+                        nostos_types::Type::Named { args, .. } => args.iter().any(has_unresolved_pre),
+                        nostos_types::Type::Function(ft) => ft.params.iter().any(has_unresolved_pre) || has_unresolved_pre(&ft.ret),
+                        _ => false,
+                    }
+                }
                 let should_overwrite = self.inferred_expr_types.get(&span)
-                    .map(|existing| matches!(existing, nostos_types::Type::Var(_) | nostos_types::Type::TypeParam(_)))
+                    .map(|existing| has_unresolved_pre(existing))
                     .unwrap_or(true);
                 if should_overwrite {
                     self.inferred_expr_types.insert(span, ty);
@@ -13353,10 +13381,48 @@ impl Compiler {
                     // Check for function with signature (new naming convention)
                     let resolved = self.resolve_name(name);
                     let prefix = format!("{}/", resolved);
-                    // First find the key, then get the function (to avoid borrow issues)
-                    let func_key = self.functions.keys()
-                        .find(|k| k.starts_with(&prefix))
-                        .cloned();
+
+                    // When there are multiple overloads, use HM-inferred type to select the right one
+                    let func_key = {
+                        // Collect all matching overload keys
+                        let matching_keys: Vec<String> = self.functions.keys()
+                            .filter(|k| k.starts_with(&prefix))
+                            .cloned()
+                            .collect();
+
+                        if matching_keys.len() > 1 {
+                            // Multiple overloads - use HM inference to pick the right one
+                            if let Some(inferred_ty) = self.inferred_expr_types.get(&ident.span) {
+                                if let nostos_types::Type::Function(ref ft) = inferred_ty {
+                                    let param_types: Vec<String> = ft.params.iter()
+                                        .map(|t| t.display())
+                                        .collect();
+                                    if param_types.iter().all(|t| self.is_type_concrete(t)) {
+                                        let expected_name = format!("{}/{}", resolved, param_types.join(","));
+                                        if matching_keys.contains(&expected_name) {
+                                            Some(expected_name)
+                                        } else {
+                                            // Fallback: try resolve_function_call scoring
+                                            let arg_types: Vec<Option<String>> = param_types.iter().map(|t| Some(t.clone())).collect();
+                                            self.resolve_function_call(&resolved, &arg_types)
+                                                .or_else(|| matching_keys.into_iter().min())
+                                        }
+                                    } else {
+                                        // Non-concrete param types - pick first deterministically
+                                        matching_keys.into_iter().min()
+                                    }
+                                } else {
+                                    matching_keys.into_iter().min()
+                                }
+                            } else {
+                                // No HM type info - pick first deterministically
+                                matching_keys.into_iter().min()
+                            }
+                        } else {
+                            matching_keys.into_iter().next()
+                        }
+                    };
+
                     if let Some(key) = func_key {
                         let func = self.functions.get(&key)
                             .expect("function key was just found in functions map")
@@ -27618,12 +27684,35 @@ impl Compiler {
     ///
     /// This function attempts full HM inference and falls back to AST-based constraint analysis
     /// if inference fails.
-    pub fn infer_signature(&self, def: &FnDef) -> String {
+    pub fn infer_signature(&mut self, def: &FnDef) -> String {
         // Always try HM inference first - this captures trait bounds from the function body
         // (e.g., Eq from ==, Ord from <, Num from +) that explicit annotations don't express.
         // Previously stdlib functions with annotations skipped HM inference, which meant
         // trait bounds were lost and couldn't propagate through generic wrapper functions.
-        if let Some(sig) = self.try_hm_inference(def) {
+        if let Some((sig, expr_types)) = self.try_hm_inference(def) {
+            // Store resolved expr types from per-function inference.
+            // These may provide better type resolution than batch inference
+            // (e.g., resolving overloaded function references via calling context).
+            for (span, ty) in expr_types {
+                fn has_unresolved(ty: &nostos_types::Type) -> bool {
+                    match ty {
+                        nostos_types::Type::Var(_) | nostos_types::Type::TypeParam(_) => true,
+                        nostos_types::Type::List(inner) | nostos_types::Type::Set(inner) |
+                        nostos_types::Type::IO(inner) | nostos_types::Type::Array(inner) => has_unresolved(inner),
+                        nostos_types::Type::Map(k, v) => has_unresolved(k) || has_unresolved(v),
+                        nostos_types::Type::Tuple(elems) => elems.iter().any(has_unresolved),
+                        nostos_types::Type::Named { args, .. } => args.iter().any(has_unresolved),
+                        nostos_types::Type::Function(ft) => ft.params.iter().any(has_unresolved) || has_unresolved(&ft.ret),
+                        _ => false,
+                    }
+                }
+                let should_overwrite = self.inferred_expr_types.get(&span)
+                    .map(|existing| has_unresolved(existing))
+                    .unwrap_or(true);
+                if should_overwrite {
+                    self.inferred_expr_types.insert(span, ty);
+                }
+            }
             return sig;
         }
         let fallback = def.signature();
@@ -27633,7 +27722,8 @@ impl Compiler {
 
     /// Try full Hindley-Milner type inference for a function.
     /// Returns None if inference fails, allowing fallback to AST-based signature.
-    fn try_hm_inference(&self, def: &FnDef) -> Option<String> {
+    /// Also returns resolved expression types for the function body.
+    fn try_hm_inference(&self, def: &FnDef) -> Option<(String, Vec<(Span, nostos_types::Type)>)> {
         // Create a fresh type environment for inference
         let mut env = nostos_types::standard_env();
 
@@ -28269,10 +28359,16 @@ impl Compiler {
                 bounds.sort();
                 bounds.dedup();
 
+                // Extract expr types before returning (merged type params special case)
+                let resolved_expr_types: Vec<(Span, nostos_types::Type)> = ctx.take_expr_types()
+                    .into_iter()
+                    .map(|(span, ty)| (span, ctx.apply_full_subst(&ty)))
+                    .filter(|(_, ty)| !matches!(ty, nostos_types::Type::Var(_) | nostos_types::Type::TypeParam(_)))
+                    .collect();
                 return if bounds.is_empty() {
-                    Some(type_sig)
+                    Some((type_sig, resolved_expr_types))
                 } else {
-                    Some(format!("{} => {}", bounds.join(", "), type_sig))
+                    Some((format!("{} => {}", bounds.join(", "), type_sig), resolved_expr_types))
                 };
             }
         }
@@ -28512,12 +28608,43 @@ impl Compiler {
             format!("{} -> {}", param_types.join(" -> "), ret_type)
         };
 
-        let result = if bounds.is_empty() {
-            Some(type_sig)
+        let sig = if bounds.is_empty() {
+            type_sig
         } else {
-            Some(format!("{} => {}", bounds.join(", "), type_sig))
+            format!("{} => {}", bounds.join(", "), type_sig)
         };
-        result
+
+        // Extract resolved expression types from inference.
+        // Filter to include types with resolved params (for overload selection)
+        // even if return type has Vars.
+        let resolved_expr_types: Vec<(Span, nostos_types::Type)> = ctx.take_expr_types()
+            .into_iter()
+            .map(|(span, ty)| (span, ctx.apply_full_subst(&ty)))
+            .filter(|(_, ty)| {
+                fn is_resolved(ty: &nostos_types::Type) -> bool {
+                    match ty {
+                        nostos_types::Type::Var(_) | nostos_types::Type::TypeParam(_) => false,
+                        nostos_types::Type::List(inner) | nostos_types::Type::Set(inner) |
+                        nostos_types::Type::IO(inner) | nostos_types::Type::Array(inner) => is_resolved(inner),
+                        nostos_types::Type::Map(k, v) => is_resolved(k) && is_resolved(v),
+                        nostos_types::Type::Tuple(elems) => elems.iter().all(is_resolved),
+                        nostos_types::Type::Named { args, .. } => args.iter().all(is_resolved),
+                        nostos_types::Type::Function(ft) => ft.params.iter().all(is_resolved) && is_resolved(&ft.ret),
+                        _ => true,
+                    }
+                }
+                fn has_resolved_params(ty: &nostos_types::Type) -> bool {
+                    if let nostos_types::Type::Function(ft) = ty {
+                        !ft.params.is_empty() && ft.params.iter().all(is_resolved)
+                    } else {
+                        false
+                    }
+                }
+                is_resolved(ty) || has_resolved_params(ty)
+            })
+            .collect();
+
+        Some((sig, resolved_expr_types))
     }
 
     /// Type check a function definition using Hindley-Milner type inference.
@@ -29362,7 +29489,9 @@ impl Compiler {
             .into_iter()
             .map(|(span, ty)| (span, ctx.apply_full_subst(&ty)))
             .filter(|(_, ty)| {
-                // Only keep types that are fully resolved (no Vars or TypeParams)
+                // Only keep types that are fully resolved (no Vars or TypeParams).
+                // Exception: Function types where params are resolved but ret has Vars
+                // are still useful for overload selection (we only need param types).
                 fn is_resolved(ty: &nostos_types::Type) -> bool {
                     match ty {
                         nostos_types::Type::Var(_) | nostos_types::Type::TypeParam(_) => false,
@@ -29375,7 +29504,14 @@ impl Compiler {
                         _ => true,
                     }
                 }
-                is_resolved(ty)
+                fn has_resolved_params(ty: &nostos_types::Type) -> bool {
+                    if let nostos_types::Type::Function(ft) = ty {
+                        !ft.params.is_empty() && ft.params.iter().all(is_resolved)
+                    } else {
+                        false
+                    }
+                }
+                is_resolved(ty) || has_resolved_params(ty)
             })
             .collect();
 
