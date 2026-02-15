@@ -214,6 +214,12 @@ use std::sync::Arc;
 impl CachedValue {
     /// Convert a Value to CachedValue for constant pool serialization
     pub fn from_value(value: &Value) -> Option<Self> {
+        Self::from_value_with_fn_list(value, &[])
+    }
+
+    /// Convert a Value to CachedValue, converting CallDirect → CallByName in inline functions.
+    /// The function_list maps function indices to their names.
+    pub fn from_value_with_fn_list(value: &Value, function_list: &[String]) -> Option<Self> {
         match value {
             Value::Unit => Some(CachedValue::Unit),
             Value::Bool(b) => Some(CachedValue::Bool(*b)),
@@ -232,17 +238,21 @@ impl CachedValue {
             Value::Decimal(d) => Some(CachedValue::Decimal(d.to_string())),
             Value::String(s) => Some(CachedValue::String((**s).clone())),
             Value::List(items) => {
-                let cached: Option<Vec<_>> = items.iter().map(CachedValue::from_value).collect();
+                let cached: Option<Vec<_>> = items.iter().map(|v| CachedValue::from_value_with_fn_list(v, function_list)).collect();
                 cached.map(CachedValue::List)
             }
             Value::Tuple(items) => {
-                let cached: Option<Vec<_>> = items.iter().map(CachedValue::from_value).collect();
+                let cached: Option<Vec<_>> = items.iter().map(|v| CachedValue::from_value_with_fn_list(v, function_list)).collect();
                 cached.map(CachedValue::Tuple)
             }
             Value::Function(f) => {
                 // If it's a lambda (anonymous function), cache it inline
                 if f.name == "<lambda>" || f.name.contains(".<lambda>") {
-                    function_to_cached(f).map(|cached_fn| CachedValue::InlineFunction(Box::new(cached_fn)))
+                    if function_list.is_empty() {
+                        function_to_cached(f).map(|cached_fn| CachedValue::InlineFunction(Box::new(cached_fn)))
+                    } else {
+                        function_to_cached_with_fn_list(f, function_list).map(|cached_fn| CachedValue::InlineFunction(Box::new(cached_fn)))
+                    }
                 } else {
                     Some(CachedValue::FunctionRef(f.name.clone()))
                 }
@@ -404,7 +414,7 @@ impl CachedChunk {
     /// but when loading from cache, functions get different indices.
     pub fn from_chunk_with_function_list(chunk: &Chunk, function_list: &[String]) -> Option<Self> {
         let mut constants: Vec<CachedValue> = chunk.constants.iter()
-            .map(CachedValue::from_value)
+            .map(|v| CachedValue::from_value_with_fn_list(v, function_list))
             .collect::<Option<Vec<_>>>()?;
 
         // Convert instructions, replacing CallDirect with CallByName
