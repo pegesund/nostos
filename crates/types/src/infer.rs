@@ -171,6 +171,11 @@ pub struct InferCtx<'a> {
     /// Direct mapping from pre-registered param Var IDs to their resolved param types.
     /// Used as fallback during enrichment when solve() exits early, similar to clause_ret_types.
     pub clause_param_types: HashMap<u32, Type>,
+    /// Deferred overload calls: when multiple overloads tie because arg types are
+    /// unresolved Vars, defer the overload selection until after constraint solving.
+    /// Format: (overloads, arg_types, return_type_var, span).
+    #[allow(clippy::type_complexity)]
+    deferred_overload_calls: Vec<(Vec<FunctionType>, Vec<Type>, Type, Span)>,
     /// Var IDs created by instantiate_function (from named function references).
     /// These are safe to freshen in instantiate_local_binding for let-polymorphism,
     /// because they don't have body constraints in the current inference scope.
@@ -214,6 +219,7 @@ impl<'a> InferCtx<'a> {
             deferred_typed_binding_checks: Vec::new(),
             deferred_branch_type_checks: Vec::new(),
             deferred_index_checks: Vec::new(),
+            deferred_overload_calls: Vec::new(),
             known_implicit_fns: HashSet::new(),
             implicit_conversions: Vec::new(),
             clause_ret_types: HashMap::new(),
@@ -591,9 +597,10 @@ impl<'a> InferCtx<'a> {
     }
 
     /// Find the best matching overload for a function call based on argument types.
-    /// Returns the INDEX of the overload whose parameter types best match the (resolved) argument types.
-    /// This is the key to proper overload resolution in HM type inference.
-    fn find_best_overload_idx(&self, overloads: &[&FunctionType], arg_types: &[Type]) -> Option<usize> {
+    /// Returns (index, is_ambiguous): the INDEX of the best-matching overload,
+    /// and whether the match was ambiguous (multiple overloads tied at a low score,
+    /// typically because arg types are unresolved Vars).
+    fn find_best_overload_idx(&self, overloads: &[&FunctionType], arg_types: &[Type]) -> (Option<usize>, bool) {
         // Resolve argument types through current substitution
         let resolved_args: Vec<Type> = arg_types.iter()
             .map(|t| self.env.apply_subst(t))
@@ -601,6 +608,7 @@ impl<'a> InferCtx<'a> {
 
         // Try each overload and score how well it matches
         let mut best_match: Option<(usize, usize)> = None;  // (index, score)
+        let mut num_tied = 0usize;
 
         for (idx, &overload) in overloads.iter().enumerate() {
             if overload.params.len() != arg_types.len() {
@@ -629,14 +637,17 @@ impl<'a> InferCtx<'a> {
                 // (e.g., stdlib.validation.range: Concat a => Int -> Int -> ((a, String) -> Option[String])).
                 let is_better = if let Some((prev_idx, prev_score)) = best_match {
                     if score > prev_score {
+                        num_tied = 1;
                         true
                     } else if score == prev_score {
+                        num_tied += 1;
                         // Tiebreaker: prefer overloads with fewer type_params (more concrete)
                         overload.type_params.len() < overloads[prev_idx].type_params.len()
                     } else {
                         false
                     }
                 } else {
+                    num_tied = 1;
                     true
                 };
                 if is_better {
@@ -645,7 +656,34 @@ impl<'a> InferCtx<'a> {
             }
         }
 
-        best_match.map(|(idx, _)| idx)
+        // Ambiguous if multiple overloads tied AND the best score is low (only Var matches)
+        // AND the overloads have conflicting concrete Named types at some parameter position.
+        // Generic overloads (TypeParam/Var params) don't conflict and shouldn't trigger deferral.
+        let has_concrete_conflict = if num_tied > 1 {
+            let arg_count = arg_types.len();
+            let mut conflicting = false;
+            for pos in 0..arg_count {
+                let mut named_types: Vec<&str> = Vec::new();
+                for overload in overloads {
+                    if pos < overload.params.len() {
+                        if let Type::Named { name, .. } = &overload.params[pos] {
+                            named_types.push(name.as_str());
+                        }
+                    }
+                }
+                if named_types.len() >= 2 && named_types.windows(2).any(|w| w[0] != w[1]) {
+                    conflicting = true;
+                    break;
+                }
+            }
+            conflicting
+        } else {
+            false
+        };
+        let is_ambiguous = num_tied > 1
+            && best_match.map(|(_, s)| s <= 50 * arg_types.len()).unwrap_or(false)
+            && has_concrete_conflict;
+        (best_match.map(|(idx, _)| idx), is_ambiguous)
     }
 
     /// Check if a parameter type is compatible with an argument type.
@@ -2264,6 +2302,37 @@ impl<'a> InferCtx<'a> {
                     }
                 }
             }
+        }
+
+        // Post-solve: resolve deferred overload calls now that type variables
+        // (e.g., lambda params from map/filter) may be resolved.
+        // Process iteratively: if an overload's arg types are still unresolved Vars,
+        // re-queue it. This handles cascading deferrals (e.g., magnitude deferred
+        // because map hadn't resolved the lambda param type yet).
+        let mut deferred_overloads = std::mem::take(&mut self.deferred_overload_calls);
+        for _pass in 0..3 {
+            if deferred_overloads.is_empty() { break; }
+            let mut still_deferred = Vec::new();
+            for (overloads, arg_types, ret_ty, span) in deferred_overloads {
+                let overload_refs: Vec<&FunctionType> = overloads.iter().collect();
+                let (best_idx, is_ambiguous) = self.find_best_overload_idx(&overload_refs, &arg_types);
+                if is_ambiguous {
+                    // Still ambiguous - re-queue for next pass
+                    still_deferred.push((overloads, arg_types, ret_ty, span));
+                    continue;
+                }
+                if let Some(idx) = best_idx {
+                    let sig = overloads[idx].clone();
+                    let func_ty = self.instantiate_function(&sig);
+                    if let Type::Function(ft) = func_ty {
+                        for (arg_ty, param_ty) in arg_types.iter().zip(ft.params.iter()) {
+                            self.unify_types(arg_ty, param_ty)?;
+                        }
+                        self.unify_types(&ret_ty, &ft.ret)?;
+                    }
+                }
+            }
+            deferred_overloads = still_deferred;
         }
 
         // Post-solve: check pending method calls now that types are resolved
@@ -5292,12 +5361,26 @@ impl<'a> InferCtx<'a> {
                             let is_recursive = self.current_function.as_ref() == Some(name);
                             // Find best overload index first to avoid borrow issues
                             // Skip strict matching if named args present (can't reorder without param names)
-                            let best_idx = if has_named_args {
-                                Some(0) // Use first/wildcard overload for named args
+                            let (best_idx, is_ambiguous) = if has_named_args {
+                                (Some(0), false) // Use first/wildcard overload for named args
                             } else {
                                 let overload_refs: Vec<&FunctionType> = overloads.iter().collect();
                                 self.find_best_overload_idx(&overload_refs, &arg_types)
                             };
+
+                            // If ambiguous (multiple overloads tied because args are Vars),
+                            // defer overload selection until after constraint solving.
+                            // Return early to skip normal func_ty unification.
+                            if is_ambiguous && overloads.len() > 1 && !is_recursive {
+                                let ret_ty = self.fresh();
+                                self.deferred_overload_calls.push((
+                                    overloads.clone(),
+                                    arg_types.clone(),
+                                    ret_ty.clone(),
+                                    *call_span,
+                                ));
+                                return Ok(ret_ty);
+                            }
                             let sig = overloads[best_idx.unwrap_or(0)].clone();
                             if is_recursive {
                                 // Convert TypeParams to type variables using consistent mappings
@@ -5354,12 +5437,23 @@ impl<'a> InferCtx<'a> {
                         if !overloads.is_empty() {
                             // Find best overload index first to avoid borrow issues
                             // Skip strict matching if named args present
-                            let best_idx = if has_named_args {
-                                Some(0)
+                            let (best_idx, is_ambiguous) = if has_named_args {
+                                (Some(0), false)
                             } else {
                                 let overload_refs: Vec<&FunctionType> = overloads.iter().collect();
                                 self.find_best_overload_idx(&overload_refs, &arg_types)
                             };
+
+                            if is_ambiguous && overloads.len() > 1 {
+                                let ret_ty = self.fresh();
+                                self.deferred_overload_calls.push((
+                                    overloads.clone(),
+                                    arg_types.clone(),
+                                    ret_ty.clone(),
+                                    *call_span,
+                                ));
+                                return Ok(ret_ty);
+                            }
                             let sig = overloads[best_idx.unwrap_or(0)].clone();
                             self.instantiate_function(&sig)
                         } else {
