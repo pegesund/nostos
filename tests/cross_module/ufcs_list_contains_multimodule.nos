@@ -1,0 +1,23 @@
+# expect: [Alice!]
+# Cross-module UFCS list.contains regression test.
+# Previously, when a record type with a List[String] field was imported
+# from another module, calling .contains() on that list via UFCS
+# would resolve to String.contains instead of stdlib.list.contains,
+# causing "type mismatch: expected Bool, found String".
+
+module Types
+    pub type Box = { items: List[String] }
+end
+
+use Types.*
+
+process(boxes, names) =
+    boxes.flatMap(b => {
+        own = b.items.filter(v => names.contains(v))
+        own.map(v => v ++ "!")
+    })
+
+main() = {
+    result = process([Box(["Alice", "Bob"])], ["Alice"])
+    show(result)
+}
