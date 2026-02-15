@@ -9724,6 +9724,14 @@ impl Compiler {
         // when pre_register_module_metadata runs before compile_items)
         let check_name = self.qualify_name(&def.name.node);
         if self.trait_defs.contains_key(&check_name) {
+            // Even though trait_defs was populated by forward declarations (Pass 1),
+            // we still need to store the full AST for default method compilation.
+            // Pass 1 doesn't have access to store trait_defs_ast.
+            if def.methods.iter().any(|m| m.default_impl.is_some()) {
+                if !self.trait_defs_ast.contains_key(&check_name) {
+                    self.trait_defs_ast.insert(check_name, def.clone());
+                }
+            }
             return Ok(());
         }
 
@@ -10453,7 +10461,9 @@ impl Compiler {
                             compile_fn_def_default_name.clone()
                         };
 
-                        // Create a synthetic FnDef from the default implementation
+                        // Create a synthetic FnDef from the default implementation.
+                        // Use qualified_method_name so compile_fn_def produces the same
+                        // function key as the placeholder registered above.
                         let clause = FnClause {
                             params: trait_method.params.clone(),
                             guard: None,
@@ -10465,7 +10475,7 @@ impl Compiler {
                             visibility: Visibility::Public,
                             doc: None,
                             decorators: vec![],
-                            name: Spanned::new(local_method_name.clone(), trait_method.name.span),
+                            name: Spanned::new(qualified_method_name.clone(), trait_method.name.span),
                             type_params: vec![],
                             clauses: vec![clause],
                             is_template: false,
@@ -10524,7 +10534,23 @@ impl Compiler {
                             }
                         }
 
+                        // For cross-module trait impls, temporarily clear module_path so
+                        // compile_fn_def's qualify_name doesn't add the wrong module prefix.
+                        // The synthetic_def.name already contains the fully qualified name.
+                        let is_cross_module_default = qualified_type_name.contains('.')
+                            && qualified_type_name != self.qualify_name(&unqualified_type_name);
+                        let saved_module_path_for_default = if is_cross_module_default {
+                            Some(std::mem::take(&mut self.module_path))
+                        } else {
+                            None
+                        };
+
                         self.compile_fn_def(&synthetic_def)?;
+
+                        // Restore module_path if it was saved
+                        if let Some(saved_path) = saved_module_path_for_default {
+                            self.module_path = saved_path;
+                        }
 
                         self.param_types = saved_param_types;
 
