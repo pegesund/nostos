@@ -892,10 +892,8 @@ impl Autocomplete {
             Some(inferred)
         } else if let Some(var_type) = source.get_variable_type(receiver) {
             Some(var_type)
-        } else if let Some(literal_type) = Self::detect_literal_type(receiver) {
-            Some(literal_type.to_string())
         } else {
-            None
+            Self::detect_literal_type(receiver).map(|literal_type| literal_type.to_string())
         };
 
         let type_name = type_name.unwrap_or_else(|| receiver.to_string());

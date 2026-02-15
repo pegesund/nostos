@@ -637,20 +637,21 @@ impl<'a> InferCtx<'a> {
                 // This ensures builtin functions (no type_params, e.g., range: Int -> Int -> [Int])
                 // win over stdlib functions with the same name but generic return types
                 // (e.g., stdlib.validation.range: Concat a => Int -> Int -> ((a, String) -> Option[String])).
-                let is_better = if let Some((prev_idx, prev_score)) = best_match {
-                    if score > prev_score {
+                let is_better = match best_match {
+                    Some((_, prev_score)) if score > prev_score => {
                         num_tied = 1;
                         true
-                    } else if score == prev_score {
+                    }
+                    Some((prev_idx, prev_score)) if score == prev_score => {
                         num_tied += 1;
                         // Tiebreaker: prefer overloads with fewer type_params (more concrete)
                         overload.type_params.len() < overloads[prev_idx].type_params.len()
-                    } else {
-                        false
                     }
-                } else {
-                    num_tied = 1;
-                    true
+                    Some(_) => false,
+                    None => {
+                        num_tied = 1;
+                        true
+                    }
                 };
                 if is_better {
                     best_match = Some((idx, score));
@@ -806,14 +807,12 @@ impl<'a> InferCtx<'a> {
         // Propagate trait bounds from var_bounds (discovered during inference)
         // to the fresh vars. This enables trait bound propagation through call chains.
         for (old_id, bound) in &func_ty.var_bounds {
-            if let Some(new_ty) = var_subst.get(old_id) {
-                if let Type::Var(new_id) = new_ty {
-                    self.add_trait_bound(*new_id, bound.clone());
-                    self.constraints.push(Constraint::HasTrait(
-                        Type::Var(*new_id),
-                        bound.clone(),
-                    ));
-                }
+            if let Some(Type::Var(new_id)) = var_subst.get(old_id) {
+                self.add_trait_bound(*new_id, bound.clone());
+                self.constraints.push(Constraint::HasTrait(
+                    Type::Var(*new_id),
+                    bound.clone(),
+                ));
             }
         }
 
@@ -1232,46 +1231,6 @@ impl<'a> InferCtx<'a> {
 
         let empty_param_subst: HashMap<String, Type> = HashMap::new();
         self.freshen_type(&resolved, &var_subst, &empty_param_subst)
-    }
-
-    /// Static version of collect_var_ids that doesn't need &self
-    fn collect_var_ids_static(ty: &Type, ids: &mut Vec<u32>) {
-        match ty {
-            Type::Var(id) => {
-                if !ids.contains(id) {
-                    ids.push(*id);
-                }
-            }
-            Type::List(elem) | Type::Array(elem) | Type::Set(elem) | Type::IO(elem) => {
-                Self::collect_var_ids_static(elem, ids);
-            }
-            Type::Map(k, v) => {
-                Self::collect_var_ids_static(k, ids);
-                Self::collect_var_ids_static(v, ids);
-            }
-            Type::Tuple(elems) => {
-                for elem in elems {
-                    Self::collect_var_ids_static(elem, ids);
-                }
-            }
-            Type::Function(ft) => {
-                for p in &ft.params {
-                    Self::collect_var_ids_static(p, ids);
-                }
-                Self::collect_var_ids_static(&ft.ret, ids);
-            }
-            Type::Named { args, .. } => {
-                for arg in args {
-                    Self::collect_var_ids_static(arg, ids);
-                }
-            }
-            Type::Record(rec) => {
-                for (_, field_ty, _) in &rec.fields {
-                    Self::collect_var_ids_static(field_ty, ids);
-                }
-            }
-            _ => {}
-        }
     }
 
     /// Collect all Var IDs in a type
@@ -2586,7 +2545,7 @@ impl<'a> InferCtx<'a> {
         // Process deferred index access checks.
         // When Index expressions had unresolved container types (Var), we deferred them.
         // Now that solve() has run, resolve the container and add proper constraints.
-        for (container_ty, index_ty, elem_ty, span) in std::mem::take(&mut self.deferred_index_checks) {
+        for (container_ty, index_ty, elem_ty, _span) in std::mem::take(&mut self.deferred_index_checks) {
             let resolved = self.env.apply_subst(&container_ty);
             match &resolved {
                 Type::Map(key_ty, val_ty) => {
@@ -2689,7 +2648,7 @@ impl<'a> InferCtx<'a> {
             if !resolved_default.has_any_type_var() && !resolved_param.has_any_type_var() {
                 // Both fully concrete - use unify_types for comparison to handle
                 // module-qualified Named types (e.g., "Cfg.Config" vs "Config")
-                if let Err(_) = self.unify_types(&resolved_default, &resolved_param) {
+                if self.unify_types(&resolved_default, &resolved_param).is_err() {
                     self.last_error_span = Some(span);
                     return Err(TypeError::Mismatch {
                         expected: resolved_param.display(),
@@ -3016,31 +2975,31 @@ impl<'a> InferCtx<'a> {
                 if let Constraint::Equal(ref a, ref b, _) = constraint {
                     let a = self.apply_local_subst(a, &local_subst);
                     let b = self.apply_local_subst(b, &local_subst);
-                    self.extract_local_bindings(&a, &b, &relevant_vars, &mut new_bindings);
+                    Self::extract_local_bindings(&a, &b, &relevant_vars, &mut new_bindings);
                 }
             }
             let mut added = 0;
-            for (var_id, ty) in new_bindings {
-                if !local_subst.contains_key(&var_id) {
-                    // Track new vars for next iteration
-                    fn collect_var_ids(ty: &Type, ids: &mut std::collections::HashSet<u32>) {
-                        match ty {
-                            Type::Var(id) => { ids.insert(*id); }
-                            Type::List(inner) | Type::Set(inner) | Type::IO(inner) | Type::Array(inner) => {
-                                collect_var_ids(inner, ids);
-                            }
-                            Type::Map(k, v) => { collect_var_ids(k, ids); collect_var_ids(v, ids); }
-                            Type::Tuple(elems) => { for e in elems { collect_var_ids(e, ids); } }
-                            Type::Function(ft) => {
-                                for p in &ft.params { collect_var_ids(p, ids); }
-                                collect_var_ids(&ft.ret, ids);
-                            }
-                            Type::Named { args, .. } => { for a in args { collect_var_ids(a, ids); } }
-                            _ => {}
-                        }
+            // Track new vars for next iteration
+            fn collect_var_ids(ty: &Type, ids: &mut std::collections::HashSet<u32>) {
+                match ty {
+                    Type::Var(id) => { ids.insert(*id); }
+                    Type::List(inner) | Type::Set(inner) | Type::IO(inner) | Type::Array(inner) => {
+                        collect_var_ids(inner, ids);
                     }
+                    Type::Map(k, v) => { collect_var_ids(k, ids); collect_var_ids(v, ids); }
+                    Type::Tuple(elems) => { for e in elems { collect_var_ids(e, ids); } }
+                    Type::Function(ft) => {
+                        for p in &ft.params { collect_var_ids(p, ids); }
+                        collect_var_ids(&ft.ret, ids);
+                    }
+                    Type::Named { args, .. } => { for a in args { collect_var_ids(a, ids); } }
+                    _ => {}
+                }
+            }
+            for (var_id, ty) in new_bindings {
+                if let std::collections::hash_map::Entry::Vacant(entry) = local_subst.entry(var_id) {
                     collect_var_ids(&ty, &mut relevant_vars);
-                    local_subst.insert(var_id, ty);
+                    entry.insert(ty);
                     added += 1;
                 }
             }
@@ -3091,7 +3050,7 @@ impl<'a> InferCtx<'a> {
     }
 
     fn extract_local_bindings(
-        &self, a: &Type, b: &Type,
+        a: &Type, b: &Type,
         relevant: &std::collections::HashSet<u32>,
         bindings: &mut Vec<(u32, Type)>,
     ) {
@@ -3118,26 +3077,26 @@ impl<'a> InferCtx<'a> {
             }
             (Type::Function(f1), Type::Function(f2)) if f1.params.len() == f2.params.len() => {
                 for (p1, p2) in f1.params.iter().zip(f2.params.iter()) {
-                    self.extract_local_bindings(p1, p2, relevant, bindings);
+                    Self::extract_local_bindings(p1, p2, relevant, bindings);
                 }
-                self.extract_local_bindings(&f1.ret, &f2.ret, relevant, bindings);
+                Self::extract_local_bindings(&f1.ret, &f2.ret, relevant, bindings);
             }
             (Type::List(a), Type::List(b)) | (Type::Set(a), Type::Set(b))
             | (Type::IO(a), Type::IO(b)) | (Type::Array(a), Type::Array(b)) => {
-                self.extract_local_bindings(a, b, relevant, bindings);
+                Self::extract_local_bindings(a, b, relevant, bindings);
             }
             (Type::Map(k1, v1), Type::Map(k2, v2)) => {
-                self.extract_local_bindings(k1, k2, relevant, bindings);
-                self.extract_local_bindings(v1, v2, relevant, bindings);
+                Self::extract_local_bindings(k1, k2, relevant, bindings);
+                Self::extract_local_bindings(v1, v2, relevant, bindings);
             }
             (Type::Tuple(e1), Type::Tuple(e2)) if e1.len() == e2.len() => {
                 for (a, b) in e1.iter().zip(e2.iter()) {
-                    self.extract_local_bindings(a, b, relevant, bindings);
+                    Self::extract_local_bindings(a, b, relevant, bindings);
                 }
             }
             (Type::Named { args: a1, .. }, Type::Named { args: a2, .. }) if a1.len() == a2.len() => {
                 for (a, b) in a1.iter().zip(a2.iter()) {
-                    self.extract_local_bindings(a, b, relevant, bindings);
+                    Self::extract_local_bindings(a, b, relevant, bindings);
                 }
             }
             _ => {}
@@ -3161,8 +3120,8 @@ impl<'a> InferCtx<'a> {
             }
             let mut added = 0;
             for (var_id, ty) in new_bindings {
-                if !self.env.substitution.contains_key(&var_id) {
-                    self.env.substitution.insert(var_id, ty);
+                if let std::collections::hash_map::Entry::Vacant(entry) = self.env.substitution.entry(var_id) {
+                    entry.insert(ty);
                     added += 1;
                 }
             }
@@ -3228,48 +3187,6 @@ impl<'a> InferCtx<'a> {
             (Type::Named { args: a1, .. }, Type::Named { args: a2, .. }) if a1.len() == a2.len() => {
                 for (a, b) in a1.iter().zip(a2.iter()) {
                     self.collect_var_bindings_targeted(a, b, target_vars, bindings);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn collect_var_bindings(&self, a: &Type, b: &Type, bindings: &mut Vec<(u32, Type)>) {
-        let a = self.env.apply_subst(a);
-        let b = self.env.apply_subst(b);
-        match (&a, &b) {
-            (Type::Var(id), ty) if !matches!(ty, Type::Var(_)) => {
-                bindings.push((*id, ty.clone()));
-            }
-            (ty, Type::Var(id)) if !matches!(ty, Type::Var(_)) => {
-                bindings.push((*id, ty.clone()));
-            }
-            (Type::Var(id1), Type::Var(id2)) if id1 != id2 => {
-                // Var→Var: record both directions
-                bindings.push((*id1, Type::Var(*id2)));
-            }
-            (Type::Function(f1), Type::Function(f2)) if f1.params.len() == f2.params.len() => {
-                for (p1, p2) in f1.params.iter().zip(f2.params.iter()) {
-                    self.collect_var_bindings(p1, p2, bindings);
-                }
-                self.collect_var_bindings(&f1.ret, &f2.ret, bindings);
-            }
-            (Type::List(a), Type::List(b)) | (Type::Set(a), Type::Set(b))
-            | (Type::IO(a), Type::IO(b)) | (Type::Array(a), Type::Array(b)) => {
-                self.collect_var_bindings(a, b, bindings);
-            }
-            (Type::Map(k1, v1), Type::Map(k2, v2)) => {
-                self.collect_var_bindings(k1, k2, bindings);
-                self.collect_var_bindings(v1, v2, bindings);
-            }
-            (Type::Tuple(e1), Type::Tuple(e2)) if e1.len() == e2.len() => {
-                for (a, b) in e1.iter().zip(e2.iter()) {
-                    self.collect_var_bindings(a, b, bindings);
-                }
-            }
-            (Type::Named { args: a1, .. }, Type::Named { args: a2, .. }) if a1.len() == a2.len() => {
-                for (a, b) in a1.iter().zip(a2.iter()) {
-                    self.collect_var_bindings(a, b, bindings);
                 }
             }
             _ => {}
@@ -5662,7 +5579,7 @@ impl<'a> InferCtx<'a> {
                             // Collect from entire return type, not just Function returns,
                             // to handle cases like identity(inc) where ret is a Var.
                             let mut ret_var_ids = Vec::new();
-                            self.collect_var_ids(&*ft.ret, &mut ret_var_ids);
+                            self.collect_var_ids(&ft.ret, &mut ret_var_ids);
                             for var_id in ret_var_ids {
                                 if param_var_ids.contains(&var_id) {
                                     self.polymorphic_vars.remove(&var_id);
@@ -6753,7 +6670,7 @@ impl<'a> InferCtx<'a> {
         // For Pipe operator, handle RHS Call specially: a |> f(b) => f(a, b)
         if op == BinOp::Pipe {
             if let Expr::Call(func, type_args, call_args, call_span) = right {
-                let left_ty = self.infer_expr(left)?;
+                let _left_ty = self.infer_expr(left)?;
                 // Build new args: [piped_value, ...original_args]
                 let mut new_args = vec![CallArg::Positional(left.clone())];
                 new_args.extend(call_args.iter().cloned());
@@ -7707,7 +7624,7 @@ impl<'a> InferCtx<'a> {
                     if let Type::Function(sub_sig) = substituted {
                         // Update the environment entry so recursive calls see Var types
                         self.env.insert_function(name.clone(), sub_sig);
-                        if self.env.functions.get(&qualified_name).is_some() {
+                        if self.env.functions.contains_key(&qualified_name) {
                             if let Some(updated) = self.env.functions.get(name).cloned() {
                                 self.env.insert_function(qualified_name.clone(), updated);
                             }
@@ -7901,10 +7818,10 @@ impl<'a> InferCtx<'a> {
                 // Also check constraints pushed by the union-find propagation above
                 for constraint in &self.constraints {
                     if let Constraint::HasTrait(Type::Var(vid), tn) = constraint {
-                        if *vid == var_id && !tn.starts_with("HasMethod(") && !tn.starts_with("HasField(") {
-                            if !discovered_bounds.iter().any(|(id, b)| *id == var_id && b == tn) {
-                                discovered_bounds.push((var_id, tn.clone()));
-                            }
+                        if *vid == var_id && !tn.starts_with("HasMethod(") && !tn.starts_with("HasField(")
+                            && !discovered_bounds.iter().any(|(id, b)| *id == var_id && b == tn)
+                        {
+                            discovered_bounds.push((var_id, tn.clone()));
                         }
                     }
                 }

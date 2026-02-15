@@ -135,9 +135,7 @@ impl<'a> EditorCompletionSource<'a> {
             Some(self.engine),
         );
         for (name, ty) in buffer_bindings {
-            if !local_vars.contains_key(&name) {
-                local_vars.insert(name, ty);
-            }
+            local_vars.entry(name).or_insert(ty);
         }
         local_vars
     }

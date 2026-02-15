@@ -6118,7 +6118,7 @@ impl ReplEngine {
         if let Some(module) = module_opt {
             for item in &module.items {
                 if let nostos_syntax::ast::Item::FnDef(fn_def) = item {
-                    if fn_def.name.node.to_string() == short_name {
+                    if fn_def.name.node == short_name {
                         return Some((file_path, Self::offset_to_line(&content, fn_def.span.start)));
                     }
                 }

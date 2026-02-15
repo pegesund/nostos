@@ -372,9 +372,9 @@ pub fn extract_local_bindings(
                                     param_types.as_ref().and_then(|pts| {
                                         pts.get(i).and_then(|(_, ptype, _, _)| {
                                             // Skip unresolved types (?) and single-letter type variables
-                                            if !ptype.is_empty()
-                                                && !ptype.contains('?')
-                                                && !(ptype.len() == 1 && ptype.chars().next().map_or(false, |c| c.is_lowercase()))
+                                            if !(ptype.is_empty()
+                                                || ptype.contains('?')
+                                                || ptype.len() == 1 && ptype.chars().next().map_or(false, |c| c.is_lowercase()))
                                             {
                                                 Some(ptype.clone())
                                             } else {
@@ -1265,7 +1265,7 @@ pub fn extract_type_fields_from_source(content: &str, type_name: &str) -> Vec<St
 
         if trimmed.starts_with("type ") {
             let rest = trimmed[5..].trim();
-            let def_type_name = rest.split(|c| c == '=' || c == '[')
+            let def_type_name = rest.split(['=', '['])
                 .next()
                 .unwrap_or("")
                 .trim();

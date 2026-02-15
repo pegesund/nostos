@@ -11021,11 +11021,7 @@ impl Compiler {
         // Extract the local constructor name (after last '.')
         let local_ctor = constructor.rsplit('.').next().unwrap_or(constructor);
         // Extract the module prefix if any
-        let module_prefix = if constructor.contains('.') {
-            Some(constructor.rsplitn(2, '.').nth(1).unwrap_or(""))
-        } else {
-            None
-        };
+        let module_prefix = constructor.rsplit_once('.').map(|(prefix, _)| prefix);
 
         for (type_name, info) in &self.types {
             if let TypeInfoKind::Variant { constructors } | TypeInfoKind::ReactiveVariant { constructors } = &info.kind {
@@ -30468,9 +30464,6 @@ impl Compiler {
 
                 // Parse type arguments (handle nested brackets for things like List[List[Int]])
                 let args = self.parse_type_args(args_str);
-                if name == "List" && args.len() != 1 {
-                }
-
                 // Handle built-in parameterized types
                 return match name {
                     "List" if args.len() == 1 => {

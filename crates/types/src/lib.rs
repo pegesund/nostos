@@ -550,10 +550,10 @@ impl TypeEnv {
                     let qualified_name = format!("{}{}", check_name, arity_suffix);
                     if let Some(ft) = self.functions.get(&qualified_name) {
                         let min_required = ft.required_params.unwrap_or(ft.params.len());
-                        if arity >= min_required && arity <= ft.params.len() {
-                            if !results.contains(&ft) {
-                                results.push(ft);
-                            }
+                        if arity >= min_required && arity <= ft.params.len()
+                            && !results.contains(&ft)
+                        {
+                            results.push(ft);
                         }
                     }
                 }
@@ -570,10 +570,10 @@ impl TypeEnv {
                                 if arity_compatible {
                                     let suffix = &fn_name[prefix.len()..];
                                     // Only include typed entries (not wildcard entries already checked)
-                                    if !suffix.chars().all(|c| c == '_' || c == ',') {
-                                        if !results.contains(&ft) {
-                                            results.push(ft);
-                                        }
+                                    if !suffix.chars().all(|c| c == '_' || c == ',')
+                                        && !results.contains(&ft)
+                                    {
+                                        results.push(ft);
                                     }
                                 }
                             }
