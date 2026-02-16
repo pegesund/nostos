@@ -3031,9 +3031,19 @@ fn main() -> ExitCode {
                     .expect("Failed to compile stdlib");
             }
 
-            // Register prelude imports so stdlib functions are available without prefix
+            // Register prelude imports so stdlib functions are available without prefix.
+            // Must happen before compile_all() since stdlib functions use UFCS methods
+            // (e.g., db.nos uses .map()) resolved via prelude imports.
             for (local_name, qualified_name) in stdlib_functions {
                 compiler.add_prelude_import(local_name, qualified_name);
+            }
+
+            // Compile stdlib function bodies now, so they have bytecode even if
+            // project cache causes compile_all() to be skipped later.
+            if let Err((e, filename, source)) = compiler.compile_all() {
+                let source_error = e.to_source_error();
+                source_error.eprint(&filename, &source);
+                return ExitCode::FAILURE;
             }
         } // end of else (no cache)
     } else {
