@@ -10114,11 +10114,24 @@ impl Compiler {
         // But `Container[Int]: HasValue` specifies the type arg, so self should be
         // "Container[Int]" which has correct arity.
         let impl_specifies_type_args = unqualified_type_name.contains('[');
+        let type_def_for_impl = self.type_defs.get(&qualified_type_name)
+            .or_else(|| self.type_defs.get(&unqualified_type_name));
         let impl_type_is_generic = !impl_specifies_type_args
-            && self.type_defs.get(&qualified_type_name)
-                .or_else(|| self.type_defs.get(&unqualified_type_name))
-                .map(|td| !td.type_params.is_empty())
-                .unwrap_or(false);
+            && type_def_for_impl.map(|td| !td.type_params.is_empty()).unwrap_or(false);
+        // For generic types without specified type args, build a parameterized type string
+        // with lowercase type variables. E.g., Box[A] → "Box[a]", Pair[A,B] → "Pair[a, b]".
+        // This preserves the base type name (for field access/trait dispatch) while using
+        // fresh type vars (to avoid TypeArityMismatch with concrete instantiations).
+        let generic_self_type = if impl_type_is_generic {
+            type_def_for_impl.map(|td| {
+                let vars: Vec<String> = td.type_params.iter()
+                    .map(|p| p.name.node.to_lowercase())
+                    .collect();
+                format!("{}[{}]", unqualified_type_name, vars.join(", "))
+            })
+        } else {
+            None
+        };
 
         let unqualified_trait_name = impl_def.trait_name.node.clone();
         // Qualify trait name for lookup (trait defined in same module)
@@ -10286,10 +10299,11 @@ impl Compiler {
                                     // For "self" parameter with simple Var pattern, use the
                                     // implementing type. Skip for Variant patterns like
                                     // Circle(r) - those use pattern matching dispatch instead.
-                                    // For generic types, use "_" to avoid TypeArityMismatch
-                                    // (e.g., Box vs Box[Int]).
-                                    if impl_type_is_generic {
-                                        return "_".to_string();
+                                    // For generic types, use parameterized form (e.g., "Box[a]")
+                                    // to preserve type name for field/trait dispatch while avoiding
+                                    // TypeArityMismatch (bare "Box" has 0 args vs Box[Int] has 1).
+                                    if let Some(ref gen_ty) = generic_self_type {
+                                        return gen_ty.clone();
                                     }
                                     return unqualified_type_name.clone();
                                 } else if trait_ty != "_" && !trait_ty.contains("->") {
@@ -10489,13 +10503,15 @@ impl Compiler {
                                     // to resolve field access on self and catch return type
                                     // mismatches. Skip for Variant patterns like Circle(r) -
                                     // injecting the parent type breaks pattern matching dispatch.
-                                    // For generic types, DON'T inject the bare type name
-                                    // (e.g., "Box") as it lacks type params, causing
-                                    // TypeArityMismatch when called with Box[Int].
-                                    if !impl_type_is_generic {
-                                        if let Some(type_expr) = self.parse_return_type_expr(&unqualified_type_name) {
-                                            param.ty = Some(type_expr);
-                                        }
+                                    // For generic types, inject parameterized form (e.g., "Box[a]")
+                                    // to preserve type info for field/trait dispatch.
+                                    let self_type_str = if let Some(ref gen_ty) = generic_self_type {
+                                        gen_ty.as_str()
+                                    } else {
+                                        unqualified_type_name.as_str()
+                                    };
+                                    if let Some(type_expr) = self.parse_return_type_expr(self_type_str) {
+                                        param.ty = Some(type_expr);
                                     }
                                 } else if trait_ty != "_" && !trait_ty.contains("->") {
                                     // Substitute Self with the implementing type
@@ -10522,11 +10538,15 @@ impl Compiler {
 
                     // For "self" parameter (first param in trait methods) or Self-typed params
                     if let Some(name) = self.pattern_binding_name(&param.pattern) {
-                        if (name == "self" || is_self_typed) && !impl_type_is_generic {
-                            // Use qualified type name for param_types.
-                            // Skip for generic types - the bare name lacks type params,
-                            // causing TypeArityMismatch during HM inference.
-                            self.param_types.insert(name, qualified_type_name.clone());
+                        if name == "self" || is_self_typed {
+                            // For generic types, use parameterized form (e.g., "Box[a]")
+                            // to preserve type name for field/trait dispatch.
+                            let param_type = if let Some(ref gen_ty) = generic_self_type {
+                                gen_ty.clone()
+                            } else {
+                                qualified_type_name.clone()
+                            };
+                            self.param_types.insert(name, param_type);
                         }
                     }
                 }
