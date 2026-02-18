@@ -10125,7 +10125,20 @@ impl Compiler {
             // First try to resolve through imports (e.g., "Box" -> "Containers.Box")
             // This handles the case where a type is imported from a module and a trait
             // is implemented on it outside the module.
-            if let Some(imported) = self.imports.get(&unqualified_type_name) {
+            // For specialized types like "Container[Int]", extract the base name "Container"
+            // for import lookup, then reattach the type args to the qualified name.
+            let (base_name, type_args_suffix) = if let Some(bracket_pos) = unqualified_type_name.find('[') {
+                (&unqualified_type_name[..bracket_pos], Some(&unqualified_type_name[bracket_pos..]))
+            } else {
+                (unqualified_type_name.as_str(), None)
+            };
+            if let Some(imported) = self.imports.get(base_name) {
+                if let Some(suffix) = type_args_suffix {
+                    format!("{}{}", imported, suffix)
+                } else {
+                    imported.clone()
+                }
+            } else if let Some(imported) = self.imports.get(&unqualified_type_name) {
                 imported.clone()
             } else {
                 self.qualify_name(&unqualified_type_name)
