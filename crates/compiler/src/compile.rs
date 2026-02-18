@@ -13746,7 +13746,8 @@ impl Compiler {
                                             let param_names: Vec<String> = fn_def.clauses[0].params.iter()
                                                 .filter_map(|p| self.pattern_binding_name(&p.pattern))
                                                 .collect();
-                                            if let Ok(mangled_name) = self.compile_monomorphized_variant(&key, &param_types, &param_names) {
+                                            match self.compile_monomorphized_variant(&key, &param_types, &param_names) {
+                                                Ok(mangled_name) => {
                                                 if let Some(mono_func) = self.functions.get(&mangled_name).cloned() {
                                                     if !mono_func.code.code.is_empty() {
                                                         let dst = self.alloc_reg();
@@ -13760,6 +13761,9 @@ impl Compiler {
                                                 let name_idx = self.chunk.add_constant(Value::String(Arc::new(mangled_name)));
                                                 self.chunk.emit(Instruction::LoadFunctionByName(dst, name_idx), line);
                                                 return Ok(dst);
+                                            }
+                                                Err(_) => {
+                                                }
                                             }
                                         }
                                     }
@@ -22027,12 +22031,33 @@ impl Compiler {
                 // We have a polymorphic function. Try to determine the type to specialize for.
                 if let Some(TypeExpr::Function(param_types, _)) = expected_type {
                     // Expected type is a function type like (Val) -> Int
+                    // When the function type annotation is (A, B) -> C, the parser creates
+                    // Function([Tuple([A, B])], C) - a single tuple parameter.
+                    // But the actual function has separate parameters.
+                    // Expand tuple param types to match multi-param functions.
+                    let fn_param_count = self.fn_asts.get(&poly_name)
+                        .map(|fd| fd.clauses[0].params.len())
+                        .unwrap_or(0);
+                    let effective_param_types: Vec<&TypeExpr> = if param_types.len() == 1 && fn_param_count > 1 {
+                        if let TypeExpr::Tuple(elems) = &param_types[0] {
+                            if elems.len() == fn_param_count {
+                                elems.iter().collect()
+                            } else {
+                                param_types.iter().collect()
+                            }
+                        } else {
+                            param_types.iter().collect()
+                        }
+                    } else {
+                        param_types.iter().collect()
+                    };
+
                     // Extract concrete types from the function parameters
-                    let concrete_types: Vec<String> = param_types.iter()
+                    let concrete_types: Vec<String> = effective_param_types.iter()
                         .filter_map(|t| self.type_expr_to_type_name(t))
                         .collect();
 
-                    if concrete_types.len() == param_types.len() && !concrete_types.is_empty() {
+                    if concrete_types.len() == effective_param_types.len() && !concrete_types.is_empty() {
                         // All types are concrete - monomorphize and load
                         if let Some(fn_def) = self.fn_asts.get(&poly_name).cloned() {
                             let param_names: Vec<String> = fn_def.clauses[0].params.iter()
