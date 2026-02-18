@@ -10363,6 +10363,29 @@ impl Compiler {
             let signature = param_types.join(",");
             let full_name = format!("{}/{}", base_name, signature);
 
+            // Build a signature string for HM inference.
+            // This allows cross-module trait methods to be visible to the type inference
+            // engine, enabling generic functions to call trait methods on unresolved types.
+            let sig_string = {
+                let trait_method_info = self.trait_defs.get(&trait_name)
+                    .and_then(|ti| ti.methods.iter().find(|m| m.name == method_name));
+                let ret_type = trait_method_info
+                    .map(|m| {
+                        let self_sub = if let Some(ref gen_ty) = generic_self_type {
+                            gen_ty.as_str()
+                        } else {
+                            unqualified_type_name.as_str()
+                        };
+                        m.return_type.replace("Self", self_sub)
+                    })
+                    .unwrap_or_else(|| "_".to_string());
+                let params_str = param_types.iter()
+                    .map(|t| if t == "_" { "a".to_string() } else { t.clone() })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("(({}) -> {})", params_str, ret_type)
+            };
+
             // Add placeholder to functions for resolve_function_call to find
             if !self.functions.contains_key(&full_name) {
                 let placeholder = FunctionValue {
@@ -10378,7 +10401,7 @@ impl Compiler {
                     source_code: None,
                     source_file: None,
                     doc: None,
-                    signature: None,
+                    signature: Some(sig_string.clone()),
                     param_types: param_types.clone(),
                     return_type: None,
                     required_params: None,
@@ -12811,7 +12834,7 @@ impl Compiler {
         // should NOT be treated as needing monomorphization - they work fine with primitive dispatch.
         // We do NOT populate current_fn_type_params from pending_fn_signatures because that would
         // make operator dispatch (e.g., +) trigger UnresolvedTraitMethod for simple arithmetic functions.
-        let fn_key = if arity == 0 {
+        let fn_key_wildcard = if arity == 0 {
             format!("{}/", base_name)
         } else {
             format!("{}/{}", base_name, vec!["_"; arity].join(","))
@@ -12820,10 +12843,14 @@ impl Compiler {
         // A function with type vars only in its return type (like main() -> Var(1)) is not
         // truly generic - it just means inference couldn't fully resolve the return. Only
         // functions with generic parameters can be monomorphized (specialized at call sites).
-        let has_generic_hm_signature = if let Some(fn_sig) = self.pending_fn_signatures.get(&fn_key) {
-            fn_sig.params.iter().any(|p| p.has_any_type_var() || p.has_type_params())
-        } else {
-            false
+        // Look up by both the wildcard key (e.g., "foo/_,_") and the annotated key
+        // (e.g., "foo/String,_") since pending_fn_signatures stores keys with concrete
+        // type annotations from function parameters.
+        let has_generic_hm_signature = {
+            let fn_sig = self.pending_fn_signatures.get(&fn_key_wildcard)
+                .or_else(|| self.pending_fn_signatures.get(&name));
+            fn_sig.map(|sig| sig.params.iter().any(|p| p.has_any_type_var() || p.has_type_params()))
+                .unwrap_or(false)
         };
         let saved_fn_type_params = std::mem::replace(&mut self.current_fn_type_params, def.type_params.clone());
         let saved_fn_generic_hm = std::mem::replace(&mut self.current_fn_generic_hm, has_generic_hm_signature);
