@@ -10811,10 +10811,59 @@ impl Compiler {
                         } else {
                             local_method_name.clone()
                         };
+                        // Substitute Self with the implementing type in params and return type.
+                        // Without this, functions like `double(self) -> Self` would keep
+                        // the literal "Self" type, causing type mismatches.
+                        let self_type_name = if let Some(ref gen_ty) = generic_self_type {
+                            gen_ty.clone()
+                        } else {
+                            unqualified_type_name.clone()
+                        };
+                        fn subst_self_in_type_expr(te: &TypeExpr, replacement: &str, span: Span) -> TypeExpr {
+                            match te {
+                                TypeExpr::Name(ident) if ident.node == "Self" => {
+                                    TypeExpr::Name(Spanned::new(replacement.to_string(), span))
+                                }
+                                TypeExpr::Generic(ident, args) => {
+                                    let new_ident = if ident.node == "Self" {
+                                        Spanned::new(replacement.to_string(), span)
+                                    } else {
+                                        ident.clone()
+                                    };
+                                    let new_args = args.iter()
+                                        .map(|a| subst_self_in_type_expr(a, replacement, span))
+                                        .collect();
+                                    TypeExpr::Generic(new_ident, new_args)
+                                }
+                                TypeExpr::Function(params, ret) => {
+                                    let new_params = params.iter()
+                                        .map(|p| subst_self_in_type_expr(p, replacement, span))
+                                        .collect();
+                                    let new_ret = Box::new(subst_self_in_type_expr(ret, replacement, span));
+                                    TypeExpr::Function(new_params, new_ret)
+                                }
+                                TypeExpr::Tuple(elems) => {
+                                    let new_elems = elems.iter()
+                                        .map(|e| subst_self_in_type_expr(e, replacement, span))
+                                        .collect();
+                                    TypeExpr::Tuple(new_elems)
+                                }
+                                other => other.clone(),
+                            }
+                        }
+                        let subst_params: Vec<FnParam> = trait_method.params.iter().map(|p| {
+                            FnParam {
+                                pattern: p.pattern.clone(),
+                                ty: p.ty.as_ref().map(|t| subst_self_in_type_expr(t, &self_type_name, trait_method.span)),
+                                default: p.default.clone(),
+                            }
+                        }).collect();
+                        let subst_return_type = trait_method.return_type.as_ref()
+                            .map(|t| subst_self_in_type_expr(t, &self_type_name, trait_method.span));
                         let clause = FnClause {
-                            params: trait_method.params.clone(),
+                            params: subst_params,
                             guard: None,
-                            return_type: trait_method.return_type.clone(),
+                            return_type: subst_return_type,
                             body: default_body.clone(),
                             span: trait_method.span,
                         };
