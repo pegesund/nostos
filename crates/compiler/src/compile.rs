@@ -13876,6 +13876,54 @@ impl Compiler {
                         return result;
                     }
 
+                    // Check if this is a trait method being used as a first-class
+                    // function reference (e.g., items.map(score) where score is a trait method).
+                    // Use HM-inferred type to find the concrete trait impl.
+                    if self.is_known_trait_method(name) {
+                        if let Some(inferred_ty) = self.inferred_expr_types.get(&ident.span).cloned() {
+                            if let nostos_types::Type::Function(ref ft) = inferred_ty {
+                                if let Some(first_param) = ft.params.first() {
+                                    let type_name = first_param.display();
+                                    if self.is_type_concrete(&type_name) {
+                                        if let Some(trait_fn) = self.find_trait_method(&type_name, name) {
+                                            let arg_types: Vec<Option<String>> = ft.params.iter()
+                                                .map(|t| Some(t.display()))
+                                                .collect();
+                                            let call_name = self.resolve_function_call(&trait_fn, &arg_types)
+                                                .unwrap_or(trait_fn);
+                                            if let Some(func) = self.functions.get(&call_name).cloned() {
+                                                let dst = self.alloc_reg();
+                                                let idx = self.chunk.add_constant(Value::Function(func));
+                                                self.chunk.emit(Instruction::LoadConst(dst, idx), line);
+                                                return Ok(dst);
+                                            }
+                                            // Try loading by name at runtime
+                                            let dst = self.alloc_reg();
+                                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(call_name)));
+                                            self.chunk.emit(Instruction::LoadFunctionByName(dst, name_idx), line);
+                                            return Ok(dst);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // HM type not available or not concrete.
+                        // Only trigger monomorphization if we're in a generic context
+                        // where the type will be resolved later.
+                        if self.current_fn_generic_hm
+                            || !self.current_fn_type_params.is_empty()
+                            || !self.current_type_bindings.is_empty()
+                        {
+                            return Err(CompileError::UnresolvedTraitMethod {
+                                method: name.clone(),
+                                span: ident.span,
+                            });
+                        }
+                        // Otherwise fall through to UnknownVariable error
+                        // (the UFCS caller will convert this to a proper
+                        // "no method found" error message if applicable)
+                    }
+
                     // Find similar names from locals, functions, and mvars
                     let local_names: Vec<&str> = self.locals.keys().map(|s| s.as_str()).collect();
                     let fn_names: Vec<&str> = self.functions.keys().map(|s| s.as_str()).collect();
