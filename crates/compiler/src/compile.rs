@@ -16281,9 +16281,9 @@ impl Compiler {
                                 .collect();
                             let has_some_concrete_ufcs = concrete_types.iter().any(|t| self.is_type_concrete(t));
                             if has_some_concrete_ufcs {
-                                // Build full arg type list with "_" for unknown types
+                                // Build arg type list: keep all known types, "_" for unknown
                                 let mono_arg_types_ufcs: Vec<String> = mod_arg_types.iter()
-                                    .map(|t| t.clone().filter(|s| self.is_type_concrete(s)).unwrap_or_else(|| "_".to_string()))
+                                    .map(|t| t.clone().unwrap_or_else(|| "_".to_string()))
                                     .collect();
                                 if let Some(fn_def) = self.fn_asts.get(&call_name).cloned() {
                                     let param_names_mono: Vec<String> = fn_def.clauses[0].params.iter()
@@ -19424,14 +19424,14 @@ impl Compiler {
             });
 
             // If polymorphic and at least some types are known and concrete, try monomorphization.
-            // For unknown types (e.g., lambda arguments), use "_" as a wildcard.
-            // This allows functions like `transformAndDisplay(pair, f)` to monomorphize
-            // based on the known receiver type even when the callback type is unknown.
+            // Keep ALL known types (even partially-resolved ones like Either[Int, ?25]) because
+            // the base type name is sufficient for UFCS trait method resolution. Only use "_"
+            // for truly unknown types (None in arg_types).
             let has_some_concrete = concrete_arg_types.iter().any(|t| self.is_type_concrete(t));
             let final_call_name = if is_polymorphic && has_some_concrete {
-                // Build full arg type list with "_" for unknown types
+                // Build arg type list: keep all known types, "_" for unknown
                 let mono_arg_types: Vec<String> = arg_types.iter()
-                    .map(|t| t.clone().filter(|s| self.is_type_concrete(s)).unwrap_or_else(|| "_".to_string()))
+                    .map(|t| t.clone().unwrap_or_else(|| "_".to_string()))
                     .collect();
 
                 // Get parameter names from the function AST
