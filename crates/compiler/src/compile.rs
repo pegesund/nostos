@@ -19833,6 +19833,55 @@ impl Compiler {
                         span: func.span(),
                     });
                 }
+                // Before falling through, check if this is a trait method called in function form.
+                // e.g., display(w) where display is a trait method of Showable.
+                // Use the first argument's type to find the right trait impl.
+                if !arg_regs.is_empty() {
+                    let first_arg_type = self.expr_type_name(Self::call_arg_expr(&args[0]));
+                    if let Some(ref arg_type) = first_arg_type {
+                        if let Some(trait_fn_base) = self.find_trait_method(arg_type, &qualified_name) {
+                            // Found trait method impl - resolve to full function key with arity
+                            let trait_arg_types: Vec<Option<String>> = args.iter()
+                                .map(|arg| self.expr_type_name(Self::call_arg_expr(arg)))
+                                .collect();
+                            let call_name = self.resolve_function_call(&trait_fn_base, &trait_arg_types)
+                                .unwrap_or_else(|| {
+                                    self.find_function_by_arity(&trait_fn_base, args.len())
+                                        .unwrap_or_else(|| {
+                                            let wildcard_sig = vec!["_".to_string(); args.len()].join(",");
+                                            format!("{}/{}", trait_fn_base, wildcard_sig)
+                                        })
+                                });
+                            let dst = self.alloc_reg();
+                            if let Some(&func_idx) = self.function_indices.get(&call_name) {
+                                if is_tail {
+                                    for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                                        self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+                                    }
+                                    self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
+                                    return Ok(0);
+                                } else {
+                                    self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), line);
+                                    return Ok(dst);
+                                }
+                            } else {
+                                let name_idx = self.chunk.add_constant(Value::String(call_name.into()));
+                                let func_reg_2 = self.alloc_reg();
+                                self.chunk.emit(Instruction::LoadFunctionByName(func_reg_2, name_idx), line);
+                                if is_tail {
+                                    for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                                        self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+                                    }
+                                    self.chunk.emit(Instruction::TailCall(func_reg_2, arg_regs.into()), line);
+                                    return Ok(0);
+                                } else {
+                                    self.chunk.emit(Instruction::Call(dst, func_reg_2, arg_regs.into()), line);
+                                    return Ok(dst);
+                                }
+                            }
+                        }
+                    }
+                }
                 // Fall through to generic call path for simple identifiers
             }
             } // Close the else block for local variable check
@@ -28370,6 +28419,14 @@ impl Compiler {
             }
         }
 
+        // Build a set of trait method names from trait definitions.
+        // Used below to avoid registering concrete trait method impls under bare method names
+        // (e.g., "display" should not be registered as "(Button) -> String" just because Button
+        // implements Showable - it should stay generic so both display(widget) and display(button) work).
+        let trait_method_names: std::collections::HashSet<String> = self.trait_defs.values()
+            .flat_map(|td| td.methods.iter().map(|m| m.name.clone()))
+            .collect();
+
         // Register known functions in environment for recursive calls
         // Don't overwrite functions from standard_env (like println) that have trait constraints
         // Sort function names to ensure deterministic processing order - this matters for overloaded
@@ -28454,15 +28511,25 @@ impl Compiler {
                 // Insert just name with arity (e.g., "optMap/_,_")
                 if let Some(dot_pos) = base_name.rfind('.') {
                     let short_name = &base_name[dot_pos + 1..];
-                    let short_qualified = format!("{}{}", short_name, arity_suffix);
-                    // Always insert with arity suffix for overload resolution
-                    env.insert_function(short_qualified, func_type.clone());
-                    // Also with wildcard suffix
-                    let short_wildcard = format!("{}{}", short_name, wildcard_suffix);
-                    env.insert_function(short_wildcard, func_type.clone());
-                    // Also insert bare name for simple lookups (first wins)
-                    if !env.functions.contains_key(short_name) {
-                        env.insert_function(short_name.to_string(), func_type);
+                    // Detect trait method implementations: base_name has form
+                    // "Type.Trait.method" or "module.Type.Trait.method" (2+ dots)
+                    // and short_name is a known trait method name.
+                    // These should NOT be registered under bare method names because
+                    // each impl has a concrete type (e.g., "(Widget) -> String") which
+                    // would conflict with other impls. UFCS handles dispatch instead.
+                    let is_trait_method_impl = trait_method_names.contains(short_name)
+                        && base_name.matches('.').count() >= 2;
+                    if !is_trait_method_impl {
+                        let short_qualified = format!("{}{}", short_name, arity_suffix);
+                        // Always insert with arity suffix for overload resolution
+                        env.insert_function(short_qualified, func_type.clone());
+                        // Also with wildcard suffix
+                        let short_wildcard = format!("{}{}", short_name, wildcard_suffix);
+                        env.insert_function(short_wildcard, func_type.clone());
+                        // Also insert bare name for simple lookups (first wins)
+                        if !env.functions.contains_key(short_name) {
+                            env.insert_function(short_name.to_string(), func_type);
+                        }
                     }
                 } else {
                     // Non-module function (e.g., "toStr/_"): register bare name
@@ -28552,6 +28619,75 @@ impl Compiler {
         for (fn_name, fn_type) in &self.trait_method_ufcs_signatures {
             if !env.functions.contains_key(fn_name) {
                 env.insert_function(fn_name.clone(), fn_type.clone());
+            }
+        }
+
+        // Register trait methods under their bare names with generic signatures.
+        // This allows trait methods to be called in function form (e.g., `display(w)`)
+        // with different types without type conflicts. The signature uses type variables
+        // for `self` so `display(Widget(...))` and `display(Button(...))` both work.
+        {
+            let mut trait_var_base = 200u32; // High base to avoid collisions
+            for trait_info in self.trait_defs.values() {
+                for method in &trait_info.methods {
+                    let method_name = &method.name;
+                    // Build generic function type: self param is a fresh type var
+                    let mut params = Vec::new();
+                    trait_var_base += 1;
+                    params.push(nostos_types::Type::Var(trait_var_base)); // self
+                    for _ in 1..method.param_count {
+                        trait_var_base += 1;
+                        params.push(nostos_types::Type::Var(trait_var_base));
+                    }
+                    let ret = if method.return_type != "()" && !method.return_type.is_empty()
+                        && !method.return_type.chars().next().map(|c| c.is_lowercase()).unwrap_or(false)
+                        && !method.return_type.contains("->")
+                    {
+                        self.type_name_to_type(&method.return_type)
+                    } else {
+                        trait_var_base += 1;
+                        nostos_types::Type::Var(trait_var_base)
+                    };
+                    let arity_suffix = if method.param_count == 0 {
+                        "/".to_string()
+                    } else {
+                        format!("/{}", vec!["_"; method.param_count].join(","))
+                    };
+                    let fn_key = format!("{}{}", method_name, arity_suffix);
+                    // Overwrite any concrete impl that was incorrectly registered
+                    env.insert_function(fn_key, nostos_types::FunctionType {
+                        required_params: None,
+                        type_params: vec![],
+                        params,
+                        ret: Box::new(ret),
+                        var_bounds: vec![],
+                    });
+                    // Also register bare name
+                    env.insert_function(method_name.clone(), nostos_types::FunctionType {
+                        required_params: None,
+                        type_params: vec![],
+                        params: {
+                            let mut p = Vec::new();
+                            trait_var_base += 1;
+                            p.push(nostos_types::Type::Var(trait_var_base));
+                            for _ in 1..method.param_count {
+                                trait_var_base += 1;
+                                p.push(nostos_types::Type::Var(trait_var_base));
+                            }
+                            p
+                        },
+                        ret: Box::new(if method.return_type != "()" && !method.return_type.is_empty()
+                            && !method.return_type.chars().next().map(|c| c.is_lowercase()).unwrap_or(false)
+                            && !method.return_type.contains("->")
+                        {
+                            self.type_name_to_type(&method.return_type)
+                        } else {
+                            trait_var_base += 1;
+                            nostos_types::Type::Var(trait_var_base)
+                        }),
+                        var_bounds: vec![],
+                    });
+                }
             }
         }
 
@@ -29502,6 +29638,11 @@ impl Compiler {
             }
         };
 
+        // Build trait method names set for type_check_fn (same as try_hm_inference)
+        let trait_method_names_tc: std::collections::HashSet<String> = self.trait_defs.values()
+            .flat_map(|td| td.methods.iter().map(|m| m.name.clone()))
+            .collect();
+
         // First pass: register local names for functions NOT in the current module
         // (only if not already present)
         // Sort to ensure "foo/" (0-arity) comes before "foo/_" (1-arity)
@@ -29515,7 +29656,10 @@ impl Compiler {
 
             if !in_current_module {
                 let local_name = base_name.rsplit('.').next().unwrap_or(base_name);
-                if !env.functions.contains_key(local_name) {
+                // Skip trait method impls (e.g., Widget.Showable.display) from bare name registration
+                let is_trait_method_impl = trait_method_names_tc.contains(local_name)
+                    && base_name.matches('.').count() >= 2;
+                if !is_trait_method_impl && !env.functions.contains_key(local_name) {
                     if let Some(fn_type) = env.functions.get(fn_name).cloned() {
                         env.insert_function(local_name.to_string(), fn_type);
                     }
@@ -29574,8 +29718,13 @@ impl Compiler {
 
             if in_current_module {
                 let local_name = base_name.rsplit('.').next().unwrap_or(base_name);
-                if let Some(fn_type) = env.functions.get(fn_name).cloned() {
-                    env.insert_function(local_name.to_string(), fn_type);
+                // Skip trait method impls from bare name registration
+                let is_trait_method_impl = trait_method_names_tc.contains(local_name)
+                    && base_name.matches('.').count() >= 2;
+                if !is_trait_method_impl {
+                    if let Some(fn_type) = env.functions.get(fn_name).cloned() {
+                        env.insert_function(local_name.to_string(), fn_type);
+                    }
                 }
             }
         }
@@ -29601,6 +29750,78 @@ impl Compiler {
                 let local_name = format!("{}{}", local_name_base, arity_suffix);
                 if let Some(fn_type) = env.functions.get(fn_name).cloned() {
                     env.insert_function(local_name, fn_type);
+                }
+            }
+        }
+
+        // Register trait method UFCS signatures for check_pending_method_calls.
+        for (fn_name, fn_type) in &self.trait_method_ufcs_signatures {
+            if !env.functions.contains_key(fn_name) {
+                env.insert_function(fn_name.clone(), fn_type.clone());
+            }
+        }
+
+        // Register trait methods under bare names with generic signatures.
+        // Same logic as in try_hm_inference - prevents concrete impl types from
+        // conflicting when trait methods are called in function form.
+        {
+            let mut trait_var_base = 200u32;
+            for trait_info in self.trait_defs.values() {
+                for method in &trait_info.methods {
+                    let method_name = &method.name;
+                    let mut params = Vec::new();
+                    trait_var_base += 1;
+                    params.push(nostos_types::Type::Var(trait_var_base));
+                    for _ in 1..method.param_count {
+                        trait_var_base += 1;
+                        params.push(nostos_types::Type::Var(trait_var_base));
+                    }
+                    let ret = if method.return_type != "()" && !method.return_type.is_empty()
+                        && !method.return_type.chars().next().map(|c| c.is_lowercase()).unwrap_or(false)
+                        && !method.return_type.contains("->")
+                    {
+                        self.type_name_to_type(&method.return_type)
+                    } else {
+                        trait_var_base += 1;
+                        nostos_types::Type::Var(trait_var_base)
+                    };
+                    let arity_suffix = if method.param_count == 0 {
+                        "/".to_string()
+                    } else {
+                        format!("/{}", vec!["_"; method.param_count].join(","))
+                    };
+                    let fn_key = format!("{}{}", method_name, arity_suffix);
+                    env.insert_function(fn_key, nostos_types::FunctionType {
+                        required_params: None,
+                        type_params: vec![],
+                        params: params.clone(),
+                        ret: Box::new(ret.clone()),
+                        var_bounds: vec![],
+                    });
+                    env.insert_function(method_name.clone(), nostos_types::FunctionType {
+                        required_params: None,
+                        type_params: vec![],
+                        params: {
+                            let mut p = Vec::new();
+                            trait_var_base += 1;
+                            p.push(nostos_types::Type::Var(trait_var_base));
+                            for _ in 1..method.param_count {
+                                trait_var_base += 1;
+                                p.push(nostos_types::Type::Var(trait_var_base));
+                            }
+                            p
+                        },
+                        ret: Box::new(if method.return_type != "()" && !method.return_type.is_empty()
+                            && !method.return_type.chars().next().map(|c| c.is_lowercase()).unwrap_or(false)
+                            && !method.return_type.contains("->")
+                        {
+                            self.type_name_to_type(&method.return_type)
+                        } else {
+                            trait_var_base += 1;
+                            nostos_types::Type::Var(trait_var_base)
+                        }),
+                        var_bounds: vec![],
+                    });
                 }
             }
         }
