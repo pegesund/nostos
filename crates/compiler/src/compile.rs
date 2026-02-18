@@ -4182,6 +4182,20 @@ impl Compiler {
         let saved = self.module_path.clone();
         self.module_path.push(module_def.name.node.clone());
 
+        // Process use statements FIRST so that imported types are available
+        // for trait impl registration. Without this, `use Types.Vec2` inside
+        // module Ops isn't processed, and `Vec2: Scalable` resolves Vec2 to
+        // "Ops.Vec2" instead of "Types.Vec2", creating an empty placeholder
+        // function that's never overwritten by the actual compilation.
+        let saved_imports = self.imports.clone();
+        for inner_item in &module_def.items {
+            if let Item::Use(use_stmt) = inner_item {
+                // Only process if the imported module is already known
+                // (e.g., Types is already registered from an earlier nested module)
+                let _ = self.compile_use_stmt(use_stmt);
+            }
+        }
+
         // Register type definitions inside nested module
         for inner_item in &module_def.items {
             if let Item::TypeDef(type_def) = inner_item {
@@ -4196,12 +4210,15 @@ impl Compiler {
             }
         }
 
-        // Now process trait impls (traits are now registered)
+        // Now process trait impls (traits and imports are now registered)
         for inner_item in &module_def.items {
             if let Item::TraitImpl(trait_impl) = inner_item {
                 self.pre_register_trait_impl(trait_impl)?;
             }
         }
+
+        // Restore imports - don't let nested module imports leak into parent scope
+        self.imports = saved_imports;
 
         // Recurse into deeper nested modules
         for inner_item in &module_def.items {
