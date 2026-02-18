@@ -10764,8 +10764,17 @@ impl Compiler {
                         };
 
                         // Create a synthetic FnDef from the default implementation.
-                        // Use qualified_method_name so compile_fn_def produces the same
-                        // function key as the placeholder registered above.
+                        // For non-cross-module: use local_method_name (compile_fn_def will
+                        // add the module prefix via qualify_name).
+                        // For cross-module: use qualified_method_name (module_path is cleared
+                        // below so qualify_name is a no-op).
+                        let is_cross_module_default = qualified_type_name.contains('.')
+                            && qualified_type_name != self.qualify_name(&unqualified_type_name);
+                        let fn_def_name = if is_cross_module_default {
+                            qualified_method_name.clone()
+                        } else {
+                            local_method_name.clone()
+                        };
                         let clause = FnClause {
                             params: trait_method.params.clone(),
                             guard: None,
@@ -10777,7 +10786,7 @@ impl Compiler {
                             visibility: Visibility::Public,
                             doc: None,
                             decorators: vec![],
-                            name: Spanned::new(qualified_method_name.clone(), trait_method.name.span),
+                            name: Spanned::new(fn_def_name.clone(), trait_method.name.span),
                             type_params: vec![],
                             clauses: vec![clause],
                             is_template: false,
@@ -10839,8 +10848,6 @@ impl Compiler {
                         // For cross-module trait impls, temporarily clear module_path so
                         // compile_fn_def's qualify_name doesn't add the wrong module prefix.
                         // The synthetic_def.name already contains the fully qualified name.
-                        let is_cross_module_default = qualified_type_name.contains('.')
-                            && qualified_type_name != self.qualify_name(&unqualified_type_name);
                         let saved_module_path_for_default = if is_cross_module_default {
                             Some(std::mem::take(&mut self.module_path))
                         } else {
