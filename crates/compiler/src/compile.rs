@@ -19880,6 +19880,17 @@ impl Compiler {
                                 }
                             }
                         }
+                    } else if self.is_known_trait_method(&qualified_name)
+                        && !Self::is_generic_builtin_method(&qualified_name)
+                    {
+                        // Arg type unknown but function name is a trait method.
+                        // Signal that monomorphization is needed - when the enclosing
+                        // function is monomorphized with concrete types, the arg type
+                        // will be known and the trait dispatch above will succeed.
+                        return Err(CompileError::UnresolvedTraitMethod {
+                            method: qualified_name.clone(),
+                            span: func.span(),
+                        });
                     }
                 }
                 // Fall through to generic call path for simple identifiers
