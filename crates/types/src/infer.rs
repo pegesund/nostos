@@ -3553,6 +3553,15 @@ impl<'a> InferCtx<'a> {
                     }
                 });
 
+                // Fallback: arity-based lookup for custom type trait methods.
+                // Trait impl methods are registered as {TypeName}.{method}/_,_,...
+                // in trait_method_ufcs_signatures by compile_trait_impl_inner.
+                let fn_type_opt = if fn_type_opt.is_some() {
+                    fn_type_opt
+                } else {
+                    self.env.lookup_function_with_arity(&qualified_name, arity).cloned()
+                };
+
                 // Cross-type UFCS lookup: when {ReceiverType}.{method} is not found,
                 // try other type-prefixed entries (e.g., String.join when receiver is List).
                 // This is the general UFCS pattern: methods may be registered under a
