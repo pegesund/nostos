@@ -12393,7 +12393,18 @@ impl Compiler {
         // positives on specialized function types.
         let is_monomorphized = def.name.node.contains('$');
         if is_stdlib || is_monomorphized {
-            // Skip to bytecode compilation for stdlib and monomorphized variants
+            // Skip full type checking for stdlib and monomorphized variants.
+            // However, for monomorphized variants, still run HM inference to populate
+            // inferred_expr_types - this is needed for UFCS method resolution on
+            // intermediate expressions (e.g., `transformed = p.mapFirst(f); transformed.display()`).
+            if is_monomorphized {
+                let hm_result = self.try_hm_inference(def);
+                if let Some((_, expr_types)) = hm_result {
+                    for (span, ty) in expr_types {
+                        self.inferred_expr_types.insert(span, ty);
+                    }
+                }
+            }
         } else {
         match self.type_check_fn(def, &def.name.node) {
         Ok(resolved_types) => {
@@ -16268,14 +16279,17 @@ impl Compiler {
                             let concrete_types: Vec<String> = mod_arg_types.iter()
                                 .filter_map(|t| t.clone())
                                 .collect();
-                            let all_known = concrete_types.len() == mod_arg_types.len();
-                            let all_concrete = concrete_types.iter().all(|t| self.is_type_concrete(t));
-                            if all_known && all_concrete && !concrete_types.is_empty() {
+                            let has_some_concrete_ufcs = concrete_types.iter().any(|t| self.is_type_concrete(t));
+                            if has_some_concrete_ufcs {
+                                // Build full arg type list with "_" for unknown types
+                                let mono_arg_types_ufcs: Vec<String> = mod_arg_types.iter()
+                                    .map(|t| t.clone().filter(|s| self.is_type_concrete(s)).unwrap_or_else(|| "_".to_string()))
+                                    .collect();
                                 if let Some(fn_def) = self.fn_asts.get(&call_name).cloned() {
                                     let param_names_mono: Vec<String> = fn_def.clauses[0].params.iter()
                                         .filter_map(|p| self.pattern_binding_name(&p.pattern))
                                         .collect();
-                                    match self.compile_monomorphized_variant(&call_name, &concrete_types, &param_names_mono) {
+                                    match self.compile_monomorphized_variant(&call_name, &mono_arg_types_ufcs, &param_names_mono) {
                                         Ok(mangled_name) => mangled_name,
                                         Err(e) => {
                                             if matches!(e, CompileError::TypeError { .. }
@@ -16392,11 +16406,10 @@ impl Compiler {
                                     }
                                 }
                             } else {
-                                // If calling a polymorphic function with non-concrete types
-                                // (type parameters), and the current function also has type params,
-                                // propagate polymorphism so the current function gets monomorphized too.
+                                // No concrete types known - propagate polymorphism if the current
+                                // function also has type params, so it gets monomorphized too.
                                 // Without this, the current function would call the empty polymorphic stub.
-                                if !all_concrete && !self.current_fn_type_params.is_empty() {
+                                if !self.current_fn_type_params.is_empty() {
                                     return Err(CompileError::UnresolvedTraitMethod {
                                         method: call_name.clone(),
                                         span: method.span,
@@ -19410,8 +19423,17 @@ impl Compiler {
                 self.is_type_concrete(t)
             });
 
-            // If polymorphic and all types are known AND concrete, try to create a monomorphized variant
-            let final_call_name = if is_polymorphic && all_types_known && all_types_concrete && !concrete_arg_types.is_empty() {
+            // If polymorphic and at least some types are known and concrete, try monomorphization.
+            // For unknown types (e.g., lambda arguments), use "_" as a wildcard.
+            // This allows functions like `transformAndDisplay(pair, f)` to monomorphize
+            // based on the known receiver type even when the callback type is unknown.
+            let has_some_concrete = concrete_arg_types.iter().any(|t| self.is_type_concrete(t));
+            let final_call_name = if is_polymorphic && has_some_concrete {
+                // Build full arg type list with "_" for unknown types
+                let mono_arg_types: Vec<String> = arg_types.iter()
+                    .map(|t| t.clone().filter(|s| self.is_type_concrete(s)).unwrap_or_else(|| "_".to_string()))
+                    .collect();
+
                 // Get parameter names from the function AST
                 // fn_asts is keyed by full name with signature (e.g., "hashable/T")
                 if let Some(fn_def) = self.fn_asts.get(&call_name).cloned() {
@@ -19421,7 +19443,7 @@ impl Compiler {
                         .collect();
 
                     // Try to monomorphize using the full call_name as base
-                    match self.compile_monomorphized_variant(&call_name, &concrete_arg_types, &param_names) {
+                    match self.compile_monomorphized_variant(&call_name, &mono_arg_types, &param_names) {
                         Ok(mangled_name) => mangled_name,
                         Err(e) => {
                             // If monomorphization fails with a real error, propagate it instead
@@ -20972,10 +20994,11 @@ impl Compiler {
         specialized_def.type_params.clear(); // No longer polymorphic
 
         // Update parameter types in clauses to use concrete types instead of type params
-        // This ensures the function signature uses concrete types
+        // This ensures the function signature uses concrete types.
+        // Skip parameters with "_" type (unknown, e.g. lambda arguments) - keep original annotation.
         for clause in &mut specialized_def.clauses {
             for (i, param) in clause.params.iter_mut().enumerate() {
-                if i < arg_type_names.len() {
+                if i < arg_type_names.len() && arg_type_names[i] != "_" {
                     // Replace the type annotation with the concrete type
                     let concrete_type_name = &arg_type_names[i];
                     // Parse parameterized types like "List[Box]" into proper TypeExpr::Generic
@@ -20996,9 +21019,9 @@ impl Compiler {
         }
         let saved_type_bindings = std::mem::take(&mut self.current_type_bindings);
 
-        // Set param_types for this specialization
+        // Set param_types for this specialization (skip "_" unknown types)
         for (i, param_name) in param_names.iter().enumerate() {
-            if i < arg_type_names.len() {
+            if i < arg_type_names.len() && arg_type_names[i] != "_" {
                 self.param_types.insert(param_name.clone(), arg_type_names[i].clone());
             }
         }
@@ -21783,6 +21806,38 @@ impl Compiler {
                     Spanned::new(container.to_string(), Span::default()),
                     type_args,
                 );
+            }
+        }
+
+        // Check for function type: (Params) -> RetType or ParamType -> RetType
+        {
+            let bytes = type_str.as_bytes();
+            let mut depth = 0i32;
+            for i in 0..bytes.len() {
+                match bytes[i] {
+                    b'(' | b'[' | b'{' => depth += 1,
+                    b')' | b']' | b'}' => depth = (depth - 1).max(0),
+                    b'-' if depth == 0 && i + 1 < bytes.len() && bytes[i + 1] == b'>' => {
+                        let params_str = type_str[..i].trim();
+                        let ret_str = type_str[i + 2..].trim();
+
+                        let param_types = if params_str == "()" || params_str.is_empty() {
+                            vec![]
+                        } else if params_str.starts_with('(') && params_str.ends_with(')') {
+                            let inner = &params_str[1..params_str.len() - 1];
+                            Self::split_type_args(inner)
+                                .into_iter()
+                                .map(|s| Self::parse_type_string_to_type_expr(&s))
+                                .collect()
+                        } else {
+                            vec![Self::parse_type_string_to_type_expr(params_str)]
+                        };
+
+                        let ret_type = Self::parse_type_string_to_type_expr(ret_str);
+                        return TypeExpr::Function(param_types, Box::new(ret_type));
+                    }
+                    _ => {}
+                }
             }
         }
 
