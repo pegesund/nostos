@@ -11498,7 +11498,23 @@ impl Compiler {
             Expr::Record(type_name, _, _) => {
                 let ctor_name = &type_name.node;
                 self.find_type_for_constructor(ctor_name)
-                    .map(|type_name| self.type_name_to_type(&type_name))
+                    .map(|found_type_name| {
+                        // For generic types (e.g., Wrap[a]), append type params
+                        // so the return type is Named("Wrap", [Var(1)]) not Named("Wrap", [])
+                        let qualified = self.qualify_name(&found_type_name);
+                        let type_def = self.type_defs.get(&qualified)
+                            .or_else(|| self.type_defs.get(&found_type_name));
+                        if let Some(td) = type_def {
+                            if !td.type_params.is_empty() && !found_type_name.contains('[') {
+                                let vars: Vec<String> = td.type_params.iter()
+                                    .map(|p| p.name.node.to_lowercase())
+                                    .collect();
+                                let with_params = format!("{}[{}]", found_type_name, vars.join(", "));
+                                return self.type_name_to_type(&with_params);
+                            }
+                        }
+                        self.type_name_to_type(&found_type_name)
+                    })
             }
             // Match expression: look at the first arm's body
             Expr::Match(_, arms, _) => {
@@ -30713,9 +30729,18 @@ impl Compiler {
         }
 
         // Register trait method UFCS signatures for check_pending_method_calls.
+        // Always overwrite: UFCS signatures have carefully assigned var IDs (starting at 100)
+        // to avoid collisions between type params and method params. The compiled function's
+        // signature (registered via trait_method_type_aliases above) may have incorrect var IDs
+        // where e.g. a generic type's param 'a' (Var(1)) collides with method param 'f' (also Var(1)).
         for (fn_name, fn_type) in &self.trait_method_ufcs_signatures {
-            if !env.functions.contains_key(fn_name) {
-                env.insert_function(fn_name.clone(), fn_type.clone());
+            env.insert_function(fn_name.clone(), fn_type.clone());
+            // Also register under bare name (without arity suffix) because
+            // check_pending_method_calls first tries env.functions.get("Type.method")
+            // before falling back to lookup_function_with_arity.
+            if let Some(slash_pos) = fn_name.find('/') {
+                let bare_name = &fn_name[..slash_pos];
+                env.insert_function(bare_name.to_string(), fn_type.clone());
             }
         }
 
