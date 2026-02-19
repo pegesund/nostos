@@ -3112,7 +3112,7 @@ impl Compiler {
         // Pre-populate fn_asts with all pending functions so they can see each other
         // This is critical for multi-file modules where functions from different files
         // need to call each other (e.g., main.nos calling benchmark.nos in the same module)
-        for (fn_def, module_path, _, _, _, _) in &pending {
+        for (fn_def, module_path, fn_imports, _, _, _) in &pending {
             let base_name = if module_path.is_empty() {
                 fn_def.name.node.clone()
             } else {
@@ -3128,7 +3128,8 @@ impl Compiler {
                 let name = format!("{}/{}", base_name, signature);
                 // Insert a placeholder in fn_asts so has_function_with_base can find it
                 self.fn_asts.insert(name.clone(), fn_def.clone());
-                self.fn_ast_imports.insert(name.clone(), self.imports.clone());
+                // Use the module-specific imports (not self.imports which may be from a different module)
+                self.fn_ast_imports.insert(name.clone(), fn_imports.clone());
                 // Update fn_asts_by_base index
                 let fn_base = name.split('/').next().unwrap_or(&name);
                 self.fn_asts_by_base
@@ -19099,23 +19100,32 @@ impl Compiler {
                 );
 
                 if is_numeric_conversion {
-                    if let Some(arg_type) = self.expr_type_name(arg_exprs[0]) {
-                        // Type variables (?N) might resolve to numeric types, so allow them
-                        let is_type_variable = arg_type.starts_with('?');
-                        let is_numeric = matches!(arg_type.as_str(),
-                            "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
-                            "UInt8" | "UInt16" | "UInt32" | "UInt64" |
-                            "Float" | "Float32" | "Float64" | "BigInt"
-                        );
+                    // Skip this check if user has defined their own function with this name
+                    // (user-defined overloads should shadow builtin numeric conversions)
+                    // Check fn_asts_by_base (populated early) and imports for cross-module
+                    let has_user_defined = self.fn_asts_by_base.contains_key(qname.as_str())
+                        || self.imports.get(qname.as_str())
+                            .map(|qualified| self.fn_asts_by_base.contains_key(qualified.as_str()))
+                            .unwrap_or(false);
+                    if !has_user_defined {
+                        if let Some(arg_type) = self.expr_type_name(arg_exprs[0]) {
+                            // Type variables (?N) might resolve to numeric types, so allow them
+                            let is_type_variable = arg_type.starts_with('?');
+                            let is_numeric = matches!(arg_type.as_str(),
+                                "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
+                                "UInt8" | "UInt16" | "UInt32" | "UInt64" |
+                                "Float" | "Float32" | "Float64" | "BigInt"
+                            );
 
-                        if !is_numeric && !is_type_variable {
-                            return Err(CompileError::TypeError {
-                                message: format!(
-                                    "type mismatch in argument 1: `{}` expects numeric type (Int, Float, etc.) but found `{}`",
-                                    qname, arg_type
-                                ),
-                                span: arg_exprs[0].span(),
-                            });
+                            if !is_numeric && !is_type_variable {
+                                return Err(CompileError::TypeError {
+                                    message: format!(
+                                        "type mismatch in argument 1: `{}` expects numeric type (Int, Float, etc.) but found `{}`",
+                                        qname, arg_type
+                                    ),
+                                    span: arg_exprs[0].span(),
+                                });
+                            }
                         }
                     }
                 }
@@ -19177,6 +19187,22 @@ impl Compiler {
         if let Some(qualified_name) = maybe_qualified_name {
             // Compile-time resolved builtins - no string lookup, no HashMap, no runtime dispatch!
             if !qualified_name.contains('.') {
+                // Check if first arg is a numeric type (for numeric conversion builtin guards).
+                // When user defines their own function with the same name as a numeric builtin
+                // (e.g., toFloat(c: Celsius)), the builtin should only be used for numeric args.
+                let first_arg_is_numeric = if arg_regs.len() == 1 {
+                    arg_exprs.first()
+                        .and_then(|e| self.expr_type_name(e))
+                        .map(|t| t.starts_with('?') || matches!(t.as_str(),
+                            "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
+                            "UInt8" | "UInt16" | "UInt32" | "UInt64" |
+                            "Float" | "Float32" | "Float64" | "BigInt"
+                        ))
+                        .unwrap_or(true) // Unknown type → assume numeric (safe fallback)
+                } else {
+                    false
+                };
+
                 match qualified_name.as_str() {
                     // === Type-agnostic builtins (no runtime dispatch needed) ===
                     "println" if arg_regs.len() == 1 => {
@@ -19642,57 +19668,58 @@ impl Compiler {
                     }
                     // === Numeric type conversions ===
                     // New standardized naming: as<Type>() with legacy aliases
-                    "asFloat64" | "asFloat" | "toFloat" | "toFloat64" if arg_regs.len() == 1 => {
+                    // Guard: only use builtin when arg is numeric (allows user-defined overloads for custom types)
+                    "asFloat64" | "asFloat" | "toFloat" | "toFloat64" if arg_regs.len() == 1 && first_arg_is_numeric => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::IntToFloat(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "asInt64" | "asInt" | "toInt" | "toInt64" if arg_regs.len() == 1 => {
+                    "asInt64" | "asInt" | "toInt" | "toInt64" if arg_regs.len() == 1 && first_arg_is_numeric => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::FloatToInt(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "asInt8" | "toInt8" if arg_regs.len() == 1 => {
+                    "asInt8" | "toInt8" if arg_regs.len() == 1 && first_arg_is_numeric => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ToInt8(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "asInt16" | "toInt16" if arg_regs.len() == 1 => {
+                    "asInt16" | "toInt16" if arg_regs.len() == 1 && first_arg_is_numeric => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ToInt16(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "asInt32" | "toInt32" if arg_regs.len() == 1 => {
+                    "asInt32" | "toInt32" if arg_regs.len() == 1 && first_arg_is_numeric => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ToInt32(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "asUInt8" | "toUInt8" if arg_regs.len() == 1 => {
+                    "asUInt8" | "toUInt8" if arg_regs.len() == 1 && first_arg_is_numeric => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ToUInt8(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "asUInt16" | "toUInt16" if arg_regs.len() == 1 => {
+                    "asUInt16" | "toUInt16" if arg_regs.len() == 1 && first_arg_is_numeric => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ToUInt16(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "asUInt32" | "toUInt32" if arg_regs.len() == 1 => {
+                    "asUInt32" | "toUInt32" if arg_regs.len() == 1 && first_arg_is_numeric => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ToUInt32(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "asUInt64" | "toUInt64" if arg_regs.len() == 1 => {
+                    "asUInt64" | "toUInt64" if arg_regs.len() == 1 && first_arg_is_numeric => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ToUInt64(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "asFloat32" | "toFloat32" if arg_regs.len() == 1 => {
+                    "asFloat32" | "toFloat32" if arg_regs.len() == 1 && first_arg_is_numeric => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ToFloat32(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "asBigInt" | "toBigInt" if arg_regs.len() == 1 => {
+                    "asBigInt" | "toBigInt" if arg_regs.len() == 1 && first_arg_is_numeric => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ToBigInt(dst, arg_regs[0]), line);
                         return Ok(dst);

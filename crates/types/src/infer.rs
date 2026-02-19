@@ -659,25 +659,33 @@ impl<'a> InferCtx<'a> {
             }
         }
 
-        // Ambiguous if multiple overloads tied AND the best score is low (only Var matches)
+        // Ambiguous if multiple overloads tied AND the best score is not perfect
         // AND the overloads have conflicting concrete types at some parameter position.
         // Generic overloads (TypeParam/Var params) don't conflict and shouldn't trigger deferral.
         let has_concrete_conflict = if num_tied > 1 {
             let arg_count = arg_types.len();
             let mut conflicting = false;
+            // Helper: check if a type is fully generic (only contains TypeParam/Var leaves)
+            fn is_fully_generic(ty: &Type) -> bool {
+                match ty {
+                    Type::Var(_) | Type::TypeParam(_) => true,
+                    Type::List(inner) | Type::Set(inner) | Type::Array(inner) | Type::IO(inner) => is_fully_generic(inner),
+                    Type::Map(k, v) => is_fully_generic(k) && is_fully_generic(v),
+                    Type::Tuple(elems) => elems.iter().all(|e| is_fully_generic(e)),
+                    Type::Named { args, .. } => args.iter().all(|a| is_fully_generic(a)),
+                    Type::Function(ft) => ft.params.iter().all(|p| is_fully_generic(p)) && is_fully_generic(&ft.ret),
+                    _ => false,
+                }
+            }
             for pos in 0..arg_count {
                 let mut concrete_types: Vec<String> = Vec::new();
                 for overload in overloads {
                     if pos < overload.params.len() {
                         let param = &overload.params[pos];
-                        // Check for ANY concrete type, not just Named types.
-                        // Primitive types (Int, String, Float, Bool, etc.) are concrete
-                        // and indicate conflicting overloads when they differ.
-                        match param {
-                            Type::Var(_) | Type::TypeParam(_) => {} // Generic - skip
-                            _ => {
-                                concrete_types.push(param.display());
-                            }
+                        // Skip fully generic types (TypeParam/Var or containers of them).
+                        // e.g., List[a] and List[T] are both generic and don't conflict.
+                        if !is_fully_generic(param) {
+                            concrete_types.push(param.display());
                         }
                     }
                 }
@@ -690,8 +698,11 @@ impl<'a> InferCtx<'a> {
         } else {
             false
         };
+        // When conflicting concrete overloads are tied, treat as ambiguous unless
+        // the score is perfect (100 per arg = all types exactly resolved).
+        // Score 75 = container(Var) match (e.g., List(Var) vs List(Int)), score 50 = bare Var.
         let is_ambiguous = num_tied > 1
-            && best_match.map(|(_, s)| s <= 50 * arg_types.len()).unwrap_or(false)
+            && best_match.map(|(_, s)| s < 100 * arg_types.len()).unwrap_or(false)
             && has_concrete_conflict;
         (best_match.map(|(idx, _)| idx), is_ambiguous)
     }
