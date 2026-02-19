@@ -3297,6 +3297,25 @@ fn main() -> ExitCode {
             compiler.pre_register_module_type_names(&parsed.module, parsed.module_path.clone());
         }
 
+        // Pass 1.5a2: Compile ALL type definitions from ALL modules.
+        // This must happen before Pass 1.5b so that trait impl registration can
+        // determine if a type is generic (has type parameters). Without this,
+        // modules processed early in Pass 1.5b can't find type definitions from
+        // modules processed later, causing incorrect placeholder function keys
+        // for trait methods on generic types.
+        for parsed in &parsed_modules {
+            if let Err(e) = compiler.compile_module_type_defs_only(
+                &parsed.module,
+                parsed.module_path.clone(),
+                std::sync::Arc::new(parsed.source.clone()),
+                parsed.path.to_str().unwrap_or("unknown").to_string(),
+            ) {
+                let source_error = e.to_source_error();
+                source_error.eprint(parsed.path.to_str().unwrap_or("unknown"), &parsed.source);
+                return ExitCode::FAILURE;
+            }
+        }
+
         // Pass 1.5b: Pre-register metadata (use stmts, traits, trait impls) from ALL modules
         // before compiling any function bodies. This ensures trait methods from module A
         // are visible when compiling trait impl bodies in module B, regardless of

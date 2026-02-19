@@ -4167,6 +4167,121 @@ impl Compiler {
         self.module_path = saved;
     }
 
+    /// Compile all type definitions from a module, processing use statements first
+    /// so imported types can be resolved. This populates self.type_defs which is
+    /// needed by pre_register_trait_impl to determine if a type is generic.
+    /// Must be called for ALL modules before pre_register_module_metadata to ensure
+    /// cross-module type definitions are available for trait impl registration.
+    pub fn compile_module_type_defs_only(&mut self, module: &Module, module_path: Vec<String>, source: std::sync::Arc<String>, source_name: String) -> Result<(), CompileError> {
+        use nostos_syntax::ast::Item;
+
+        // Update line_starts for error reporting
+        self.line_starts = vec![0];
+        for (i, c) in source.char_indices() {
+            if c == '\n' {
+                self.line_starts.push(i + 1);
+            }
+        }
+
+        self.current_source = Some(source);
+        self.current_source_name = Some(source_name);
+
+        // Register module path
+        if !module_path.is_empty() {
+            let mut prefix = String::new();
+            for component in &module_path {
+                if !prefix.is_empty() {
+                    prefix.push('.');
+                }
+                prefix.push_str(component);
+                self.known_modules.insert(prefix.clone());
+            }
+        }
+
+        let old_module_path = std::mem::replace(&mut self.module_path, module_path);
+        let saved_imports = self.imports.clone();
+
+        // Process use statements first (needed to resolve imported type names)
+        for item in &module.items {
+            if let Item::Use(use_stmt) = item {
+                let _ = self.compile_use_stmt(use_stmt);
+            }
+        }
+
+        // Register templates (needed for type decorators like @withTypeName)
+        for item in &module.items {
+            if let Item::FnDef(fn_def) = item {
+                if fn_def.is_template {
+                    let qualified_name = self.qualify_name(&fn_def.name.node);
+                    self.templates.insert(fn_def.name.node.clone(), fn_def.clone());
+                    self.templates.insert(qualified_name, fn_def.clone());
+                }
+            }
+        }
+
+        // Compile type definitions (idempotent - safe to call again later)
+        for item in &module.items {
+            if let Item::TypeDef(type_def) = item {
+                self.compile_type_def(type_def)?;
+            }
+        }
+
+        // Handle nested modules
+        for item in &module.items {
+            if let Item::ModuleDef(module_def) = item {
+                self.compile_nested_module_type_defs_only(module_def)?;
+            }
+        }
+
+        // Restore state - imports will be properly set up in pre_register_module_metadata
+        self.imports = saved_imports;
+        self.module_path = old_module_path;
+        Ok(())
+    }
+
+    /// Recursively compile type definitions from nested module definitions.
+    fn compile_nested_module_type_defs_only(&mut self, module_def: &nostos_syntax::ast::ModuleDef) -> Result<(), CompileError> {
+        use nostos_syntax::ast::Item;
+
+        let saved = self.module_path.clone();
+        self.module_path.push(module_def.name.node.clone());
+
+        // Process use statements
+        for item in &module_def.items {
+            if let Item::Use(use_stmt) = item {
+                let _ = self.compile_use_stmt(use_stmt);
+            }
+        }
+
+        // Register templates (needed for type decorators)
+        for item in &module_def.items {
+            if let Item::FnDef(fn_def) = item {
+                if fn_def.is_template {
+                    let qualified_name = self.qualify_name(&fn_def.name.node);
+                    self.templates.insert(fn_def.name.node.clone(), fn_def.clone());
+                    self.templates.insert(qualified_name, fn_def.clone());
+                }
+            }
+        }
+
+        // Compile type definitions
+        for item in &module_def.items {
+            if let Item::TypeDef(type_def) = item {
+                self.compile_type_def(type_def)?;
+            }
+        }
+
+        // Recurse into nested modules
+        for item in &module_def.items {
+            if let Item::ModuleDef(inner_module_def) = item {
+                self.compile_nested_module_type_defs_only(inner_module_def)?;
+            }
+        }
+
+        self.module_path = saved;
+        Ok(())
+    }
+
     /// Pre-register module metadata: use statements, types, traits, and trait impls.
     /// This registers trait implementations (type_traits, trait_impls) without compiling
     /// method bodies. Used in multi-file projects to ensure all trait impls are visible
@@ -4654,7 +4769,6 @@ impl Compiler {
                     },
                 };
                 self.functions.insert(full_name.clone(), Arc::new(placeholder));
-
                 let fn_base = full_name.split('/').next().unwrap_or(&full_name);
                 self.functions_by_base
                     .entry(fn_base.to_string())
@@ -17001,7 +17115,6 @@ impl Compiler {
                             .map(|a| self.expr_type_name(a))
                             .collect();
 
-                        // Resolve to the correct function variant using signature matching
                         let call_name = if let Some(resolved) = self.resolve_function_call(&qualified_method, &arg_types) {
                             resolved
                         } else {
