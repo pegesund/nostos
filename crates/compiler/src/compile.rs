@@ -12630,10 +12630,11 @@ impl Compiler {
         if self.current_fn_type_params.iter().any(|tp| tp.name.node == type_name_clean) {
             return true;
         }
-        // Also check for single uppercase letters that aren't known types
-        // These are likely type parameters from outer generic functions (e.g., in lambdas)
-        if type_name_clean.len() == 1 && type_name_clean.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false) {
-            // It's a single uppercase letter - check if it's NOT a known type
+        // Also check for single letters (upper or lowercase) that aren't known types.
+        // Uppercase: type parameters from outer generic functions (e.g., in lambdas)
+        // Lowercase: type parameters from annotations (e.g., fn(x: a, y: a) without explicit [a])
+        if type_name_clean.len() == 1 && type_name_clean.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) {
+            // It's a single letter - check if it's NOT a known type
             if !self.types.contains_key(type_name_clean) {
                 return true;
             }
