@@ -3436,10 +3436,9 @@ impl<'a> InferCtx<'a> {
                 if type_name_opt.is_none() && matches!(&resolved_receiver, Type::Var(_))
                     && iteration < max_iterations - 1
                 {
-                    // Truly list-only methods that can be used to infer receiver type.
-                    // Excludes methods shared with String/Map/Set (length, len, contains,
-                    // isEmpty, get, set, concat, empty).
-                    let can_infer_from_method = matches!(call.method_name.as_str(),
+                    // Methods that uniquely identify the receiver type.
+                    // List-only methods (excludes methods shared with String/Map/Set):
+                    let is_list_method = matches!(call.method_name.as_str(),
                         "map" | "filter" | "fold" | "flatMap" | "any" | "all" | "find" |
                         "sort" | "sortBy" | "head" | "tail" | "init" | "last" |
                         "reverse" | "sum" | "product" | "zip" | "unzip" | "take" | "drop" |
@@ -3450,6 +3449,12 @@ impl<'a> InferCtx<'a> {
                         "isSortedBy" | "maximum" | "minimum" | "takeWhile" | "dropWhile" |
                         "partition" | "zipWith"
                     );
+                    // Map-only methods (not on Set/List/String):
+                    let is_map_method = matches!(call.method_name.as_str(),
+                        "lookup" | "keys" | "values" | "getOrThrow" | "toList"
+                    ) || (call.method_name == "insert" && call.arg_types.len() == 3);
+                    // insert with 3 arg_types (receiver + key + value) → Map; 2 arg_types (receiver + elem) → Set
+                    let can_infer_from_method = is_list_method || is_map_method;
                     if !can_infer_from_method {
                         // Before deferring, try to constrain the return type from known
                         // method signatures. This catches errors like `f(x) = x.isEmpty() + 1`
@@ -3462,11 +3467,11 @@ impl<'a> InferCtx<'a> {
                     }
                 }
 
-                // If receiver is still a Var but method is list-only, infer receiver as List.
-                // This ensures the method call gets processed (lookup, param/return unification)
-                // instead of being silently dropped when type_name_opt is None.
+                // If receiver is still a Var but method uniquely identifies a type,
+                // infer the receiver type. This ensures the method call gets processed
+                // (lookup, param/return unification) instead of being silently dropped.
                 let type_name_opt = if type_name_opt.is_none() && matches!(&resolved_receiver, Type::Var(_)) {
-                    let can_infer_from_method = matches!(call.method_name.as_str(),
+                    let is_list_method = matches!(call.method_name.as_str(),
                         "map" | "filter" | "fold" | "flatMap" | "any" | "all" | "find" |
                         "sort" | "sortBy" | "head" | "tail" | "init" | "last" |
                         "reverse" | "sum" | "product" | "zip" | "unzip" | "take" | "drop" |
@@ -3477,12 +3482,22 @@ impl<'a> InferCtx<'a> {
                         "isSortedBy" | "maximum" | "minimum" | "takeWhile" | "dropWhile" |
                         "partition" | "zipWith"
                     );
-                    if can_infer_from_method {
+                    let is_map_method = matches!(call.method_name.as_str(),
+                        "lookup" | "keys" | "values" | "getOrThrow" | "toList"
+                    ) || (call.method_name == "insert" && call.arg_types.len() == 3);
+                    if is_list_method {
                         // Unify receiver with List[?X] so type info flows properly
                         let elem = self.fresh();
                         let list_ty = Type::List(Box::new(elem));
                         let _ = self.unify_types(&resolved_receiver, &list_ty);
                         Some("List".to_string())
+                    } else if is_map_method {
+                        // Unify receiver with Map[?K, ?V] so type info flows properly
+                        let key = self.fresh();
+                        let val = self.fresh();
+                        let map_ty = Type::Map(Box::new(key), Box::new(val));
+                        let _ = self.unify_types(&resolved_receiver, &map_ty);
+                        Some("Map".to_string())
                     } else {
                         type_name_opt
                     }
@@ -3517,19 +3532,41 @@ impl<'a> InferCtx<'a> {
                     // like `length: a -> Int` have type variables, not concrete types.
                     match type_name.as_str() {
                         "List" => {
+                            // Try unqualified first, then qualified "List.method"
                             self.env.functions.get(&call.method_name).cloned().filter(|ft| {
                                 matches!(ft.params.first(), Some(Type::List(_)) | Some(Type::Var(_)))
+                            }).or_else(|| {
+                                let qualified = format!("List.{}", call.method_name);
+                                self.env.functions.get(&qualified).cloned()
                             })
                         }
-                        "Map" => self.env.functions.get(&call.method_name).cloned().filter(|ft| {
-                            matches!(ft.params.first(), Some(Type::Map(_, _)) | Some(Type::Var(_)))
-                        }),
-                        "Set" => self.env.functions.get(&call.method_name).cloned().filter(|ft| {
-                            matches!(ft.params.first(), Some(Type::Set(_)) | Some(Type::Var(_)))
-                        }),
-                        "String" => self.env.functions.get(&call.method_name).cloned().filter(|ft| {
-                            matches!(ft.params.first(), Some(Type::String) | Some(Type::Var(_)))
-                        }),
+                        "Map" => {
+                            // Try unqualified first, then qualified "Map.method"
+                            self.env.functions.get(&call.method_name).cloned().filter(|ft| {
+                                matches!(ft.params.first(), Some(Type::Map(_, _)) | Some(Type::Var(_)))
+                            }).or_else(|| {
+                                let qualified = format!("Map.{}", call.method_name);
+                                self.env.functions.get(&qualified).cloned()
+                            })
+                        }
+                        "Set" => {
+                            // Try unqualified first, then qualified "Set.method"
+                            self.env.functions.get(&call.method_name).cloned().filter(|ft| {
+                                matches!(ft.params.first(), Some(Type::Set(_)) | Some(Type::Var(_)))
+                            }).or_else(|| {
+                                let qualified = format!("Set.{}", call.method_name);
+                                self.env.functions.get(&qualified).cloned()
+                            })
+                        }
+                        "String" => {
+                            // Try unqualified first, then qualified "String.method"
+                            self.env.functions.get(&call.method_name).cloned().filter(|ft| {
+                                matches!(ft.params.first(), Some(Type::String) | Some(Type::Var(_)))
+                            }).or_else(|| {
+                                let qualified = format!("String.{}", call.method_name);
+                                self.env.functions.get(&qualified).cloned()
+                            })
+                        }
                         "Option" => {
                             // Option methods are registered as optXxx in stdlib
                             // Support both shorthand (.map) and direct (.optMap) names

@@ -372,7 +372,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Regex.captures", signature: "String -> String -> Option[List[String]]", doc: "Get capture groups from first match" },
 
     // === Map Functions ===
-    BuiltinInfo { name: "Map.insert", signature: "Map k v -> k -> v -> Map k v", doc: "Insert key-value pair, returns new map" },
+    BuiltinInfo { name: "Map.insert", signature: "Map k v -> k -> w -> Map k v", doc: "Insert key-value pair, returns new map" },
     BuiltinInfo { name: "Map.remove", signature: "Map k v -> k -> Map k v", doc: "Remove key from map, returns new map" },
     BuiltinInfo { name: "Map.get", signature: "Map k v -> k -> v", doc: "Get value for key, returns unit if not found" },
     BuiltinInfo { name: "Map.lookup", signature: "Map k v -> k -> Option v", doc: "Lookup key, returns Some(value) or None" },
@@ -13355,6 +13355,12 @@ impl Compiler {
                         is_unknown_method;
                     !is_spurious
                 }
+                // UnresolvedTraitMethod from type_check_fn is NOT a hard error.
+                // It happens when a function calls methods on polymorphic parameters
+                // (e.g., `myInsert(m, k, v) = m.insert(k, v)`). The actual body
+                // compilation will handle this by marking the function as polymorphic
+                // and triggering monomorphization at call sites.
+                CompileError::UnresolvedTraitMethod { .. } => false,
                 _ => true,
             };
             if should_report {
@@ -13900,6 +13906,16 @@ impl Compiler {
                     if !self.current_fn_type_params.is_empty() || has_generic_hm_signature {
                         // Mark this function as needing monomorphization
                         self.polymorphic_fns.insert(name.clone());
+                        // Compute HM-inferred signature even for polymorphic functions.
+                        // This allows monomorphized variants to use the base function's
+                        // type parameter relationships for return type inference, e.g.,
+                        // storeSet(s, k, v) = s.insert(k, v) → Map[a, b] -> a -> b -> Map[a, b]
+                        let sig = self.infer_signature(def);
+                        if let Some(fn_val) = self.functions.get(&name) {
+                            let mut new_fn_val = (**fn_val).clone();
+                            new_fn_val.signature = Some(sig);
+                            self.functions.insert(name.clone(), Arc::new(new_fn_val));
+                        }
                         // Restore state and return success
                         self.chunk = saved_chunk;
                         self.locals = saved_locals;
@@ -20200,17 +20216,63 @@ impl Compiler {
                     match self.compile_monomorphized_variant(&call_name, &mono_arg_types, &param_names) {
                         Ok(mangled_name) => mangled_name,
                         Err(e) => {
-                            // If monomorphization fails with a real error, propagate it instead
-                            // of falling back to the empty polymorphic stub which would crash
-                            // at runtime with "Instruction pointer out of bounds".
-                            if matches!(e, CompileError::TypeError { .. }
+                            // If monomorphization fails because some arg types aren't concrete
+                            // (e.g., "z (polymorphic)" from return type of another polymorphic fn),
+                            // try to find an existing monomorphized variant that matches on the
+                            // concrete arg positions. This handles cases like:
+                            //   s1 = storeSet(s0, "name", "Alice")  → creates storeSet$Map[a,b]_String_String
+                            //   s2 = storeSet(s1, "city", "NYC")    → s1 type is "z (polymorphic)"
+                            // The second call should reuse the first variant.
+                            let has_non_concrete = mono_arg_types.iter().any(|t| !self.is_type_concrete(t));
+                            if has_non_concrete && matches!(e, CompileError::UnresolvedTraitMethod { .. }) {
+                                let fn_base = call_name.split('/').next().unwrap_or(&call_name);
+                                let prefix = format!("{}$", fn_base);
+                                // Find existing variant matching on concrete positions.
+                                // Use bracket-aware splitting (split_type_args) because
+                                // types like "Map[a, b]" contain commas inside brackets.
+                                let existing_variant = self.function_indices.keys()
+                                    .find(|k| {
+                                        if !k.starts_with(&prefix) {
+                                            return false;
+                                        }
+                                        // Extract the signature part (after /)
+                                        if let Some(sig_part) = k.split('/').nth(1) {
+                                            let existing_types = Self::split_type_args(sig_part);
+                                            if existing_types.len() != mono_arg_types.len() {
+                                                return false;
+                                            }
+                                            // Check that concrete positions match
+                                            for (i, mono_ty) in mono_arg_types.iter().enumerate() {
+                                                if self.is_type_concrete(mono_ty) {
+                                                    if i < existing_types.len() && existing_types[i] != *mono_ty {
+                                                        return false;
+                                                    }
+                                                }
+                                            }
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    })
+                                    .cloned();
+                                if let Some(variant) = existing_variant {
+                                    variant
+                                } else {
+                                    // No existing variant found - propagate error
+                                    return Err(e);
+                                }
+                            } else if matches!(e, CompileError::TypeError { .. }
                                 | CompileError::UnresolvedTraitMethod { .. }
                                 | CompileError::TraitBoundNotSatisfied { .. }
                                 | CompileError::UnknownFunction { .. }
                                 | CompileError::UnknownVariable { .. }) {
+                                // If monomorphization fails with a real error, propagate it instead
+                                // of falling back to the empty polymorphic stub which would crash
+                                // at runtime with "Instruction pointer out of bounds".
                                 return Err(e);
+                            } else {
+                                call_name.clone()
                             }
-                            call_name.clone()
                         }
                     }
                 } else {
@@ -23115,6 +23177,10 @@ impl Compiler {
     fn is_type_concrete(&self, t: &str) -> bool {
         // HM type variables (like ?1676) are NOT concrete
         if t.starts_with('?') {
+            return false;
+        }
+        // Unresolved HM type var fallback strings (like "a (polymorphic)") are NOT concrete
+        if t.contains("(polymorphic)") || t.contains("(type parameter)") {
             return false;
         }
         // If it's a known type, it's concrete
