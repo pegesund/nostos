@@ -2704,6 +2704,7 @@ impl Compiler {
                         .collect();
                     let mut resolved_ret = if has_explicit_type_params { ctx.env.apply_subst(&fn_type.ret) } else { ctx.apply_full_subst(&fn_type.ret) };
 
+
                     // Fallback: if resolved params/ret are still bare Vars (solve() may have
                     // exited early on an error from a different function), use LOCAL resolution
                     // from remaining constraints to recover the actual types.
@@ -3014,6 +3015,96 @@ impl Compiler {
                         var_bounds: vec![],
                     };
 
+                }
+            }
+        }
+
+        // POST-ENRICHMENT FIX-UP: Resolve unresolved return types for wrapper functions.
+        // When a function's return type is TypeParam("a") but all params are concrete,
+        // the function is not truly generic - its return type just wasn't resolved during
+        // batch inference (because instantiate_function creates fresh vars disconnected
+        // from the originals). Re-infer these functions with resolved signatures.
+        {
+            let needs_reinfer: Vec<String> = self.pending_fn_signatures.iter()
+                .filter(|(fn_name, fn_type)| {
+                    let is_stdlib = fn_name.starts_with("stdlib.");
+                    !is_stdlib && fn_type.type_params.iter().any(|tp| {
+                        *fn_type.ret == nostos_types::Type::TypeParam(tp.name.clone())
+                    }) && fn_type.params.iter().all(|p| {
+                        !matches!(p, nostos_types::Type::TypeParam(_))
+                    })
+                })
+                .map(|(name, _)| name.clone())
+                .collect();
+
+            if !needs_reinfer.is_empty() {
+                // Build resolved function signature lookup (qualified -> return type)
+                let resolved_returns: HashMap<String, nostos_types::Type> = self.pending_fn_signatures.iter()
+                    .filter(|(_, ft)| !matches!(ft.ret.as_ref(), nostos_types::Type::TypeParam(_) | nostos_types::Type::Var(_)))
+                    .map(|(name, ft)| (name.clone(), (*ft.ret).clone()))
+                    .collect();
+
+
+                // Also build bare name → return type lookup
+                let mut bare_returns: HashMap<String, nostos_types::Type> = HashMap::new();
+                for (fn_name, ret_ty) in &resolved_returns {
+                    let base = fn_name.split('/').next().unwrap_or(fn_name);
+                    if let Some(dot_pos) = base.rfind('.') {
+                        let bare = &base[dot_pos + 1..];
+                        let bare_key = if let Some(slash_pos) = fn_name.find('/') {
+                            format!("{}{}", bare, &fn_name[slash_pos..])
+                        } else {
+                            bare.to_string()
+                        };
+                        bare_returns.entry(bare_key).or_insert_with(|| ret_ty.clone());
+                    }
+                }
+
+                // For each function needing reinference, analyze its body AST
+                for fn_name in &needs_reinfer {
+                    let fn_info = pending.iter().find(|(fn_def, module_path, _, _, _, _)| {
+                        let qualified = if module_path.is_empty() {
+                            fn_def.name.node.clone()
+                        } else {
+                            format!("{}.{}", module_path.join("."), fn_def.name.node)
+                        };
+                        let clause = fn_def.clauses.first();
+                        if let Some(clause) = clause {
+                            let type_param_names: std::collections::HashSet<&str> = fn_def.type_params.iter()
+                                .map(|tp| tp.name.node.as_str())
+                                .collect();
+                            let parts: Vec<String> = clause.params.iter().map(|p| {
+                                if let Some(ty_expr) = &p.ty {
+                                    let ty_str = self.type_expr_to_string(ty_expr);
+                                    if type_param_names.contains(ty_str.as_str()) { "_".to_string() } else { ty_str }
+                                } else { "_".to_string() }
+                            }).collect();
+                            let arity_suffix = if clause.params.is_empty() { "/".to_string() } else { format!("/{}", parts.join(",")) };
+                            let full_name = format!("{}{}", qualified, arity_suffix);
+                            &full_name == fn_name
+                        } else {
+                            false
+                        }
+                    });
+
+                    if let Some((fn_def, module_path, _, _, _, _)) = fn_info {
+                        if let Some(clause) = fn_def.clauses.first() {
+                            // Try to resolve the return type by analyzing the body's last expression
+                            let module_prefix = if module_path.is_empty() {
+                                String::new()
+                            } else {
+                                format!("{}.", module_path.join("."))
+                            };
+                            if let Some(resolved_ret) = self.resolve_body_return_type(
+                                &clause.body, &module_prefix, &resolved_returns, &bare_returns
+                            ) {
+                                if let Some(sig) = self.pending_fn_signatures.get_mut(fn_name) {
+                                    sig.ret = Box::new(resolved_ret);
+                                    sig.type_params.clear();
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -10682,11 +10773,12 @@ impl Compiler {
                     })
                     .collect();
 
-                // Get return type from trait definition
+                // Get return type from trait definition or method body analysis
                 let hm_ret_type = if let Some(trait_info) = self.trait_defs.get(&trait_name) {
                     if let Some(trait_method) = trait_info.methods.iter().find(|m| m.name == method_name) {
                         let ret_type = &trait_method.return_type;
-                        if ret_type != "()" && !ret_type.chars().next().map(|c| c.is_lowercase()).unwrap_or(false)
+                        if ret_type != "()" && !ret_type.is_empty()
+                            && !ret_type.chars().next().map(|c| c.is_lowercase()).unwrap_or(false)
                             && !ret_type.contains("->")
                         {
                             let self_sub = generic_self_type.as_ref()
@@ -10708,8 +10800,14 @@ impl Compiler {
                             }
                             self.type_name_to_type(&resolved_ret)
                         } else {
-                            trait_var_counter += 1;
-                            nostos_types::Type::Var(trait_var_counter)
+                            // Trait definition doesn't specify return type.
+                            // Analyze the method implementation body to find constructor
+                            // calls, which tell us the concrete return type.
+                            self.infer_return_type_from_method_body(method, &unqualified_type_name, &generic_self_type)
+                                .unwrap_or_else(|| {
+                                    trait_var_counter += 1;
+                                    nostos_types::Type::Var(trait_var_counter)
+                                })
                         }
                     } else {
                         trait_var_counter += 1;
@@ -11190,6 +11288,161 @@ impl Compiler {
         self.trait_impls.insert((qualified_type_name, trait_name), impl_info);
 
         Ok(())
+    }
+
+    /// Resolve the return type of a function body by analyzing the AST.
+    /// Looks at the last expression and checks if it's a call to a function
+    /// with a known concrete return type.
+    fn resolve_body_return_type(
+        &self,
+        body: &Expr,
+        module_prefix: &str,
+        resolved_returns: &HashMap<String, nostos_types::Type>,
+        bare_returns: &HashMap<String, nostos_types::Type>,
+    ) -> Option<nostos_types::Type> {
+        // Get the "tail" expression of the body
+        let tail = self.get_tail_expr(body);
+
+        match tail {
+            // Direct function call: foo(args)
+            Expr::Call(func, _type_args, args, _) => {
+                if let Expr::Var(ident) = func.as_ref() {
+                    let name = &ident.node;
+                    let arity = args.len();
+                    // Try qualified name first
+                    let qualified = format!("{}{}/_", module_prefix, name);
+                    if let Some(ret) = resolved_returns.get(&qualified) {
+                        return Some(ret.clone());
+                    }
+                    // Try with actual arity suffix
+                    let with_arity = format!("{}{}/{}", module_prefix, name, vec!["_"; arity].join(","));
+                    if let Some(ret) = resolved_returns.get(&with_arity) {
+                        return Some(ret.clone());
+                    }
+                    // Try bare name
+                    let bare = format!("{}/_", name);
+                    if let Some(ret) = bare_returns.get(&bare) {
+                        return Some(ret.clone());
+                    }
+                    let bare_arity = format!("{}/{}", name, vec!["_"; arity].join(","));
+                    if let Some(ret) = bare_returns.get(&bare_arity) {
+                        return Some(ret.clone());
+                    }
+                    // Also try exact typed signature lookups
+                    for (key, ret) in resolved_returns.iter().chain(bare_returns.iter()) {
+                        let key_base = key.split('/').next().unwrap_or(key);
+                        let key_bare = key_base.rsplit('.').next().unwrap_or(key_base);
+                        if key_bare == name {
+                            return Some(ret.clone());
+                        }
+                    }
+                }
+                None
+            }
+            // Method call: x.method() - try to resolve through trait impl functions
+            Expr::MethodCall(_obj, method, _args, _) => {
+                let method_name = &method.node;
+                // Look for any function whose name ends with this method name
+                // and has a concrete return type
+                for (key, ret) in resolved_returns.iter().chain(bare_returns.iter()) {
+                    let key_base = key.split('/').next().unwrap_or(key);
+                    let key_bare = key_base.rsplit('.').next().unwrap_or(key_base);
+                    if key_bare == method_name.as_str() {
+                        return Some(ret.clone());
+                    }
+                }
+                None
+            }
+            // Constructor call: Foo27(args) - return type is the constructor's type
+            Expr::Record(type_name, _, _) => {
+                let ctor_name = &type_name.node;
+                self.find_type_for_constructor(ctor_name)
+                    .map(|type_name| self.type_name_to_type(&type_name))
+            }
+            _ => None,
+        }
+    }
+
+    /// Get the "tail" (last) expression in a body.
+    fn get_tail_expr<'a>(&self, expr: &'a Expr) -> &'a Expr {
+        match expr {
+            Expr::Block(stmts, _) => {
+                if let Some(last) = stmts.last() {
+                    match last {
+                        nostos_syntax::Stmt::Expr(e) => self.get_tail_expr(e),
+                        _ => expr,
+                    }
+                } else {
+                    expr
+                }
+            }
+            _ => expr,
+        }
+    }
+
+    /// Infer the return type of a trait method implementation by analyzing its body AST.
+    /// Looks for constructor calls (Record expressions) in the tail expression and match arms.
+    /// Returns Some(Type) if a concrete return type can be determined, None otherwise.
+    fn infer_return_type_from_method_body(
+        &self,
+        method: &FnDef,
+        unqualified_type_name: &str,
+        generic_self_type: &Option<String>,
+    ) -> Option<nostos_types::Type> {
+        let clause = method.clauses.first()?;
+        let tail = self.get_tail_expr(&clause.body);
+        self.infer_type_from_tail_expr(tail, unqualified_type_name, generic_self_type)
+    }
+
+    /// Infer the return type from a tail expression by looking for constructor calls.
+    fn infer_type_from_tail_expr(
+        &self,
+        expr: &Expr,
+        unqualified_type_name: &str,
+        generic_self_type: &Option<String>,
+    ) -> Option<nostos_types::Type> {
+        match expr {
+            // Direct constructor call: Foo(args) or Foo { fields }
+            Expr::Record(type_name, _, _) => {
+                let ctor_name = &type_name.node;
+                self.find_type_for_constructor(ctor_name)
+                    .map(|type_name| self.type_name_to_type(&type_name))
+            }
+            // Match expression: look at the first arm's body
+            Expr::Match(_, arms, _) => {
+                for arm in arms {
+                    if let Some(ty) = self.infer_type_from_tail_expr(&arm.body, unqualified_type_name, generic_self_type) {
+                        return Some(ty);
+                    }
+                }
+                None
+            }
+            // If-else: check the 'then' branch
+            Expr::If(_, then_branch, else_branch, _) => {
+                let then_tail = self.get_tail_expr(then_branch);
+                if let Some(ty) = self.infer_type_from_tail_expr(then_tail, unqualified_type_name, generic_self_type) {
+                    return Some(ty);
+                }
+                let else_tail = self.get_tail_expr(else_branch);
+                self.infer_type_from_tail_expr(else_tail, unqualified_type_name, generic_self_type)
+            }
+            // Variable "self" → return type is the implementing type
+            Expr::Var(ident) if ident.node == "self" => {
+                let type_str = generic_self_type.as_deref()
+                    .unwrap_or(unqualified_type_name);
+                Some(self.type_name_to_type(type_str))
+            }
+            // Block: check the tail expression of the block
+            Expr::Block(stmts, _) => {
+                if let Some(last) = stmts.last() {
+                    if let nostos_syntax::Stmt::Expr(e) = last {
+                        return self.infer_type_from_tail_expr(e, unqualified_type_name, generic_self_type);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
     }
 
     /// Convert a type expression to a string representation.
