@@ -141,10 +141,84 @@ error was reported as `TypeError` instead of being deferred to monomorphization.
 determine whether the method exists — defer to monomorphization where
 concrete types are available.
 
-### Probes 164-165: Passed (2 additional probes after fix)
+### Probes 164-175: All Passed (12 additional probes after fix)
 Covered:
 - Multi-file: trait dispatch with measureAll on homogeneous list
 - Multi-file: state management with list-based state (addToState, runOps)
+- Multi-file: generic pair with zipWith
+- Multi-file: pipeline operations (pipe, pipe2, pipe3)
+- Multi-file: counter variant type with increment
+- Multi-file: validator with predicate list
+- Multi-file: 3-module chain (types/ops/main)
+- Multi-file: event system with handler dispatch
+- Multi-file: cache pattern with Map lookup/insert
+- Multi-file: math utilities using toFloat
+- Multi-file: list partition/span with filter
+- Multi-file: Option map/getOrElse/flatMap utilities
+
+### Probe 176: **BUG FOUND** - Trait methods on generic types with function params
+**Problem**: `Wrap: Transformable transform(self, f) = match self { Wrap(v) -> Wrap(f(v)) } end`
+where `Wrap[a]` is generic — calling `w.transform(x => x * 5)` failed with
+"type mismatch: expected Int, found (Int) -> Int".
+
+**Root cause**: Two interrelated issues:
+1. In `type_check_fn`, the compiled function's signature was registered via
+   `trait_method_type_aliases` under the bare name `"Wrap.transform"`. This
+   signature had `Var(1)` for BOTH the generic type param `a` AND the method
+   param `f`, causing them to be unified (so `f: Int` instead of `f: (Int)->Int`).
+2. The UFCS signature (which correctly used distinct var IDs: `Var(1)` for `a`
+   and `Var(101)` for `f`) was registered later but with a `contains_key` guard,
+   so it didn't overwrite the wrong one.
+3. Additionally, `infer_return_type_from_method_body` returned `Named("Wrap", [])`
+   (no type args) for generic types because `find_type_for_constructor` only
+   returned the bare type name.
+
+**Fix**: (1) UFCS signatures now always overwrite in `type_check_fn` and are
+registered under both arity-suffixed and bare names. (2) Return type inference
+now includes type params for generic constructors.
+
+**Commit**: `6449963` - Fix type inference for trait methods on generic types with function params
+
+### Probes 177-229: All Passed (53 additional probes after fix)
+Covered:
+- Multi-file: diamond dependency with generic variant types
+- Multi-file: cross-module higher-order functions (apply, compose)
+- Multi-file: polymorphic wrappers (Box, Pair, Identity)
+- Multi-file: multi-param generic types with trait methods
+- Multi-file: chained trait method calls
+- Multi-file: trait methods as HOF arguments
+- Multi-file: multiple trait impls on same type
+- Multi-file: Functor-style map on generic types
+- Multi-file: nested generic types (List[Option[T]])
+- Multi-file: cross-module fold with generic accumulator
+- Multi-file: state threading patterns
+- Multi-file: recursive types with tree fold
+- Multi-file: validator with function types (Validator[a])
+- Multi-file: complex lambda chains across modules
+- Multi-file: string operations, pipeline composition
+- Multi-file: Map operations through generic wrappers
+
+### Probe 230: **BUG FOUND** - Lambda param types not propagated from HM inference
+**Problem**: `foldr(pairs, %{}, (pair, acc) => match pair { (k, v) -> acc.insert(k, v) })`
+failed with "cannot resolve trait method `insert` without type information".
+Also, the binding `m = foldr(...)` got type `"U"` (type parameter name from foldr's
+signature) instead of `Map`, so subsequent `m.keys()` also failed.
+
+**Root causes** (2 issues):
+1. `get_function_param_types("foldr")` returns empty because stdlib functions
+   loaded from bytecode cache don't have AST entries in `fn_asts`. Without
+   expected param types, lambda arguments aren't compiled with type information,
+   so the lambda parameter `acc` has no type during method dispatch.
+2. `expr_type_name` handled `Type::Named` for partially-resolved HM types but
+   NOT `Type::Map`, `Type::Set`, or `Type::List` (which are separate enum variants).
+   So when HM inference resolved a type to `Map[String, ?121]`, `expr_type_name`
+   fell through to pattern-based inference which returned the type parameter `"U"`.
+
+**Fix**: (1) In `compile_arg_with_expected_type`, when no expected type is available
+from the function signature but HM inference has resolved the lambda's type, extract
+parameter types from the HM-inferred function type. (2) In `expr_type_name`, handle
+`Type::Map`, `Type::Set`, and `Type::List` alongside `Type::Named` for partially
+resolved types — the base type is known and sufficient for method dispatch.
 
 ## Summary
 
@@ -154,4 +228,6 @@ Covered:
 | 2       | 5 (87-91)         | Cross-module overload resolution | Yes (be3cfa5+) | 126 |
 | 3       | 34 (93-126)       | Polymorphic Map method wrappers | Yes (1fd9c9c) | 130 |
 | 4       | 19 (131-149)      | Missing toFloat in BUILTINS | Yes (afe8f0a) | 150 |
-| 5       | 13 (150-162)      | Unknown receiver method deferral | Yes | 165 |
+| 5       | 13 (150-162)      | Unknown receiver method deferral | Yes (27f6044) | 165 |
+| 6       | 11 (165-175)      | Trait method on generic type + fn params | Yes (6449963) | 176 |
+| 7       | 54 (177-230)      | Lambda param types from HM inference | Yes (68b495e) | 230 |
