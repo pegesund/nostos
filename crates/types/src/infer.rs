@@ -7608,12 +7608,78 @@ impl<'a> InferCtx<'a> {
             format!("/{}", vec!["_"; arity].join(","))
         };
         let qualified_name = format!("{}{}", name, arity_suffix);
+        // Collect declared param types for overload matching.
+        // This prevents cross-contamination in batch inference when multiple overloads
+        // (e.g., add(Int,Int) and add(String,String)) share the same bare name.
+        let declared_param_types: Vec<Option<Type>> = func.clauses.first()
+            .map(|c| c.params.iter().map(|p| {
+                p.ty.as_ref().map(|ty_expr| self.type_from_ast(ty_expr))
+            }).collect())
+            .unwrap_or_default();
+
+        // Helper: check if a function type's params are compatible with declared param types
+        let check_param_compat = |ft: &FunctionType| -> bool {
+            if ft.params.len() != declared_param_types.len() { return false; }
+            for (op, dp) in ft.params.iter().zip(declared_param_types.iter()) {
+                if let Some(declared) = dp {
+                    // Both are concrete types - must match
+                    if !matches!(op, Type::Var(_)) && op != declared {
+                        return false;
+                    }
+                }
+            }
+            true
+        };
+
         let pre_registered = self.env.functions.get(name).cloned()
-            .or_else(|| self.env.functions.get(&qualified_name).cloned())
+            .filter(|ft| check_param_compat(ft))
+            .or_else(|| self.env.functions.get(&qualified_name).cloned()
+                .filter(|ft| check_param_compat(ft)))
             .or_else(|| {
-                // Also check typed overloads (e.g., "showCounter/Counter")
-                let all_overloads = self.env.lookup_all_functions_with_arity(name, arity);
-                all_overloads.first().cloned().cloned()
+                // Check typed overloads (e.g., "showCounter/Counter")
+                // Clone to avoid borrow conflicts with self
+                let all_overloads: Vec<FunctionType> = self.env.lookup_all_functions_with_arity(name, arity)
+                    .into_iter().cloned().collect();
+                if all_overloads.len() <= 1 {
+                    all_overloads.into_iter().next()
+                } else {
+                    // Multiple overloads: match by declared param types to find the
+                    // correct pre-registered entry. This prevents cross-contamination
+                    // between overloads (e.g., add(Int,Int) picking up add(String,String)'s
+                    // return type var during batch inference).
+                    let declared_param_types: Vec<Type> = func.clauses.first()
+                        .map(|c| c.params.iter().map(|p| {
+                            if let Some(ty_expr) = &p.ty {
+                                self.type_from_ast(ty_expr)
+                            } else {
+                                Type::Var(u32::MAX) // sentinel for untyped
+                            }
+                        }).collect())
+                        .unwrap_or_default();
+
+                    // Find the overload whose concrete param types match
+                    let mut best: Option<FunctionType> = None;
+                    for overload in &all_overloads {
+                        if overload.params.len() != declared_param_types.len() {
+                            continue;
+                        }
+                        let mut matches = true;
+                        for (op, dp) in overload.params.iter().zip(declared_param_types.iter()) {
+                            // Skip comparison for untyped params or type vars
+                            if matches!(dp, Type::Var(id) if *id == u32::MAX) { continue; }
+                            if matches!(op, Type::Var(_)) { continue; }
+                            if op != dp {
+                                matches = false;
+                                break;
+                            }
+                        }
+                        if matches {
+                            best = Some(overload.clone());
+                            break;
+                        }
+                    }
+                    best.or_else(|| all_overloads.into_iter().next())
+                }
             });
 
         // For functions with explicit type parameters (e.g., myMap[A, B]),
