@@ -28966,10 +28966,8 @@ impl Compiler {
         // (e.g., Eq from ==, Ord from <, Num from +) that explicit annotations don't express.
         // Previously stdlib functions with annotations skipped HM inference, which meant
         // trait bounds were lost and couldn't propagate through generic wrapper functions.
-        if let Some((sig, expr_types)) = self.try_hm_inference(def) {
-            if def.name.node.contains("mapPair") || def.name.node.contains("myMap") {
-                eprintln!("DEBUG infer_signature: {}  ->  {}", def.name.node, sig);
-            }
+        let hm_result = self.try_hm_inference(def);
+        if let Some((sig, expr_types)) = hm_result {
             // Store resolved expr types from per-function inference.
             // These may provide better type resolution than batch inference
             // (e.g., resolving overloaded function references via calling context).
@@ -29630,7 +29628,7 @@ impl Compiler {
         };
 
         // Solve constraints (this can hang on unresolved type vars with HasField)
-        if ctx.solve().is_err() {
+        if let Err(_solve_errs) = ctx.solve() {
             return None;
         }
 
