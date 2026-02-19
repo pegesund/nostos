@@ -346,6 +346,53 @@ appear in syntactic positions — after brackets, between commas, etc.).
 
 **Commit**: `f426c75` - Fix type param substitution corrupting type names containing param letters
 
+### Probes 352-358: All Passed (7 probes)
+Covered:
+- Continuation of multi-file generic patterns after type param substitution fix
+
+### Probe 359: **BUG FOUND** - Type variable letter collision with annotation type params
+**Problem**: `mapPair2(p: Pair[a, b], f, g) = Pair(f(fst2(p)), g(snd2(p)))` —
+when `f` and `g` change the return type (e.g., `toString` and `length`), the
+call failed with "type mismatch: expected String, found Int".
+
+**Root cause**: When building HM signatures, `Named("a")` from annotations and
+`Var(?f_ret)` from inference both formatted to letter "a". The signature became
+`Pair[a, b] -> (a -> a) -> (b -> b) -> Pair[a, b]` instead of the correct
+`Pair[a, b] -> (a -> c) -> (b -> d) -> Pair[c, d]`, over-constraining return types.
+
+**Fix**: Added `collect_named_type_param_letters()` to find letters already used
+by Named types from annotations. When assigning letters to Var IDs, those reserved
+letters are skipped to avoid collisions.
+
+**Commit**: `34ce960` - Fix type variable letter collision with annotation type param names
+
+### Probes 360-389: All Passed (30 probes after fix)
+Covered:
+- Annotated vs unannotated generic functions with type-changing HOFs
+- Cross-module annotated generic functions
+- Pipeline operations with annotated params
+- BST operations (insert, inorder traversal)
+- Generic fold/reduce with annotated accumulator types
+- Recursive annotated generic functions
+
+### Probe 390: **BUG FOUND** - Annotation type params fail trait bound checks
+**Problem**: `bInsert(t: BTree[a], val) = ... val < x ...` failed with
+"type parameter 'a' must have 'Ord' trait bound" even though the same function
+works without annotations.
+
+**Root cause**: Three interrelated issues:
+1. `solve()` in HM inference rejects `Named("a")` with `MissingTraitImpl` because
+   deferred_has_trait treats it as a concrete type lacking trait impls
+2. Trait bounds on Vars unified with `Named("a")` aren't included in signature
+3. Second-pass check requires explicit `[a: Ord]` even when HM can infer the bound
+
+**Fix**: (1) Skip single-char lowercase Named types in all three deferred_has_trait
+retry passes. (2) Add `get_trait_bounds_for_named_type_params()` to collect trait
+bounds from Vars resolved to Named type params. (3) Only require explicit trait
+bound declarations when user declared type params explicitly.
+
+**Commit**: `fe13951` - Fix annotation type params failing trait bound checks
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -361,3 +408,5 @@ appear in syntactic positions — after brackets, between commas, etc.).
 | 9       | 18 (241-258)      | Variant pattern type for non-param fields | Yes (fa3b230) | 259 |
 | 9b      | 20 (260-279)      | Cross-module polymorphic return type | Yes (8416dc8) | 280 |
 | 10      | 70 (281-350)      | Type param substitution corrupts type names | Yes (f426c75) | 351 |
+| 11      | 7 (352-358)       | Type var letter collision with annotations | Yes (34ce960) | 359 |
+| 11b     | 30 (360-389)      | Annotation type params fail trait bounds | Yes (fe13951) | 390 |
