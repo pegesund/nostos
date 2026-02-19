@@ -393,6 +393,61 @@ bound declarations when user declared type params explicitly.
 
 **Commit**: `fe13951` - Fix annotation type params failing trait bound checks
 
+### Probes 391-398: All Passed (8 probes)
+Covered:
+- Annotated function with inferred Num trait bound (addDouble)
+- Multiple annotated params from same type, returning List[a]
+- Cross-module annotated generic function (wrapInList, doubleWrap)
+- Nested generic type with annotations (Option[List[a]])
+- Annotated recursive function on generic type (myLen)
+- Cross-module generic record type (Box[a] with makeBox/unbox)
+- Annotated function returning different generic type than input
+- Two annotated functions composed together
+
+### Probe 399: **BUG FOUND** - Comparison ops on annotation type params emit Int-specific instructions
+**Problem**: `clampedAdd(x: a, y: a, maxVal: a) -> a = if x + y > maxVal then maxVal else x + y`
+crashed with "Panic: GtInt: expected Int64" when called with Float arguments.
+
+**Root cause**: `is_current_type_param()` only recognized uppercase single-letter type params
+(A, B, C...), not lowercase ones (a, b, c...) from annotations. So for `x: a`, the type "a"
+wasn't recognized as a type parameter, and `>` was compiled as `GtInt` instead of generic `Gt`.
+
+**Fix**: Extend the single-letter type param check in `is_current_type_param()` to include
+both uppercase and lowercase letters.
+
+**Commit**: `ff5e74e` - Fix comparison ops on lowercase annotation type params
+
+### Probes 400-486: All Passed (87 probes after fix, including parallel agent 421-486)
+Covered:
+- Cross-module 3-module chain with annotated generic functions
+- Multi-file mutual recursion with imports
+- Multi-file with overloaded function names across modules
+- Multi-file with trait impl in separate module (both alpha orders)
+- Multi-file with generic type in one module, trait impl in another, use in third
+- Multi-file with 4+ modules in a chain
+- Multi-file where module names affect compilation order (z before a)
+- Cross-module pattern matching on imported variant types
+- Cross-module closures capturing imported types
+- Cross-module generic record types with field access and transform
+- Cross-module Option chaining, Result types
+- Cross-module trait implementations with comparisons
+- Cross-module middleware chain pattern
+- Cross-module with deeply nested module chains (6 modules)
+- Generic function instantiation with different types cross-module
+
+### Probe 487: **BUG FOUND** - Trait method `-> self` return type not resolved to concrete type
+**Problem**: Trait method with `-> self` return type doesn't resolve on chained calls.
+`c.stepForward().stepForward()` fails because the return type of the first call is
+"self" (unresolved) instead of "Counter".
+
+**Root cause**: `type_expr_to_string()` returns lowercase "self" for `-> self` return types.
+Downstream code uses `.replace("Self", impl_type)` to substitute the concrete type, which
+fails because "self" != "Self" (case mismatch).
+
+**Fix**: Normalize "self" to "Self" at all three TraitMethodInfo creation points.
+
+**Commit**: `4a1f3dc` - Fix trait method return type 'self' not normalized to 'Self'
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -410,3 +465,5 @@ bound declarations when user declared type params explicitly.
 | 10      | 70 (281-350)      | Type param substitution corrupts type names | Yes (f426c75) | 351 |
 | 11      | 7 (352-358)       | Type var letter collision with annotations | Yes (34ce960) | 359 |
 | 11b     | 30 (360-389)      | Annotation type params fail trait bounds | Yes (fe13951) | 390 |
+| 12      | 8 (391-398)       | Comparison ops on annotation type params | Yes (ff5e74e) | 399 |
+| 12b     | 87 (400-486)      | Trait method `-> self` not normalized | Yes (4a1f3dc) | 487 |
