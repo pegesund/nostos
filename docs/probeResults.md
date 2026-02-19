@@ -110,9 +110,41 @@ proper signatures (e.g., `toFloat: a -> Float`, `toInt: a -> Int`). Excluded
 these from the builtin shadowing check since user code may define trait methods
 with these names.
 
-### Probes 150: Passed (1 additional probe after fix)
+### Probes 150-162: All Passed (13 additional probes after fix)
 Covered:
 - Multi-file: mapReduce pattern with map and fold across modules
+- toInt/toFloat conversion in polymorphic wrappers
+- Multi-file: cross-module converters with toFloat
+- Multi-file: higher-order function application with named functions
+- Multi-file: Option chaining with float operations (safeDivF + safeLog)
+- Multi-file: accumulate/sum/product patterns
+- Multi-file: Result-like variant types with bind/mapResult
+- Multi-file: function composition chains (compose, applyBoth)
+- Multi-file: recursive tree types with sumTree
+- Multi-file: Map config pattern (getConfig/setConfig)
+- Multi-file: recursive list operations (myMap/myFilter/myFold)
+- Multi-file: currying with closures (add, mul, applyBoth)
+- Multi-file: string operations with mapWords
+
+### Probe 163: **BUG FOUND** - Method calls on unknown receiver type not deferred
+**Problem**: `lookupOr(m, key, default) = match m.lookup(key) { ... }` failed
+with "no method `lookup` found for type `unknown`".
+
+**Root cause**: When the receiver type is "unknown" (polymorphic parameter),
+the UFCS error handler only treated it as `UnresolvedTraitMethod` if the
+function had explicit type params OR `current_fn_generic_hm` was set. Plain
+polymorphic functions like `lookupOr(m, key, default)` had neither, so the
+error was reported as `TypeError` instead of being deferred to monomorphization.
+
+**Fix**: Always treat method calls on "unknown" receiver type as
+`UnresolvedTraitMethod`. If we don't know the receiver type, we can't
+determine whether the method exists — defer to monomorphization where
+concrete types are available.
+
+### Probes 164-165: Passed (2 additional probes after fix)
+Covered:
+- Multi-file: trait dispatch with measureAll on homogeneous list
+- Multi-file: state management with list-based state (addToState, runOps)
 
 ## Summary
 
@@ -121,4 +153,5 @@ Covered:
 | 1       | 51                | Ambiguous UFCS dispatch | Yes (823b885) | 86 |
 | 2       | 5 (87-91)         | Cross-module overload resolution | Yes (be3cfa5+) | 126 |
 | 3       | 34 (93-126)       | Polymorphic Map method wrappers | Yes (1fd9c9c) | 130 |
-| 4       | 19 (131-149)      | Missing toFloat in BUILTINS | Yes | 150 |
+| 4       | 19 (131-149)      | Missing toFloat in BUILTINS | Yes (afe8f0a) | 150 |
+| 5       | 13 (150-162)      | Unknown receiver method deferral | Yes | 165 |

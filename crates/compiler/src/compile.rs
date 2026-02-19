@@ -17870,12 +17870,12 @@ impl Compiler {
                         // Also check current_type_bindings keys (type params being substituted)
                         let is_type_param = is_type_param || (!is_polymorphic && self.current_type_bindings.contains_key(&receiver_type));
 
-                        // If receiver type is "unknown" and we're in a function with a generic
-                        // HM signature, this is likely a method call on a value derived from a
-                        // type parameter (e.g., lambda param `s` in `xs.map(s => s.toUpper())`
-                        // where xs has a generic type). Treat as unresolved trait method.
-                        let is_unknown_in_generic = receiver_type == "unknown"
-                            && (self.current_fn_generic_hm || !self.current_fn_type_params.is_empty());
+                        // If receiver type is "unknown", we can't determine whether the method
+                        // exists or not. Treat as unresolved trait method and defer to
+                        // monomorphization where concrete types are available.
+                        // This handles: (1) lambda params in generic contexts,
+                        // (2) plain polymorphic functions like `lookupOr(m, key, default) = m.lookup(key)`
+                        let is_unknown_in_generic = receiver_type == "unknown";
 
                         // If the receiver is a type parameter, this is an unresolved trait method
                         // that needs monomorphization - not a real error.
