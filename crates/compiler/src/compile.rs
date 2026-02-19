@@ -10484,8 +10484,12 @@ impl Compiler {
                 let params_str = param_types.iter()
                     .map(|t| if t == "_" { "a".to_string() } else { t.clone() })
                     .collect::<Vec<_>>()
-                    .join(", ");
-                format!("(({}) -> {})", params_str, ret_type)
+                    .join(" -> ");
+                if params_str.is_empty() {
+                    format!("() -> {}", ret_type)
+                } else {
+                    format!("{} -> {}", params_str, ret_type)
+                }
             };
 
             // Add placeholder to functions for resolve_function_call to find
