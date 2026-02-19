@@ -498,6 +498,55 @@ Covered:
 - Nested lambda with captured variables
 - Tuple patterns in various contexts
 
+### Probe 590: **BUG FOUND** - Cross-module trait method lookup fails for impls on builtin/generic types
+**Problem**: `List[Int]: Summable` with method `total(self)` in module `types.nos` —
+calling `nums.total()` from `main.nos` fails with "no method `total` found for type `List[Int]`".
+
+**Root cause**: Two issues:
+1. `type_traits` map was only keyed on the qualified type name (e.g., `"types.List[Int]"`)
+   but `find_trait_method` tried short names like `"List"`, `"List[Int]"` — none matched.
+2. Even after finding the trait, function name construction used the base type name `"List"`
+   but the actual function was registered with type args (e.g., `"types.List[Int].types.Summable.total"`).
+
+**Fix**: (1) Also register `type_traits` entries under the short base type name without
+type args and module prefix. (2) In `find_trait_method`, also try constructing function
+names with the original type name including type args.
+
+**Commit**: `55919ec` - Fix cross-module trait method lookup for impls on builtin/generic types
+
+### Probes 591-780: All Passed (190 probes, parallel agents)
+Covered:
+- Cross-module trait impl on String (shout method)
+- Multiple trait impls in same module (Int, String)
+- Trait impl separated: type in module A, trait in B, impl in C
+- Trait with multiple methods (double, triple)
+- Type def + trait impl in same module (Shape: HasArea)
+- Type from one module, trait impl in another
+- Re-export patterns through intermediate modules
+- Generic types (Box[a], Maybe[a], Wrapper[a]) across modules
+- Higher-order functions, closures, currying across modules
+- Forward references (two-phase: type/trait defined after use)
+- Mutual recursion (isEven/isOdd)
+- Deeply nested module chains (4-5 levels: a→b→c→d→main)
+- Recursive types (Tree, IntList) across modules
+- Variant with 4+ constructors
+- Generic wrapper with map-like operations (mapBox, unbox)
+- Set/Map operations across modules
+- Record types with multiple fields
+- Pipeline patterns (filter/map/fold chains)
+- Chained trait method calls returning Self
+- Pattern matching on nested variants
+- Cross-module exceptions and try/catch
+- Trait impls on Bool, String, List[Int], List[String], Option[Int], Result[Int, String]
+- Trait on imported generic type with concrete type arg (Pair[Int]: Summable)
+- Multiple traits on same type from different modules
+- Variant with both positional and named fields
+- Three levels of type nesting (A, B { inner: A }, C { inner: B })
+- Polymorphic functions called with different types at multiple call sites
+- MVar usage across modules
+- Spawn/await across modules
+- Complex 5-module project (model + traits + impls + utils + main)
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -519,3 +568,5 @@ Covered:
 | 12b     | 87 (400-486)      | Trait method `-> self` not normalized | Yes (4a1f3dc) | 487 |
 | 13      | 32 (488-519)      | UFCS key includes type args | Yes (7087c27) | 520 |
 | 13b     | 66 (521-586)      | (none - clean run) | N/A | 586 |
+| 14      | 3 (587-589)       | Cross-module trait on builtin types | Yes (55919ec) | 590 |
+| 14b     | 190 (591-780)     | (none - clean run) | N/A | 780 |
