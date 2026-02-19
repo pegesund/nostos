@@ -10905,7 +10905,16 @@ impl Compiler {
             // Key format: {TypeName}.{method}/_,_,... (matches lookup_function_with_arity).
             // NOTE: Cannot use pending_fn_signatures because compile_all clears non-stdlib entries.
             {
-                let ufcs_key = format!("{}.{}", unqualified_type_name, method_name);
+                // Strip type args from unqualified_type_name for the UFCS key.
+                // E.g., "Either[Int, String]" -> "Either" so that
+                // check_pending_method_calls can find the method via get_type_name()
+                // which returns just the base name (e.g., "Either").
+                let bare_type_name = if let Some(bracket_pos) = unqualified_type_name.find('[') {
+                    &unqualified_type_name[..bracket_pos]
+                } else {
+                    unqualified_type_name.as_str()
+                };
+                let ufcs_key = format!("{}.{}", bare_type_name, method_name);
                 let ufcs_arity_suffix = if arity == 0 {
                     "/".to_string()
                 } else {
@@ -10987,7 +10996,13 @@ impl Compiler {
                 // e.g., "Circle.area/_" AND "shapes.Circle.area/_" so that both
                 // local and imported type names can find the method.
                 if qualified_type_name != unqualified_type_name {
-                    let qualified_ufcs_key = format!("{}.{}", qualified_type_name, method_name);
+                    // Strip type args from qualified_type_name too
+                    let bare_qualified = if let Some(bracket_pos) = qualified_type_name.find('[') {
+                        &qualified_type_name[..bracket_pos]
+                    } else {
+                        qualified_type_name.as_str()
+                    };
+                    let qualified_ufcs_key = format!("{}.{}", bare_qualified, method_name);
                     let qualified_ufcs_fn_name = format!("{}{}", qualified_ufcs_key, ufcs_arity_suffix);
                     self.trait_method_ufcs_signatures.insert(
                         qualified_ufcs_fn_name,
