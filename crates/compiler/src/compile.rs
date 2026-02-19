@@ -11688,6 +11688,50 @@ impl Compiler {
             }
         }
 
+        // Also check imported overloads for cross-module function name resolution.
+        // When base_name is "ext.process" and there's an import "process" -> "base.process",
+        // we need to also include "base.process/..." overloads as candidates so that
+        // runtime dispatch can consider both local and imported overloads.
+        if base_name.contains('.') {
+            let unqualified = base_name.rsplit('.').next().unwrap_or(base_name);
+            if let Some(imported_base) = self.imports.get(unqualified) {
+                if imported_base.as_str() != base_name && !self.prelude_functions.contains(imported_base.as_str()) {
+                    let import_prefix = format!("{}/", imported_base);
+                    for (key, fn_info) in &self.functions {
+                        if candidates.contains(key) { continue; }
+                        if let Some(suffix) = key.strip_prefix(&import_prefix) {
+                            let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
+                            if param_count == arity {
+                                candidates.push(key.clone());
+                            } else if param_count > arity {
+                                if let Some(required_count) = fn_info.required_params {
+                                    if arity >= required_count && arity <= param_count {
+                                        candidates.push(key.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    for (key, def) in &self.fn_asts {
+                        if candidates.contains(key) { continue; }
+                        if let Some(suffix) = key.strip_prefix(&import_prefix) {
+                            let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
+                            if param_count == arity && !candidates.contains(key) {
+                                candidates.push(key.clone());
+                            } else if param_count > arity && !def.clauses.is_empty() {
+                                let required_count = def.clauses[0].params.iter()
+                                    .filter(|p| p.default.is_none())
+                                    .count();
+                                if arity >= required_count && arity <= param_count && !candidates.contains(key) {
+                                    candidates.push(key.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Also check if current function matches (for self-recursion during compilation)
         if let Some(current) = &self.current_function_name {
             if let Some(suffix) = current.strip_prefix(&prefix) {
@@ -12112,6 +12156,35 @@ impl Compiler {
                 };
                 let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
                 if param_count == arity { count += 1; }
+            }
+        }
+
+        // Also count imported overloads for cross-module function name resolution.
+        // When base_name is "ext.process" and there's an import "process" -> "base.process",
+        // we need to also count "base.process/..." overloads.
+        if base_name.contains('.') {
+            let unqualified = base_name.rsplit('.').next().unwrap_or(base_name);
+            if let Some(imported_base) = self.imports.get(unqualified) {
+                if imported_base.as_str() != base_name && !self.prelude_functions.contains(imported_base.as_str()) {
+                    let import_prefix = format!("{}/", imported_base);
+                    for (key, _) in &self.functions {
+                        if let Some(suffix) = key.strip_prefix(&import_prefix) {
+                            let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
+                            if param_count == arity { count += 1; }
+                        }
+                    }
+                    if let Some(keys) = self.fn_asts_by_base.get(imported_base.as_str()) {
+                        for key in keys {
+                            if self.functions.contains_key(key.as_str()) { continue; }
+                            let key_base = key.split('/').next().unwrap_or(key);
+                            let key_prefix = format!("{}/", key_base);
+                            if let Some(suffix) = key.strip_prefix(&key_prefix) {
+                                let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
+                                if param_count == arity { count += 1; }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -19980,6 +20053,37 @@ impl Compiler {
                 if any_arg_unknown {
                     let overload_count = self.count_overloads_with_arity(&resolved_name, call_arity);
                     if overload_count > 1 {
+                        // Register aliases for imported overloads under the local module namespace.
+                        // The VM's CallByName constructs "ext.process/Int" from "ext.process" + arg types,
+                        // but the imported function is registered as "base.process/Int". We need
+                        // "ext.process/Int" to also exist in the function table.
+                        if resolved_name.contains('.') {
+                            let unqualified = resolved_name.rsplit('.').next().unwrap_or(&resolved_name);
+                            if let Some(imported_base) = self.imports.get(unqualified).cloned() {
+                                if imported_base.as_str() != resolved_name.as_str() && !self.prelude_functions.contains(imported_base.as_str()) {
+                                    let import_prefix = format!("{}/", imported_base);
+                                    let local_prefix = format!("{}/", resolved_name);
+                                    let aliases: Vec<(String, Arc<FunctionValue>)> = self.functions.iter()
+                                        .filter_map(|(key, val)| {
+                                            key.strip_prefix(&import_prefix).map(|suffix| {
+                                                let alias_key = format!("{}{}", local_prefix, suffix);
+                                                (alias_key, val.clone())
+                                            })
+                                        })
+                                        .collect();
+                                    for (alias_key, val) in aliases {
+                                        if !self.functions.contains_key(&alias_key) {
+                                            self.functions.insert(alias_key.clone(), val);
+                                            // Also update the index
+                                            self.functions_by_base
+                                                .entry(resolved_name.clone())
+                                                .or_default()
+                                                .insert(alias_key);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         let name_idx = self.chunk.add_constant(Value::String(resolved_name.clone().into()));
                         let dst = self.alloc_reg();
                         if is_tail {
