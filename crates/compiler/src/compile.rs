@@ -10873,16 +10873,28 @@ impl Compiler {
                     nostos_types::Type::Var(trait_var_counter)
                 };
 
+                let fn_type = nostos_types::FunctionType {
+                    required_params: None,
+                    type_params: vec![],
+                    params: hm_param_types,
+                    ret: Box::new(hm_ret_type),
+                    var_bounds: vec![],
+                };
                 self.trait_method_ufcs_signatures.insert(
-                    ufcs_fn_name,
-                    nostos_types::FunctionType {
-                        required_params: None,
-                        type_params: vec![],
-                        params: hm_param_types,
-                        ret: Box::new(hm_ret_type),
-                        var_bounds: vec![],
-                    },
+                    ufcs_fn_name.clone(),
+                    fn_type.clone(),
                 );
+                // Also register under qualified type name for cross-module lookups.
+                // e.g., "Circle.area/_" AND "shapes.Circle.area/_" so that both
+                // local and imported type names can find the method.
+                if qualified_type_name != unqualified_type_name {
+                    let qualified_ufcs_key = format!("{}.{}", qualified_type_name, method_name);
+                    let qualified_ufcs_fn_name = format!("{}{}", qualified_ufcs_key, ufcs_arity_suffix);
+                    self.trait_method_ufcs_signatures.insert(
+                        qualified_ufcs_fn_name,
+                        fn_type,
+                    );
+                }
             }
         }
 
