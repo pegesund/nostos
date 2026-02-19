@@ -20306,6 +20306,44 @@ impl Compiler {
             }
         }
 
+        // For constructor calls (Expr::Record), validate HM's type against the actual
+        // constructor. HM may assign a wrong type due to cross-module overload resolution
+        // (e.g., Dog3("Rex") incorrectly typed as Cat3 because HM only saw one overload).
+        // If HM's type contradicts the constructor, use the constructor's static type instead.
+        if let Expr::Record(type_name, _, _) = expr {
+            let ctor_name = &type_name.node;
+            // Determine the actual type from the constructor name
+            let actual_type = self.find_type_for_constructor(ctor_name)
+                .or_else(|| {
+                    let resolved = self.resolve_name(ctor_name);
+                    if self.types.contains_key(&resolved) || self.type_defs.contains_key(&resolved) {
+                        Some(resolved)
+                    } else if self.types.contains_key(ctor_name) || self.type_defs.contains_key(ctor_name) {
+                        Some(ctor_name.clone())
+                    } else {
+                        None
+                    }
+                });
+
+            if let Some(ref actual) = actual_type {
+                // Check if HM's type contradicts the constructor's actual type
+                if let Some(hm_ty) = self.inferred_expr_types.get(&expr.span()) {
+                    let hm_display = hm_ty.display();
+                    // Extract base type name from HM (e.g., "Container[Int]" -> "Container")
+                    let hm_base = hm_display.split('[').next().unwrap_or(&hm_display);
+                    // Extract base type name from actual (strip module prefix for comparison)
+                    let actual_base = actual.split('.').last().unwrap_or(actual);
+                    let hm_base_short = hm_base.split('.').last().unwrap_or(hm_base);
+
+                    if hm_base_short != actual_base {
+                        // HM gave a different type than the constructor indicates - use constructor type
+                        return Some(actual.clone());
+                    }
+                    // HM's type matches the constructor - let HM handle it (it has type params)
+                }
+            }
+        }
+
         // Use HM-inferred type if available (types are resolved after solve())
         // With file_id in Span, multi-file lookups now work correctly.
         // For unresolved types (Var, TypeParam), remember them as fallback but try
@@ -24644,6 +24682,7 @@ impl Compiler {
         let explicit_type = binding.ty.as_ref().map(|t| self.type_expr_name(t));
         let inferred_type = self.expr_type_name(&binding.value);
         let value_type = explicit_type.clone().or_else(|| inferred_type.clone());
+
 
         // Type annotation validation: if explicit type is provided and we can infer the value type,
         // check that they are compatible. Only check primitive type mismatches to avoid
