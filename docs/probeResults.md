@@ -301,6 +301,51 @@ TypeParams.
 
 **Commit**: `8416dc8` - Fix cross-module polymorphic return type leak in batch type enrichment
 
+### Probes 281-350: All Passed (70 additional probes after fix)
+Covered:
+- Cross-module generic Box/Wrapper with positional and named fields
+- Cross-module Either type with multiple type params
+- Polymorphic identity function at multiple call sites
+- Cross-module fold, map/filter pipelines
+- Cross-module recursive types (Tree, rose tree Node)
+- Cross-module function composition, currying, closures
+- 3-module Result operations chain
+- Cross-module generic Stack container
+- Cross-module variant pattern matching (Shape, Cmd)
+- 3-module diamond dependency with variant types
+- Cross-module trait implementations (in same and separate modules)
+- Alphabetical ordering stress (ztypes module)
+- Trait on generic type (Box: Mappable)
+- Cross-module pipeline transformations
+- UFCS .map() in cross-module functions
+- sort/unique wrappers, median calculation
+- Lambda with pattern match on cross-module type
+- 5-module dependency chain
+- Chained trait method calls on generic type
+- List of functions pipeline
+- Cross-module string interpolation
+- Cross-module histogram with Map accumulator fold
+- Generic function extract + method call (like probe 280 pattern)
+- Error detection (type mismatch correctly caught)
+- Multiple call sites with same generic function, different types
+- Function-returning generic functions
+
+### Probe 351: **BUG FOUND** - Type param substitution corrupts type names
+**Problem**: `type Registry[a] = Registry(Map[String, a])` — pattern matching
+`Registry(m)` then calling `m.insert(k, v)` failed with "no method `insert`
+found for type `M?36p[String, ?36]`".
+
+**Root cause**: Three locations in compile.rs used naive `string.replace(param, concrete)`
+to substitute type parameters in type strings. When param is "a" and the type string
+is "Map[String, a]", the replacement turned it into "M?36p[String, ?36]" because the
+"a" inside "Map" was also replaced.
+
+**Fix**: Replaced naive `.replace()` with the existing `substitute_single_type_param()`
+function which does word-boundary-aware substitution (only replacing type params that
+appear in syntactic positions — after brackets, between commas, etc.).
+
+**Commit**: `f426c75` - Fix type param substitution corrupting type names containing param letters
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -315,3 +360,4 @@ TypeParams.
 | 8       | 2 (231-232)       | Cross-module same-name resolution | Yes (f80384b) | 240 |
 | 9       | 18 (241-258)      | Variant pattern type for non-param fields | Yes (fa3b230) | 259 |
 | 9b      | 20 (260-279)      | Cross-module polymorphic return type | Yes (8416dc8) | 280 |
+| 10      | 70 (281-350)      | Type param substitution corrupts type names | Yes (f426c75) | 351 |
