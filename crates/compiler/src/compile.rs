@@ -29814,11 +29814,20 @@ impl Compiler {
             .collect();
         let mut ret_type = self.format_type_normalized_both(&resolved_ret, &combined_map.0, &combined_map.1);
 
-        // Collect trait bounds for type variables that appear in the signature
+        // Collect trait bounds for type variables that appear in the signature.
+        // SKIP HasField and HasMethod constraints here - they're handled by dedicated
+        // sections below using deferred_has_field/deferred_method_on_var which have
+        // correct type variable IDs. The string-form bounds from trait_bounds contain
+        // letter references from the CALLEE's signature namespace (e.g., "HasField(value,b)"
+        // where 'b' refers to unbox's return type) that would be misinterpreted as letters
+        // in THIS function's namespace.
         let mut bounds: Vec<String> = Vec::new();
         for (&var_id, &var_name) in &var_map {
             let trait_names = ctx.get_trait_bounds(var_id);
             for trait_name in trait_names {
+                if trait_name.starts_with("HasField(") || trait_name.starts_with("HasMethod(") {
+                    continue;
+                }
                 bounds.push(format!("{} {}", trait_name, var_name));
             }
         }
@@ -29828,6 +29837,9 @@ impl Compiler {
                 if let nostos_types::Type::Var(var_id) = ctx.env.apply_subst(&var_type) {
                     let trait_names = ctx.get_trait_bounds(var_id);
                     for trait_name in trait_names {
+                        if trait_name.starts_with("HasField(") || trait_name.starts_with("HasMethod(") {
+                            continue;
+                        }
                         bounds.push(format!("{} {}", trait_name, tp_char));
                     }
                 }
