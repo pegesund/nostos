@@ -4182,7 +4182,12 @@ impl Compiler {
                                 param_count: m.params.len(),
                                 has_default: m.default_impl.is_some(),
                                 return_type: m.return_type.as_ref()
-                                    .map(|ty| self.type_expr_to_string(ty))
+                                    .map(|ty| {
+                                        let s = self.type_expr_to_string(ty);
+                                        // Normalize lowercase "self" to "Self" so downstream
+                                        // code that does .replace("Self", impl_type) works correctly.
+                                        if s == "self" { "Self".to_string() } else { s }
+                                    })
                                     .unwrap_or_else(|| "()".to_string()),
                                 param_types,
                             }
@@ -4262,7 +4267,12 @@ impl Compiler {
                                 param_count: m.params.len(),
                                 has_default: m.default_impl.is_some(),
                                 return_type: m.return_type.as_ref()
-                                    .map(|ty| self.type_expr_to_string(ty))
+                                    .map(|ty| {
+                                        let s = self.type_expr_to_string(ty);
+                                        // Normalize lowercase "self" to "Self" so downstream
+                                        // code that does .replace("Self", impl_type) works correctly.
+                                        if s == "self" { "Self".to_string() } else { s }
+                                    })
                                     .unwrap_or_else(|| "()".to_string()),
                                 param_types,
                             }
@@ -10418,7 +10428,12 @@ impl Compiler {
                     param_count: m.params.len(),
                     has_default: m.default_impl.is_some(),
                     return_type: m.return_type.as_ref()
-                        .map(|ty| self.type_expr_to_string(ty))
+                        .map(|ty| {
+                            let s = self.type_expr_to_string(ty);
+                            // Normalize lowercase "self" to "Self" so downstream
+                            // code that does .replace("Self", impl_type) works correctly.
+                            if s == "self" { "Self".to_string() } else { s }
+                        })
                         .unwrap_or_else(|| "()".to_string()),
                     param_types,
                 }
