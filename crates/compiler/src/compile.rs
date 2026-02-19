@@ -187,6 +187,20 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "asFloat64", signature: "a -> Float64", doc: "Convert numeric value to Float64" },
     BuiltinInfo { name: "asFloat", signature: "a -> Float", doc: "Convert numeric value to Float (alias for asFloat64)" },
     BuiltinInfo { name: "asBigInt", signature: "a -> BigInt", doc: "Convert integer value to BigInt" },
+    // toX numeric conversions (same semantics as asX for HM inference)
+    BuiltinInfo { name: "toFloat", signature: "a -> Float", doc: "Convert numeric value to Float" },
+    BuiltinInfo { name: "toFloat32", signature: "a -> Float32", doc: "Convert numeric value to Float32" },
+    BuiltinInfo { name: "toFloat64", signature: "a -> Float64", doc: "Convert numeric value to Float64" },
+    BuiltinInfo { name: "toInt", signature: "a -> Int", doc: "Convert numeric value to Int" },
+    BuiltinInfo { name: "toInt8", signature: "a -> Int8", doc: "Convert numeric value to Int8" },
+    BuiltinInfo { name: "toInt16", signature: "a -> Int16", doc: "Convert numeric value to Int16" },
+    BuiltinInfo { name: "toInt32", signature: "a -> Int32", doc: "Convert numeric value to Int32" },
+    BuiltinInfo { name: "toInt64", signature: "a -> Int64", doc: "Convert numeric value to Int64" },
+    BuiltinInfo { name: "toUInt8", signature: "a -> UInt8", doc: "Convert numeric value to UInt8" },
+    BuiltinInfo { name: "toUInt16", signature: "a -> UInt16", doc: "Convert numeric value to UInt16" },
+    BuiltinInfo { name: "toUInt32", signature: "a -> UInt32", doc: "Convert numeric value to UInt32" },
+    BuiltinInfo { name: "toUInt64", signature: "a -> UInt64", doc: "Convert numeric value to UInt64" },
+    BuiltinInfo { name: "toBigInt", signature: "a -> BigInt", doc: "Convert integer value to BigInt" },
 
     // === File I/O ===
     // All File functions throw exceptions on error
@@ -513,6 +527,13 @@ pub fn check_builtin_shadowing(name: &str) -> Option<(&'static str, &'static str
         // Only check non-namespaced builtins (no '.' in name)
         // Namespaced builtins like File.readAll won't conflict with user's `readAll`
         if builtin.name.contains('.') {
+            continue;
+        }
+
+        // Skip numeric conversion builtins (toFloat, toInt, etc.) from shadowing checks.
+        // These are in BUILTINS only for HM type inference, but the names are common enough
+        // that users may define their own trait methods with these names.
+        if builtin.name.starts_with("to") && builtin.doc.contains("Convert numeric value") {
             continue;
         }
 
