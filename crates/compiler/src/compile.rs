@@ -12593,6 +12593,29 @@ impl Compiler {
         }
     }
 
+    /// Check if a method name is a builtin method that exists on multiple types
+    /// with TYPE-SPECIFIC signatures, making it ambiguous when the receiver type
+    /// is unknown (type variable). When the receiver is a type variable, these
+    /// methods need monomorphization to dispatch correctly.
+    ///
+    /// Only includes methods where the unqualified version (found by UFCS fallback)
+    /// would compile "successfully" but dispatch to the WRONG type's implementation.
+    /// Methods with generic signatures like `length: a -> Int` are NOT included
+    /// because they work correctly on any type at runtime.
+    /// Methods that don't have an unqualified version (like `insert`, `remove`)
+    /// are NOT included because the UFCS fallback would fail and the existing
+    /// error handler already triggers monomorphization for those.
+    fn is_ambiguous_builtin_method(method: &str) -> bool {
+        matches!(method,
+            // List.get: [a] -> Int -> a vs Map.get: Map k v -> k -> v
+            "get" |
+            // List.set: [a] -> Int -> a -> [a] vs typed array set
+            "set" |
+            // stdlib.list.contains: List[T] -> T -> Bool vs Map/Set/String.contains
+            "contains"
+        )
+    }
+
     /// Map a binary operator to its trait and method name.
     /// Returns (trait_name, method_name) for operators that can be overloaded.
     fn operator_to_trait_method(op: &BinOp) -> Option<(&'static str, &'static str)> {
@@ -17577,12 +17600,12 @@ impl Compiler {
                             });
                         }
                     } else if (type_name.starts_with('?') || self.is_current_type_param(&type_name))
-                               && self.is_known_trait_method(&method.node)
+                               && (self.is_known_trait_method(&method.node) || Self::is_ambiguous_builtin_method(&method.node))
                                && !Self::is_generic_builtin_method(&method.node) {
                         // Type is a type variable (from HM inference) or a type parameter,
-                        // and the method is a trait method (but not a generic builtin).
-                        // This needs monomorphization - the type will be replaced with
-                        // a concrete type during instantiation.
+                        // and the method is a trait method or an ambiguous builtin (exists on
+                        // multiple types like get/contains/isEmpty). This needs monomorphization
+                        // to dispatch to the correct type-specific implementation.
                         return Err(CompileError::UnresolvedTraitMethod {
                             method: method.node.clone(),
                             span: method.span,
@@ -17659,9 +17682,11 @@ impl Compiler {
                         return Ok(dst);
                     }
 
-                    // Type unknown - check if this is a trait method that needs monomorphization
-                    // But exclude generic builtins (show, hash, copy) that work on any type
-                    if self.is_known_trait_method(&method.node) && !Self::is_generic_builtin_method(&method.node) {
+                    // Type unknown - check if this is a trait method or ambiguous builtin
+                    // that needs monomorphization. Exclude generic builtins (show, hash, copy)
+                    // that work on any type.
+                    if (self.is_known_trait_method(&method.node) || Self::is_ambiguous_builtin_method(&method.node))
+                        && !Self::is_generic_builtin_method(&method.node) {
                         return Err(CompileError::UnresolvedTraitMethod {
                             method: method.node.clone(),
                             span: method.span,
