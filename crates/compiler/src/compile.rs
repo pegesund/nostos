@@ -1732,7 +1732,9 @@ impl Compiler {
         // Preserve cached stdlib signatures (loaded from cache via register_function_signature_from_cache)
         // which start with "stdlib." - only clear non-stdlib entries.
         self.pending_fn_signatures.retain(|name, _| name.starts_with("stdlib."));
-        let mut counter = 0u32;
+        // Start above 100 to avoid collisions with letter-based type param IDs
+        // from type_name_to_type() which maps 'a'->1, 'b'->2, ..., 'z'->26.
+        let mut counter = 100u32;
         for (fn_def, module_path, _, _, _, _) in &pending {
             let fn_name = if module_path.is_empty() {
                 fn_def.name.node.clone()
@@ -4979,8 +4981,10 @@ impl Compiler {
             def.name.node.clone()
         };
 
-        // Type variable counter for untyped parameters
-        let mut type_var_counter = 0u32;
+        // Type variable counter for untyped parameters.
+        // Start above 100 to avoid collisions with letter-based type param IDs
+        // from type_name_to_type() which maps 'a'->1, 'b'->2, ..., 'z'->26.
+        let mut type_var_counter = 100u32;
 
         // Process clauses for type signature (used for UFCS resolution)
         // For overloaded functions (multiple clauses), register EACH clause with a typed key
@@ -28963,6 +28967,9 @@ impl Compiler {
         // Previously stdlib functions with annotations skipped HM inference, which meant
         // trait bounds were lost and couldn't propagate through generic wrapper functions.
         if let Some((sig, expr_types)) = self.try_hm_inference(def) {
+            if def.name.node.contains("mapPair") || def.name.node.contains("myMap") {
+                eprintln!("DEBUG infer_signature: {}  ->  {}", def.name.node, sig);
+            }
             // Store resolved expr types from per-function inference.
             // These may provide better type resolution than batch inference
             // (e.g., resolving overloaded function references via calling context).
