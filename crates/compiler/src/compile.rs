@@ -2200,6 +2200,105 @@ impl Compiler {
                 }
             }
 
+            // Register user-defined traits in the type environment for batch inference.
+            // This enables trait method lookup in function bodies that call trait methods
+            // in function form (e.g., getId(x) where getId is a trait method).
+            for (trait_name, trait_info) in &self.trait_defs {
+                let methods: Vec<nostos_types::TraitMethod> = trait_info.methods.iter()
+                    .map(|m| {
+                        let mut params = vec![
+                            ("self".to_string(), nostos_types::Type::TypeParam("Self".to_string()))
+                        ];
+                        for i in 1..m.param_count {
+                            params.push((format!("arg{}", i), nostos_types::Type::TypeParam(format!("T{}", i))));
+                        }
+                        nostos_types::TraitMethod {
+                            name: m.name.clone(),
+                            params,
+                            ret: if m.return_type.is_empty() || m.return_type == "_" {
+                                nostos_types::Type::TypeParam("R".to_string())
+                            } else {
+                                self.type_name_to_type(&m.return_type)
+                            },
+                        }
+                    })
+                    .collect();
+
+                env.traits.insert(trait_name.clone(), nostos_types::TraitDef {
+                    name: trait_name.clone(),
+                    supertraits: trait_info.super_traits.clone(),
+                    required: methods,
+                    defaults: vec![],
+                });
+
+                if let Some(dot_pos) = trait_name.rfind('.') {
+                    let short_name = &trait_name[dot_pos + 1..];
+                    if !env.traits.contains_key(short_name) {
+                        if let Some(trait_def) = env.traits.get(trait_name).cloned() {
+                            env.traits.insert(short_name.to_string(), trait_def);
+                        }
+                    }
+                }
+            }
+
+            // Register trait method UFCS signatures for batch inference.
+            for (fn_name, fn_type) in &self.trait_method_ufcs_signatures {
+                if !env.functions.contains_key(fn_name) {
+                    env.insert_function(fn_name.clone(), fn_type.clone());
+                }
+            }
+
+            // Register trait methods under bare names with generic signatures.
+            // This allows trait methods called in function form (e.g., getId(x))
+            // to be resolved during batch inference.
+            {
+                let mut trait_var_base = 200u32;
+                for trait_info in self.trait_defs.values() {
+                    for method in &trait_info.methods {
+                        let method_name = &method.name;
+                        let mut params = Vec::new();
+                        trait_var_base += 1;
+                        params.push(nostos_types::Type::Var(trait_var_base));
+                        for _ in 1..method.param_count {
+                            trait_var_base += 1;
+                            params.push(nostos_types::Type::Var(trait_var_base));
+                        }
+                        let ret = if method.return_type != "()" && !method.return_type.is_empty()
+                            && !method.return_type.chars().next().map(|c| c.is_lowercase()).unwrap_or(false)
+                            && !method.return_type.contains("->")
+                        {
+                            self.type_name_to_type(&method.return_type)
+                        } else {
+                            trait_var_base += 1;
+                            nostos_types::Type::Var(trait_var_base)
+                        };
+                        let arity_suffix = if method.param_count == 0 {
+                            "/".to_string()
+                        } else {
+                            format!("/{}", vec!["_"; method.param_count].join(","))
+                        };
+                        let fn_key = format!("{}{}", method_name, arity_suffix);
+                        env.insert_function(fn_key, nostos_types::FunctionType {
+                            required_params: None,
+                            type_params: vec![],
+                            params: params.clone(),
+                            ret: Box::new(ret.clone()),
+                            var_bounds: vec![],
+                        });
+                        // Also register bare name
+                        if !env.functions.contains_key(method_name) {
+                            env.insert_function(method_name.clone(), nostos_types::FunctionType {
+                                required_params: None,
+                                type_params: vec![],
+                                params,
+                                ret: Box::new(ret),
+                                var_bounds: vec![],
+                            });
+                        }
+                    }
+                }
+            }
+
             // Copy bare-name function entries from compiler's functions_by_base to TypeEnv.
             // This enables cross-module overload resolution in HM inference: e.g., when
             // math_ops.compute(Int) and str_ops.compute(String) are both imported,
@@ -2461,7 +2560,10 @@ impl Compiler {
             // Apply substitution to resolve type variables to concrete types.
             let user_expr_types: HashMap<_, _> = ctx.take_expr_types()
                 .into_iter()
-                .map(|(span, ty)| (span, ctx.apply_full_subst(&ty)))
+                .map(|(span, ty)| {
+                    let resolved = ctx.apply_full_subst(&ty);
+                    (span, resolved)
+                })
                 .collect();
             self.inferred_expr_types.extend(user_expr_types);
 
