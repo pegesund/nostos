@@ -5000,6 +5000,18 @@ impl<'a> InferCtx<'a> {
                     return Err(TypeError::UnificationFailed(t1.display(), t2.display()));
                 }
                 if a1.len() != a2.len() {
+                    // When one side has 0 type args and the other doesn't,
+                    // treat the 0-args side as having implicit fresh type variables.
+                    // This handles bare type annotations like `p: Pair` for `Pair[A, B]`.
+                    if a1.is_empty() && !a2.is_empty() {
+                        // a1 is bare (e.g., Pair), a2 has args (e.g., Pair[Int, Int])
+                        // Just accept - the bare type is compatible with any instantiation
+                        return Ok(());
+                    }
+                    if a2.is_empty() && !a1.is_empty() {
+                        // Same but reversed
+                        return Ok(());
+                    }
                     return Err(TypeError::TypeArityMismatch {
                         expected: a1.len(),
                         found: a2.len(),
