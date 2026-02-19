@@ -24301,25 +24301,26 @@ impl Compiler {
                 // Literals don't bind anything
             }
             Pattern::Variant(ctor_ident, fields, _) => {
-                // For variants, try to extract field types from the type
-                // If ty is "MyOption[Int]" and constructor has one field of type T,
-                // the field's concrete type is Int
+                // For variants, look up the constructor to get field types, then substitute
+                // type parameters with concrete type args from the scrutinee type.
+                // E.g., for type Outcome[a] = Success(a) | Failure(String):
+                //   matching Outcome[Int] against Failure(m) -> m has type String (not Int)
+                //   matching Outcome[Int] against Success(v) -> v has type Int (from param a)
                 if let VariantPatternFields::Positional(patterns) = fields {
                     if !patterns.is_empty() {
-                        // Try to extract type arguments from ty (e.g., "MyOption[Int]" -> ["Int"])
-                        if let Some(bracket_pos) = ty.find('[') {
+                        // Extract type arguments from the scrutinee type string
+                        let type_args: Vec<String> = if let Some(bracket_pos) = ty.find('[') {
                             if ty.ends_with(']') {
                                 let inner = &ty[bracket_pos + 1..ty.len() - 1];
-                                let type_args = Self::split_type_args(inner);
-                                // For single type arg and single pattern, assume they match
-                                if type_args.len() == 1 && patterns.len() == 1 {
-                                    self.extract_pattern_binding_types_inner(&patterns[0], &type_args[0], result);
-                                    return;
-                                }
+                                Self::split_type_args(inner)
+                            } else {
+                                vec![]
                             }
-                        }
-                        // Also look up the constructor to get field types
-                        // Sort type names alphabetically for deterministic lookup
+                        } else {
+                            vec![]
+                        };
+
+                        // Look up the constructor to get its raw field types
                         let ctor_name = &ctor_ident.node;
                         let mut type_names_sorted: Vec<_> = self.types.keys().collect();
                         type_names_sorted.sort();
@@ -24327,16 +24328,49 @@ impl Compiler {
                             if let Some(info) = self.types.get(ty_name) {
                                 if let TypeInfoKind::Variant { constructors } = &info.kind {
                                     if let Some((_, field_types)) = constructors.iter().find(|(name, _)| name == ctor_name) {
-                                        // Try to match patterns with field types
+                                        // Build a type param -> type arg substitution map
+                                        // Get type params from type_defs if available
+                                        let base_type_name = if ty.contains('[') {
+                                            &ty[..ty.find('[').unwrap()]
+                                        } else {
+                                            ty
+                                        };
+                                        let type_param_names: Vec<String> = self.type_defs.get(base_type_name)
+                                            .or_else(|| self.type_defs.get(ty_name))
+                                            .map(|td| td.type_params.iter().map(|tp| tp.name.node.clone()).collect())
+                                            .unwrap_or_default();
+
                                         for (i, pat) in patterns.iter().enumerate() {
-                                            if let Some(field_ty) = field_types.get_type(i) {
-                                                self.extract_pattern_binding_types_inner(pat, field_ty, result);
+                                            if let Some(raw_field_ty) = field_types.get_type(i) {
+                                                // Substitute type parameters in the field type
+                                                let resolved_field_ty = if !type_args.is_empty() && !type_param_names.is_empty() {
+                                                    let mut resolved = raw_field_ty.clone();
+                                                    for (param_name, arg_val) in type_param_names.iter().zip(type_args.iter()) {
+                                                        // Only substitute if the field type IS or CONTAINS the type parameter
+                                                        if &resolved == param_name {
+                                                            resolved = arg_val.clone();
+                                                        } else if resolved.contains(param_name.as_str()) {
+                                                            resolved = resolved.replace(param_name.as_str(), arg_val);
+                                                        }
+                                                    }
+                                                    resolved
+                                                } else {
+                                                    raw_field_ty.clone()
+                                                };
+                                                self.extract_pattern_binding_types_inner(pat, &resolved_field_ty, result);
                                             }
                                         }
                                         return;
                                     }
                                 }
                             }
+                        }
+
+                        // Fallback: if constructor not found in self.types, use type args directly
+                        // (this handles cases where type info isn't available)
+                        if type_args.len() == 1 && patterns.len() == 1 {
+                            self.extract_pattern_binding_types_inner(&patterns[0], &type_args[0], result);
+                            return;
                         }
                     }
                 }
@@ -24446,11 +24480,58 @@ impl Compiler {
                     false
                 }
             }
-            Pattern::Variant(_ctor_ident, fields, _) => {
-                // For Named types with type arguments, extract the arguments
-                if let Type::Named { args, .. } = ty {
+            Pattern::Variant(ctor_ident, fields, _) => {
+                // For Named types with type arguments, look up the constructor to get
+                // actual field types rather than assuming type args map to field types.
+                // E.g., Outcome[Int] = Success(a) | Failure(String) - for Failure(m),
+                // m should be String (not Int from the type arg).
+                if let Type::Named { name, args } = ty {
                     if let VariantPatternFields::Positional(patterns) = fields {
-                        // For single type arg and single pattern, use structural extraction
+                        let ctor_name = &ctor_ident.node;
+                        // Try to look up constructor field types and substitute type params
+                        let base_name = name.as_str();
+                        let mut found = false;
+                        let mut type_names_sorted: Vec<_> = self.types.keys().collect();
+                        type_names_sorted.sort();
+                        for ty_name in &type_names_sorted {
+                            if let Some(info) = self.types.get(*ty_name) {
+                                if let TypeInfoKind::Variant { constructors } = &info.kind {
+                                    if let Some((_, field_types)) = constructors.iter().find(|(n, _)| n == ctor_name) {
+                                        // Get type parameter names from type_defs
+                                        let type_param_names: Vec<String> = self.type_defs.get(base_name)
+                                            .or_else(|| self.type_defs.get(*ty_name))
+                                            .map(|td| td.type_params.iter().map(|tp| tp.name.node.clone()).collect())
+                                            .unwrap_or_default();
+
+                                        for (i, pat) in patterns.iter().enumerate() {
+                                            if let Some(raw_field_ty) = field_types.get_type(i) {
+                                                // Check if the raw field type is a type parameter
+                                                let param_idx = type_param_names.iter().position(|p| p == raw_field_ty);
+                                                if let Some(idx) = param_idx {
+                                                    // Field type is a type parameter - use the corresponding type arg
+                                                    if idx < args.len() {
+                                                        if !self.extract_pattern_binding_types_structural(pat, &args[idx], result) {
+                                                            self.extract_pattern_binding_types_inner(pat, &args[idx].display(), result);
+                                                        }
+                                                    }
+                                                } else {
+                                                    // Field type is concrete (e.g., String) - use as-is
+                                                    self.extract_pattern_binding_types_inner(pat, raw_field_ty, result);
+                                                }
+                                            }
+                                        }
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if found {
+                            return true;
+                        }
+
+                        // Fallback: if constructor not found, use type args directly
+                        // (original behavior for simple cases)
                         if args.len() == 1 && patterns.len() == 1 {
                             if !self.extract_pattern_binding_types_structural(&patterns[0], &args[0], result) {
                                 self.extract_pattern_binding_types_inner(&patterns[0], &args[0].display(), result);
