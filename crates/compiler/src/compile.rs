@@ -28283,8 +28283,28 @@ impl Compiler {
     /// Get a function's return type directly.
     /// Falls back to inferring from the function body AST if no explicit type.
     pub fn get_function_return_type(&self, name: &str) -> Option<String> {
-        // First try explicit return type from compiled function
-        if let Some(ret_type) = self.find_function(name).and_then(|f| f.return_type.clone()) {
+        // For overloaded functions (name without '/'), check all overloads agree on return type.
+        // If they disagree (e.g., Int vs Float), return None to avoid wrong code generation.
+        if !name.contains('/') {
+            let prefix = format!("{}/", name);
+            let mut ret: Option<String> = None;
+            let mut found_any = false;
+            for (key, func) in &self.functions {
+                if key == name || key.starts_with(&prefix) {
+                    if let Some(rt) = &func.return_type {
+                        found_any = true;
+                        match &ret {
+                            None => ret = Some(rt.clone()),
+                            Some(prev) if prev != rt => return None,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            if found_any {
+                return ret;
+            }
+        } else if let Some(ret_type) = self.find_function(name).and_then(|f| f.return_type.clone()) {
             return Some(ret_type);
         }
 
@@ -28306,14 +28326,27 @@ impl Compiler {
             return self.infer_type_from_expr(&clause.body);
         }
 
-        // If name doesn't contain '/', search by prefix
+        // If name doesn't contain '/', search by prefix.
+        // For overloaded functions, only return a type if all overloads agree.
         if !name.contains('/') {
             let prefix = format!("{}/", name);
+            let mut result_type: Option<String> = None;
+            let mut found_any = false;
             for (key, ast) in &self.fn_asts {
                 if key.starts_with(&prefix) {
-                    let clause = ast.clauses.first()?;
-                    return self.infer_type_from_expr(&clause.body);
+                    found_any = true;
+                    if let Some(clause) = ast.clauses.first() {
+                        let this_type = self.infer_type_from_expr(&clause.body);
+                        match (&result_type, &this_type) {
+                            (None, _) => result_type = this_type,
+                            (Some(prev), Some(curr)) if prev != curr => return None,
+                            _ => {}
+                        }
+                    }
                 }
+            }
+            if found_any {
+                return result_type;
             }
         }
 
