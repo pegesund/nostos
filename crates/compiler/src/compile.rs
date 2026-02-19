@@ -3963,8 +3963,18 @@ impl Compiler {
         // Set module path
         self.module_path = module_path;
 
+        // Save imports so that `use` statements inside this file-based module don't leak
+        // to other modules (prevents transitive import leaking across files).
+        // This mirrors what compile_module_def() does for inline modules.
+        let saved_imports = self.imports.clone();
+        let saved_import_sources = self.import_sources.clone();
+
         // Compile items
         self.compile_items(&module.items)?;
+
+        // Restore imports to prevent transitive leaking between file-based modules
+        self.imports = saved_imports;
+        self.import_sources = saved_import_sources;
 
         // Reset module path
         self.module_path = Vec::new();
@@ -4001,8 +4011,17 @@ impl Compiler {
         // Set module path
         self.module_path = module_path;
 
+        // Save imports so that `use` statements inside this file-based module don't leak
+        // to other modules (prevents transitive import leaking across files).
+        let saved_imports = self.imports.clone();
+        let saved_import_sources = self.import_sources.clone();
+
         // Compile only metadata items (no functions)
         self.compile_items_metadata_only(&module.items)?;
+
+        // Restore imports to prevent transitive leaking between file-based modules
+        self.imports = saved_imports;
+        self.import_sources = saved_import_sources;
 
         // Reset module path
         self.module_path = Vec::new();
@@ -4405,6 +4424,11 @@ impl Compiler {
 
         let old_module_path = std::mem::replace(&mut self.module_path, module_path);
 
+        // Save imports so that `use` statements inside this file-based module don't leak
+        // to other modules during metadata pre-registration.
+        let saved_imports = self.imports.clone();
+        let saved_import_sources = self.import_sources.clone();
+
         // Pre-pass: collect names of local (inline) modules
         let local_module_names: std::collections::HashSet<String> = module.items.iter()
             .filter_map(|item| {
@@ -4476,6 +4500,10 @@ impl Compiler {
                 self.pre_register_trait_impl(trait_impl)?;
             }
         }
+
+        // Restore imports to prevent transitive leaking between file-based modules
+        self.imports = saved_imports;
+        self.import_sources = saved_import_sources;
 
         self.module_path = old_module_path;
 
