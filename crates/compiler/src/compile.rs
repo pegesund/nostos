@@ -8482,9 +8482,9 @@ impl Compiler {
         for (_i, (clause_type, arg_type)) in clause_types.iter().zip(arg_types.iter()).enumerate() {
             if let (Some(expected_expr), Some(actual)) = (clause_type, arg_type) {
                 let expected = self.type_expr_name(expected_expr);
-                // Substitute type parameters
+                // Substitute type parameters using word-boundary-aware replacement
                 let expected = type_param_map.iter().fold(expected, |acc, (param, concrete)| {
-                    acc.replace(param, concrete)
+                    Self::substitute_single_type_param(&acc, param, concrete)
                 });
 
                 // Helper to check if a type is a numeric type (auto-coercion applies)
@@ -8588,9 +8588,9 @@ impl Compiler {
         for (i, (clause_type, arg_type)) in clause_types.iter().zip(arg_types.iter()).enumerate() {
             if let (Some(expected_expr), Some(actual)) = (clause_type, arg_type) {
                 let expected = self.type_expr_name(expected_expr);
-                // Substitute type parameters
+                // Substitute type parameters using word-boundary-aware replacement
                 let expected = type_param_map.iter().fold(expected, |acc, (param, concrete)| {
-                    acc.replace(param, concrete)
+                    Self::substitute_single_type_param(&acc, param, concrete)
                 });
 
                 // Helper functions
@@ -24394,12 +24394,9 @@ impl Compiler {
                                                 let resolved_field_ty = if !type_args.is_empty() && !type_param_names.is_empty() {
                                                     let mut resolved = raw_field_ty.clone();
                                                     for (param_name, arg_val) in type_param_names.iter().zip(type_args.iter()) {
-                                                        // Only substitute if the field type IS or CONTAINS the type parameter
-                                                        if &resolved == param_name {
-                                                            resolved = arg_val.clone();
-                                                        } else if resolved.contains(param_name.as_str()) {
-                                                            resolved = resolved.replace(param_name.as_str(), arg_val);
-                                                        }
+                                                        // Use word-boundary-aware substitution to avoid corrupting
+                                                        // type names that contain the param letter (e.g., "Map" contains "a")
+                                                        resolved = Self::substitute_single_type_param(&resolved, param_name, arg_val);
                                                     }
                                                     resolved
                                                 } else {
