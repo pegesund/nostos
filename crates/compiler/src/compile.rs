@@ -2727,6 +2727,54 @@ impl Compiler {
                         .collect();
                     let mut resolved_ret = if has_explicit_type_params { ctx.env.apply_subst(&fn_type.ret) } else { ctx.apply_full_subst(&fn_type.ret) };
 
+                    // Fix: Batch inference can contaminate shared Var IDs (Var(1)='a', Var(2)='b',
+                    // etc.) causing apply_full_subst to resolve them to Named("a"), Named("b")
+                    // instead of keeping them as type variables. Normalize these back to Var IDs
+                    // so Phase 3 can properly convert them to TypeParams.
+                    fn normalize_leaked_type_params(ty: &nostos_types::Type, known_types: &HashMap<String, TypeInfo>) -> nostos_types::Type {
+                        match ty {
+                            nostos_types::Type::Named { name, args } if args.is_empty() => {
+                                // Single lowercase letter not in known types → type parameter leaked as Named
+                                if name.len() == 1 && name.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false)
+                                    && !known_types.contains_key(name)
+                                {
+                                    let var_id = (name.chars().next().unwrap() as u32) - ('a' as u32) + 1;
+                                    nostos_types::Type::Var(var_id)
+                                } else {
+                                    ty.clone()
+                                }
+                            }
+                            nostos_types::Type::Named { name, args } => {
+                                let new_args: Vec<nostos_types::Type> = args.iter()
+                                    .map(|a| normalize_leaked_type_params(a, known_types))
+                                    .collect();
+                                nostos_types::Type::Named { name: name.clone(), args: new_args }
+                            }
+                            nostos_types::Type::List(e) => nostos_types::Type::List(Box::new(normalize_leaked_type_params(e, known_types))),
+                            nostos_types::Type::Array(e) => nostos_types::Type::Array(Box::new(normalize_leaked_type_params(e, known_types))),
+                            nostos_types::Type::Set(e) => nostos_types::Type::Set(Box::new(normalize_leaked_type_params(e, known_types))),
+                            nostos_types::Type::IO(e) => nostos_types::Type::IO(Box::new(normalize_leaked_type_params(e, known_types))),
+                            nostos_types::Type::Map(k, v) => nostos_types::Type::Map(
+                                Box::new(normalize_leaked_type_params(k, known_types)),
+                                Box::new(normalize_leaked_type_params(v, known_types)),
+                            ),
+                            nostos_types::Type::Tuple(elems) => nostos_types::Type::Tuple(
+                                elems.iter().map(|e| normalize_leaked_type_params(e, known_types)).collect(),
+                            ),
+                            nostos_types::Type::Function(ft) => nostos_types::Type::Function(nostos_types::FunctionType {
+                                type_params: ft.type_params.clone(),
+                                params: ft.params.iter().map(|p| normalize_leaked_type_params(p, known_types)).collect(),
+                                ret: Box::new(normalize_leaked_type_params(&ft.ret, known_types)),
+                                required_params: ft.required_params,
+                                var_bounds: ft.var_bounds.clone(),
+                            }),
+                            _ => ty.clone(),
+                        }
+                    }
+                    for p in resolved_params.iter_mut() {
+                        *p = normalize_leaked_type_params(p, &self.types);
+                    }
+                    resolved_ret = normalize_leaked_type_params(&resolved_ret, &self.types);
 
                     // Fallback: if resolved params/ret are still bare Vars (solve() may have
                     // exited early on an error from a different function), use LOCAL resolution
