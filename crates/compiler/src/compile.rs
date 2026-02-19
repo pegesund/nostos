@@ -2441,17 +2441,28 @@ impl Compiler {
                     let is_type_var = ty.starts_with('?');
 
                     // For type parameters used with Num/Ord, check if the function has that trait bound.
-                    // If not, this is a real error - the type param needs the trait bound declared.
+                    // Only require explicit bounds when the user explicitly declared type params
+                    // via `fn[a: Ord](...)`. When type params come from annotations only
+                    // (e.g., `fn(t: BTree[a])` with no explicit `[a]`), HM inference handles
+                    // bound propagation into the signature automatically.
                     if is_type_param && matches!(trait_name.as_str(), "Num" | "Ord") {
-                        // Check if ANY function in this batch has this type param with the required bound
-                        // user_fns tuple: (idx, (fn_def, module_path, ...))
-                        // type_params is on FnDef, not FnClause
-                        let has_required_bound = user_fns.iter().any(|(_, (fn_def, _, _, _, _, _))| {
-                            fn_def.type_params.iter().any(|tp| {
-                                tp.name.node == *ty &&
-                                tp.constraints.iter().any(|c| c.node == *trait_name)
-                            })
+                        // Check if ANY function in this batch has explicit type param declarations
+                        let has_explicit_type_params = user_fns.iter().any(|(_, (fn_def, _, _, _, _, _))| {
+                            !fn_def.type_params.is_empty()
                         });
+                        // Only check explicit bounds when the user declared type params explicitly
+                        let has_required_bound = if has_explicit_type_params {
+                            user_fns.iter().any(|(_, (fn_def, _, _, _, _, _))| {
+                                fn_def.type_params.iter().any(|tp| {
+                                    tp.name.node == *ty &&
+                                    tp.constraints.iter().any(|c| c.node == *trait_name)
+                                })
+                            })
+                        } else {
+                            // No explicit type params - type params come from annotations only,
+                            // HM inference will handle the bounds in the signature
+                            true
+                        };
                         if !has_required_bound {
                             let error_span = ctx.last_error_span().unwrap_or_else(|| Span::new(0, 0));
                             let op_kind = if trait_name == "Ord" { "comparison" } else { "arithmetic" };
@@ -30144,6 +30155,22 @@ impl Compiler {
                 }
             }
         }
+        // Also collect trait bounds for Named type params from annotations.
+        // When a function has `f(t: BTree[a], val)` and uses `val < x` where x has type `a`,
+        // the Ord bound is on the Var that was unified with Named("a"), but Named("a") doesn't
+        // appear in var_map or type_param_map. We need to find these bounds and include them.
+        let named_bounds = ctx.get_trait_bounds_for_named_type_params();
+        for (named_param, trait_name) in &named_bounds {
+            if trait_name.starts_with("HasField(") || trait_name.starts_with("HasMethod(") {
+                continue;
+            }
+            // The Named type param letter is its own name (e.g., "a" maps to letter 'a')
+            if let Some(&ch) = named_param.chars().next().as_ref() {
+                if named_type_param_letters.contains(&ch) {
+                    bounds.push(format!("{} {}", trait_name, ch));
+                }
+            }
+        }
         // Collect HasMethod constraints FIRST (before HasField), because HasMethod
         // adds intermediate return type vars that HasField sources may reference.
         // e.g., getFirst(pairs) = { pair = pairs.head(); pair.0 ++ " items" }
@@ -30323,6 +30350,7 @@ impl Compiler {
         } else {
             format!("{} => {}", bounds.join(", "), type_sig)
         };
+
 
         // Extract resolved expression types from inference.
         // Filter to include types with resolved params (for overload selection)

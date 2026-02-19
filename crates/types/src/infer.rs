@@ -329,6 +329,30 @@ impl<'a> InferCtx<'a> {
         result
     }
 
+    /// Get trait bounds for Named types that were unified with Vars carrying trait bounds.
+    /// When annotations use `p: Pair[a, b]`, HM inference stores `a` as `Named("a")`.
+    /// If `a` is used with operations requiring traits (e.g., `<` needing Ord),
+    /// the trait bound is on the Var that was unified with Named("a"), not directly on it.
+    /// This method returns (named_type_name, trait_name) pairs for such cases.
+    pub fn get_trait_bounds_for_named_type_params(&self) -> Vec<(String, String)> {
+        let mut result = Vec::new();
+        for (&var_id, bounds) in &self.trait_bounds {
+            let resolved = self.env.apply_subst(&Type::Var(var_id));
+            if let Type::Named { name, args } = &resolved {
+                // Only for single lowercase letter names with no args (type params from annotations)
+                if args.is_empty() && name.len() == 1 {
+                    let ch = name.chars().next().unwrap();
+                    if ch.is_ascii_lowercase() {
+                        for bound in bounds {
+                            result.push((name.clone(), bound.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        result
+    }
+
     /// Get unresolved HasField constraints (field access on still-generic type vars).
     /// Used to propagate field requirements from generic function bodies to call sites.
     pub fn get_deferred_has_field(&self) -> &[(Type, String, Type)] {
@@ -2253,6 +2277,11 @@ impl<'a> InferCtx<'a> {
             let resolved = self.env.apply_subst(ty);
             match &resolved {
                 Type::Var(_) | Type::TypeParam(_) => {} // Still unresolved or polymorphic, skip
+                // Named types with single lowercase letter and no args are type params
+                // from annotations (e.g., `f(t: BTree[a])` where `a` is Named("a")).
+                // Treat them as polymorphic - don't reject, just skip.
+                Type::Named { name, args } if args.is_empty() && name.len() == 1
+                    && name.chars().next().map_or(false, |c| c.is_ascii_lowercase()) => {}
                 Type::Function(_) => {
                     // Function types NEVER implement standard traits (Eq, Ord, Num, etc.)
                     // regardless of their parameter/return types. So even with unresolved
@@ -2337,6 +2366,9 @@ impl<'a> InferCtx<'a> {
             let resolved = self.env.apply_subst(ty);
             match &resolved {
                 Type::Var(_) | Type::TypeParam(_) => {} // Still unresolved or polymorphic, skip
+                // Named type params from annotations (e.g., Named("a")) - skip
+                Type::Named { name, args } if args.is_empty() && name.len() == 1
+                    && name.chars().next().map_or(false, |c| c.is_ascii_lowercase()) => {}
                 Type::Function(_) => {
                     return Err(TypeError::MissingTraitImpl {
                         ty: resolved.display(),
@@ -2522,6 +2554,9 @@ impl<'a> InferCtx<'a> {
             let resolved = self.env.apply_subst(ty);
             match &resolved {
                 Type::Var(_) | Type::TypeParam(_) => {} // Still unresolved or polymorphic, skip
+                // Named type params from annotations (e.g., Named("a")) - skip
+                Type::Named { name, args } if args.is_empty() && name.len() == 1
+                    && name.chars().next().map_or(false, |c| c.is_ascii_lowercase()) => {}
                 Type::Function(_) => {
                     return Err(TypeError::MissingTraitImpl {
                         ty: resolved.display(),
