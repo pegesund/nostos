@@ -31673,6 +31673,29 @@ impl Compiler {
         }
     }
 
+    /// Resolve an unqualified type name to its fully-qualified form.
+    /// Checks module_path first, then imports, then falls back to the original name.
+    fn resolve_user_type_name(&self, name: &str) -> String {
+        if name.contains('.') {
+            return name.to_string();
+        }
+        // 1. Try qualifying with current module path
+        if !self.module_path.is_empty() {
+            let qualified = format!("{}.{}", self.module_path.join("."), name);
+            if self.types.contains_key(&qualified) {
+                return qualified;
+            }
+        }
+        // 2. Try resolving through imports (e.g., "use Types.*" maps IntBox -> Types.IntBox)
+        if let Some(imported) = self.imports.get(name) {
+            if self.types.contains_key(imported) {
+                return imported.clone();
+            }
+        }
+        // 3. Fall back to original name
+        name.to_string()
+    }
+
     fn type_name_to_type(&self, ty: &str) -> nostos_types::Type {
         let ty = ty.trim();
 
@@ -31799,17 +31822,8 @@ impl Compiler {
                         nostos_types::Type::IO(Box::new(args.into_iter().next().expect("IO should have 1 type arg")))
                     }
                     _ => {
-                        // Resolve unqualified type names using module context
-                        let resolved_name = if !name.contains('.') && !self.module_path.is_empty() {
-                            let qualified = format!("{}.{}", self.module_path.join("."), name);
-                            if self.types.contains_key(&qualified) {
-                                qualified
-                            } else {
-                                name.to_string()
-                            }
-                        } else {
-                            name.to_string()
-                        };
+                        // Resolve unqualified type names using module context and imports
+                        let resolved_name = self.resolve_user_type_name(name);
                         nostos_types::Type::Named {
                             name: resolved_name,
                             args,
@@ -31849,17 +31863,8 @@ impl Compiler {
                     nostos_types::Type::IO(Box::new(args.into_iter().next().expect("IO should have 1 type arg")))
                 }
                 _ => {
-                    // Resolve unqualified type names using module context
-                    let resolved_name = if !name.contains('.') && !self.module_path.is_empty() {
-                        let qualified = format!("{}.{}", self.module_path.join("."), name);
-                        if self.types.contains_key(&qualified) {
-                            qualified
-                        } else {
-                            name.to_string()
-                        }
-                    } else {
-                        name.to_string()
-                    };
+                    // Resolve unqualified type names using module context and imports
+                    let resolved_name = self.resolve_user_type_name(name);
                     nostos_types::Type::Named {
                         name: resolved_name,
                         args,
@@ -31929,18 +31934,8 @@ impl Compiler {
                         }
                     }
                 } else {
-                    // Try to resolve the type name using module context:
-                    // If unqualified and module_path is set, check qualified version first
-                    let resolved_name = if !ty.contains('.') && !self.module_path.is_empty() {
-                        let qualified = format!("{}.{}", self.module_path.join("."), ty);
-                        if self.types.contains_key(&qualified) {
-                            qualified
-                        } else {
-                            ty.to_string()
-                        }
-                    } else {
-                        ty.to_string()
-                    };
+                    // Resolve using module context and imports
+                    let resolved_name = self.resolve_user_type_name(ty);
                     nostos_types::Type::Named { name: resolved_name, args: vec![] }
                 }
             }
