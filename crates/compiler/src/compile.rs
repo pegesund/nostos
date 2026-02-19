@@ -10757,6 +10757,24 @@ impl Compiler {
         if !traits_vec.contains(&trait_name) {
             traits_vec.push(trait_name.clone());
         }
+        // Also register under the base type name (without type args and without module
+        // prefix) so that find_trait_method can find the trait when looking up by the
+        // short name (e.g., "List" finds traits registered on "types.List[Int]").
+        // This is needed for cross-module trait impls on builtin or generic types.
+        let base_for_traits = if let Some(bracket_pos) = qualified_type_name.find('[') {
+            &qualified_type_name[..bracket_pos]
+        } else {
+            qualified_type_name.as_str()
+        };
+        let short_base = base_for_traits.rsplit('.').next().unwrap_or(base_for_traits);
+        if short_base != qualified_type_name {
+            let traits_vec2 = self.type_traits
+                .entry(short_base.to_string())
+                .or_insert_with(Vec::new);
+            if !traits_vec2.contains(&trait_name) {
+                traits_vec2.push(trait_name.clone());
+            }
+        }
 
         // Pre-compute trait param types for each method (clone to avoid borrow issues)
         let trait_method_params: HashMap<String, Vec<(String, String)>> = self.trait_defs.get(&trait_name)
@@ -12578,6 +12596,31 @@ impl Compiler {
                             // Extract the base name (without signature)
                             let base = key.split('/').next().unwrap_or(&key);
                             return Some(base.to_string());
+                        }
+
+                        // Also try with the original type name including type args.
+                        // e.g., trait impl on List[Int] registers fn as "types.List[Int].types.Summable.total"
+                        // but type_name_to_try might be "List" (base name). Try "List[Int]" too.
+                        if type_name_to_try != type_name {
+                            let method_with_args = format!("{}.{}.{}", type_name, trait_name, method_name);
+                            let prefix_with_args = format!("{}/", method_with_args);
+                            let func_exists_with_args = self.functions.keys().any(|k| k.starts_with(&prefix_with_args))
+                                || self.fn_asts.keys().any(|k| k.starts_with(&prefix_with_args));
+                            if func_exists_with_args {
+                                return Some(method_with_args);
+                            }
+                            // Also try suffix search with type args
+                            let suffix_with_args = format!(".{}/", method_with_args);
+                            let found_with_args = self.functions.keys()
+                                .find(|k| k.contains(&suffix_with_args))
+                                .cloned()
+                                .or_else(|| self.fn_asts.keys()
+                                    .find(|k| k.contains(&suffix_with_args))
+                                    .cloned());
+                            if let Some(key) = found_with_args {
+                                let base = key.split('/').next().unwrap_or(&key);
+                                return Some(base.to_string());
+                            }
                         }
 
                         // Fall back to the basic name (might be resolved by caller)
