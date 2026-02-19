@@ -241,6 +241,66 @@ the prefix scan.
 
 ### Probes 234-240: All Passed (7 additional probes after fix)
 
+## Session 9 (2026-02-19)
+
+### Probes 241-258: All Passed (18 probes)
+Covered:
+- Multi-file: generic wrapper types with method chains
+- Multi-file: variant constructors with named/positional fields
+- Multi-file: generic fold/reduce patterns across modules
+- Multi-file: recursive types (tree, list) with generic operations
+- Multi-file: pipeline builders with type-safe chaining
+- Multi-file: nested generic types (Option[List[Int]], etc.)
+- Multi-file: trait methods returning generic types
+- Multi-file: function composition with type propagation
+
+### Probe 259: **BUG FOUND** - Variant pattern matching wrong type for non-parametric fields
+**Problem**: `type Outcome[a] = Success(a) | Failure(String)` — matching
+`Outcome[Int]` against `Failure(m)` incorrectly assigned `m` type `Int`
+instead of `String`.
+
+**Root cause**: The pattern binding type extraction assumed "single type
+arg and single pattern field → they match". This is wrong when the variant's
+field uses a concrete type (String) rather than a type parameter (a).
+
+**Fix**: Look up the constructor's actual field types from the type definition,
+build a substitution map from type params to type args, and only substitute
+type parameters while keeping concrete types unchanged. Applied to both
+string-based and structural extraction paths.
+
+**Commit**: `fa3b230` - Fix variant pattern matching assigning wrong types for non-parametric fields
+
+### Probes 260-279: All Passed (20 probes after fix)
+Covered:
+- Multi-file: generic functions operating on variant types
+- Multi-file: cross-module pattern matching with destructuring
+- Multi-file: higher-order functions with variant return types
+- Multi-file: Result type with map/flatMap operations
+- Multi-file: generic container operations (push, pop, peek)
+- Multi-file: cross-module type aliases and re-exports
+
+### Probe 280: **BUG FOUND** - Cross-module polymorphic return type not resolved
+**Problem**: `getFirst(p: Pair[a, b]) = p.first` in a types module, called
+from main as `types.getFirst(p)` then `length(first)` — failed with "type
+mismatch: expected List, String, Tuple, or Array, found a".
+
+**Root cause**: Batch inference shares fixed Var IDs across functions (Var(1)
+for 'a', Var(2) for 'b' from type_name_to_type). During batch solving, these
+shared Vars get unified with Named("a") from type definition field accesses.
+When apply_full_subst resolves getFirst's signature, Var(1) becomes Named("a")
+instead of staying as a type variable. Phase 3's collect_all_vars doesn't
+detect Named("a") as a type parameter, so no TypeParam conversion happens.
+The pending signature ends up with type_params: [] and ret: Named("a"),
+which the HM inference can't instantiate or unify with concrete types.
+
+**Fix**: Added normalize_leaked_type_params step after apply_full_subst in
+the enrichment pipeline. Detects Named { name, args: [] } where name is a
+single lowercase letter not matching any known type, and converts it back to
+the corresponding Var(id). This allows Phase 3 to properly convert them to
+TypeParams.
+
+**Commit**: `8416dc8` - Fix cross-module polymorphic return type leak in batch type enrichment
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -253,3 +313,5 @@ the prefix scan.
 | 6       | 11 (165-175)      | Trait method on generic type + fn params | Yes (6449963) | 176 |
 | 7       | 54 (177-230)      | Lambda param types from HM inference | Yes (68b495e) | 230 |
 | 8       | 2 (231-232)       | Cross-module same-name resolution | Yes (f80384b) | 240 |
+| 9       | 18 (241-258)      | Variant pattern type for non-param fields | Yes (fa3b230) | 259 |
+| 9b      | 20 (260-279)      | Cross-module polymorphic return type | Yes (8416dc8) | 280 |
