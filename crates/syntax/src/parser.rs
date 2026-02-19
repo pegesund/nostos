@@ -241,6 +241,9 @@ fn type_expr() -> impl Parser<Token, TypeExpr, Error = Simple<Token>> + Clone {
 
         let simple = qualified_type_name().map(TypeExpr::Name);
 
+        // Lowercase type variable (e.g., `a` in `type Tree[a] = Leaf(a)`)
+        let type_var = ident().map(TypeExpr::Name);
+
         let generic = qualified_type_name()
             .then(
                 ty.clone()
@@ -275,7 +278,7 @@ fn type_expr() -> impl Parser<Token, TypeExpr, Error = Simple<Token>> + Clone {
                 TypeExpr::Generic(list_name, vec![inner])
             });
 
-        let atom = choice((unit, generic, simple, record, tuple, list_type));
+        let atom = choice((unit, generic, simple, type_var, record, tuple, list_type));
 
         // Function type: T -> U or (T, U) -> V
         let params = ty

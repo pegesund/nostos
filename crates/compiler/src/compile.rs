@@ -1886,7 +1886,7 @@ impl Compiler {
                     TypeInfoKind::Record { fields, mutable } => {
                         let field_types: Vec<(String, nostos_types::Type, bool)> = fields
                             .iter()
-                            .map(|(n, ty)| (n.clone(), self.type_name_to_type(ty), false))
+                            .map(|(n, ty)| (n.clone(), Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params), false))
                             .collect();
                         env.define_type(
                             name.clone(),
@@ -1900,7 +1900,7 @@ impl Compiler {
                     TypeInfoKind::Reactive { fields } => {
                         let field_types: Vec<(String, nostos_types::Type, bool)> = fields
                             .iter()
-                            .map(|(n, ty)| (n.clone(), self.type_name_to_type(ty), false))
+                            .map(|(n, ty)| (n.clone(), Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params), false))
                             .collect();
                         env.define_type(
                             name.clone(),
@@ -1922,13 +1922,13 @@ impl Compiler {
                                     VariantFieldsInfo::Positional(field_types) => {
                                         nostos_types::Constructor::Positional(
                                             ctor_name.clone(),
-                                            field_types.iter().map(|ty| self.type_name_to_type(ty)).collect(),
+                                            field_types.iter().map(|ty| Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params)).collect(),
                                         )
                                     }
                                     VariantFieldsInfo::Named(fields) => {
                                         nostos_types::Constructor::Named(
                                             ctor_name.clone(),
-                                            fields.iter().map(|(name, ty)| (name.clone(), self.type_name_to_type(ty))).collect(),
+                                            fields.iter().map(|(name, ty)| (name.clone(), Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params))).collect(),
                                         )
                                     }
                                 }
@@ -2066,7 +2066,7 @@ impl Compiler {
                     TypeInfoKind::Record { fields, mutable } => {
                         let field_types: Vec<(String, nostos_types::Type, bool)> = fields
                             .iter()
-                            .map(|(n, ty)| (n.clone(), self.type_name_to_type(ty), false))
+                            .map(|(n, ty)| (n.clone(), Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params), false))
                             .collect();
                         env.define_type(
                             name.clone(),
@@ -2080,7 +2080,7 @@ impl Compiler {
                     TypeInfoKind::Reactive { fields } => {
                         let field_types: Vec<(String, nostos_types::Type, bool)> = fields
                             .iter()
-                            .map(|(n, ty)| (n.clone(), self.type_name_to_type(ty), false))
+                            .map(|(n, ty)| (n.clone(), Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params), false))
                             .collect();
                         env.define_type(
                             name.clone(),
@@ -2102,13 +2102,13 @@ impl Compiler {
                                     VariantFieldsInfo::Positional(field_types) => {
                                         nostos_types::Constructor::Positional(
                                             ctor_name.clone(),
-                                            field_types.iter().map(|ty| self.type_name_to_type(ty)).collect(),
+                                            field_types.iter().map(|ty| Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params)).collect(),
                                         )
                                     }
                                     VariantFieldsInfo::Named(fields) => {
                                         nostos_types::Constructor::Named(
                                             ctor_name.clone(),
-                                            fields.iter().map(|(name, ty)| (name.clone(), self.type_name_to_type(ty))).collect(),
+                                            fields.iter().map(|(name, ty)| (name.clone(), Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params))).collect(),
                                         )
                                     }
                                 }
@@ -2414,7 +2414,7 @@ impl Compiler {
                 // have custom trait implementations that the inference env doesn't know about.
                 if let TypeError::MissingTraitImpl { ref ty, ref trait_name } = e {
                     // Check if the type definitely can't implement the trait.
-                    let is_type_param = ty.len() <= 2 && ty.chars().next().map_or(false, |c| c.is_uppercase());
+                    let is_type_param = ty.len() <= 2 && ty.chars().next().map_or(false, |c| c.is_alphabetic());
                     let is_type_var = ty.starts_with('?');
 
                     // For type parameters used with Num/Ord, check if the function has that trait bound.
@@ -28385,7 +28385,7 @@ impl Compiler {
                 TypeInfoKind::Record { fields, mutable } => {
                     let field_types: Vec<(String, nostos_types::Type, bool)> = fields
                         .iter()
-                        .map(|(n, ty)| (n.clone(), self.type_name_to_type(ty), false))
+                        .map(|(n, ty)| (n.clone(), Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params), false))
                         .collect();
                     env.define_type(
                         name.clone(),
@@ -28400,7 +28400,7 @@ impl Compiler {
                     // Reactive records are treated like mutable records in the type system
                     let field_types: Vec<(String, nostos_types::Type, bool)> = fields
                         .iter()
-                        .map(|(n, ty)| (n.clone(), self.type_name_to_type(ty), false))
+                        .map(|(n, ty)| (n.clone(), Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params), false))
                         .collect();
                     env.define_type(
                         name.clone(),
@@ -28421,13 +28421,13 @@ impl Compiler {
                             VariantFieldsInfo::Positional(types) => {
                                 nostos_types::Constructor::Positional(
                                     ctor_name.clone(),
-                                    types.iter().map(|ty| self.type_name_to_type(ty)).collect(),
+                                    types.iter().map(|ty| Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params)).collect(),
                                 )
                             }
                             VariantFieldsInfo::Named(fields) => {
                                 nostos_types::Constructor::Named(
                                     ctor_name.clone(),
-                                    fields.iter().map(|(fname, ty)| (fname.clone(), self.type_name_to_type(ty))).collect(),
+                                    fields.iter().map(|(fname, ty)| (fname.clone(), Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params))).collect(),
                                 )
                             }
                         })
@@ -28451,13 +28451,13 @@ impl Compiler {
                             VariantFieldsInfo::Positional(types) => {
                                 nostos_types::Constructor::Positional(
                                     ctor_name.clone(),
-                                    types.iter().map(|ty| self.type_name_to_type(ty)).collect(),
+                                    types.iter().map(|ty| Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params)).collect(),
                                 )
                             }
                             VariantFieldsInfo::Named(fields) => {
                                 nostos_types::Constructor::Named(
                                     ctor_name.clone(),
-                                    fields.iter().map(|(fname, ty)| (fname.clone(), self.type_name_to_type(ty))).collect(),
+                                    fields.iter().map(|(fname, ty)| (fname.clone(), Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params))).collect(),
                                 )
                             }
                         })
@@ -29414,7 +29414,7 @@ impl Compiler {
                 TypeInfoKind::Record { fields, mutable } => {
                     let field_types: Vec<(String, nostos_types::Type, bool)> = fields
                         .iter()
-                        .map(|(n, ty)| (n.clone(), self.type_name_to_type(ty), false))
+                        .map(|(n, ty)| (n.clone(), Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params), false))
                         .collect();
                     env.define_type(
                         name.clone(),
@@ -29429,7 +29429,7 @@ impl Compiler {
                     // Reactive records are treated like mutable records in the type system
                     let field_types: Vec<(String, nostos_types::Type, bool)> = fields
                         .iter()
-                        .map(|(n, ty)| (n.clone(), self.type_name_to_type(ty), false))
+                        .map(|(n, ty)| (n.clone(), Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params), false))
                         .collect();
                     env.define_type(
                         name.clone(),
@@ -29450,13 +29450,13 @@ impl Compiler {
                             VariantFieldsInfo::Positional(types) => {
                                 nostos_types::Constructor::Positional(
                                     ctor_name.clone(),
-                                    types.iter().map(|ty| self.type_name_to_type(ty)).collect(),
+                                    types.iter().map(|ty| Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params)).collect(),
                                 )
                             }
                             VariantFieldsInfo::Named(fields) => {
                                 nostos_types::Constructor::Named(
                                     ctor_name.clone(),
-                                    fields.iter().map(|(fname, ty)| (fname.clone(), self.type_name_to_type(ty))).collect(),
+                                    fields.iter().map(|(fname, ty)| (fname.clone(), Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params))).collect(),
                                 )
                             }
                         })
@@ -29480,13 +29480,13 @@ impl Compiler {
                             VariantFieldsInfo::Positional(types) => {
                                 nostos_types::Constructor::Positional(
                                     ctor_name.clone(),
-                                    types.iter().map(|ty| self.type_name_to_type(ty)).collect(),
+                                    types.iter().map(|ty| Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params)).collect(),
                                 )
                             }
                             VariantFieldsInfo::Named(fields) => {
                                 nostos_types::Constructor::Named(
                                     ctor_name.clone(),
-                                    fields.iter().map(|(fname, ty)| (fname.clone(), self.type_name_to_type(ty))).collect(),
+                                    fields.iter().map(|(fname, ty)| (fname.clone(), Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params))).collect(),
                                 )
                             }
                         })
@@ -31157,6 +31157,82 @@ impl Compiler {
                     )
                 }
             }
+        }
+    }
+
+    /// Convert Var IDs back to TypeParam names for type definition fields.
+    /// When lowercase type params like `a`, `b` are used in type definitions,
+    /// `type_name_to_type` converts them to Var(1), Var(2) etc. But for HM
+    /// type definitions, they need to be TypeParam("a"), TypeParam("b") etc.
+    fn vars_to_type_params(ty: &nostos_types::Type, type_params: &[nostos_types::TypeParam]) -> nostos_types::Type {
+        if type_params.is_empty() {
+            return ty.clone();
+        }
+        // Build mapping: Var(id) -> TypeParam(name) for lowercase single-letter params
+        let var_to_param: std::collections::HashMap<u32, String> = type_params.iter()
+            .filter_map(|tp| {
+                if tp.name.len() == 1 {
+                    let ch = tp.name.chars().next().unwrap();
+                    if ch.is_ascii_lowercase() {
+                        let var_id = (ch as u32) - ('a' as u32) + 1;
+                        return Some((var_id, tp.name.clone()));
+                    }
+                }
+                None
+            })
+            .collect();
+        if var_to_param.is_empty() {
+            return ty.clone();
+        }
+        Self::replace_vars_with_params(ty, &var_to_param)
+    }
+
+    fn replace_vars_with_params(ty: &nostos_types::Type, map: &std::collections::HashMap<u32, String>) -> nostos_types::Type {
+        match ty {
+            nostos_types::Type::Var(id) => {
+                if let Some(name) = map.get(id) {
+                    nostos_types::Type::TypeParam(name.clone())
+                } else {
+                    ty.clone()
+                }
+            }
+            nostos_types::Type::List(inner) => {
+                nostos_types::Type::List(Box::new(Self::replace_vars_with_params(inner, map)))
+            }
+            nostos_types::Type::Array(inner) => {
+                nostos_types::Type::Array(Box::new(Self::replace_vars_with_params(inner, map)))
+            }
+            nostos_types::Type::Set(inner) => {
+                nostos_types::Type::Set(Box::new(Self::replace_vars_with_params(inner, map)))
+            }
+            nostos_types::Type::IO(inner) => {
+                nostos_types::Type::IO(Box::new(Self::replace_vars_with_params(inner, map)))
+            }
+            nostos_types::Type::Map(k, v) => {
+                nostos_types::Type::Map(
+                    Box::new(Self::replace_vars_with_params(k, map)),
+                    Box::new(Self::replace_vars_with_params(v, map)),
+                )
+            }
+            nostos_types::Type::Tuple(elems) => {
+                nostos_types::Type::Tuple(elems.iter().map(|e| Self::replace_vars_with_params(e, map)).collect())
+            }
+            nostos_types::Type::Named { name, args } => {
+                nostos_types::Type::Named {
+                    name: name.clone(),
+                    args: args.iter().map(|a| Self::replace_vars_with_params(a, map)).collect(),
+                }
+            }
+            nostos_types::Type::Function(ft) => {
+                nostos_types::Type::Function(nostos_types::FunctionType {
+                    params: ft.params.iter().map(|p| Self::replace_vars_with_params(p, map)).collect(),
+                    ret: Box::new(Self::replace_vars_with_params(&ft.ret, map)),
+                    type_params: ft.type_params.clone(),
+                    var_bounds: ft.var_bounds.clone(),
+                    required_params: ft.required_params,
+                })
+            }
+            _ => ty.clone(),
         }
     }
 
