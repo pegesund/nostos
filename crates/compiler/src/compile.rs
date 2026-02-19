@@ -11733,7 +11733,10 @@ impl Compiler {
         // When base_name is "ext.process" and there's an import "process" -> "base.process",
         // we need to also include "base.process/..." overloads as candidates so that
         // runtime dispatch can consider both local and imported overloads.
-        if base_name.contains('.') {
+        // IMPORTANT: Only do this when no direct candidates were found. If we already
+        // found "beta.transform/_" from the prefix scan, adding "alpha.transform/_" from
+        // imports would create a false ambiguity (both score the same, alphabetical wins).
+        if candidates.is_empty() && base_name.contains('.') {
             let unqualified = base_name.rsplit('.').next().unwrap_or(base_name);
             if let Some(imported_base) = self.imports.get(unqualified) {
                 if imported_base.as_str() != base_name && !self.prelude_functions.contains(imported_base.as_str()) {
