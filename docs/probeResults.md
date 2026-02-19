@@ -220,6 +220,27 @@ parameter types from the HM-inferred function type. (2) In `expr_type_name`, han
 `Type::Map`, `Type::Set`, and `Type::List` alongside `Type::Named` for partially
 resolved types — the base type is known and sufficient for method dispatch.
 
+### Probes 231-232: All Passed (2 additional probes after fix)
+
+### Probe 233: **BUG FOUND** - Cross-module same-named functions resolve to wrong module
+**Problem**: When two modules export functions with the same name (e.g.,
+`alpha.transform(x) = x * 2` and `beta.transform(x) = x + 100`), qualified
+calls like `beta.transform(5)` returned `10` (alpha's result) instead of `105`.
+
+**Root cause**: In `resolve_function_call`, after finding direct candidates via
+prefix scan (e.g., `beta.transform/_`), an import fallback unconditionally added
+candidates from other modules (e.g., `alpha.transform/_` via imports). Both
+candidates scored identically, and the alphabetical tiebreaker picked `alpha`
+over `beta`.
+
+**Fix**: Added `candidates.is_empty()` guard to the import fallback lookup.
+Only search imports for candidates when no direct candidates were found from
+the prefix scan.
+
+**Commit**: `f80384b` - Fix cross-module qualified call resolving to wrong module
+
+### Probes 234-240: All Passed (7 additional probes after fix)
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -231,3 +252,4 @@ resolved types — the base type is known and sufficient for method dispatch.
 | 5       | 13 (150-162)      | Unknown receiver method deferral | Yes (27f6044) | 165 |
 | 6       | 11 (165-175)      | Trait method on generic type + fn params | Yes (6449963) | 176 |
 | 7       | 54 (177-230)      | Lambda param types from HM inference | Yes (68b495e) | 230 |
+| 8       | 2 (231-232)       | Cross-module same-name resolution | Yes (f80384b) | 240 |
