@@ -30058,11 +30058,31 @@ impl Compiler {
             self.collect_type_vars(ty, &mut var_order);
         }
 
-        // Create mapping from type var ID to normalized letter
-        let mut var_map: HashMap<u32, char> = var_order.iter().enumerate()
-            .map(|(i, &id)| (id, (b'a' + (i as u8 % 26)) as char))
-            .collect();
-        let mut next_var_letter = var_order.len();
+        // Collect Named types that look like type parameters (lowercase, no args, not
+        // known concrete types). These come from annotations like `p: Pair[a, b]` where
+        // `a` and `b` are stored as Named("a") / Named("b") in HM inference.
+        // We must reserve their letters so Var letter assignment doesn't collide.
+        let mut named_type_param_letters: HashSet<char> = HashSet::new();
+        for ty in resolved_params.iter().chain(std::iter::once(&resolved_ret)) {
+            self.collect_named_type_param_letters(ty, &mut named_type_param_letters);
+        }
+
+        // Create mapping from type var ID to normalized letter, skipping letters
+        // reserved by Named type params from annotations
+        let mut var_map: HashMap<u32, char> = HashMap::new();
+        let mut next_letter_idx: u8 = 0;
+        for &id in &var_order {
+            // Find next available letter that isn't reserved by annotation type params
+            loop {
+                let letter = (b'a' + (next_letter_idx % 26)) as char;
+                next_letter_idx += 1;
+                if !named_type_param_letters.contains(&letter) {
+                    var_map.insert(id, letter);
+                    break;
+                }
+            }
+        }
+        let mut next_var_letter = next_letter_idx as usize;
 
         // Also collect TypeParam names and map them to normalized letters
         // TypeParams (from explicit annotations) don't have Var IDs directly,
@@ -30073,7 +30093,16 @@ impl Compiler {
         }
         // Assign letters to TypeParams AFTER Var letters to avoid collisions
         let type_param_map: HashMap<String, char> = type_param_order.iter().enumerate()
-            .map(|(i, name)| (name.clone(), (b'a' + ((next_var_letter + i) as u8 % 26)) as char))
+            .map(|(i, name)| {
+                let mut letter_idx = next_var_letter + i;
+                let mut letter = (b'a' + (letter_idx as u8 % 26)) as char;
+                // Also skip reserved Named type param letters for TypeParams
+                while named_type_param_letters.contains(&letter) {
+                    letter_idx += 1;
+                    letter = (b'a' + (letter_idx as u8 % 26)) as char;
+                }
+                (name.clone(), letter)
+            })
             .collect();
         next_var_letter += type_param_order.len();
 
@@ -31864,6 +31893,53 @@ impl Compiler {
             nostos_types::Type::Named { args, .. } => {
                 for a in args {
                     self.collect_type_param_names(a, names);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Collect single-char lowercase Named type names that are type parameters from annotations.
+    /// When a function has `p: Pair[a, b]` and `a`/`b` are not in current_type_params,
+    /// HM inference stores them as `Named("a", [])` / `Named("b", [])`. We need to know
+    /// these letters to avoid collisions when assigning letters to Var IDs in signatures.
+    fn collect_named_type_param_letters(&self, ty: &nostos_types::Type, letters: &mut HashSet<char>) {
+        match ty {
+            nostos_types::Type::Named { name, args } => {
+                // A Named type with no args and a single lowercase letter name
+                // is a type parameter from an annotation (e.g., Named("a", []))
+                if args.is_empty() && name.len() == 1 {
+                    let ch = name.chars().next().unwrap();
+                    if ch.is_ascii_lowercase() {
+                        letters.insert(ch);
+                    }
+                }
+                for a in args {
+                    self.collect_named_type_param_letters(a, letters);
+                }
+            }
+            nostos_types::Type::Tuple(elems) => {
+                for e in elems {
+                    self.collect_named_type_param_letters(e, letters);
+                }
+            }
+            nostos_types::Type::List(elem) | nostos_types::Type::Array(elem)
+            | nostos_types::Type::Set(elem) | nostos_types::Type::IO(elem) => {
+                self.collect_named_type_param_letters(elem, letters);
+            }
+            nostos_types::Type::Map(k, v) => {
+                self.collect_named_type_param_letters(k, letters);
+                self.collect_named_type_param_letters(v, letters);
+            }
+            nostos_types::Type::Function(f) => {
+                for p in &f.params {
+                    self.collect_named_type_param_letters(p, letters);
+                }
+                self.collect_named_type_param_letters(&f.ret, letters);
+            }
+            nostos_types::Type::Record(rec) => {
+                for (_, t, _) in &rec.fields {
+                    self.collect_named_type_param_letters(t, letters);
                 }
             }
             _ => {}
