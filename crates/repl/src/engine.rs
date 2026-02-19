@@ -23124,9 +23124,18 @@ mod lsp_show_tests {
     use std::fs;
 
     fn create_temp_dir_lsp(name: &str) -> std::path::PathBuf {
-        let base = std::env::temp_dir().join("nostos_lsp_tests");
-        fs::create_dir_all(&base).ok();
-        let path = base.join(name);
+        // Use a unique directory per test invocation to avoid race conditions
+        // when tests run in parallel. Include thread ID and a random suffix.
+        let unique = format!(
+            "nostos_lsp_{}_{:?}_{}",
+            name,
+            std::thread::current().id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let path = std::env::temp_dir().join(unique);
         if path.exists() {
             fs::remove_dir_all(&path).ok();
         }

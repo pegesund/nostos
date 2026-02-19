@@ -4981,8 +4981,21 @@ impl Compiler {
         // Type variable counter for untyped parameters
         let mut type_var_counter = 0u32;
 
-        // Process first clause for type signature (used for UFCS resolution)
-        if let Some(clause) = def.clauses.first() {
+        // Process clauses for type signature (used for UFCS resolution)
+        // For overloaded functions (multiple clauses), register EACH clause with a typed key
+        // to prevent key collisions in pending_fn_signatures (e.g., process/[Int] vs process/[String]).
+        // For single-clause functions, use the wildcard arity key (e.g., process/_).
+        let is_overloaded = def.clauses.len() > 1;
+
+        // Convert AST type params to types module TypeParams (shared across clauses)
+        let type_params: Vec<nostos_types::TypeParam> = def.type_params.iter()
+            .map(|tp| nostos_types::TypeParam {
+                name: tp.name.node.clone(),
+                constraints: tp.constraints.iter().map(|c| c.node.clone()).collect(),
+            })
+            .collect();
+
+        for (clause_idx, clause) in def.clauses.iter().enumerate() {
             // Build type signature for pending_fn_signatures
             let param_types: Vec<Type> = clause.params
                 .iter()
@@ -5014,34 +5027,47 @@ impl Compiler {
                 None // All required
             };
 
-            // Build qualified name with arity suffix (e.g., "stdlib.list.map/_,_" for 2 params)
-            // This matches the key format that UFCS resolution expects
-            let arity_suffix = if clause.params.is_empty() {
-                "/".to_string()
-            } else {
-                format!("/{}", vec!["_"; clause.params.len()].join(","))
+            let fn_type = FunctionType {
+                required_params,
+                type_params: type_params.clone(),
+                params: param_types.clone(),
+                ret: Box::new(ret_ty),
+                var_bounds: vec![],
             };
-            let qualified_fn_name = format!("{}{}", base_name, arity_suffix);
 
-            // Convert AST type params to types module TypeParams
-            let type_params: Vec<nostos_types::TypeParam> = def.type_params.iter()
-                .map(|tp| nostos_types::TypeParam {
-                    name: tp.name.node.clone(),
-                    constraints: tp.constraints.iter().map(|c| c.node.clone()).collect(),
-                })
-                .collect();
+            if is_overloaded {
+                // For overloaded functions, use typed key to avoid collisions
+                // e.g., "process/List[Int]" and "process/List[String]"
+                let param_type_strs: Vec<String> = clause.params.iter()
+                    .map(|p| p.ty.as_ref()
+                        .map(|ty| self.type_expr_to_string(ty))
+                        .unwrap_or_else(|| "_".to_string()))
+                    .collect();
+                let typed_suffix = param_type_strs.join(",");
+                let typed_fn_name = format!("{}/{}", base_name, typed_suffix);
+                self.pending_fn_signatures.insert(typed_fn_name, fn_type.clone());
 
-            // Register in pending_fn_signatures for type checking
-            self.pending_fn_signatures.insert(
-                qualified_fn_name,
-                FunctionType {
-                    required_params,
-                    type_params,
-                    params: param_types,
-                    ret: Box::new(ret_ty),
-                    var_bounds: vec![],
-                },
-            );
+                // Also register with wildcard arity suffix for the FIRST clause only
+                // so that UFCS resolution can find at least one overload
+                if clause_idx == 0 {
+                    let arity_suffix = if clause.params.is_empty() {
+                        "/".to_string()
+                    } else {
+                        format!("/{}", vec!["_"; clause.params.len()].join(","))
+                    };
+                    let wildcard_fn_name = format!("{}{}", base_name, arity_suffix);
+                    self.pending_fn_signatures.insert(wildcard_fn_name, fn_type);
+                }
+            } else {
+                // Single-clause: use wildcard arity suffix as before
+                let arity_suffix = if clause.params.is_empty() {
+                    "/".to_string()
+                } else {
+                    format!("/{}", vec!["_"; clause.params.len()].join(","))
+                };
+                let qualified_fn_name = format!("{}{}", base_name, arity_suffix);
+                self.pending_fn_signatures.insert(qualified_fn_name, fn_type);
+            }
         }
 
         // Process each clause for fn_asts
