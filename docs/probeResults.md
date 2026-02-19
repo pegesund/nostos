@@ -448,6 +448,56 @@ fails because "self" != "Self" (case mismatch).
 
 **Commit**: `4a1f3dc` - Fix trait method return type 'self' not normalized to 'Self'
 
+### Probes 488-519: All Passed (32 probes)
+Covered:
+- Trait method returns generic type (Option[Self], List[Self])
+- Multi-file trait methods returning Self on generic types
+- Multi-file trait impls on multiple types (Circle, Rectangle) in same module
+- Multi-file trait with multiple methods (area, perimeter)
+- Deeply nested multi-file chains with trait method calls
+- Cross-module trait impl with same method name
+- String trait impl (measureLen)
+- Cross-module trait hierarchies
+
+### Probe 520: **BUG FOUND** - UFCS key includes type args for concrete generic trait impls
+**Problem**: `Either[Int, String]: Mappable` with `mapLeft(self, f)` method — calling
+`e1.mapLeft(x => x * 5)` fails to find the method.
+
+**Root cause**: When registering trait method UFCS signatures, the type name included
+type args (e.g., `Either[Int, String].mapLeft/_,_`). But `get_type_name()` returns just
+the base name (`Either`), so `check_pending_method_calls` looks up `Either.mapLeft/_,_`
+which doesn't match.
+
+**Fix**: Strip type args from both `unqualified_type_name` and `qualified_type_name`
+when forming UFCS keys. E.g., `Either[Int, String]` → `Either`.
+
+**Commit**: `7087c27` - Strip type args from UFCS key when registering trait method signatures
+
+### Probes 521-586: All Passed (66 probes, parallel agent)
+Covered:
+- Generic functions with multiple type params in nested types
+- Cross-module callbacks returning generic types
+- Pattern matching on nested variant types (Option[List[Int]])
+- Cross-module recursive Tree[a] traversal
+- Higher-order currying with type params
+- Multi-file Map operations through generic wrappers
+- Mutual recursion with annotations
+- Newtype wrapper with trait impl
+- Lambda with complex pattern match on variant type
+- Generic function at 3+ different type instantiations
+- Closure capturing (by-value semantics)
+- Cross-module variant construction and matching
+- Generic Either type with map/bind operations
+- Multi-type-param types (Triple[a,b,c])
+- Recursive variant traversal (custom List2)
+- Option chaining transformations
+- Polymorphic list operations (myLength, myReverse)
+- Pattern matching with or-patterns
+- Multi-file generic Stack container
+- Deeply nested variant match (3 levels)
+- Nested lambda with captured variables
+- Tuple patterns in various contexts
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -467,3 +517,5 @@ fails because "self" != "Self" (case mismatch).
 | 11b     | 30 (360-389)      | Annotation type params fail trait bounds | Yes (fe13951) | 390 |
 | 12      | 8 (391-398)       | Comparison ops on annotation type params | Yes (ff5e74e) | 399 |
 | 12b     | 87 (400-486)      | Trait method `-> self` not normalized | Yes (4a1f3dc) | 487 |
+| 13      | 32 (488-519)      | UFCS key includes type args | Yes (7087c27) | 520 |
+| 13b     | 66 (521-586)      | (none - clean run) | N/A | 586 |
