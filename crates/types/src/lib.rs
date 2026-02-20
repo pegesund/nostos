@@ -520,13 +520,28 @@ impl TypeEnv {
             name
         };
 
+        // Build module-qualified name for same-module function resolution.
+        // When current_module is set (e.g., "ops"), bare name "taskScore" should
+        // also check "ops.taskScore" to find functions in the same module.
+        let module_qualified = if !name.contains('.') {
+            self.current_module.as_ref().map(|m| format!("{}.{}", m, name))
+        } else {
+            None
+        };
+
         // Collect candidates from both the resolved (imported) name AND the original name.
+        // Also include module-qualified name for same-module function resolution.
         // This allows local functions with different arities to coexist with imported functions.
-        let names_to_check: Vec<&str> = if resolved_name != name {
+        let mut names_to_check: Vec<&str> = if resolved_name != name {
             vec![resolved_name, name]
         } else {
             vec![resolved_name]
         };
+        if let Some(ref mq) = module_qualified {
+            if !names_to_check.contains(&mq.as_str()) {
+                names_to_check.push(mq.as_str());
+            }
+        }
 
         for check_name in &names_to_check {
             if !check_name.contains('/') {
@@ -617,13 +632,25 @@ impl TypeEnv {
             name
         };
 
+        // Build module-qualified name for same-module resolution
+        let module_qualified = if !name.contains('.') {
+            self.current_module.as_ref().map(|m| format!("{}.{}", m, name))
+        } else {
+            None
+        };
+
         // Check both the resolved (imported) name and the original name.
-        // This ensures local functions are found even when an import alias exists.
-        let names_to_check: Vec<&str> = if resolved_name != name {
+        // Also include module-qualified name for same-module function calls.
+        let mut names_to_check: Vec<&str> = if resolved_name != name {
             vec![resolved_name, name]
         } else {
             vec![resolved_name]
         };
+        if let Some(ref mq) = module_qualified {
+            if !names_to_check.contains(&mq.as_str()) {
+                names_to_check.push(mq.as_str());
+            }
+        }
 
         for check_name in &names_to_check {
             if !check_name.contains('/') {

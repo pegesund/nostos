@@ -1236,6 +1236,9 @@ pub struct Compiler {
     /// Imports that were active when each fn_ast was registered.
     /// Used to restore the correct import context during monomorphization.
     fn_ast_imports: HashMap<String, HashMap<String, String>>,
+    /// Per-module imports: module_path_str -> {short_name -> qualified_name}
+    /// Populated during Pass 1.5b so batch inference can resolve cross-module function calls.
+    module_imports: HashMap<String, HashMap<String, String>>,
     /// Source info for each function: function name -> (source_name, source_code)
     fn_sources: HashMap<String, (String, Arc<String>)>,
     /// Function type parameters with bounds: function name -> type parameters
@@ -1588,6 +1591,7 @@ impl Compiler {
             param_types: HashMap::new(),
             fn_asts: HashMap::new(),
             fn_ast_imports: HashMap::new(),
+            module_imports: HashMap::new(),
             fn_sources: HashMap::new(),
             fn_type_params: HashMap::new(),
             polymorphic_fns: HashSet::new(),
@@ -2428,6 +2432,8 @@ impl Compiler {
             if !implicit_fns.is_empty() {
                 ctx.set_known_implicit_fns(implicit_fns);
             }
+            // Build base function_aliases from global imports (stdlib etc.)
+            let base_function_aliases = ctx.env.function_aliases.clone();
             for (_, (fn_def, module_path, _, _, _, _)) in &user_fns {
                 // Use qualified name for batch inference to prevent cross-module
                 // type variable collision when different modules define functions
@@ -2435,16 +2441,25 @@ impl Compiler {
                 if !module_path.is_empty() {
                     // Set current module so resolve_type_name prefers this module's types.
                     // E.g., inside module B, `Point` resolves to `B.Point` not `A.Point`.
-                    ctx.env.current_module = Some(module_path.join("."));
-                    let qualified_name = format!("{}.{}", module_path.join("."), fn_def.name.node);
+                    let module_key = module_path.join(".");
+                    ctx.env.current_module = Some(module_key.clone());
+                    // Restore base aliases then overlay this module's imports
+                    ctx.env.function_aliases = base_function_aliases.clone();
+                    if let Some(mod_imports) = self.module_imports.get(&module_key) {
+                        for (short, qualified) in mod_imports {
+                            ctx.env.function_aliases.insert(short.clone(), qualified.clone());
+                        }
+                    }
+                    let qualified_name = format!("{}.{}", module_key, fn_def.name.node);
                     let mut qualified_def = fn_def.clone();
                     qualified_def.name = nostos_syntax::Ident {
-                        node: qualified_name,
+                        node: qualified_name.clone(),
                         span: fn_def.name.span,
                     };
                     let _ = ctx.infer_function(&qualified_def);
                 } else {
                     ctx.env.current_module = None;
+                    ctx.env.function_aliases = base_function_aliases.clone();
                     let _ = ctx.infer_function(fn_def);
                 }
             }
@@ -4616,6 +4631,23 @@ impl Compiler {
             }
         }
 
+        // Save per-module imports for batch inference before restoring.
+        // This allows batch inference to set up correct function_aliases per module.
+        if !self.module_path.is_empty() {
+            let module_key = self.module_path.join(".");
+            // Only store function imports (not type imports)
+            let fn_imports: HashMap<String, String> = self.imports.iter()
+                .filter(|(_, v)| {
+                    // Function imports have qualified names where last segment starts lowercase
+                    v.split('.').last()
+                        .map(|s| s.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false))
+                        .unwrap_or(false)
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            self.module_imports.insert(module_key, fn_imports);
+        }
+
         // Restore imports to prevent transitive leaking between file-based modules
         self.imports = saved_imports;
         self.import_sources = saved_import_sources;
@@ -5257,6 +5289,7 @@ impl Compiler {
             param_types: HashMap::new(),
             fn_asts: HashMap::new(),
             fn_ast_imports: HashMap::new(),
+            module_imports: HashMap::new(),
             fn_sources: HashMap::new(),
             fn_type_params: HashMap::new(),
             polymorphic_fns: HashSet::new(),
@@ -30716,6 +30749,7 @@ impl Compiler {
         } else {
             format!("{} => {}", bounds.join(", "), type_sig)
         };
+
 
 
         // Extract resolved expression types from inference.
