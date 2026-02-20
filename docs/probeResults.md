@@ -1152,6 +1152,92 @@ Covered:
 - Multi-file projects up to 5 modules with cross-module trait definitions and usage
 - Generic functions (identity, HOF callbacks across modules)
 
+### Probes 2781-2830: All Passed (50 probes - complex patterns)
+Covered:
+- Generic function instantiated at 5+ different types
+- Lambda through 3 levels of indirection (compose, applyTwice)
+- Pattern matching on nested Option[Option[Int]], Result inside Option
+- Chained method calls (map->filter->length, map->filter->map->sum)
+- Cross-module generic instantiation at 4+ types, 3-module dependency chains
+- Two-phase compilation: trait in z_ module, impl in a_ module
+- Cross-module mutual recursion (isEven/isOdd), concurrent spawn + message passing
+- Recursive generic data structures (trees, linked lists, stacks)
+- Function factories returning generic list transformers
+- sortBy with custom comparator, multiple trait impls on same type cross-module
+
+### Probes 2831-2880: All Passed (50 probes - single-impl inference + error detection)
+Covered:
+- Single-impl trait lambda inference (correct unique-type resolution)
+- Multi-impl trait lambda correctly errors ("cannot resolve trait method")
+- Builtin shadowing prevention (show, eval, contains)
+- Recursive generic Tree with pattern matching, deep tree depth computation
+- Generic Pair swap, pipeline operator chains
+- Type mismatch error detection, missing trait impl errors
+- Cross-module variant functions, 5-module dependency chains, diamond dependency
+- Cross-module single-impl trait lambda inference
+- Wrong number of args error detection, undefined variable error (with suggestions)
+- Mixed return type error detection
+- Complex 5-module project (types, traits, filters, stats, main)
+
+### Probes 2881-2930: All Passed (50 probes - trait dispatch + re-exports)
+Covered:
+- Pattern match + map with variant type, cross-module re-export chain (A->B->C)
+- Generic fn calling generic fn (applyTwice), nested folds on list of lists
+- Two-phase trait impls on generic types (z_types, a_traits, m_impl) - 4 module project
+- Generic function composition, method chain on freshly constructed list
+- show() on user-defined unit variant types, spawn with Option type
+- Diamond dependency with shared type, default parameters cross-module
+- Recursive variant type across modules (Tree), trait method in map over list
+- 5-module projects with complex dependency graphs
+- Cross-module generic Either type, recursive generic variant stack
+- Trait impl on generic type in alphabetically-first file (two-phase compilation)
+
+### Probes 2931-2980: All Passed (50 probes - adversarial inference)
+Covered:
+- Type inference through multiple let bindings (map/filter/length chains)
+- Cross-module overloaded functions same name different types
+- Nested generic type construction Some(Ok([1,2,3])) with pattern matching
+- Lambda with multi-step body, generic function as argument to generic function
+- Mutable variable with chained map/filter operations
+- Pipeline operator with cross-module functions
+- Cross-module trait impl ordering (impl in alphabetically-first module)
+- 5-module diamond dependency pattern, 4-module transitive imports
+- Private vs public visibility enforcement, selective imports with curly braces
+- Cartesian product via nested flatMap/map, mutual recursion cross-module
+- Generic combineWith with 3 type vars cross-module
+
+### Probes 2981-3030: All Passed (50 probes - limits of type system)
+Covered:
+- Higher-order functions returning functions (makeAdder, compose)
+- List of functions with map application
+- Triple type with 3 type params (mapFirst/mapSecond/mapThird)
+- Manual fold via recursive overloading, recursive expression evaluation
+- Deeply nested method chains (map/filter/flatMap)
+- Cross-module diamond/chain dependencies (5 modules deep)
+- Cross-module generic type wrapper (wrap/unwrap/doubleWrapped)
+- Phantom type patterns (Tagged[u] with unit types) - single and cross-module
+- Match with guards (when clauses), try/catch across 3 modules
+- Cross-module reverse alphabetical ordering stress (aaa depends on zzz)
+- Trait method chaining (show on result of map)
+- Mutable state with mvar
+
+### Probes 3031-3080: All Passed (50 probes - fragile area targeting)
+Covered:
+- Trait UFCS with multiple string params across modules
+- Trait with 4+ params, trait method taking function param
+- Single-impl vs multi-impl trait methods in lambda context (boundary cases)
+- Pattern matching on cross-module generic variant
+- Cross-module function with Num trait bound type params
+- Three-module trait + generic + pattern matching combined
+- Method chains (map/filter/sortBy) on cross-module types
+- Deeply nested function application with generics
+- Cross-module recursive variant (MathExpr) with evaluate
+- Lambda capturing cross-module function
+- Complex 5-module project (types, validators, transforms, formatter)
+- Cross-module trait with supertrait, trait impl on variant type
+- Recursive binary tree (sum + depth), multi-module algebra/geometry projects
+- Generic pair operations (swap, mapFirst, mapBoth with 4 type params)
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -1223,3 +1309,9 @@ Covered:
 | 35b     | 0 (2681)          | Widely-implemented trait method (.show()) inferred to wrong type | Yes (423a2a5) | 2681 |
 | 35c     | ~25 (2682-2707)   | Named args in trait UFCS not resolved during HM inference | Yes (f94f6b0) | ~2710 |
 | 35d     | 50 (2731-2780)    | (none - clean run) | N/A | 2780 |
+| 36      | 50 (2781-2830)    | (none - complex patterns) | N/A | 2830 |
+| 36b     | 50 (2831-2880)    | (none - single-impl inference + errors) | N/A | 2880 |
+| 37      | 50 (2881-2930)    | (none - trait dispatch + re-exports) | N/A | 2930 |
+| 37b     | 50 (2931-2980)    | (none - adversarial inference) | N/A | 2980 |
+| 37c     | 50 (2981-3030)    | (none - type system limits) | N/A | 3030 |
+| 37d     | 50 (3031-3080)    | (none - fragile area targeting) | N/A | 3080 |
