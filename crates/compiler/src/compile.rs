@@ -10944,10 +10944,33 @@ impl Compiler {
                 // Start counter high to avoid conflicts with a=1, b=2, etc.
                 let mut trait_var_counter = 100u32;
                 let hm_param_types: Vec<nostos_types::Type> = param_types.iter()
-                    .map(|pt| {
+                    .enumerate()
+                    .map(|(idx, pt)| {
                         if pt == "_" {
                             trait_var_counter += 1;
                             nostos_types::Type::Var(trait_var_counter)
+                        } else if idx == 0 && impl_specifies_type_args {
+                            // For concrete generic impls like Holder[Int]: Measurable,
+                            // generalize the self type to use fresh type variables
+                            // (e.g., Holder[?X] instead of Holder[Int]).
+                            // Without this, multiple impls (Holder[Int], Holder[String])
+                            // overwrite each other in trait_method_ufcs_signatures under
+                            // the same key "Holder.measure/_", and whichever is registered
+                            // last wins, causing type errors for the other instantiation.
+                            let base_ty = self.type_name_to_type(pt);
+                            if let nostos_types::Type::Named { ref name, ref args } = base_ty {
+                                if !args.is_empty() {
+                                    let generic_args: Vec<nostos_types::Type> = args.iter().map(|_| {
+                                        trait_var_counter += 1;
+                                        nostos_types::Type::Var(trait_var_counter)
+                                    }).collect();
+                                    nostos_types::Type::Named { name: name.clone(), args: generic_args }
+                                } else {
+                                    base_ty
+                                }
+                            } else {
+                                base_ty
+                            }
                         } else {
                             self.type_name_to_type(pt)
                         }
