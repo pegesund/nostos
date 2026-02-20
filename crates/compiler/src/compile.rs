@@ -17221,16 +17221,69 @@ impl Compiler {
                         // Check visibility before allowing the call
                         self.check_visibility(&call_name, method.span)?;
 
-                        // Compile arguments, filling in defaults for missing parameters
-                        // Use call_name (resolved overload) to find the correct defaults
+                        // Compile arguments, filling in defaults for missing parameters.
+                        // Handle named arguments by reordering to match parameter positions.
                         let mut arg_regs = Vec::new();
                         let param_defaults = self.get_function_param_defaults(&call_name);
                         let param_names = self.get_function_param_names(&call_name);
+                        let has_named_args_mod = args.iter().any(|a| matches!(a, CallArg::Named(_, _)));
                         let num_params = param_names.len().max(args.len());
 
-                        if !param_names.is_empty() && param_defaults.iter().any(|d| d.is_some()) && args.len() < num_params {
-                            // Function has default parameters and caller provided fewer args
-                            // Fill in defaults for missing positional arguments
+                        if has_named_args_mod && !param_names.is_empty() {
+                            // Named args in module-qualified call: reorder to match param positions.
+                            let mut resolved: Vec<Option<&CallArg>> = vec![None; num_params];
+                            let mut positional_idx = 0usize;
+
+                            for arg in args.iter() {
+                                match arg {
+                                    CallArg::Named(name, _) => {
+                                        if let Some(pos) = param_names.iter().position(|p| p.as_deref() == Some(&name.node)) {
+                                            resolved[pos] = Some(arg);
+                                        } else {
+                                            while positional_idx < num_params && resolved[positional_idx].is_some() {
+                                                positional_idx += 1;
+                                            }
+                                            if positional_idx < num_params {
+                                                resolved[positional_idx] = Some(arg);
+                                            }
+                                        }
+                                    }
+                                    CallArg::Positional(_) => {
+                                        while positional_idx < num_params && resolved[positional_idx].is_some() {
+                                            positional_idx += 1;
+                                        }
+                                        if positional_idx < num_params {
+                                            resolved[positional_idx] = Some(arg);
+                                            positional_idx += 1;
+                                        }
+                                    }
+                                }
+                            }
+
+                            for (i, opt_arg) in resolved.into_iter().enumerate() {
+                                if let Some(arg) = opt_arg {
+                                    let reg = self.compile_expr_tail(Self::call_arg_expr(arg), false)?;
+                                    arg_regs.push(reg);
+                                } else if let Some(Some(default_expr)) = param_defaults.get(i) {
+                                    // Compile default in function definer's import context
+                                    let resolved_qname = self.resolve_name(&qualified_name);
+                                    let prefix = format!("{}/", resolved_qname);
+                                    let saved_imports = self.fn_ast_imports.get(resolved_qname.as_str())
+                                        .or_else(|| self.fn_ast_imports.iter()
+                                            .find(|(k, _)| k.starts_with(&prefix))
+                                            .map(|(_, v)| v))
+                                        .map(|fn_imports| {
+                                            let saved = self.imports.clone();
+                                            self.imports.extend(fn_imports.iter().map(|(k, v)| (k.clone(), v.clone())));
+                                            saved
+                                        });
+                                    let reg = self.compile_expr_tail(default_expr, false)?;
+                                    if let Some(saved) = saved_imports { self.imports = saved; }
+                                    arg_regs.push(reg);
+                                }
+                            }
+                        } else if !param_names.is_empty() && param_defaults.iter().any(|d| d.is_some()) && args.len() < num_params {
+                            // Positional args with defaults: fill in missing positions
                             for i in 0..num_params {
                                 if i < args.len() {
                                     let reg = self.compile_expr_tail(Self::call_arg_expr(&args[i]), false)?;
@@ -17866,27 +17919,87 @@ impl Compiler {
                             }
                         };
 
-                        // Compile arguments, filling in defaults for missing parameters
+                        // Compile arguments, filling in defaults for missing parameters.
+                        // Handle named arguments by reordering to match parameter positions.
                         let mut arg_regs = Vec::new();
                         let param_defaults = self.get_function_param_defaults(&call_name);
                         let param_names = self.get_function_param_names(&call_name);
-                        let num_params = param_names.len().max(all_args.len());
+                        let has_named_args = args.iter().any(|a| matches!(a, CallArg::Named(_, _)));
 
-                        if !param_names.is_empty() && param_defaults.iter().any(|d| d.is_some()) && all_args.len() < num_params {
-                            // Trait method has default parameters and caller provided fewer args
-                            for i in 0..num_params {
-                                if i < all_args.len() {
-                                    let reg = self.compile_expr_tail(&all_args[i], false)?;
+                        if has_named_args && param_names.len() > 1 {
+                            // Named args in UFCS call: reorder args to match param positions.
+                            // param_names[0] is "self", so caller args map to param_names[1..].
+                            let obj_reg = self.compile_expr_tail(obj, false)?;
+                            arg_regs.push(obj_reg);
+
+                            // Non-self param names and defaults (positions 1+)
+                            let non_self_names = &param_names[1..];
+                            let non_self_defaults: Vec<Option<&Expr>> = param_defaults.iter().skip(1)
+                                .map(|d| d.as_ref())
+                                .collect();
+                            let num_non_self = non_self_names.len();
+
+                            // Build resolved arg list for non-self positions
+                            let mut resolved: Vec<Option<&Expr>> = vec![None; num_non_self];
+                            let mut positional_idx = 0usize;
+
+                            for arg in args.iter() {
+                                match arg {
+                                    CallArg::Named(name, expr) => {
+                                        // Find matching param position (in non-self names)
+                                        if let Some(pos) = non_self_names.iter().position(|p| p.as_deref() == Some(&name.node)) {
+                                            resolved[pos] = Some(expr);
+                                        } else {
+                                            // Unknown name - treat as positional
+                                            while positional_idx < num_non_self && resolved[positional_idx].is_some() {
+                                                positional_idx += 1;
+                                            }
+                                            if positional_idx < num_non_self {
+                                                resolved[positional_idx] = Some(expr);
+                                            }
+                                        }
+                                    }
+                                    CallArg::Positional(expr) => {
+                                        while positional_idx < num_non_self && resolved[positional_idx].is_some() {
+                                            positional_idx += 1;
+                                        }
+                                        if positional_idx < num_non_self {
+                                            resolved[positional_idx] = Some(expr);
+                                            positional_idx += 1;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Compile each resolved arg, filling defaults for missing positions
+                            for i in 0..num_non_self {
+                                if let Some(expr) = resolved[i] {
+                                    let reg = self.compile_expr_tail(expr, false)?;
                                     arg_regs.push(reg);
-                                } else if let Some(Some(default_expr)) = param_defaults.get(i) {
+                                } else if let Some(default_expr) = non_self_defaults.get(i).and_then(|d| *d) {
                                     let reg = self.compile_expr_tail(default_expr, false)?;
                                     arg_regs.push(reg);
                                 }
                             }
                         } else {
-                            for arg in &all_args {
-                                let reg = self.compile_expr_tail(arg, false)?;
-                                arg_regs.push(reg);
+                            // No named args: use original positional logic with defaults
+                            let num_params = param_names.len().max(all_args.len());
+
+                            if !param_names.is_empty() && param_defaults.iter().any(|d| d.is_some()) && all_args.len() < num_params {
+                                for i in 0..num_params {
+                                    if i < all_args.len() {
+                                        let reg = self.compile_expr_tail(&all_args[i], false)?;
+                                        arg_regs.push(reg);
+                                    } else if let Some(Some(default_expr)) = param_defaults.get(i) {
+                                        let reg = self.compile_expr_tail(default_expr, false)?;
+                                        arg_regs.push(reg);
+                                    }
+                                }
+                            } else {
+                                for arg in &all_args {
+                                    let reg = self.compile_expr_tail(arg, false)?;
+                                    arg_regs.push(reg);
+                                }
                             }
                         }
 
