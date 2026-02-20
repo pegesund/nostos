@@ -34477,6 +34477,21 @@ impl Compiler {
             .collect::<Vec<_>>()
             .join(".");
 
+        // Check that the module exists before proceeding
+        if !self.known_modules.contains(&module_path) {
+            // Also check if any functions or types exist with this module prefix
+            // (covers edge cases where module was registered via function/type visibility)
+            let prefix = format!("{}.", module_path);
+            let has_functions = self.function_visibility.keys().any(|k| k.starts_with(&prefix));
+            let has_types = self.type_visibility.keys().any(|k| k.starts_with(&prefix));
+            if !has_functions && !has_types {
+                return Err(CompileError::TypeError {
+                    message: format!("module `{}` not found", module_path),
+                    span: use_stmt.span,
+                });
+            }
+        }
+
         // Store the use statement for later retrieval (for editor/browser)
         let use_stmt_string = match &use_stmt.imports {
             UseImports::All => format!("use {}.*", module_path),

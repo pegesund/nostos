@@ -702,6 +702,30 @@ Covered (targeting specific known-tricky code paths):
 - Constraint solver ordering: trait bound after type resolve, method chain intermediate types
 - map(f).sort() where f changes type, empty list type from later constraint
 
+### Probes 1281-1330: Error Detection Probes (25 false-positive + 25 false-negative)
+**Focus**: Testing that valid code is NOT rejected (false positives) and invalid code IS rejected (false negatives).
+
+**False-positive tests (25/25 passed)**: Valid code correctly accepted:
+- Nested generic types, lambda inference, cross-module imports
+- Trait method calls, pattern matching, pipeline chains
+- Higher-order functions, recursive types, closures
+
+**False-negative tests (22/24 passed, 1 bug found, 1 design question)**:
+
+### Probe 1325: **BUG FOUND** - `use NonExistent.*` silently succeeds
+**Problem**: `use NonExistent.*` doesn't produce an error. The compiler silently ignores
+imports from modules that don't exist, which means typos in module names go undetected.
+
+**Root cause**: `compile_use_stmt` didn't validate that the referenced module actually
+exists before processing the import. It would simply find no functions/types with the
+module prefix and import nothing, silently.
+
+**Fix**: Added module existence validation at the start of `compile_use_stmt`. Checks
+`known_modules`, `function_visibility`, and `type_visibility` for the module path. If
+none contain the module, returns `CompileError::TypeError` with "module `X` not found".
+
+**Tests**: All 1436 tests pass after the fix.
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -737,3 +761,4 @@ Covered (targeting specific known-tricky code paths):
 | 19b     | 50 (1131-1180)    | (none - clean run) | N/A | 1180 |
 | 20      | 50 (1181-1230)    | (none - targeted) | N/A | 1230 |
 | 20b     | 50 (1231-1280)    | (none - targeted) | N/A | 1280 |
+| 21      | 44 (1281-1324)    | `use NonExistent.*` silently succeeds | Yes (pending) | 1330 |
