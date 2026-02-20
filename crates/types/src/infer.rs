@@ -4497,20 +4497,21 @@ impl<'a> InferCtx<'a> {
                     // for multiple types (e.g., Show has impls for Int, String, Bool, etc.).
                     // If so, we cannot infer a unique receiver type from the method name alone.
                     let is_widely_implemented = {
-                        // Find which trait defines this method
-                        let defining_trait = self.env.traits.values().find(|td| {
-                            td.required.iter().chain(td.defaults.iter())
-                                .any(|m| m.name == call.method_name)
-                        });
-                        if let Some(trait_def) = defining_trait {
-                            // Count how many distinct types implement this trait
-                            let impl_count = self.env.impls.iter()
-                                .filter(|imp| imp.trait_name == trait_def.name)
-                                .count();
-                            impl_count >= 2
-                        } else {
-                            false
-                        }
+                        // Check ALL traits that define this method. If ANY of them
+                        // has 2+ implementations, the method is widely available and
+                        // we should not infer a specific receiver type.
+                        self.env.traits.values().any(|td| {
+                            let has_method = td.required.iter().chain(td.defaults.iter())
+                                .any(|m| m.name == call.method_name);
+                            if has_method {
+                                let impl_count = self.env.impls.iter()
+                                    .filter(|imp| imp.trait_name == td.name)
+                                    .count();
+                                impl_count >= 2
+                            } else {
+                                false
+                            }
+                        })
                     };
                     if is_widely_implemented {
                         still_deferred.push(call);

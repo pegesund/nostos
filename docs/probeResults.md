@@ -1085,6 +1085,47 @@ Covered:
 - Recompilation and cache (value change, arity change, add/remove exports, cache invalidation)
 - Import system stress (5-item selective, 8-export wildcard, re-export, duplicate import)
 
+### Probes 2531-2630: All Passed (100 probes - deep generic patterns)
+Covered:
+- Deep generic types (Option[List[Int]], Result[List[String], Int], nested 3-deep)
+- Cross-module generic function chains with multiple type params
+- HOF with recursive match-based patterns
+- Lambda factories and closures with trait method calls
+- Complex multi-module pipeline patterns
+- Generic type instantiation at 4+ different types
+- Cross-module trait impls on generic types
+
+### Probes 2631-2680: All Passed (50 probes - multi-file adversarial)
+Covered:
+- Cross-module generic types with trait methods and UFCS chains
+- Diamond dependency patterns with generic functions
+- Nested lambdas with type inference across modules
+- Two-phase compilation alphabetical sensitivity (aaa depends on zzz)
+- Trait impl in alphabetically-earlier module than type def
+- Chain of generic function calls across 3 modules
+- Cross-module overloaded function resolution
+- Recursive generic functions across modules
+- Multiple trait impls on same type from different modules
+- 4-module chains with type flow
+
+### Probe 2681: **BUG FOUND** - Widely-implemented trait method inferred to wrong type
+**Problem**: `makeFormatter() = x => x.show()` fails with "type mismatch: expected Panel,
+found Int". The unique-type inference (from probe 2608 fix) incorrectly resolves the
+receiver to `Panel` because `Panel.show` is the only explicit UFCS entry found.
+
+**Root cause**: The unique-type inference searched `env.functions` for `{TypeName}.{method}`
+patterns and found only `Panel.show` for the `show` method. But `show` is a method of the
+`Show` trait which is implemented for ALL primitive types (Int, Float, Bool, Char, String)
+via auto-derived impls. These auto-derived impls don't create UFCS entries in env.functions,
+so the search incorrectly identifies Panel as the unique implementing type.
+
+**Fix**: Before doing unique-type inference, check if the method belongs to a trait that has
+2+ implementations registered in `env.impls`. This covers all widely-implemented traits
+(Show, Hash, Eq, Ord) whose methods work on many types. The check is fully general - it
+uses trait definition and implementation data rather than hardcoded method names.
+
+**Commit**: `423a2a5` - Skip unique-type inference for methods from widely-implemented traits
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -1152,3 +1193,5 @@ Covered:
 | 34      | 50 (2531-2580)    | (none - deep generic patterns) | N/A | 2580 |
 | 34b     | 27 (2581-2607)    | Lambda returning trait method call on untyped param | Yes (e0166e7) | 2608 |
 | 34c     | 22 (2609-2630)    | (none - after fix) | N/A | 2630 |
+| 35      | 50 (2631-2680)    | (none - clean run) | N/A | 2680 |
+| 35b     | 0 (2681)          | Widely-implemented trait method (.show()) inferred to wrong type | Yes (423a2a5) | 2681 |
