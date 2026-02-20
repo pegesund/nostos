@@ -779,6 +779,41 @@ Covered:
 - Multiple type params with mapBoth
 - Cross-module exception throwing and catching
 
+### Probes 1431-1480: All Passed (50 probes)
+Covered:
+- Cross-module record types with pattern matching (field access + destructuring)
+- Deeply nested cross-module chains (4-5 level A->B->C->D->main)
+- Two traits on same type, both imported cross-module
+- Trait methods taking trait-bounded arguments
+- Map.lookup equality (Some/None comparison works after fix)
+- Result type from try/catch, cross-module exceptions
+- Cross-module closures capturing imported functions
+- Nested variant matching (2-3 levels: Some(Ok(x)), Some(Some(Some(v))))
+- Default parameters in function signatures
+- List operations on cross-module types (.map().filter().sum())
+- Pattern matching on imported record fields
+- Multiple imports from same module (use M.{f, g, h})
+- Qualified calls mixed with unqualified in same function
+- Recursive variant types cross-module (Expr tree evaluator)
+
+### Probes 1481-1530: All Passed (50 probes)
+Covered:
+- Type-changing fold (accumulator type differs from element type)
+- Function returning function returning function (3-level closures)
+- Complex pipeline with type changes at each step
+- Match on string literal patterns
+- List of variant values with map/filter on constructors
+- Nested match with destructuring on generic variants
+- Higher-order: generic fn taking generic fn as arg
+- Cross-module diamond dependency with shared types
+- Cross-module recursive types (Expr = Lit | Add | Mul)
+- Generic function composition
+- Equality comparison on Option (verifying fix)
+- Generic functions with Num/Eq constraints
+- Mutual recursion patterns
+- Tuple construction and element access
+- Chained method calls (filter.map.fold)
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -816,4 +851,6 @@ Covered:
 | 20b     | 50 (1231-1280)    | (none - targeted) | N/A | 1280 |
 | 21      | 44 (1281-1324)    | `use NonExistent.*` silently succeeds | Yes (2b3d467) | 1330 |
 | 22      | 50 (1331-1380)    | (none - clean run) | N/A | 1380 |
-| 22b     | 32 (1381-1412)    | Option/Result type_name mismatch in native fns | Yes (pending) | 1430 |
+| 22b     | 32 (1381-1412)    | Option/Result type_name mismatch + record pattern match | Yes (f7fcf9c, d327f94) | 1430 |
+| 23      | 50 (1431-1480)    | (none - clean run) | N/A | 1480 |
+| 23b     | 50 (1481-1530)    | (none - clean run) | N/A | 1530 |
