@@ -1423,4 +1423,4 @@ with unassigned registers are safely ignored since reachable Returns will match.
 | 39      | 100 (3281-3380)   | (none - clean run) | N/A | 3380 |
 | 39b     | ~60 (3340)        | JIT bool detection for if/then/else returning Bool | Yes (1c1754a) | ~3340 |
 | 40      | ~48 (3381-3428)   | Function-typed field call collides with builtin module method (e.g., `cb.run(x)` on record → Exec.run) | Yes (3838ac8) | ~3430 |
-| 40b     | ~100 (3431-3500+30 multi-file) | (none - clean run: function-typed fields, multi-file, two-phase compilation, HOFs, trait dispatch, recursive types) | N/A | ~3500 |
+| 40b     | ~80 (3431-3511+30 multi-file) | Function-typed field `send` collides with UFCS method `WebSocket.send` (same class as 40, but true UFCS not module fn) | Yes (0caf5ea) | ~3511 |
