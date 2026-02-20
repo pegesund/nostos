@@ -994,6 +994,36 @@ Covered:
 - Cross-module exceptions (3-module propagation, custom error types, Result chaining)
 - Real-world apps (todo, math vectors, game entities, interpreter, config, event bus, router, ORM)
 
+### Probe 2141: **BUG FOUND** - Trait methods with default parameters fail on UFCS calls
+**Problem**: `n.add()` where `add(self, x: Int = 5)` has a default parameter fails with
+"Wrong number of arguments: expected 2, found 1".
+
+**Root cause**: Three locations in compile.rs needed fixes:
+1. Trait impl forward declaration `FunctionValue` had `required_params: None`
+2. UFCS signature `FunctionType` had `required_params: None`
+3. Trait dispatch argument compilation didn't fill in default values for missing arguments
+
+**Fix**: Compute `required_params` from method clause parameters at both registration
+points. Also fill in default values at the trait dispatch argument compilation path.
+
+**Commit**: `dd92d6c`
+
+### Probes 2131-2180: All Passed (50 probes, after fix)
+Covered:
+- Cross-module default parameters (function call defaults, module value defaults, overloaded)
+- Trait method default params (single-file and cross-module, multiple types, pattern matching)
+- Generic constructors in complex positions (Some in map, nested Some, fold accumulator, pipeline)
+- Method chaining on trait method results (.map().filter(), Option match, cross-module)
+- Closures capturing trait-bounded values (nested closures, cross-module, combined with defaults)
+
+### Probes 2181-2230: All Passed (50 probes - adversarial corners)
+Covered:
+- Mutual recursion + generics (isEven/isOdd, Tree processing, cross-module, expression eval)
+- Complex pattern match + type propagation (Result[Option[Int]], nested 3 layers, 4+ constructors)
+- Higher-order functions + trait bounds (applyTwice, compose, filter+map chain, named fn args)
+- Record field access chains (3-level deep, cross-module, generic records, map over fields)
+- Pipeline operator stress (5+ steps, type changes, cross-module, feeding into match)
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -1048,3 +1078,6 @@ Covered:
 | 29      | 43 (2031-2073)    | Pattern-matched generic stdlib type loses type info | Yes (696bb26) | 2074 |
 | 29b     | 6 (2075-2080)     | (none - after fix) | N/A | 2080 |
 | 29c     | 50 (2081-2130)    | (none - multi-file stress) | N/A | 2130 |
+| 30      | 10 (2131-2140)    | Trait method default params fail on UFCS calls | Yes (dd92d6c) | 2141 |
+| 30b     | 39 (2142-2180)    | (none - after fix) | N/A | 2180 |
+| 30c     | 50 (2181-2230)    | (none - adversarial corners) | N/A | 2230 |
