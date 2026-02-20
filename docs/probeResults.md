@@ -1024,6 +1024,35 @@ Covered:
 - Record field access chains (3-level deep, cross-module, generic records, map over fields)
 - Pipeline operator stress (5+ steps, type changes, cross-module, feeding into match)
 
+### Probe 2239: **BUG FOUND** - Named arguments in UFCS trait method calls assigned to wrong positions
+**Problem**: `s.adjusted(scale: 3)` where `adjusted(self, offset: Int = 0, scale: Int = 1)`
+assigns `3` to `offset` instead of `scale`, returning `(5+3)*1=8` instead of `(5+0)*3=15`.
+
+**Root cause**: Two UFCS code paths in compile.rs compiled arguments purely positionally
+without checking for `CallArg::Named` variants. Module-qualified calls and trait method
+dispatch both ignored named argument names.
+
+**Fix**: Added named-arg reordering logic to both UFCS paths, matching the approach already
+used in `compile_call()`. For trait method UFCS, accounts for `self` being at position 0.
+
+**Commit**: `8e7fbbb`
+
+### Probes 2231-2280: All Passed (50 probes, after fix)
+Covered:
+- Trait method default param regression (single-file, cross-module, multiple types, chained calls)
+- Type inference through let bindings (lambda binding, conditional, HOF, nested closures)
+- Recursive variant types with methods (binary tree, linked list, expression eval, cross-module)
+- Complex fold patterns (record accumulator, Map building, different accumulator type, nested folds)
+- Mixed feature stress (trait+generic+cross-module, default+match+pipeline, closure+trait+fold)
+
+### Probes 2281-2330: All Passed (50 probes - dispatch ordering + instantiation)
+Covered:
+- Cross-module trait dispatch ordering (3-file separation, multiple traits, supertrait, chained)
+- Generic function instantiation (4+ types, generic calling generic, composition, cross-module)
+- Pattern matching + type narrowing (wildcard, recursive, list patterns, guard conditions)
+- String processing (split+map+fold, chars+filter, comparison chains, method chaining)
+- Concurrency (MVar with generic types, multiple spawns, channel-like patterns)
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -1081,3 +1110,6 @@ Covered:
 | 30      | 10 (2131-2140)    | Trait method default params fail on UFCS calls | Yes (dd92d6c) | 2141 |
 | 30b     | 39 (2142-2180)    | (none - after fix) | N/A | 2180 |
 | 30c     | 50 (2181-2230)    | (none - adversarial corners) | N/A | 2230 |
+| 31      | 8 (2231-2238)     | Named args in UFCS trait method calls | Yes (8e7fbbb) | 2239 |
+| 31b     | 41 (2240-2280)    | (none - after fix) | N/A | 2280 |
+| 31c     | 50 (2281-2330)    | (none - dispatch+instantiation) | N/A | 2330 |
