@@ -1089,6 +1089,59 @@ impl FnDef {
         let mut class_to_type_var: HashMap<String, char> = HashMap::new();
         let mut type_var_counter = 0u8;
 
+        // Collect type parameter letters already used in annotations (e.g., 'a' and 'b'
+        // from `p: Pair[a, b]`) so we don't assign them to untyped parameters.
+        let mut used_letters: HashSet<char> = HashSet::new();
+        fn collect_type_param_letters(ty: &TypeExpr, used: &mut HashSet<char>) {
+            match ty {
+                TypeExpr::Name(ident) => {
+                    let name = &ident.node;
+                    if name.len() == 1 {
+                        if let Some(c) = name.chars().next() {
+                            if c.is_ascii_lowercase() {
+                                used.insert(c);
+                            }
+                        }
+                    }
+                }
+                TypeExpr::Generic(_, args) => {
+                    for arg in args {
+                        collect_type_param_letters(arg, used);
+                    }
+                }
+                TypeExpr::Function(params, ret) => {
+                    for p in params {
+                        collect_type_param_letters(p, used);
+                    }
+                    collect_type_param_letters(ret, used);
+                }
+                TypeExpr::Tuple(elems) => {
+                    for e in elems {
+                        collect_type_param_letters(e, used);
+                    }
+                }
+                TypeExpr::Record(fields) => {
+                    for (_, ty) in fields {
+                        collect_type_param_letters(ty, used);
+                    }
+                }
+                TypeExpr::Unit => {}
+            }
+        }
+        for p in &clause.params {
+            if let Some(t) = p.ty.as_ref() {
+                collect_type_param_letters(t, &mut used_letters);
+            }
+        }
+        // Also check return type annotation
+        if let Some(t) = clause.return_type.as_ref() {
+            collect_type_param_letters(t, &mut used_letters);
+        }
+        // Skip past any letters used in annotations
+        while type_var_counter < 26 && used_letters.contains(&((b'a' + type_var_counter) as char)) {
+            type_var_counter += 1;
+        }
+
         let param_types: Vec<String> = clause.params.iter()
             .enumerate()
             .map(|(i, p)| {
@@ -1100,6 +1153,10 @@ impl FnDef {
                     let type_var = *class_to_type_var.entry(root).or_insert_with(|| {
                         let v = (b'a' + type_var_counter) as char;
                         type_var_counter = (type_var_counter + 1) % 26;
+                        // Skip letters used in annotations
+                        while type_var_counter < 26 && used_letters.contains(&((b'a' + type_var_counter) as char)) {
+                            type_var_counter += 1;
+                        }
                         v
                     });
                     type_var.to_string()
@@ -1107,6 +1164,10 @@ impl FnDef {
                     // Complex pattern without simple name
                     let v = (b'a' + type_var_counter) as char;
                     type_var_counter = (type_var_counter + 1) % 26;
+                    // Skip letters used in annotations
+                    while type_var_counter < 26 && used_letters.contains(&((b'a' + type_var_counter) as char)) {
+                        type_var_counter += 1;
+                    }
                     v.to_string()
                 }
             })
