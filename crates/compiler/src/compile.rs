@@ -12515,11 +12515,13 @@ impl Compiler {
         let names_to_check: Vec<&str> = {
             let mut names = vec![name];
             if let Some(imported) = self.imports.get(name) {
-                if imported.as_str() != name {
+                // Only consider imports from user modules, not stdlib.
+                // Stdlib functions should not prevent builtin dispatch.
+                if imported.as_str() != name && !imported.starts_with("stdlib.") {
                     names.push(imported.as_str());
                 }
             }
-            if qualified.as_str() != name && !names.contains(&qualified.as_str()) {
+            if qualified.as_str() != name && !names.contains(&qualified.as_str()) && !qualified.starts_with("stdlib.") {
                 names.push(qualified.as_str());
             }
             names
