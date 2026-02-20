@@ -4905,42 +4905,14 @@ impl Compiler {
                     .map(|(c, _, _)| c)
                     .collect();
 
-                // Sort clauses by specificity: literals before variables, typed before untyped
-                // This ensures pattern matching tries specific patterns first
+                // Sort only by type annotation count: typed params before untyped.
+                // Do NOT sort by pattern specificity - preserve definition order
+                // for pattern-based clauses (like Haskell/ML/Erlang).
                 let mut sorted_clauses = all_clauses;
                 sorted_clauses.sort_by(|a, b| {
-                    // Compare clause specificity based on patterns AND type annotations
-                    fn clause_specificity(clause: &FnClause) -> (i32, i32) {
-                        // Primary: pattern specificity, Secondary: type annotation count
-                        fn pattern_specificity(p: &Pattern) -> i32 {
-                            match p {
-                                // Literals are most specific
-                                Pattern::Int(_, _) | Pattern::Int8(_, _) | Pattern::Int16(_, _) |
-                                Pattern::Int32(_, _) | Pattern::UInt8(_, _) | Pattern::UInt16(_, _) |
-                                Pattern::UInt32(_, _) | Pattern::UInt64(_, _) | Pattern::Float(_, _) |
-                                Pattern::Float32(_, _) | Pattern::BigInt(_, _) | Pattern::Decimal(_, _) |
-                                Pattern::Char(_, _) | Pattern::Bool(_, _) | Pattern::String(_, _) |
-                                Pattern::Unit(_) => 0,
-                                // Variant/constructor patterns
-                                Pattern::Variant(_, _, _) | Pattern::List(_, _) |
-                                Pattern::Tuple(_, _) | Pattern::Record(_, _) => 1,
-                                // Wildcard and variable are least specific
-                                Pattern::Wildcard(_) | Pattern::Var(_) => 2,
-                                // Other patterns
-                                _ => 1,
-                            }
-                        }
-                        let pattern_spec = if clause.params.is_empty() {
-                            2
-                        } else {
-                            pattern_specificity(&clause.params[0].pattern)
-                        };
-                        // Count typed params (more typed = more specific)
-                        // Negate so that more typed params sorts first
-                        let typed_count = -(clause.params.iter().filter(|p| p.ty.is_some()).count() as i32);
-                        (pattern_spec, typed_count)
-                    }
-                    clause_specificity(a).cmp(&clause_specificity(b))
+                    let a_typed = -(a.params.iter().filter(|p| p.ty.is_some()).count() as i32);
+                    let b_typed = -(b.params.iter().filter(|p| p.ty.is_some()).count() as i32);
+                    a_typed.cmp(&b_typed)
                 });
 
                 fn_order.push(qualified_name.clone());
@@ -34383,33 +34355,14 @@ impl Compiler {
                     .map(|(c, _)| c)
                     .collect();
 
-                // Sort clauses by specificity: literals before variables, typed before untyped
+                // Sort only by type annotation count: typed params before untyped.
+                // Do NOT sort by pattern specificity - preserve definition order
+                // for pattern-based clauses (like Haskell/ML/Erlang).
                 let mut sorted_clauses = all_clauses;
                 sorted_clauses.sort_by(|a, b| {
-                    fn clause_specificity(clause: &FnClause) -> (i32, i32) {
-                        fn pattern_specificity(p: &Pattern) -> i32 {
-                            match p {
-                                Pattern::Int(_, _) | Pattern::Int8(_, _) | Pattern::Int16(_, _) |
-                                Pattern::Int32(_, _) | Pattern::UInt8(_, _) | Pattern::UInt16(_, _) |
-                                Pattern::UInt32(_, _) | Pattern::UInt64(_, _) | Pattern::Float(_, _) |
-                                Pattern::Float32(_, _) | Pattern::BigInt(_, _) | Pattern::Decimal(_, _) |
-                                Pattern::Char(_, _) | Pattern::Bool(_, _) | Pattern::String(_, _) |
-                                Pattern::Unit(_) => 0,
-                                Pattern::Variant(_, _, _) | Pattern::List(_, _) |
-                                Pattern::Tuple(_, _) | Pattern::Record(_, _) => 1,
-                                Pattern::Wildcard(_) | Pattern::Var(_) => 2,
-                                _ => 1,
-                            }
-                        }
-                        let pattern_spec = if clause.params.is_empty() {
-                            2
-                        } else {
-                            pattern_specificity(&clause.params[0].pattern)
-                        };
-                        let typed_count = -(clause.params.iter().filter(|p| p.ty.is_some()).count() as i32);
-                        (pattern_spec, typed_count)
-                    }
-                    clause_specificity(a).cmp(&clause_specificity(b))
+                    let a_typed = -(a.params.iter().filter(|p| p.ty.is_some()).count() as i32);
+                    let b_typed = -(b.params.iter().filter(|p| p.ty.is_some()).count() as i32);
+                    a_typed.cmp(&b_typed)
                 });
 
                 fn_order.push(qualified_name.clone());
