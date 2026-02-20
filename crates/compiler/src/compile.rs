@@ -10757,17 +10757,26 @@ impl Compiler {
         if !traits_vec.contains(&trait_name) {
             traits_vec.push(trait_name.clone());
         }
-        // Also register under the base type name (without type args and without module
-        // prefix) so that find_trait_method can find the trait when looking up by the
-        // short name (e.g., "List" finds traits registered on "types.List[Int]").
-        // This is needed for cross-module trait impls on builtin or generic types.
+        // Also register under base type names so find_trait_method can find the trait:
+        // 1. Module-qualified without type args: "types.Either2" (for cross-module lookup)
+        // 2. Short base without module prefix: "Either2" (for unqualified lookup)
         let base_for_traits = if let Some(bracket_pos) = qualified_type_name.find('[') {
             &qualified_type_name[..bracket_pos]
         } else {
             qualified_type_name.as_str()
         };
+        // Register under module-qualified base (without type args)
+        if base_for_traits != qualified_type_name {
+            let traits_vec_base = self.type_traits
+                .entry(base_for_traits.to_string())
+                .or_insert_with(Vec::new);
+            if !traits_vec_base.contains(&trait_name) {
+                traits_vec_base.push(trait_name.clone());
+            }
+        }
+        // Register under short base (without module prefix or type args)
         let short_base = base_for_traits.rsplit('.').next().unwrap_or(base_for_traits);
-        if short_base != qualified_type_name {
+        if short_base != qualified_type_name && short_base != base_for_traits {
             let traits_vec2 = self.type_traits
                 .entry(short_base.to_string())
                 .or_insert_with(Vec::new);
@@ -10790,8 +10799,17 @@ impl Compiler {
             // Use qualified_type_name so cross-module trait impls register with the
             // correct type prefix (e.g., "types.Shape" not "display.Shape").
             // This ensures find_trait_method can find the function.
-            let local_method_name = format!("{}.{}.{}", qualified_type_name, trait_name, method_name);
-            let base_name = if qualified_type_name.contains('.') {
+            // IMPORTANT: Strip type args from the type name for the function key.
+            // find_trait_method always looks up by base name (e.g., "List" not "List[a]"),
+            // so the function key must also use the base name. Type args are encoded in
+            // the signature suffix (after /) for overload resolution.
+            let base_qualified_type = if let Some(bracket_pos) = qualified_type_name.find('[') {
+                &qualified_type_name[..bracket_pos]
+            } else {
+                qualified_type_name.as_str()
+            };
+            let local_method_name = format!("{}.{}.{}", base_qualified_type, trait_name, method_name);
+            let base_name = if base_qualified_type.contains('.') {
                 // Type is already fully qualified from another module - use as-is
                 local_method_name.clone()
             } else {
@@ -11083,19 +11101,31 @@ impl Compiler {
 
         // Compile each method as a function with a special qualified name: Type.Trait.method
         // Use unqualified type name here because compile_fn_def will add module prefix
+        // IMPORTANT: Strip type args from the type name for the function key.
+        // This must match the forward declaration pass which also strips type args.
+        let bare_unqualified_type_name = if let Some(bracket_pos) = unqualified_type_name.find('[') {
+            &unqualified_type_name[..bracket_pos]
+        } else {
+            unqualified_type_name.as_str()
+        };
         let mut method_names = Vec::new();
         for method in &merged_methods {
             let method_name = method.name.node.clone();
             // Use unqualified type name for method - compile_fn_def adds module prefix
-            let local_method_name = format!("{}.{}.{}", unqualified_type_name, trait_name, method_name);
+            let local_method_name = format!("{}.{}.{}", bare_unqualified_type_name, trait_name, method_name);
             // The fully qualified method name (for registration)
             // For cross-module trait impls, the correct key uses the type's original module
             // prefix, not the current module prefix. E.g., "types.Shape.display.Displayable.display"
             // not "display.Shape.display.Displayable.display"
             let compile_fn_def_name = self.qualify_name(&local_method_name);
-            let qualified_method_name = if qualified_type_name.contains('.') && qualified_type_name != self.qualify_name(&unqualified_type_name) {
+            let base_qualified_type_for_body = if let Some(bracket_pos) = qualified_type_name.find('[') {
+                &qualified_type_name[..bracket_pos]
+            } else {
+                qualified_type_name.as_str()
+            };
+            let qualified_method_name = if base_qualified_type_for_body.contains('.') && qualified_type_name != self.qualify_name(&unqualified_type_name) {
                 // Cross-module: type is from another module, use its qualified name
-                format!("{}.{}.{}", qualified_type_name, trait_name, method_name)
+                format!("{}.{}.{}", base_qualified_type_for_body, trait_name, method_name)
             } else {
                 compile_fn_def_name.clone()
             };
