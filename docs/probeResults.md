@@ -960,6 +960,40 @@ Covered:
 - Numeric edge cases (large ints, float precision, negative modulo, conversions)
 - Advanced collections (zip, zipWith, take/drop, any/all, find, groupBy, flatten)
 
+### Probe 2074: **BUG FOUND** - Pattern-matched values from generic stdlib types lose type info
+**Problem**: Calling a trait method on a value extracted via pattern matching from a generic
+stdlib type (e.g., `Some(entry)` where scrutinee is `Option[Entry]`) fails because `entry`
+gets type `"T"` instead of `"Entry"`.
+
+**Root cause**: When stdlib types are loaded from bytecode cache, `type_defs` (AST-level
+type definitions with type parameter names) is not populated. The pattern binding type
+extraction relied solely on `type_defs` to map type parameters (like `T` in `Some(T)`)
+to concrete types (like `Entry`). Without the mapping, variables were assigned the raw
+type parameter name.
+
+**Fix**: Added `type_param_names: Vec<String>` field to `TypeInfo` struct. Populated from
+`TypeDef.type_params` during source compilation and `TypeValue.type_params` during cache
+loading. The pattern binding extraction falls back to `TypeInfo.type_param_names` when
+`type_defs` doesn't have the entry.
+
+**Commit**: `696bb26`
+
+### Probes 2031-2080: All Passed (50 probes, after fix)
+Covered:
+- Trait methods inside lambdas (map, filter, fold, nested, captured, chained)
+- Generic functions with trait bounds (Num, Eq, Ord, custom, two bounds, recursive)
+- Trait impls with complex bodies (pattern match, closures, builder, cross-module)
+- Multi-module trait dispatch (3-4 module chains, fold over trait values, pipeline)
+- Edge cases (if/else returning trait types, Map.lookup + trait method, tuple + trait)
+
+### Probes 2081-2130: All Passed (50 probes - comprehensive multi-file)
+Covered:
+- Module chain stress (6-module chain, fan-in, fan-out, star, diamond+complex)
+- Compilation order (reverse alphabetical, numbers in names, 6-level deep chains)
+- Cross-module pattern matching (nested variants, guards, exhaustive, Option[ModuleType])
+- Cross-module exceptions (3-module propagation, custom error types, Result chaining)
+- Real-world apps (todo, math vectors, game entities, interpreter, config, event bus, router, ORM)
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -1011,3 +1045,6 @@ Covered:
 | 28      | 1 (1931)          | Generic fn with trait bound + lambda param types | Yes | 1936 |
 | 28b     | 44 (1937-1980)    | (none - after fix) | N/A | 1980 |
 | 28c     | 50 (1981-2030)    | (none - adversarial) | N/A | 2030 |
+| 29      | 43 (2031-2073)    | Pattern-matched generic stdlib type loses type info | Yes (696bb26) | 2074 |
+| 29b     | 6 (2075-2080)     | (none - after fix) | N/A | 2080 |
+| 29c     | 50 (2081-2130)    | (none - multi-file stress) | N/A | 2130 |
