@@ -10912,7 +10912,17 @@ impl Compiler {
                     signature: Some(sig_string.clone()),
                     param_types: param_types.clone(),
                     return_type: None,
-                    required_params: None,
+                    required_params: {
+                        // Compute required_params for trait methods with default parameters
+                        // so that resolve_function_call can find the method when called
+                        // with fewer arguments (e.g., n.add() when add has a default param)
+                        if let Some(clause) = method.clauses.first() {
+                            let req = clause.params.iter().filter(|p| p.default.is_none()).count();
+                            if req < arity { Some(req) } else { None }
+                        } else {
+                            None
+                        }
+                    },
                 };
                 self.functions.insert(full_name.clone(), Arc::new(placeholder));
 
@@ -11048,7 +11058,16 @@ impl Compiler {
                 };
 
                 let fn_type = nostos_types::FunctionType {
-                    required_params: None,
+                    required_params: {
+                        // Compute required_params for trait methods with default parameters
+                        // so that HM inference arity check allows calls with fewer arguments
+                        if let Some(clause) = method.clauses.first() {
+                            let req = clause.params.iter().filter(|p| p.default.is_none()).count();
+                            if req < arity { Some(req) } else { None }
+                        } else {
+                            None
+                        }
+                    },
                     type_params: vec![],
                     params: hm_param_types,
                     ret: Box::new(hm_ret_type),
@@ -17847,11 +17866,28 @@ impl Compiler {
                             }
                         };
 
-                        // Compile arguments
+                        // Compile arguments, filling in defaults for missing parameters
                         let mut arg_regs = Vec::new();
-                        for arg in &all_args {
-                            let reg = self.compile_expr_tail(arg, false)?;
-                            arg_regs.push(reg);
+                        let param_defaults = self.get_function_param_defaults(&call_name);
+                        let param_names = self.get_function_param_names(&call_name);
+                        let num_params = param_names.len().max(all_args.len());
+
+                        if !param_names.is_empty() && param_defaults.iter().any(|d| d.is_some()) && all_args.len() < num_params {
+                            // Trait method has default parameters and caller provided fewer args
+                            for i in 0..num_params {
+                                if i < all_args.len() {
+                                    let reg = self.compile_expr_tail(&all_args[i], false)?;
+                                    arg_regs.push(reg);
+                                } else if let Some(Some(default_expr)) = param_defaults.get(i) {
+                                    let reg = self.compile_expr_tail(default_expr, false)?;
+                                    arg_regs.push(reg);
+                                }
+                            }
+                        } else {
+                            for arg in &all_args {
+                                let reg = self.compile_expr_tail(arg, false)?;
+                                arg_regs.push(reg);
+                            }
                         }
 
                         let dst = self.alloc_reg();
