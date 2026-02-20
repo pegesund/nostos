@@ -1383,6 +1383,39 @@ Covered:
 - Deeply nested if-else, multi-clause functions
 - Complex fold patterns (scanl, running totals, type-changing folds)
 
+## Session 42 (2026-02-20)
+
+### Probes 3598-3617: Single-file probes (20 probes, all passed or test writing errors)
+Covered:
+- Generic swap function, fibonacci with var mutation
+- filterMap, record update syntax (not supported - test errors)
+- Ok/Err construction, sortBy, list comprehension patterns
+- String.join, take/drop argument ordering
+
+### Probes proj116-proj125: Multi-file probes (10 projects)
+- proj116: Generic Stack container (passed after naming fix)
+- proj117: **BUG FOUND** - cross-module generic type annotation collision
+- proj118-proj125: Various multi-file patterns (most passed after syntax fixes)
+
+### Probe proj117: **BUG FOUND** - AST-based signature reuses annotation type param letters
+**Problem**: `mapPair(p: Pair[a, b], f) = match p { Pair(x, y) -> Pair(f(x), f(y)) }`
+in module `zzz_types`, called from `main` as `mapPair(makePair(1, 2), x => x * 2)` -
+failed with "type mismatch: expected Int, found (Int) -> Int" on `makePair(1, 2)`.
+
+**Root cause**: When `try_hm_inference` fails for `mapPair` (returns None), the
+fallback `def.signature()` in ast.rs generates type variable letters starting at 'a'.
+Since the annotation `p: Pair[a, b]` already uses 'a' and 'b', the untyped param `f`
+gets letter 'a' - colliding with Pair's first type parameter. The resulting signature
+`Pair[a, b] -> a -> b` makes `parse_signature_string` map both the Pair's first arg
+and the `f` param to Var(1). When main calls `mapPair(Pair[Int,Int], lambda)`, the
+lambda's type (Int)->Int conflicts with Int for the shared Var(1).
+
+**Fix**: Collect all lowercase single-letter type params used in annotations and skip
+them when assigning type variables to untyped parameters and return types. Now `f`
+gets letter 'c' instead of 'a', giving the correct `Pair[a, b] -> c -> d` signature.
+
+**Commit**: `f9e6346` - Fix cross-module type variable collision in AST-based signature generation
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -1471,3 +1504,4 @@ Covered:
 | 40b     | ~80 (3431-3511+30 multi-file) | Function-typed field `send` collides with UFCS method `WebSocket.send` (same class as 40, but true UFCS not module fn) | Yes (0caf5ea) | ~3511 |
 | 40c     | ~25 (3512-3536)   | Mutable variable aliasing: let-bindings share register with var | Yes (016bc3f) | ~3536 |
 | 40d     | ~61 (3537-3597+20 multi-file) | (none - clean run after var fix) | N/A | ~3597 |
+| 41      | ~20 single + 10 multi (3598-3628) | Cross-module generic type annotation collision in AST-based signature | Yes (f9e6346) | ~3628 |
