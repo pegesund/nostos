@@ -814,6 +814,33 @@ Covered:
 - Tuple construction and element access
 - Chained method calls (filter.map.fold)
 
+### Probes 1531-1580: All Passed (50 probes - complex integration)
+Covered:
+- Trait impl + generic type + cross-module + pattern match (combined)
+- 5-module projects (types, traits, impls, utils, main)
+- Generic accumulator fold over cross-module variant list (AST evaluator)
+- Trait method calling another trait method on same self
+- Cross-module trait impl using functions from third module
+- Lambda capturing cross-module type and using methods
+- Record with Option fields, variant with named field constructors
+- sortBy with cross-module record type
+- Recursive data structures (BST, Peano, custom lists)
+- Cross-module UFCS method chains (x.addTo().mulBy().extract())
+- 4-module employee filter/aggregate pipeline
+- 5-module expression evaluator with environment
+
+### Probes 1581-1630: All Passed (50 probes - regression + boundary)
+Covered:
+- **Regressions verified**: Map.lookup equality, use NonExistent.* error,
+  trait impl on List[a], trait -> Self on generic, cross-module polymorphic return,
+  annotation type params + trait bounds
+- **Empty list**: [].length(), [].map(f), [].fold(init, f), [].filter(f)
+- **Single-element**: [42].head(), [42].tail(), [42].map(f)
+- **Boundary**: 10+ chained method calls, 6-8 parameter functions,
+  5-7 level nested if/else, 8-branch match, 3 trait impls on same type
+- **Cross-module re-export chain**: A -> B -> C
+- **Error detection**: private function access, wrong constructor arity
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -854,3 +881,5 @@ Covered:
 | 22b     | 32 (1381-1412)    | Option/Result type_name mismatch + record pattern match | Yes (f7fcf9c, d327f94) | 1430 |
 | 23      | 50 (1431-1480)    | (none - clean run) | N/A | 1480 |
 | 23b     | 50 (1481-1530)    | (none - clean run) | N/A | 1530 |
+| 24      | 50 (1531-1580)    | (none - integration) | N/A | 1580 |
+| 24b     | 50 (1581-1630)    | (none - regression+boundary) | N/A | 1630 |
