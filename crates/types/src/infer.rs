@@ -3862,10 +3862,17 @@ impl<'a> InferCtx<'a> {
                         // Reorder arguments if there are named args that need to be
                         // matched to specific parameter positions (not just positionally).
                         let reordered_args: Vec<Type> = if !call.named_args.is_empty() {
-                            // Look up param names to map named args to correct positions
+                            // Look up param names to map named args to correct positions.
+                            // Try multiple key patterns: bare method name, qualified with type,
+                            // and with arity suffix. Trait UFCS methods are registered under
+                            // "{Type}.{method}" keys, so we must also try the qualified name.
                             let param_names_opt = self.env.function_param_names.get(&call.method_name)
                                 .or_else(|| {
-                                    // Try with qualified name patterns
+                                    // Try with qualified name: "{TypeName}.{method}"
+                                    self.env.function_param_names.get(&qualified_name)
+                                })
+                                .or_else(|| {
+                                    // Try with arity suffix patterns
                                     let qualified = format!("{}/", call.method_name);
                                     self.env.function_param_names.get(&qualified)
                                 });

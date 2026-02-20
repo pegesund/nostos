@@ -2275,6 +2275,22 @@ impl Compiler {
                 if !env.functions.contains_key(fn_name) {
                     env.insert_function(fn_name.clone(), fn_type.clone());
                 }
+                // Register param names for named argument resolution in type inference.
+                // UFCS keys are like "Server.setup/_, _" - extract base "Server.setup".
+                let base_name = if let Some(slash_pos) = fn_name.find('/') {
+                    &fn_name[..slash_pos]
+                } else {
+                    fn_name.as_str()
+                };
+                if !env.function_param_names.contains_key(base_name) {
+                    let names = self.get_function_param_names(base_name);
+                    let param_name_strings: Vec<String> = names.into_iter()
+                        .filter_map(|n| n)
+                        .collect();
+                    if !param_name_strings.is_empty() {
+                        env.function_param_names.insert(base_name.to_string(), param_name_strings);
+                    }
+                }
             }
 
             // Register trait methods under bare names with generic signatures.
@@ -11077,6 +11093,14 @@ impl Compiler {
                     ufcs_fn_name.clone(),
                     fn_type.clone(),
                 );
+                // Register fn_asts entry under UFCS key so get_function_param_names
+                // can find param names for named argument resolution.
+                // Without this, trait method calls with named args that skip defaults
+                // (e.g., s.setup(port: 3000)) fail because param names lookup
+                // uses the UFCS key "Server.setup" but fn_asts has "Server.Configurable.setup".
+                if !self.fn_asts.contains_key(&ufcs_fn_name) {
+                    self.fn_asts.insert(ufcs_fn_name.clone(), method.clone());
+                }
                 // Also register under qualified type name for cross-module lookups.
                 // e.g., "Circle.area/_" AND "shapes.Circle.area/_" so that both
                 // local and imported type names can find the method.
@@ -17925,6 +17949,9 @@ impl Compiler {
                         let param_defaults = self.get_function_param_defaults(&call_name);
                         let param_names = self.get_function_param_names(&call_name);
                         let has_named_args = args.iter().any(|a| matches!(a, CallArg::Named(_, _)));
+                        if has_named_args {
+                            eprintln!("DEBUG UFCS NAMED ARGS: call_name={}, param_names={:?}, qualified_method={}", call_name, param_names, qualified_method);
+                        }
 
                         if has_named_args && param_names.len() > 1 {
                             // Named args in UFCS call: reorder args to match param positions.
