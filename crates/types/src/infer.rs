@@ -4569,6 +4569,27 @@ impl<'a> InferCtx<'a> {
                             }
                         }
                     }
+                    // Before committing to the unique candidate, check if any
+                    // user-defined record type has a function-typed field with the
+                    // same name as the method. If so, the method call could be a
+                    // field access + call (e.g., `obj.send(x)` where `send` is a
+                    // function-typed field), and we should NOT infer the receiver
+                    // type from the UFCS candidate.
+                    if !multiple && candidate_type.is_some() {
+                        let has_fn_field = self.env.types.values().any(|td| {
+                            if let TypeDef::Record { fields, .. } = td {
+                                fields.iter().any(|(fname, ftype, _)| {
+                                    fname == &call.method_name && matches!(ftype, Type::Function(_))
+                                })
+                            } else {
+                                false
+                            }
+                        });
+                        if has_fn_field {
+                            // Ambiguous: could be UFCS method OR function-typed field
+                            candidate_type = None;
+                        }
+                    }
                     if !multiple {
                         if let Some(type_name) = candidate_type {
                             // Found unique type - unify receiver with it
