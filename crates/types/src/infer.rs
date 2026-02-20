@@ -7356,7 +7356,15 @@ impl<'a> InferCtx<'a> {
             let def = types_clone.get(type_name).expect("type_name from types_clone keys");
             // Check if this is a record type with the same name as the constructor
             // Record types can be constructed using their type name as a constructor
-            if type_name == name {
+            // Also match cross-module: type_name "Errors.AppError" matches constructor "AppError"
+            let record_matches = if type_name == name {
+                true
+            } else if let Some(dot_pos) = type_name.rfind('.') {
+                &type_name[dot_pos + 1..] == name
+            } else {
+                false
+            };
+            if record_matches {
                 if let TypeDef::Record { params, fields, .. } = def {
                     // Create fresh type variables for each type parameter
                     let substitution: HashMap<String, Type> = params
