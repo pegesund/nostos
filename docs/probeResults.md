@@ -873,6 +873,27 @@ Covered:
 - Higher-order functions cross-module (applyTwice, addN, factories)
 - Complex 5-file projects (type, trait, impl, helpers, main)
 
+### Probes 1731-1780: All Passed (50 probes - type inference edge cases)
+Covered:
+- Type variable escape through closures (lambda captures, nested closures, stored lambdas)
+- Constraint ordering stress (trait bounds before type, retroactive chain constraining)
+- Cross-module generic instantiation (5+ types, aliased imports, transitive generics)
+- Record/variant inference (generic fields, update patterns, two records same field name)
+- Method resolution (.map on List vs Option, chain on literal, methods on match/if results)
+- Error handling integration (try/catch returning Option, nested Result[Option[Int]])
+
+### Probes 1781-1830: All Passed (50 probes - advanced multi-file)
+Covered:
+- Circular module dependencies (mutual A<->B, 3-cycle A->B->C->A, diamond+circular)
+- Module importing itself, re-export circular patterns
+- Shadowing/name resolution (local shadows import, lambda param shadows outer, import shadows builtin)
+- Two wildcard imports with same name, qualified vs unqualified access
+- Complex pattern matching (guards, nested tuples, string literals, Bool exhaustive)
+- Nested variant patterns (Some(Ok(x)), Some(Err(e)), None)
+- Default parameters (0-3 args, complex defaults, cross-module, named args)
+- Concurrency (spawn/await, MVar generic, multiple spawns different types)
+- Collections (Set operations, nested Map of Lists, List of Maps)
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -917,3 +938,5 @@ Covered:
 | 24b     | 50 (1581-1630)    | (none - regression+boundary) | N/A | 1630 |
 | 25      | 50 (1631-1680)    | (none - creative patterns) | N/A | 1680 |
 | 25b     | 50 (1681-1730)    | (none - multi-file two-phase) | N/A | 1730 |
+| 26      | 50 (1731-1780)    | (none - type inference edge cases) | N/A | 1780 |
+| 26b     | 50 (1781-1830)    | (none - advanced multi-file) | N/A | 1830 |
