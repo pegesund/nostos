@@ -675,6 +675,33 @@ Covered:
 - Functions with 5+ differently-typed parameters
 - 4-module data transformation pipeline
 
+### Probes 1181-1230: All Passed (50 targeted probes)
+Covered (deliberately targeting previously-buggy code paths):
+- Trait dispatch key resolution: List[a]/Option[Int] trait impls, cross-module 4-module chains
+- Two traits on same List[Int], trait method taking List param, chain of 3 trait calls
+- Recursive trait methods on generic variants, cross-module Option[Int] impls
+- Two-phase compilation: reverse alphabetical ordering, mutual function deps, 5-module projects
+- Module re-exports, private function visibility, mixed qualified/wildcard imports
+- 5-level deep module chains (A->B->C->D->main)
+- Lambda/closure inference: cross-module HOF, Map fold accumulator, nested lambdas
+- Record creation in map, type-transforming pipeline lambdas
+- Type var unification: same generic fn at different types, trait bounds + concrete types
+- Recursive generic functions, closure captured vars constraining type variables
+
+### Probes 1231-1280: All Passed (50 targeted probes)
+Covered (targeting specific known-tricky code paths):
+- Trait Self return type on generics: Box[a]: Mappable with mapSelf -> Self
+- Chained Self-returning methods (.appendVal(1).appendVal(2).appendVal(3))
+- Two traits with -> Self on same type, Option[Self] return, List[Self] return
+- Cross-module Self on record types, Self on variant types, Self with 3 type params
+- Variant pattern matching type propagation: Result[String,Int], Either[List[Int],String]
+- Nested match on Option + inner variant, 3+ field constructors, unit + param ctors
+- Cross-module pattern matching, recursive Tree matching, method call result matching
+- Polymorphic function recompilation: Int+String in same body, swapped type param orders
+- Cross-module chained generics, polymorphic fn as HOF argument, recursive cross-module
+- Constraint solver ordering: trait bound after type resolve, method chain intermediate types
+- map(f).sort() where f changes type, empty list type from later constraint
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -708,3 +735,5 @@ Covered:
 | 18b     | 50 (1031-1080)    | (none - clean run) | N/A | 1080 |
 | 19      | 50 (1081-1130)    | (none - clean run) | N/A | 1130 |
 | 19b     | 50 (1131-1180)    | (none - clean run) | N/A | 1180 |
+| 20      | 50 (1181-1230)    | (none - targeted) | N/A | 1230 |
+| 20b     | 50 (1231-1280)    | (none - targeted) | N/A | 1280 |
