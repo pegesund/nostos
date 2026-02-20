@@ -937,7 +937,7 @@ impl JitCompiler {
     /// Used by the VM to decide whether to wrap the JIT result as Bool or Int64.
     fn function_returns_bool(&self, func: &FunctionValue) -> bool {
         let mut bool_regs: std::collections::HashSet<u8> = std::collections::HashSet::new();
-        let mut return_reg: Option<u8> = None;
+        let mut all_return_regs: Vec<u8> = Vec::new();
         for instr in func.code.code.iter() {
             match instr {
                 Instruction::LoadTrue(dst) | Instruction::LoadFalse(dst) => {
@@ -960,12 +960,17 @@ impl JitCompiler {
                     }
                 }
                 Instruction::Return(src) => {
-                    return_reg = Some(*src);
+                    all_return_regs.push(*src);
                 }
                 _ => {}
             }
         }
-        return_reg.map_or(false, |r| bool_regs.contains(&r))
+        // Function returns bool if ANY Return instruction returns a bool register.
+        // Dead-code Returns (e.g., from compile_fn_def after compile_if in tail position)
+        // may return from a non-bool register, but the reachable Returns will be from
+        // bool registers. If at least one Return is bool-returning, mark the function
+        // as bool-returning.
+        !all_return_regs.is_empty() && all_return_regs.iter().any(|r| bool_regs.contains(r))
     }
 
     /// Compile a pure numeric function to native code (backward compatible - compiles for Int64)
