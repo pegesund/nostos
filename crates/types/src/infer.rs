@@ -4527,7 +4527,7 @@ impl<'a> InferCtx<'a> {
                     let method_suffix = format!(".{}", call.method_name);
                     let mut candidate_type: Option<String> = None;
                     let mut multiple = false;
-                    for fn_name in self.env.functions.keys() {
+                    for (fn_name, fn_type) in self.env.functions.iter() {
                         let base = if let Some(slash_pos) = fn_name.find('/') {
                             &fn_name[..slash_pos]
                         } else {
@@ -4537,6 +4537,28 @@ impl<'a> InferCtx<'a> {
                             if !prefix.contains('.') && !prefix.is_empty()
                                 && prefix.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
                             {
+                                // Verify this is actually a UFCS method (first param is the
+                                // receiver type) and not a module-qualified function (e.g.,
+                                // Exec.run has String as first param, not Exec). Module functions
+                                // should NOT be used to infer receiver types since they're not
+                                // methods on values of that type.
+                                let is_ufcs_method = fn_type.params.first().map_or(false, |first_param| {
+                                    match first_param {
+                                        Type::Named { name, .. } => {
+                                            let base_name = name.split('.').last().unwrap_or(name);
+                                            base_name == prefix
+                                        }
+                                        Type::Var(_) | Type::TypeParam(_) => true, // Generic first param is OK
+                                        Type::List(_) => prefix == "List",
+                                        Type::Map(_, _) => prefix == "Map",
+                                        Type::Set(_) => prefix == "Set",
+                                        Type::String => prefix == "String",
+                                        _ => false,
+                                    }
+                                });
+                                if !is_ufcs_method {
+                                    continue; // Skip module functions
+                                }
                                 if candidate_type.as_ref() != Some(&prefix.to_string()) {
                                     if candidate_type.is_some() {
                                         multiple = true;
