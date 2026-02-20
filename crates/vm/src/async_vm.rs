@@ -3314,9 +3314,12 @@ impl AsyncProcess {
                         }
                     }
                     GcValue::Record(ptr) => {
-                        // Records: compare type_name directly
+                        // Records: compare type_name directly, or by local name
+                        // (for cross-module records where type_name is "Module.Type"
+                        // but pattern uses just "Type")
                         if let Some(rec) = self.heap.get_record(*ptr) {
                             &*rec.type_name == expected_ctor.as_str()
+                            || rec.type_name.rsplit('.').next() == Some(expected_ctor.as_str())
                         } else {
                             false
                         }
@@ -9713,7 +9716,7 @@ impl AsyncProcess {
                         let tuple = GcValue::Tuple(self.heap.alloc_tuple(vec![channel_val, payload_val]));
                         // Create Some variant
                         GcValue::Variant(self.heap.alloc_variant(
-                            Arc::new("Option".to_string()),
+                            Arc::new("stdlib.list.Option".to_string()),
                             Arc::new("Some".to_string()),
                             vec![tuple],
                         ))
@@ -9721,7 +9724,7 @@ impl AsyncProcess {
                     None => {
                         // Create None variant
                         GcValue::Variant(self.heap.alloc_variant(
-                            Arc::new("Option".to_string()),
+                            Arc::new("stdlib.list.Option".to_string()),
                             Arc::new("None".to_string()),
                             vec![],
                         ))
@@ -10933,7 +10936,7 @@ impl AsyncProcess {
                         is_float.push(false);
                         // Create None variant for Option type
                         let var_ptr = self.heap.alloc_variant(
-                            Arc::new("Option".to_string()),
+                            Arc::new("stdlib.list.Option".to_string()),
                             Arc::new("None".to_string()),
                             vec![],
                         );
@@ -11086,7 +11089,7 @@ impl AsyncProcess {
                 match self.parse_string_to_type(value, inner_type) {
                     Ok(inner_val) => {
                         let var_ptr = self.heap.alloc_variant(
-                            Arc::new("Option".to_string()),
+                            Arc::new("stdlib.list.Option".to_string()),
                             Arc::new("Some".to_string()),
                             vec![inner_val],
                         );
@@ -11104,7 +11107,7 @@ impl AsyncProcess {
     /// Create Ok(value) variant for Result type
     fn make_ok_variant(&mut self, value: GcValue) -> GcValue {
         let var_ptr = self.heap.alloc_variant(
-            Arc::new("Result".to_string()),
+            Arc::new("stdlib.list.Result".to_string()),
             Arc::new("Ok".to_string()),
             vec![value],
         );
@@ -11115,7 +11118,7 @@ impl AsyncProcess {
     fn make_err_variant(&mut self, message: &str) -> GcValue {
         let msg_ptr = self.heap.alloc_string(message.to_string());
         let var_ptr = self.heap.alloc_variant(
-            Arc::new("Result".to_string()),
+            Arc::new("stdlib.list.Result".to_string()),
             Arc::new("Err".to_string()),
             vec![GcValue::String(msg_ptr)],
         );
@@ -13423,7 +13426,7 @@ impl AsyncVM {
             arity: 2,
             func: Box::new(|args, heap| {
                 use regex::Regex;
-                let option_type = Arc::new("Option".to_string());
+                let option_type = Arc::new("stdlib.list.Option".to_string());
                 let s = match &args[0] {
                     GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
                     _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
@@ -13585,7 +13588,7 @@ impl AsyncVM {
             arity: 2,
             func: Box::new(|args, heap| {
                 use regex::Regex;
-                let option_type = Arc::new("Option".to_string());
+                let option_type = Arc::new("stdlib.list.Option".to_string());
                 let s = match &args[0] {
                     GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
                     _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
@@ -13883,7 +13886,7 @@ impl AsyncVM {
                     found: args[1].type_name(heap).to_string()
                 })?;
 
-                let option_type = Arc::new("Option".to_string());
+                let option_type = Arc::new("stdlib.list.Option".to_string());
 
                 match &args[0] {
                     GcValue::Map(ptr) => {

@@ -726,6 +726,59 @@ none contain the module, returns `CompileError::TypeError` with "module `X` not 
 
 **Tests**: All 1436 tests pass after the fix.
 
+### Probes 1331-1380: All Passed (50 probes)
+Covered:
+- Lambda returning lambda (higher-order closures, currying patterns)
+- Method chains returning different types at each step
+- Type inference through complex if/match chains
+- Generic functions with empty collections
+- Partial application patterns
+- Pipeline operator with functions
+- Mutual recursion across modules (isEven/isOdd)
+- Cross-module closures returning generic types
+- Deeply nested pattern matching on generic variants
+- Recursive types with multiple type params
+- Import shadowing (first import wins for wildcards)
+- Nested generics (Option[Option[Int]], Result[Int, String])
+- Closures with captures from multiple scopes
+- Cross-module types with builder patterns
+
+### Probe 1413: **BUG FOUND** - Option/Result variant type_name mismatch in native functions
+**Problem**: `Map.lookup(m, "a") == Some(1)` returns `false` even though both display
+as `Some(1)`. Also `Map.lookup(m, "z") == None` returns `false`.
+
+**Root cause**: Native VM functions (Map.lookup, Regex.find, Regex.captures) create Option
+variants with type_name `"Option"`, while compiled Nostos code creates them with the
+fully qualified `"stdlib.list.Option"`. The variant equality check (`gc_values_equal`)
+compares `type_name` fields, so they don't match.
+
+Same issue affects Result: `make_ok_variant`/`make_err_variant` used `"Result"` instead
+of `"stdlib.list.Result"`.
+
+**Fix**: Changed all native function Option/Result variant creation in async_vm.rs to
+use the fully qualified type names: `"stdlib.list.Option"` and `"stdlib.list.Result"`.
+7 occurrences fixed across Map.lookup, Regex.find, Regex.captures, parse_string_to_type,
+make_ok_variant, and make_err_variant.
+
+**Tests**: All 1436 tests pass after the fix.
+
+### Probes 1381-1430: All Passed (50 probes, after fix)
+Covered:
+- Recursive expression evaluator with cross-module variant type
+- Nested record field access
+- Map.lookup with Option equality (now works after fix)
+- Triple[A,B,C] with mapFirst
+- Nested lambdas capturing outer scope
+- Cross-module record pattern matching
+- Filter/map comprehension chains
+- Generic fold producing string
+- Recursive variant type (MyList[T]) with myLen/myMap
+- Mutual recursion with variant pattern matching
+- Cross-module trait impl in main module
+- Complex fold producing records
+- Multiple type params with mapBoth
+- Cross-module exception throwing and catching
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -761,4 +814,6 @@ none contain the module, returns `CompileError::TypeError` with "module `X` not 
 | 19b     | 50 (1131-1180)    | (none - clean run) | N/A | 1180 |
 | 20      | 50 (1181-1230)    | (none - targeted) | N/A | 1230 |
 | 20b     | 50 (1231-1280)    | (none - targeted) | N/A | 1280 |
-| 21      | 44 (1281-1324)    | `use NonExistent.*` silently succeeds | Yes (pending) | 1330 |
+| 21      | 44 (1281-1324)    | `use NonExistent.*` silently succeeds | Yes (2b3d467) | 1330 |
+| 22      | 50 (1331-1380)    | (none - clean run) | N/A | 1380 |
+| 22b     | 32 (1381-1412)    | Option/Result type_name mismatch in native fns | Yes (pending) | 1430 |
