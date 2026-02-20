@@ -3446,7 +3446,7 @@ impl<'a> InferCtx<'a> {
     /// wasn't known during initial inference (e.g., status from Server.bind).
     fn check_pending_method_calls(&mut self) -> Result<(), TypeError> {
         // Take ownership of pending calls to avoid borrow issues
-        let mut pending = std::mem::take(&mut self.pending_method_calls);
+        let pending = std::mem::take(&mut self.pending_method_calls);
 
         // Stable-partition: process calls with already-resolved receiver types first,
         // then unresolved ones. This ensures chained calls (a.zip().map()) process
@@ -5346,6 +5346,46 @@ impl<'a> InferCtx<'a> {
             {
                 self.unify_types(&args[0], k)?;
                 self.unify_types(&args[1], v)
+            }
+
+            // Named type that is actually a built-in primitive (e.g., Named("String") vs Type::String)
+            // This can happen when cross-module signatures create Named types for primitives
+            (Type::Named { name, args }, other) | (other, Type::Named { name, args })
+                if args.is_empty() =>
+            {
+                // Try to resolve the Named type to a primitive and re-unify
+                let resolved_name = self.env.resolve_type_name(name);
+                let primitive = match resolved_name.as_str() {
+                    "String" => Some(Type::String),
+                    "Int" | "Int64" => Some(Type::Int),
+                    "Float" | "Float64" => Some(Type::Float),
+                    "Bool" => Some(Type::Bool),
+                    "Char" => Some(Type::Char),
+                    "Int8" => Some(Type::Int8),
+                    "Int16" => Some(Type::Int16),
+                    "Int32" => Some(Type::Int32),
+                    "UInt8" => Some(Type::UInt8),
+                    "UInt16" => Some(Type::UInt16),
+                    "UInt32" => Some(Type::UInt32),
+                    "UInt64" => Some(Type::UInt64),
+                    "Float32" => Some(Type::Float32),
+                    "BigInt" => Some(Type::BigInt),
+                    "Decimal" => Some(Type::Decimal),
+                    "Pid" => Some(Type::Pid),
+                    "Ref" => Some(Type::Ref),
+                    "()" | "Unit" => Some(Type::Unit),
+                    _ => None,
+                };
+                if let Some(prim) = primitive {
+                    if &prim == other {
+                        Ok(())
+                    } else {
+                        // Re-unify the resolved primitive with the other type
+                        self.unify_types(&prim, other)
+                    }
+                } else {
+                    Err(TypeError::UnificationFailed(t1.display(), t2.display()))
+                }
             }
 
             // Mismatch
