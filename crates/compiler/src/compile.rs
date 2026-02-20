@@ -18195,6 +18195,25 @@ impl Compiler {
                                         None
                                     }
                                 })
+                            } else if let nostos_syntax::ast::TypeBody::Variant(variants) = &type_def.body {
+                                // Single-constructor variant with named fields (e.g., type Handler = Handler { apply: (Int) -> Int })
+                                if variants.len() == 1 {
+                                    if let nostos_syntax::ast::VariantFields::Named(fields) = &variants[0].fields {
+                                        fields.iter().enumerate().find_map(|(idx, f)| {
+                                            if f.name.node == method.node
+                                                && matches!(f.ty, nostos_syntax::ast::TypeExpr::Function(_, _))
+                                            {
+                                                Some(idx)
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
                             } else {
                                 None
                             }
