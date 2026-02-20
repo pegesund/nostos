@@ -1238,6 +1238,75 @@ Covered:
 - Recursive binary tree (sum + depth), multi-module algebra/geometry projects
 - Generic pair operations (swap, mapFirst, mapBoth with 4 type params)
 
+### Probes 3081-3130: All Passed (50 probes - inference corners)
+Covered:
+- Method call on match result (arithmetic, string, list)
+- Option pipeline (map chain, unwrapOr)
+- fold with show() in accumulator, fold with separator logic
+- Lambda returning tuple and triple tuple
+- Empty collection operations (map/fold/filter on empty typed lists)
+- Polymorphic identity at 5 types, polymorphic pair at multiple types
+- Nested record field access, generic record type (Box[a])
+- Cross-module polymorphic function, record type, stdlib Result
+- Recursive tree type with sumTree, recursive expression evaluator (AST)
+- Generic stack type (push/peek), function shadowing across modules
+
+### Probe 3165: **BUG FOUND** - Multi-clause function dispatch ignores definition order
+**Problem**: `myTake(xs, 0) = []` followed by `myTake([x|rest], n) = [x] ++ myTake(rest, n-1)`
+incorrectly matches clause 2 when called with `myTake([1,2,3], 0)`, causing infinite recursion.
+
+**Root cause**: The compiler sorted clauses by first-parameter pattern specificity
+(literal=0, constructor=1, variable=2) at two locations in compile.rs (lines 4908-4944
+and 34386-34413). This reordered `myTake(xs, 0)` (variable first param, specificity=2)
+AFTER `myTake([x|rest], n)` (list pattern, specificity=1), breaking the standard
+top-to-bottom definition order semantics.
+
+**Fix**: Removed pattern specificity sorting. Kept only type-annotation-count sorting
+(needed for typed overloads like `f(x: Int)` before `f(x)`). Uses stable sort so
+clauses with equal type annotation counts preserve definition order.
+
+**Commit**: `14be7fb`
+
+### Probes 3131-3180: All Passed (50 probes - real-world patterns)
+Covered:
+- Simple and complex AST with recursive evaluation (IntLit, BoolLit, BinOp)
+- State machine with transitions (Idle, Running, Done)
+- Generic stack, queue implementations
+- Config record with nested defaults, event system with handlers
+- Graph operations (adjacency list), parser combinator patterns
+- Mini type checker with recursive types
+- Data pipeline (validate, transform, aggregate, format)
+- Serialization of variant types, closures capturing state
+- Builder pattern, curried functions, multi-module interpreter
+
+### Probes 3181-3230: All Passed (50 probes - type inference torture)
+Covered:
+- Generic function as both direct call and UFCS
+- Chained user-defined trait methods (transform().describe())
+- Lambda returning tuple with mixed types (Int, Int, String)
+- Cross-module generic functions with 3+ type params (zip3)
+- Pattern match inside lambda inside fold
+- Nested generics 3+ deep (Option[List[Result[Int, String]]])
+- Multiple trait impls in same expression (Point, Circle, Rect)
+- Generic record Box[a] with UFCS methods
+- Type error detection (mismatch, undefined function, wrong arg type)
+- Recursive variant types (Tree, Expr evaluator)
+- Cross-module function factories, generic Either variant
+
+### Probes 3231-3280: All Passed (50 probes - compilation edge cases)
+Covered:
+- Long function bodies (10+ bindings)
+- Deeply nested if/else (5-7 levels, 9 branches)
+- Functions with 6-8 parameters
+- Multiple sequential match expressions
+- Cross-module 6-module project (model/validate/format/stats/search/main)
+- Recursive types (linked list, binary tree, expression tree)
+- Deeply nested pattern matching (Option[Option[Option[Int]]])
+- Generic types (Box[a], Pair[a,b], Either[a,b])
+- Complex string formatting (show/concat/join chains)
+- UFCS method chaining on custom records
+- Overloaded functions with dispatch by parameter type
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -1315,3 +1384,8 @@ Covered:
 | 37b     | 50 (2931-2980)    | (none - adversarial inference) | N/A | 2980 |
 | 37c     | 50 (2981-3030)    | (none - type system limits) | N/A | 3030 |
 | 37d     | 50 (3031-3080)    | (none - fragile area targeting) | N/A | 3080 |
+| 38      | 50 (3081-3130)    | (none - inference corners) | N/A | 3130 |
+| 38b     | 34 (3131-3164)    | Multi-clause dispatch ignores definition order | Yes (14be7fb) | 3165 |
+| 38c     | 15 (3166-3180)    | (none - after fix) | N/A | 3180 |
+| 38d     | 50 (3181-3230)    | (none - type inference torture) | N/A | 3230 |
+| 38e     | 50 (3231-3280)    | (none - compilation edge cases) | N/A | 3280 |
