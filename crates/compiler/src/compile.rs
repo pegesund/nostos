@@ -2006,7 +2006,21 @@ impl Compiler {
             for builtin in BUILTINS {
                 if !env.functions.contains_key(builtin.name) {
                     if let Some(fn_type) = self.parse_signature_string(builtin.signature) {
-                        env.insert_function(builtin.name.to_string(), fn_type);
+                        env.insert_function(builtin.name.to_string(), fn_type.clone());
+
+                        // Register list methods with "List." prefix for UFCS type inference
+                        if builtin.signature.starts_with("[a]") && !builtin.name.contains('.') {
+                            let has_single_type_param = !builtin.signature.contains(" b")
+                                && !builtin.signature.contains("(b");
+                            let is_numeric_only = matches!(builtin.name, "sum" | "product");
+                            let has_callback_param = builtin.signature.contains("(a ->");
+                            if has_single_type_param && !is_numeric_only && !has_callback_param {
+                                let list_qualified = format!("List.{}", builtin.name);
+                                if !env.functions.contains_key(&list_qualified) {
+                                    env.insert_function(list_qualified, fn_type);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2187,7 +2201,24 @@ impl Compiler {
             for builtin in BUILTINS {
                 if !env.functions.contains_key(builtin.name) {
                     if let Some(fn_type) = self.parse_signature_string(builtin.signature) {
-                        env.insert_function(builtin.name.to_string(), fn_type);
+                        env.insert_function(builtin.name.to_string(), fn_type.clone());
+
+                        // Register list methods with "List." prefix for UFCS type inference.
+                        // Without this, check_pending_method_calls phase2 only finds
+                        // String.take (a named BUILTIN) but not List.take, causing batch
+                        // inference to incorrectly resolve generic receivers to String.
+                        if builtin.signature.starts_with("[a]") && !builtin.name.contains('.') {
+                            let has_single_type_param = !builtin.signature.contains(" b")
+                                && !builtin.signature.contains("(b");
+                            let is_numeric_only = matches!(builtin.name, "sum" | "product");
+                            let has_callback_param = builtin.signature.contains("(a ->");
+                            if has_single_type_param && !is_numeric_only && !has_callback_param {
+                                let list_qualified = format!("List.{}", builtin.name);
+                                if !env.functions.contains_key(&list_qualified) {
+                                    env.insert_function(list_qualified, fn_type);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -22582,6 +22613,38 @@ impl Compiler {
             return Err(e);
         }
 
+        // compile_fn_def generates its own function key from param type annotations,
+        // which may differ from mangled_name when the function has default parameters.
+        // E.g., mangled_name="takeN$List[Int]/List[Int]" but compile_fn_def generates
+        // "takeN$List[Int]/List[Int],_" (including the untyped default param).
+        // If this happens, copy the compiled function to the expected mangled_name key.
+        if self.functions.get(&mangled_name).map(|f| f.code.code.is_empty()).unwrap_or(false) {
+            // The placeholder is still empty - compile_fn_def stored code under a different key
+            let base_name_part = mangled_name.split('/').next().unwrap_or(&mangled_name);
+            let actual_key = self.functions.keys()
+                .find(|k| k.starts_with(base_name_part) && k.as_str() != mangled_name && {
+                    self.functions.get(*k).map(|f| !f.code.code.is_empty()).unwrap_or(false)
+                })
+                .cloned();
+            if let Some(actual_key) = actual_key {
+                if let Some(compiled_fn) = self.functions.get(&actual_key).cloned() {
+                    // Update the function name to match mangled_name
+                    let mut fn_val = (*compiled_fn).clone();
+                    fn_val.name = mangled_name.clone();
+                    self.functions.insert(mangled_name.clone(), Arc::new(fn_val));
+                    // Remove the mismatched key
+                    self.functions.remove(&actual_key);
+                    // Also fix function_indices
+                    if let Some(idx) = self.function_indices.remove(&actual_key) {
+                        self.function_indices.insert(mangled_name.clone(), idx);
+                        if let Some(entry) = self.function_list.iter_mut().find(|n| **n == actual_key) {
+                            *entry = mangled_name.clone();
+                        }
+                    }
+                }
+            }
+        }
+
         // Restore context
         self.param_types = saved_param_types;
         self.module_path = saved_module_path;
@@ -29978,7 +30041,24 @@ impl Compiler {
 
                 // Also register under bare name if not already present
                 if !env.functions.contains_key(builtin.name) {
-                    env.insert_function(builtin.name.to_string(), fn_type);
+                    env.insert_function(builtin.name.to_string(), fn_type.clone());
+                }
+
+                // Register list methods with "List." prefix for UFCS type inference.
+                // Without this, phase2 of check_pending_method_calls only finds
+                // String.take (registered as a named BUILTIN) but not List.take,
+                // causing it to incorrectly unify generic receivers with String.
+                if builtin.signature.starts_with("[a]") && !builtin.name.contains('.') {
+                    let has_single_type_param = !builtin.signature.contains(" b")
+                        && !builtin.signature.contains("(b");
+                    let is_numeric_only = matches!(builtin.name, "sum" | "product");
+                    let has_callback_param = builtin.signature.contains("(a ->");
+                    if has_single_type_param && !is_numeric_only && !has_callback_param {
+                        let list_qualified = format!("List.{}", builtin.name);
+                        if !env.functions.contains_key(&list_qualified) {
+                            env.insert_function(list_qualified, fn_type);
+                        }
+                    }
                 }
             }
         }
@@ -30348,7 +30428,6 @@ impl Compiler {
 
         // Create inference context
         let mut ctx = InferCtx::new(&mut env);
-
         // Infer the function type
         let func_ty = match ctx.infer_function(def) {
             Ok(ft) => ft,
@@ -30774,7 +30853,6 @@ impl Compiler {
         } else {
             format!("{} => {}", bounds.join(", "), type_sig)
         };
-
 
 
         // Extract resolved expression types from inference.
@@ -34518,7 +34596,10 @@ impl Compiler {
                     signature: None,
                     param_types,
                     return_type,
-                    required_params: None, // Will be set when fully compiled
+                    required_params: {
+                        let req = clauses[0].params.iter().filter(|p| p.default.is_none()).count();
+                        if req < arity { Some(req) } else { None }
+                    },
                 };
                 self.functions.insert(full_name.clone(), Arc::new(placeholder));
 
