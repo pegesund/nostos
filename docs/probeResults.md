@@ -894,6 +894,23 @@ Covered:
 - Concurrency (spawn/await, MVar generic, multiple spawns different types)
 - Collections (Set operations, nested Map of Lists, List of Maps)
 
+### Probes 1831-1880: All Passed (50 probes - tricky HM inference)
+Covered:
+- Polymorphic recursion (recursive list/tree processing, mutual recursion, fix-point patterns)
+- Higher-rank polymorphism stress (identity at two types, generic args, function lists, compose)
+- Complex data flow (5+ assignments, deeply nested match, shared captures, chained generics)
+- Cross-module trait dispatch (same-name methods, chained traits, qualified paths, nested traits)
+- Operators (comparison chains, arithmetic with generics, show(), equality on custom types)
+- Edge cases (wildcard match, 50+ char fn names, Unicode, 10+ nested calls, 8 params)
+
+### Probes 1881-1930: All Passed (50 probes - combinatorial multi-file)
+Covered:
+- Module ordering permutations (z_types/a_impl, 5-module chains, re-exports, trait-only modules)
+- Forward reference stress (main calls later module, mutual trait impls, circular imports)
+- Visibility/access control (public/private, opaque types, facade patterns, selective imports)
+- Complex generic types (3 type params, nested generics, phantom types, recursive generic Stack)
+- Error detection accuracy (10 tests: private access, missing imports, type mismatches, wrong arity)
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -940,3 +957,5 @@ Covered:
 | 25b     | 50 (1681-1730)    | (none - multi-file two-phase) | N/A | 1730 |
 | 26      | 50 (1731-1780)    | (none - type inference edge cases) | N/A | 1780 |
 | 26b     | 50 (1781-1830)    | (none - advanced multi-file) | N/A | 1830 |
+| 27      | 50 (1831-1880)    | (none - tricky HM inference) | N/A | 1880 |
+| 27b     | 50 (1881-1930)    | (none - combinatorial multi-file) | N/A | 1930 |
