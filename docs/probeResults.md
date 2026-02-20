@@ -1069,6 +1069,22 @@ Covered:
 - Operator overloading via Num/Ord/Eq traits (Money, Vec3, Rational, Complex numbers)
 - Real-world application patterns (calculator, JSON builder, state machine, interpreter, registry)
 
+### Probes 2431-2480: All Passed (50 probes - deep adversarial)
+Covered:
+- Type variable escape in closures (capture + generic fn, closure factories, nested closures)
+- Constraint solver ordering stress (unconstrained vars, delayed resolution, chain filtering)
+- Cross-module type alias-like patterns (generic types, records, variants, recursive types)
+- Complex method resolution (same name on different types, chained calls, pattern-matched values)
+- Edge cases in pattern matching (wildcard nested, tuples, 3+ deep constructors, guard-like)
+
+### Probes 2481-2530: All Passed (50 probes - two-phase compilation stress)
+Covered:
+- Forward references across modules (later alphabetical, diamond, 5-module cascade)
+- Visibility edge cases (private type, public constructor, access denied errors, selective import)
+- Module naming (numbers, single-letter, underscores, 10 modules, type-name match)
+- Recompilation and cache (value change, arity change, add/remove exports, cache invalidation)
+- Import system stress (5-item selective, 8-export wildcard, re-export, duplicate import)
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -1131,3 +1147,5 @@ Covered:
 | 31c     | 50 (2281-2330)    | (none - dispatch+instantiation) | N/A | 2330 |
 | 32      | 50 (2331-2380)    | (none - named args, traits, generics) | N/A | 2380 |
 | 32b     | 50 (2381-2430)    | (none - multi-module, real-world) | N/A | 2430 |
+| 33      | 50 (2431-2480)    | (none - deep adversarial) | N/A | 2480 |
+| 33b     | 50 (2481-2530)    | (none - two-phase compilation stress) | N/A | 2530 |
