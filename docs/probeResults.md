@@ -1416,6 +1416,50 @@ gets letter 'c' instead of 'a', giving the correct `Pair[a, b] -> c -> d` signat
 
 **Commit**: `f9e6346` - Fix cross-module type variable collision in AST-based signature generation
 
+## Session 43 (2026-02-20)
+
+### Probes 3629-3713: All Passed (~85 probes - intensive multi-file + single-file)
+Covered:
+- Multi-file: generic types (Box[a], Pair[a,b], Triple[a,b,c], Quad[a,b,c,d]) across modules
+- Multi-file: HOF with generic type params (mapBox, filterGroup, applyAll)
+- Multi-file: multiple modules importing same generic type (ops + main)
+- Multi-file: 3-module chains (types -> ops -> compute -> main)
+- Multi-file: function returning function cross-module (pairMaker)
+- Multi-file: nested generic types (Labeled[a] with Box, Option, List)
+- Multi-file: recursive generic types (Tree[a] with treeMap, treeSum)
+- Multi-file: variant types without type params (Shape, Color, Expr AST)
+- Multi-file: two unrelated generic types from same module
+- Multi-file: generic type with list field + standalone usage (Accumulator[a])
+- Multi-file: concrete type specialization (Container[Int], Container[String])
+- Two-phase compilation: zzz_ types / aaa_ ops (reverse alphabetical ordering)
+- Two-phase compilation: trait in zzz_ module, impl in aaa_ module
+- Two-phase compilation: type AND trait in zzz_ module, impl in aaa_ module
+- Two-phase compilation: generic type with 4 params, partial annotation cross-module
+- Cross-module traits: pub trait + impl in separate modules (Describable, Scorer, Measurable)
+- Cross-module traits: Scalable with Self return type on record types
+- Cross-module traits: multiple impls (Int + String) in same module
+- Cross-module: record types with generic type fields (Container104)
+- Cross-module: function taking multiple different generic types as arguments
+- Cross-module: generic function returning list of generic type (mapSlots)
+- Cross-module: 4-module projects (types, ops, mul/add, main)
+- Cross-module: zipWith combining two lists into list of generic pairs
+- Single-file: nested map chains, lambda capture type propagation
+- Single-file: function composition (compose, apply)
+- Single-file: tuple destructuring from function returns
+- Single-file: polymorphic identity function at 3 types
+- Single-file: fold with different accumulator types (String, List)
+- Single-file: method call on generic match result
+- Single-file: chained filter/map/take operations
+- Single-file: mutual recursion (isEven/isOdd)
+- Single-file: option pattern matching (safeDivide with filter/map)
+- Single-file: n-ary tree type with recursive sumTree
+- Single-file: record operations (Vec2, Vec3)
+- Single-file: function values in list applied sequentially via fold
+- Single-file: try/catch with custom variant Result type
+
+**No compiler bugs found in 85 probes.** The multi-file compilation, two-phase
+compilation ordering, cross-module generic types, and trait system are all very solid.
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -1505,3 +1549,4 @@ gets letter 'c' instead of 'a', giving the correct `Pair[a, b] -> c -> d` signat
 | 40c     | ~25 (3512-3536)   | Mutable variable aliasing: let-bindings share register with var | Yes (016bc3f) | ~3536 |
 | 40d     | ~61 (3537-3597+20 multi-file) | (none - clean run after var fix) | N/A | ~3597 |
 | 41      | ~20 single + 10 multi (3598-3628) | Cross-module generic type annotation collision in AST-based signature | Yes (f9e6346) | ~3628 |
+| 43      | ~85 (3629-3713) | (none - clean run) | N/A | ~3713 |
