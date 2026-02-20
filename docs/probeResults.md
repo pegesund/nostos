@@ -841,6 +841,38 @@ Covered:
 - **Cross-module re-export chain**: A -> B -> C
 - **Error detection**: private function access, wrong constructor arity
 
+### Probes 1631-1680: All Passed (50 probes - creative patterns)
+Covered:
+- Recursive descent parser pattern (cross-module variant AST)
+- State machine with variant types and transitions
+- Builder pattern with method chaining on records
+- Interpreter pattern: Expr type with environment Map
+- Generic container with multiple operations (push, pop, peek, size)
+- Cross-module visitor pattern on variant types
+- Fold-based computations on deeply nested types
+- Generic pair/triple types with mapFirst, mapSecond
+- Complex pipeline with type changes at every step
+- Lambda factories (functions returning lambdas based on args)
+- Cross-module trait hierarchies (3 traits, 2 types)
+- Recursive tree operations (depth, flatten, map)
+- Sort/filter on records with field access
+- Higher-order closures with multiple captures
+
+### Probes 1681-1730: All Passed (50 probes - multi-file two-phase compilation)
+Covered:
+- Type defined in alphabetically-last module (z_ prefix), used from a_ prefix
+- Transitive import chains (3-4 levels deep: A -> B -> C -> D)
+- Diamond imports (two modules both importing shared module)
+- Trait in separate module from type and impl (3-file separation)
+- Module with only types vs only functions
+- Generic types/functions cross-module (Box[a], MyPair[a,b], Either[a,b])
+- Selective vs wildcard imports (`use lib.{valA, valB}`)
+- Public/private visibility (private helper, public function)
+- Cross-module type used in 4+ modules (Token type in 5 modules)
+- Recursive types cross-module (Tree, MyList, BinOp AST)
+- Higher-order functions cross-module (applyTwice, addN, factories)
+- Complex 5-file projects (type, trait, impl, helpers, main)
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -883,3 +915,5 @@ Covered:
 | 23b     | 50 (1481-1530)    | (none - clean run) | N/A | 1530 |
 | 24      | 50 (1531-1580)    | (none - integration) | N/A | 1580 |
 | 24b     | 50 (1581-1630)    | (none - regression+boundary) | N/A | 1630 |
+| 25      | 50 (1631-1680)    | (none - creative patterns) | N/A | 1680 |
+| 25b     | 50 (1681-1730)    | (none - multi-file two-phase) | N/A | 1730 |
