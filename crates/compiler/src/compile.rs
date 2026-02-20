@@ -25858,6 +25858,18 @@ impl Compiler {
 
         let value_reg = self.compile_expr_tail(&binding.value, false)?;
 
+        // If value_reg belongs to a mutable variable, copy it to a new register
+        // so the new binding captures the value, not a reference to the mutable cell.
+        // Without this, `temp = b` where `var b` would alias b's register, and
+        // mutating b would also change temp.
+        let value_reg = if self.locals.values().any(|info| info.reg == value_reg && info.mutable) {
+            let new_reg = self.alloc_reg();
+            self.chunk.emit(Instruction::Move(new_reg, value_reg), 0);
+            new_reg
+        } else {
+            value_reg
+        };
+
         // For simple variable binding
         if let Pattern::Var(ident) = &binding.pattern {
             // If the variable already exists, check mutability
