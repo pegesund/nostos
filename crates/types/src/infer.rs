@@ -4475,10 +4475,90 @@ impl<'a> InferCtx<'a> {
 
             // If no deferred calls remain or no progress was made, stop iterating
             if deferred.is_empty() || !made_progress {
-                // Before breaking, record any deferred method calls on still-unresolved
+                // Try to resolve remaining deferred calls where the receiver is still
+                // an unresolved Var by searching for unique trait method implementations.
+                // For example, if getPrice is only implemented for Item, we can infer
+                // that the receiver must be Item. This enables type inference for lambdas
+                // like `item => item.getPrice()` where the parameter has no annotation.
+                // IMPORTANT: Only do this for Var receivers, NOT TypeParam receivers,
+                // to avoid interfering with generic function type parameters.
+                let mut newly_resolved = Vec::new();
+                let mut still_deferred = Vec::new();
+                for call in deferred {
+                    let resolved = self.env.apply_subst(&call.receiver_ty);
+                    if !matches!(&resolved, Type::Var(_)) {
+                        still_deferred.push(call);
+                        continue;
+                    }
+                    let method_suffix = format!(".{}", call.method_name);
+                    let mut candidate_type: Option<String> = None;
+                    let mut multiple = false;
+                    for fn_name in self.env.functions.keys() {
+                        let base = if let Some(slash_pos) = fn_name.find('/') {
+                            &fn_name[..slash_pos]
+                        } else {
+                            fn_name.as_str()
+                        };
+                        if let Some(prefix) = base.strip_suffix(&method_suffix) {
+                            if !prefix.contains('.') && !prefix.is_empty()
+                                && prefix.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+                            {
+                                if candidate_type.as_ref() != Some(&prefix.to_string()) {
+                                    if candidate_type.is_some() {
+                                        multiple = true;
+                                        break;
+                                    }
+                                    candidate_type = Some(prefix.to_string());
+                                }
+                            }
+                        }
+                    }
+                    if !multiple {
+                        if let Some(type_name) = candidate_type {
+                            // Found unique type - unify receiver with it
+                            let param_count = self.env.types.get(&type_name)
+                                .map(|td| match td {
+                                    crate::TypeDef::Record { params, .. } |
+                                    crate::TypeDef::Variant { params, .. } => params.len(),
+                                    crate::TypeDef::Alias { .. } => 0,
+                                })
+                                .unwrap_or(0);
+                            let type_args: Vec<Type> = (0..param_count).map(|_| self.fresh()).collect();
+                            let named_ty = Type::Named { name: type_name.clone(), args: type_args };
+                            let _ = self.unify_types(&resolved, &named_ty);
+                            newly_resolved.push(call);
+                            continue;
+                        }
+                    }
+                    still_deferred.push(call);
+                }
+
+                // If we resolved some calls, process them like normal method calls
+                if !newly_resolved.is_empty() {
+                    for call in newly_resolved {
+                        let resolved_receiver = self.env.apply_subst(&call.receiver_ty);
+                        if let Some(type_name) = self.get_type_name(&resolved_receiver) {
+                            let qualified_name = format!("{}.{}", type_name, call.method_name);
+                            let arity = call.arg_types.len();
+                            let fn_type_opt = self.env.functions.get(&qualified_name).cloned()
+                                .or_else(|| self.env.lookup_function_with_arity(&qualified_name, arity).cloned());
+                            if let Some(fn_type) = fn_type_opt {
+                                let func_ty = self.instantiate_function(&fn_type);
+                                if let Type::Function(ft) = func_ty {
+                                    for (param_ty, arg_ty) in ft.params.iter().zip(call.arg_types.iter()) {
+                                        let _ = self.unify_types(arg_ty, param_ty);
+                                    }
+                                    let _ = self.unify_types(&call.ret_ty, &ft.ret);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Before breaking, record any still-deferred method calls on unresolved
                 // Vars for signature propagation. These will be encoded as HasMethod(name)
                 // in the function signature so call sites can validate them.
-                for call in &deferred {
+                for call in &still_deferred {
                     let resolved = self.env.apply_subst(&call.receiver_ty);
                     if matches!(&resolved, Type::Var(_)) {
                         self.deferred_method_on_var.push((
