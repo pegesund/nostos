@@ -1591,3 +1591,5 @@ trait implementations, UFCS dispatch, and HM inference are all extremely solid.
 | 43      | ~85 (3629-3713) | (none - clean run) | N/A | ~3713 |
 | 44      | ~80 (3714-3793) | (none - clean run, multi-file + single-file) | N/A | ~3793 |
 | 44b     | ~10 (3794-3803) | UFCS dispatch: `words.map(w => w.reverse())` resolves to List.reverse instead of String.reverse inside lambdas | Yes (9e59563) | ~3803 |
+| 45      | ~3 (3804-3806) | Named-vs-primitive type unification: cross-module `shout(s) = s.toUpper()` produces `Named("String")` that fails to unify with `Type::String` | Yes (427dc26) | ~3806 |
+| 45b     | ~26 (3807-3832, 16 multi-file) | (none - clean run after Named-vs-primitive fix) | N/A | ~3832 |
