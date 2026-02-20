@@ -1457,6 +1457,8 @@ pub struct TypeInfo {
     pub name: String,
     pub kind: TypeInfoKind,
     pub visibility: Visibility,
+    /// Type parameter names (e.g., ["T"] for Option[T], ["K", "V"] for Map[K, V])
+    pub type_param_names: Vec<String>,
 }
 
 /// Variant constructor field information.
@@ -1665,6 +1667,7 @@ impl Compiler {
                     mutable: false,
                 },
                 visibility: Visibility::Public,
+                type_param_names: vec![],
             },
         );
 
@@ -1688,6 +1691,7 @@ impl Compiler {
                     mutable: false,
                 },
                 visibility: Visibility::Public,
+                type_param_names: vec![],
             },
         );
 
@@ -1705,6 +1709,7 @@ impl Compiler {
                     mutable: false,
                 },
                 visibility: Visibility::Public,
+                type_param_names: vec![],
             },
         );
 
@@ -1722,6 +1727,7 @@ impl Compiler {
                     mutable: false,
                 },
                 visibility: Visibility::Public,
+                type_param_names: vec![],
             },
         );
     }
@@ -10301,7 +10307,8 @@ impl Compiler {
             }
         };
 
-        self.types.insert(name.clone(), TypeInfo { name: name.clone(), kind, visibility: def.visibility });
+        let type_param_names_vec: Vec<String> = def.type_params.iter().map(|tp| tp.name.node.clone()).collect();
+        self.types.insert(name.clone(), TypeInfo { name: name.clone(), kind, visibility: def.visibility, type_param_names: type_param_names_vec });
 
         // Store type visibility for access control
         self.type_visibility.insert(name.clone(), def.visibility);
@@ -24558,7 +24565,7 @@ impl Compiler {
                                 if let TypeInfoKind::Variant { constructors } = &info.kind {
                                     if let Some((_, field_types)) = constructors.iter().find(|(name, _)| name == ctor_name) {
                                         // Build a type param -> type arg substitution map
-                                        // Get type params from type_defs if available
+                                        // Get type params from type_defs if available, fallback to TypeInfo
                                         let base_type_name = if ty.contains('[') {
                                             &ty[..ty.find('[').unwrap()]
                                         } else {
@@ -24567,7 +24574,10 @@ impl Compiler {
                                         let type_param_names: Vec<String> = self.type_defs.get(base_type_name)
                                             .or_else(|| self.type_defs.get(ty_name))
                                             .map(|td| td.type_params.iter().map(|tp| tp.name.node.clone()).collect())
-                                            .unwrap_or_default();
+                                            .unwrap_or_else(|| {
+                                                // Fallback: use type_param_names from TypeInfo (populated from cache)
+                                                info.type_param_names.clone()
+                                            });
 
                                         for (i, pat) in patterns.iter().enumerate() {
                                             if let Some(raw_field_ty) = field_types.get_type(i) {
@@ -24723,11 +24733,14 @@ impl Compiler {
                             if let Some(info) = self.types.get(*ty_name) {
                                 if let TypeInfoKind::Variant { constructors } = &info.kind {
                                     if let Some((_, field_types)) = constructors.iter().find(|(n, _)| n == ctor_name) {
-                                        // Get type parameter names from type_defs
+                                        // Get type parameter names from type_defs, falling back to TypeInfo
                                         let type_param_names: Vec<String> = self.type_defs.get(base_name)
                                             .or_else(|| self.type_defs.get(*ty_name))
                                             .map(|td| td.type_params.iter().map(|tp| tp.name.node.clone()).collect())
-                                            .unwrap_or_default();
+                                            .unwrap_or_else(|| {
+                                                // Fallback: use type_param_names from TypeInfo (populated from cache)
+                                                info.type_param_names.clone()
+                                            });
 
                                         for (i, pat) in patterns.iter().enumerate() {
                                             if let Some(raw_field_ty) = field_types.get_type(i) {
@@ -27540,7 +27553,7 @@ impl Compiler {
             }
             TypeKind::Primitive | TypeKind::Alias { .. } => return,
         };
-        let type_info = TypeInfo { name: name.to_string(), kind, visibility: Visibility::Public };
+        let type_info = TypeInfo { name: name.to_string(), kind, visibility: Visibility::Public, type_param_names: type_val.type_params.clone() };
         self.types.insert(name.to_string(), type_info);
         self.type_visibility.insert(name.to_string(), Visibility::Public);
         self.known_constructors.insert(name.to_string());
@@ -27939,6 +27952,7 @@ impl Compiler {
                         name: name.clone(),
                         kind: TypeInfoKind::Record { fields: vec![], mutable: false },
                         visibility: Visibility::Public,
+                        type_param_names: vec![],
                     });
                     // Also register short name (without module prefix) for convenience
                     if let Some(dot_pos) = name.rfind('.') {
@@ -27947,6 +27961,7 @@ impl Compiler {
                             name: short_name.to_string(),
                             kind: TypeInfoKind::Record { fields: vec![], mutable: false },
                             visibility: Visibility::Public,
+                            type_param_names: vec![],
                         });
                     }
                 }
@@ -27959,6 +27974,7 @@ impl Compiler {
                             mutable: false
                         },
                         visibility: Visibility::Public,
+                        type_param_names: vec![],
                     });
                 }
             }
@@ -28480,7 +28496,8 @@ impl Compiler {
             self.types.insert(type_name.clone(), TypeInfo {
                 name: type_name,
                 kind,
-                visibility: Visibility::Public, // Cached types are from compiled modules
+                visibility: Visibility::Public, // Cached types are from compiled modules,
+                type_param_names: vec![],
             });
         }
 
