@@ -12504,11 +12504,45 @@ impl Compiler {
     /// Check if a user-defined function exists with the given name and arity.
     /// This is used to prevent builtin functions from shadowing user-defined functions.
     fn has_user_function(&self, name: &str, arity: usize) -> bool {
-        let prefix = format!("{}/", name);
+        // Check the bare name, the import-resolved name, and the module-qualified name.
+        // In multi-file projects, a function like `listSum` from module `ops`
+        // is registered under `ops.listSum` in functions_by_base, but the caller
+        // refers to it as `listSum` via `use ops.*`. Without checking the resolved
+        // name, builtin dispatch incorrectly overrides the user function.
+        // Also, inside the defining module itself, the function is `ops.listSum`
+        // but the recursive call uses the bare name `listSum`.
+        let qualified = self.qualify_name(name);
+        let names_to_check: Vec<&str> = {
+            let mut names = vec![name];
+            if let Some(imported) = self.imports.get(name) {
+                if imported.as_str() != name {
+                    names.push(imported.as_str());
+                }
+            }
+            if qualified.as_str() != name && !names.contains(&qualified.as_str()) {
+                names.push(qualified.as_str());
+            }
+            names
+        };
 
-        // Check compiled functions using O(1) index lookup
-        if let Some(keys) = self.functions_by_base.get(name) {
-            for key in keys {
+        for check_name in &names_to_check {
+            let prefix = format!("{}/", check_name);
+
+            // Check compiled functions using O(1) index lookup
+            if let Some(keys) = self.functions_by_base.get(*check_name) {
+                for key in keys {
+                    if let Some(suffix) = key.strip_prefix(&prefix) {
+                        let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                        if param_count == arity {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            // Check fn_asts (for functions being compiled or not yet compiled)
+            // Note: fn_asts doesn't have an index, but it's typically small during compilation
+            for key in self.fn_asts.keys() {
                 if let Some(suffix) = key.strip_prefix(&prefix) {
                     let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
                     if param_count == arity {
@@ -12516,25 +12550,14 @@ impl Compiler {
                     }
                 }
             }
-        }
 
-        // Check fn_asts (for functions being compiled or not yet compiled)
-        // Note: fn_asts doesn't have an index, but it's typically small during compilation
-        for key in self.fn_asts.keys() {
-            if let Some(suffix) = key.strip_prefix(&prefix) {
-                let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
-                if param_count == arity {
-                    return true;
-                }
-            }
-        }
-
-        // Check if current function matches
-        if let Some(current) = &self.current_function_name {
-            if let Some(suffix) = current.strip_prefix(&prefix) {
-                let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
-                if param_count == arity {
-                    return true;
+            // Check if current function matches
+            if let Some(current) = &self.current_function_name {
+                if let Some(suffix) = current.strip_prefix(&prefix) {
+                    let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                    if param_count == arity {
+                        return true;
+                    }
                 }
             }
         }
