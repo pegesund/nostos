@@ -187,6 +187,9 @@ fold[T, U](list: List[T], acc: U, f: (U, T) -> U) -> U = match list {
     [x | xs] -> fold(xs, f(acc, x), f)
 }
 
+# Left fold (alias for fold)
+foldl[T, U](list: List[T], acc: U, f: (U, T) -> U) -> U = fold(list, acc, f)
+
 # Right fold
 foldr[T, U](list: List[T], acc: U, f: (T, U) -> U) -> U = match list {
     [] -> acc
