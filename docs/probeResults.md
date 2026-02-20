@@ -547,6 +547,22 @@ Covered:
 - Spawn/await across modules
 - Complex 5-module project (model + traits + impls + utils + main)
 
+### Probe 782: **BUG FOUND** - UFCS key collision for multiple concrete generic trait impls
+**Problem**: `Holder[Int]: Measurable` and `Holder[String]: Measurable` both register UFCS
+signatures under the same key `"Holder.measure/_"`. The second overwrites the first, so
+calling `.measure()` on the "wrong" instantiation fails with "expected String, found Int".
+
+**Root cause**: When type args are stripped from the UFCS key (fix from probe 520), the
+concrete self type in the signature retains the specific type args. Multiple impls
+overwrite each other. E.g., `Holder.measure/_` stores `Holder[String] -> Int`, then
+`Holder(5).measure()` tries to unify `Holder[Int]` with `Holder[String]`.
+
+**Fix**: For concrete generic impls (where impl specifies type args like `Holder[Int]`),
+use fresh type variables for the type args in the UFCS self parameter. So the signature
+becomes `Holder[?X] -> Int` which works for any instantiation.
+
+**Commit**: `293fc89` - Generalize UFCS self type for concrete generic trait impls
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -570,3 +586,4 @@ Covered:
 | 13b     | 66 (521-586)      | (none - clean run) | N/A | 586 |
 | 14      | 3 (587-589)       | Cross-module trait on builtin types | Yes (55919ec) | 590 |
 | 14b     | 190 (591-780)     | (none - clean run) | N/A | 780 |
+| 15      | 1 (781)           | UFCS key collision for multiple concrete generic impls | Yes (293fc89) | 782 |
