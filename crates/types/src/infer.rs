@@ -3448,6 +3448,23 @@ impl<'a> InferCtx<'a> {
         // Take ownership of pending calls to avoid borrow issues
         let mut pending = std::mem::take(&mut self.pending_method_calls);
 
+        // Stable-partition: process calls with already-resolved receiver types first,
+        // then unresolved ones. This ensures chained calls (a.zip().map()) process
+        // in order, while lambda inner calls (w.reverse() inside map) are deferred.
+        // Within each group, preserve creation order to handle chains correctly.
+        let mut resolved_first = Vec::new();
+        let mut unresolved_later = Vec::new();
+        for call in pending {
+            let resolved_receiver = self.env.apply_subst(&call.receiver_ty);
+            if matches!(&resolved_receiver, Type::Var(_)) {
+                unresolved_later.push(call);
+            } else {
+                resolved_first.push(call);
+            }
+        }
+        resolved_first.append(&mut unresolved_later);
+        let mut pending = resolved_first;
+
         // Iteratively process pending calls. Inner calls may have unresolved
         // receiver types that become resolved after outer calls are processed.
         // Example: xs.map(inner => inner.map(x => ...)) - the inner map's
