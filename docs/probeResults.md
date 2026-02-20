@@ -911,6 +911,55 @@ Covered:
 - Complex generic types (3 type params, nested generics, phantom types, recursive generic Stack)
 - Error detection accuracy (10 tests: private access, missing imports, type mismatches, wrong arity)
 
+### Probe 1932: **BUG FOUND** - Generic functions with custom trait bounds fail at runtime
+**Problem**: `describe[T: Describable](item: T) = item.desc()` compiles but fails at
+runtime with `Function not found: T.Describable.desc/_`. The trait method dispatch
+emits a call to a placeholder function name using the type parameter instead of triggering
+monomorphization.
+
+**Root cause**: In `find_trait_method()`, when the type name is a type parameter (like `T`
+with trait bound `Describable`), it returns a placeholder string `"T.Describable.desc"`.
+The UFCS dispatch code then emitted a function call to this placeholder, which doesn't
+exist at runtime.
+
+**Fix**: Added `is_type_concrete()` checks in two locations:
+1. Method-call trait dispatch (`.method()` syntax) - returns `UnresolvedTraitMethod` error
+2. Function-call trait dispatch (`method(obj)` syntax) - returns `UnresolvedTraitMethod` error
+Both trigger monomorphization to specialize the function with concrete types.
+
+### Probe 1936: **BUG FOUND** - Lambda parameter types not propagated from HM inference
+**Problem**: Inside lambda bodies, user-defined trait methods can't be resolved because
+the lambda parameter types aren't available. E.g., `items.foldl(0, (acc, item) => acc + item.score())`
+fails because `item`'s type (inferred from `List[Item]`) isn't propagated into the lambda.
+
+**Root cause**: The `Expr::Lambda` compilation path used `compile_lambda` which doesn't
+set `local_types` for parameters. The alternative `compile_lambda_with_types` does set
+types, but was only called from specific paths.
+
+**Fix**: Modified `Expr::Lambda` compilation to check `inferred_expr_types` for the
+lambda expression's span. If HM inference resolved the lambda's function type with concrete
+parameter types, use `compile_lambda_with_types` instead of `compile_lambda`.
+
+**Commit**: (both fixes in same commit)
+
+**Tests**: All 1436 tests + 14 postgres tests pass after the fix.
+
+### Probes 1931-1980: All Passed (50 probes, after fixes)
+Covered:
+- Cross-module trait + generics + pattern matching (combined 3-feature tests)
+- Lambda + cross-module + type inference stress (fold, sortBy, captured functions)
+- PostgreSQL (basic query, parameterized, insert/select, transactions, sequences)
+- Real-world patterns (config parser, calculator, state machine, event system, template engine)
+- Regression prevention (all 10 previously-found bug patterns re-tested)
+
+### Probes 1981-2030: All Passed (50 probes - adversarial)
+Covered:
+- Deeply nested generics (Option[Option[Option[Int]]], List[Option[Result[Int,String]]])
+- String processing (split/map, chars/filter, replace, trim, toInt/toFloat)
+- Exception handling (nested try/catch, exceptions in lambdas, custom error types)
+- Numeric edge cases (large ints, float precision, negative modulo, conversions)
+- Advanced collections (zip, zipWith, take/drop, any/all, find, groupBy, flatten)
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -959,3 +1008,6 @@ Covered:
 | 26b     | 50 (1781-1830)    | (none - advanced multi-file) | N/A | 1830 |
 | 27      | 50 (1831-1880)    | (none - tricky HM inference) | N/A | 1880 |
 | 27b     | 50 (1881-1930)    | (none - combinatorial multi-file) | N/A | 1930 |
+| 28      | 1 (1931)          | Generic fn with trait bound + lambda param types | Yes | 1936 |
+| 28b     | 44 (1937-1980)    | (none - after fix) | N/A | 1980 |
+| 28c     | 50 (1981-2030)    | (none - adversarial) | N/A | 2030 |

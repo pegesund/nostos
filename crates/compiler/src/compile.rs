@@ -14923,7 +14923,32 @@ impl Compiler {
             }
 
             // Lambda
-            Expr::Lambda(params, body, _) => {
+            Expr::Lambda(params, body, lambda_span) => {
+                // Try to use HM-inferred types for lambda parameters.
+                // This enables trait method resolution inside lambda bodies
+                // when the parameter types are inferred from context (e.g.,
+                // items.foldl(0, (acc, item) => acc + score(item)) where
+                // item should be typed as Item from List[Item]).
+                if let Some(hm_type) = self.inferred_expr_types.get(lambda_span) {
+                    if let nostos_types::Type::Function(hm_fn_type) = hm_type {
+                        let hm_params = &hm_fn_type.params;
+                        let typed_params: Vec<(String, String)> = params.iter()
+                            .zip(hm_params.iter())
+                            .filter_map(|(p, ty)| {
+                                if let Some(name) = self.pattern_binding_name(p) {
+                                    let type_str = ty.display();
+                                    if !type_str.starts_with('?') && self.is_type_concrete(&type_str) {
+                                        return Some((name, type_str));
+                                    }
+                                }
+                                None
+                            })
+                            .collect();
+                        if typed_params.len() == params.len() {
+                            return self.compile_lambda_with_types(params, body, &typed_params);
+                        }
+                    }
+                }
                 self.compile_lambda(params, body)
             }
 
@@ -17772,6 +17797,14 @@ impl Compiler {
                 // Try trait method dispatch if we can determine the type of obj
                 if let Some(type_name) = self.expr_type_name(obj) {
                     if let Some(qualified_method) = self.find_trait_method(&type_name, &method.node) {
+                        // If type is not concrete (e.g., type parameter T), trigger
+                        // monomorphization instead of emitting call to placeholder.
+                        if !self.is_type_concrete(&type_name) {
+                            return Err(CompileError::UnresolvedTraitMethod {
+                                method: method.node.clone(),
+                                span: method.span,
+                            });
+                        }
                         // Found a trait method - compile as qualified function call
                         let mut all_args = vec![obj.as_ref().clone()];
                         all_args.extend(args.iter().map(|a| Self::call_arg_expr(a).clone()));
@@ -20882,6 +20915,16 @@ impl Compiler {
                     let first_arg_type = self.expr_type_name(Self::call_arg_expr(&args[0]));
                     if let Some(ref arg_type) = first_arg_type {
                         if let Some(trait_fn_base) = self.find_trait_method(arg_type, &qualified_name) {
+                            // If arg type is not concrete (e.g., type parameter T), trigger
+                            // monomorphization instead of emitting a call to a placeholder.
+                            // This ensures generic functions with custom trait bounds get
+                            // properly specialized at call sites.
+                            if !self.is_type_concrete(arg_type) {
+                                return Err(CompileError::UnresolvedTraitMethod {
+                                    method: qualified_name.clone(),
+                                    span: func.span(),
+                                });
+                            }
                             // Found trait method impl - resolve to full function key with arity
                             let trait_arg_types: Vec<Option<String>> = args.iter()
                                 .map(|arg| self.expr_type_name(Self::call_arg_expr(arg)))
