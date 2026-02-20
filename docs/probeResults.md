@@ -563,6 +563,50 @@ becomes `Holder[?X] -> Int` which works for any instantiation.
 
 **Commit**: `293fc89` - Generalize UFCS self type for concrete generic trait impls
 
+## Session 16 (2026-02-20)
+
+### Probes 783-788: All Passed
+Covered:
+- Trait impls on user-defined generic types (single-file and cross-module)
+- Cross-module trait with multiple methods
+- Multi-module pipeline patterns with traits
+
+### Probes 789-790: **BUG FOUND** - Trait impl on parameterized types produces wrong function key
+**Problem**: `List[a]: Countable` with `count2(self)` compiles but fails at runtime with
+`Function not found: List.Countable.count2/_`. Same for cross-module version.
+
+**Root cause**: Function key was built as `"List[a].Countable.count2/List[a]"` (using the
+full type name with type args), but `find_trait_method` looks up by base name
+`"List.Countable.count2/"` prefix. The `[a]` suffix in the key prevented the prefix match.
+
+**Fix**: Strip type args from the type name when building the function key in both the
+forward declaration and body compilation passes. Also register `type_traits` under the
+module-qualified base name (e.g., `"types.Either2"`) in addition to the full name and
+short base.
+
+### Probe 827: **BUG FOUND** - Cross-module trait impl on concrete generic not found
+**Problem**: `Either2[Int, String]: Describable` defined cross-module. Calling
+`Left2(42).describe()` fails with `no method 'describe' found for type
+'types.Either2[Int, ?209]'` because `b` is unresolved from `Left2(42)`.
+
+**Root cause**: `type_traits` was registered under `"types.Either2[Int, String]"` and
+`"Either2"` but NOT under `"types.Either2"` (the module-qualified base without type args),
+which is what `find_trait_method` looks up.
+
+**Fix**: Part of same commit - also register `type_traits` under the module-qualified
+base name without type args.
+
+**Commit**: `ff46dc8` - Fix trait impl on parameterized types
+
+### Probes 791-830, 831-880: All Passed (90 probes)
+Covered:
+- Polymorphic function instantiation, higher-order functions
+- Recursive variants with trait impls
+- Multi-module patterns: diamond dependencies, game entities, 3-4 module chains
+- Record types with trait impls, sortBy, fold patterns
+- Cross-module generic accumulators, mutual recursion
+- Two traits on same type from different modules
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -587,3 +631,6 @@ becomes `Holder[?X] -> Int` which works for any instantiation.
 | 14      | 3 (587-589)       | Cross-module trait on builtin types | Yes (55919ec) | 590 |
 | 14b     | 190 (591-780)     | (none - clean run) | N/A | 780 |
 | 15      | 1 (781)           | UFCS key collision for multiple concrete generic impls | Yes (293fc89) | 782 |
+| 16      | 6 (783-788)       | Trait impl on List[a] wrong fn key + cross-module Either2 | Yes (ff46dc8) | 789 |
+| 16b     | 40 (791-830)      | (none - clean run) | N/A | 830 |
+| 16c     | 50 (831-880)      | (none - clean run) | N/A | 880 |
