@@ -1307,6 +1307,37 @@ Covered:
 - UFCS method chaining on custom records
 - Overloaded functions with dispatch by parameter type
 
+### Probes 3281-3380: All Passed (100 probes)
+Covered:
+- Multi-clause function dispatch ordering (regression verified)
+- Long function bodies (10+ bindings), deeply nested if/else
+- Functions with 6-8 parameters, multiple sequential match expressions
+- Cross-module 6-module projects (model/validate/format/stats/search/main)
+- Recursive types (linked list, binary tree, expression tree)
+- Generic types (Box[a], Pair[a,b], Either[a,b])
+- Complex string formatting chains
+- Overloaded functions with dispatch by parameter type
+
+### Probe ~3340: **BUG FOUND** - JIT bool detection fails for if/then/else returning Bool
+**Problem**: `isPos(n: Int) = if n > 0 then true else false` returns `Int(1)` instead
+of `Bool(true)`. The function works correctly with `--no-jit`, confirming it's a JIT issue.
+
+**Root cause**: The JIT's `function_returns_bool` analysis only tracked the LAST `Return`
+instruction. In functions with `if/then/else` in tail position, `compile_if` emits `Return`
+for both branches (with bool registers), but `compile_fn_def` appends a dead `Return(dst)`
+where `dst` was allocated but never assigned a bool value. The analysis saw only this last
+dead Return and concluded the function doesn't return bool, so the JIT's int 0/1 result
+wasn't converted back to `Bool(true)`/`Bool(false)`.
+
+**Fix**: Changed `function_returns_bool` to check ALL Return instructions instead of just
+the last one. If any Return instruction returns from a bool-producing register (LoadTrue,
+LoadFalse, comparison, etc.), the function is marked as bool-returning. Dead-code Returns
+with unassigned registers are safely ignored since reachable Returns will match.
+
+**Commit**: `1c1754a`
+
+### Probes 3381-3480: Running (in parallel agents)
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -1389,3 +1420,5 @@ Covered:
 | 38c     | 15 (3166-3180)    | (none - after fix) | N/A | 3180 |
 | 38d     | 50 (3181-3230)    | (none - type inference torture) | N/A | 3230 |
 | 38e     | 50 (3231-3280)    | (none - compilation edge cases) | N/A | 3280 |
+| 39      | 100 (3281-3380)   | (none - clean run) | N/A | 3380 |
+| 39b     | ~60 (3340)        | JIT bool detection for if/then/else returning Bool | Yes (1c1754a) | ~3340 |
