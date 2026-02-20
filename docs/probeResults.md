@@ -647,6 +647,34 @@ Covered:
 - Complex trait+generic: two traits on same type, recursive trait methods, cross-module impls
 - Action/state reducer pattern with variant match + record + closure + fold
 
+### Probes 1081-1130: All Passed (50 probes)
+Covered:
+- Trait impls with Self return type on GENERIC types (Box[a]: Clonable, clone preserves type)
+- Chained `.clone().clone()` on generic types
+- Complex 5-6 module projects with chain and diamond dependencies
+- Lambda type inference through 3+ indirection levels
+- Cross-module HOF with lambdas, nested/curried lambdas
+- Tuple destructuring in lambdas, lambdas calling trait methods
+- Map literal construction, keys/values/toList/fromList
+- Fold accumulating into Map, record pipelines
+- Error detection: missing methods, type mismatches, missing imports, arity errors
+
+### Probes 1131-1180: All Passed (50 probes)
+Covered:
+- Empty list operations ([].length(), [] ++ [1,2,3], [].map(...))
+- Let polymorphism (top-level generic functions work polymorphically)
+- Type narrowing through pattern match, cross-module generic inference
+- Chained identity calls, empty Map insert/lookup chains
+- 5-module trait/type/impl separation across different modules
+- Trait impl body calling functions from third modules
+- Two traits on same type, variant trait impls matching all constructors
+- Generic Option piped to other generic functions, List[Option[Int]] filtering
+- Generic recursive types (RoseTree) with fold
+- Cross-module overloaded dispatch (same name, different types/arities)
+- 5-step method chains, deeply nested generic types
+- Functions with 5+ differently-typed parameters
+- 4-module data transformation pipeline
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -678,3 +706,5 @@ Covered:
 | 17b     | 50+80 (931-980)   | (none - clean run) | N/A | 980 |
 | 18      | 50 (981-1030)     | (none - clean run) | N/A | 1030 |
 | 18b     | 50 (1031-1080)    | (none - clean run) | N/A | 1080 |
+| 19      | 50 (1081-1130)    | (none - clean run) | N/A | 1130 |
+| 19b     | 50 (1131-1180)    | (none - clean run) | N/A | 1180 |
