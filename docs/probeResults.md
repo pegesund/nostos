@@ -1336,7 +1336,52 @@ with unassigned registers are safely ignored since reachable Returns will match.
 
 **Commit**: `1c1754a`
 
-### Probes 3381-3480: Running (in parallel agents)
+### Probes 3381-3430: All Passed (see sessions 40-40b)
+
+### Probes 3431-3511: All Passed (see session 40b)
+
+### Probe 3536: **BUG FOUND** - Mutable variable aliasing: let-bindings share register
+**Problem**: `var b = 1; temp = b; b = 2; (temp, b)` returns `(2, 2)` instead of `(1, 2)`.
+A let-binding (`temp = b`) that references a mutable variable (`var b`) shares the same
+register. When `b` is later mutated, `temp` also changes because they alias the same register.
+
+**Root cause**: In `compile_binding`, the RHS expression `b` compiles to `info.reg` (the
+register number of the mutable variable). The new binding `temp` is then mapped to the
+same register. When `b = 2` emits `Move(reg, new_value)`, both `b` and `temp` see the
+new value because they share the register.
+
+This breaks all temp-variable patterns (swap, fibonacci, accumulator snapshots, etc.):
+- `var a = 0; var b = 1; temp = b; b = a + b; a = temp` (fibonacci) produced powers of 2
+  instead of fibonacci numbers because `temp` aliased `b`
+- `temp = a; a = b; b = temp` (swap) didn't work correctly
+
+**Fix**: After compiling the RHS in `compile_binding`, check if `value_reg` belongs to
+any mutable local. If so, allocate a fresh register and emit a `Move` instruction to
+copy the value. This ensures the new binding captures the value at binding time rather
+than referencing the mutable cell.
+
+**Commit**: `016bc3f`
+
+### Probes 3512-3597: All Passed (~86 probes after fix, including 20 multi-file projects)
+Covered:
+- Mutable variable value capture (snapshot, swap, fibonacci, chain of snapshots)
+- Nested mutable variable scopes (inner/outer for loops)
+- Mutable accumulator patterns (for loop, string building, list reversal)
+- Iterative factorial, nested var mutation
+- Cross-module generic types (Pair, Shape, Stack, Counter, Tree)
+- Cross-module trait definitions and implementations (Describable, HasArea)
+- Three-module chains (types -> logic -> main)
+- Two-phase compilation stress (zzz_types/aaa_user alphabetical ordering)
+- Cross-module variant types (Shape, Maybe, Result, BTree)
+- Cross-module HOF (applyAll, function composition, validators)
+- Cross-module record types with builder patterns (Config, GameState, User)
+- Cross-module recursive types (BTree insert/inorder/size)
+- Cross-module mutable var in for loops (GameState.simulate)
+- Map operations, Option chaining, try/catch
+- flatMap, unique, sort, zip, fold patterns
+- String interpolation, pattern matching with guards
+- Deeply nested if-else, multi-clause functions
+- Complex fold patterns (scanl, running totals, type-changing folds)
 
 ## Summary
 
@@ -1424,3 +1469,5 @@ with unassigned registers are safely ignored since reachable Returns will match.
 | 39b     | ~60 (3340)        | JIT bool detection for if/then/else returning Bool | Yes (1c1754a) | ~3340 |
 | 40      | ~48 (3381-3428)   | Function-typed field call collides with builtin module method (e.g., `cb.run(x)` on record → Exec.run) | Yes (3838ac8) | ~3430 |
 | 40b     | ~80 (3431-3511+30 multi-file) | Function-typed field `send` collides with UFCS method `WebSocket.send` (same class as 40, but true UFCS not module fn) | Yes (0caf5ea) | ~3511 |
+| 40c     | ~25 (3512-3536)   | Mutable variable aliasing: let-bindings share register with var | Yes (016bc3f) | ~3536 |
+| 40d     | ~61 (3537-3597+20 multi-file) | (none - clean run after var fix) | N/A | ~3597 |
