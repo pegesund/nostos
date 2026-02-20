@@ -1149,3 +1149,6 @@ Covered:
 | 32b     | 50 (2381-2430)    | (none - multi-module, real-world) | N/A | 2430 |
 | 33      | 50 (2431-2480)    | (none - deep adversarial) | N/A | 2480 |
 | 33b     | 50 (2481-2530)    | (none - two-phase compilation stress) | N/A | 2530 |
+| 34      | 50 (2531-2580)    | (none - deep generic patterns) | N/A | 2580 |
+| 34b     | 27 (2581-2607)    | Lambda returning trait method call on untyped param | Yes (e0166e7) | 2608 |
+| 34c     | 22 (2609-2630)    | (none - after fix) | N/A | 2630 |
