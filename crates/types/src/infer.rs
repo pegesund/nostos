@@ -4490,6 +4490,32 @@ impl<'a> InferCtx<'a> {
                         still_deferred.push(call);
                         continue;
                     }
+                    // Check if the bare method name exists as a generic function
+                    // (e.g., "show" with signature "a -> String"). If so, it works on
+                    // any type and we should NOT infer a specific receiver type.
+                    // Check if this method belongs to a trait that has implementations
+                    // for multiple types (e.g., Show has impls for Int, String, Bool, etc.).
+                    // If so, we cannot infer a unique receiver type from the method name alone.
+                    let is_widely_implemented = {
+                        // Find which trait defines this method
+                        let defining_trait = self.env.traits.values().find(|td| {
+                            td.required.iter().chain(td.defaults.iter())
+                                .any(|m| m.name == call.method_name)
+                        });
+                        if let Some(trait_def) = defining_trait {
+                            // Count how many distinct types implement this trait
+                            let impl_count = self.env.impls.iter()
+                                .filter(|imp| imp.trait_name == trait_def.name)
+                                .count();
+                            impl_count >= 2
+                        } else {
+                            false
+                        }
+                    };
+                    if is_widely_implemented {
+                        still_deferred.push(call);
+                        continue;
+                    }
                     let method_suffix = format!(".{}", call.method_name);
                     let mut candidate_type: Option<String> = None;
                     let mut multiple = false;
