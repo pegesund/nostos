@@ -1053,6 +1053,22 @@ Covered:
 - String processing (split+map+fold, chars+filter, comparison chains, method chaining)
 - Concurrency (MVar with generic types, multiple spawns, channel-like patterns)
 
+### Probes 2331-2380: All Passed (50 probes - named args, traits, generics)
+Covered:
+- Named args in regular/cross-module/trait calls, reordering, skipping middle defaults
+- Trait inheritance/composition (supertrait chains, diamond, cross-module, same method names)
+- Generic record types (Box[a], Pair[a,b], nested generics, cross-module)
+- Error propagation (try/catch, nested, cross-module, in lambda/fold)
+- Complex type instantiation (List[Option[Int]], Option[List[String]], Result[List[Int], String])
+
+### Probes 2381-2430: All Passed (50 probes - multi-module, real-world)
+Covered:
+- Multi-file 4-5 module projects (chain, fan, diamond, re-export, generic types)
+- Trait impls on builtin types (Int, String, Bool, Float, custom variants)
+- Complex lambda/closure patterns (currying, triple-nested, composition, closure capture)
+- Operator overloading via Num/Ord/Eq traits (Money, Vec3, Rational, Complex numbers)
+- Real-world application patterns (calculator, JSON builder, state machine, interpreter, registry)
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -1113,3 +1129,5 @@ Covered:
 | 31      | 8 (2231-2238)     | Named args in UFCS trait method calls | Yes (8e7fbbb) | 2239 |
 | 31b     | 41 (2240-2280)    | (none - after fix) | N/A | 2280 |
 | 31c     | 50 (2281-2330)    | (none - dispatch+instantiation) | N/A | 2330 |
+| 32      | 50 (2331-2380)    | (none - named args, traits, generics) | N/A | 2380 |
+| 32b     | 50 (2381-2430)    | (none - multi-module, real-world) | N/A | 2430 |
