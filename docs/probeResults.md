@@ -607,6 +607,46 @@ Covered:
 - Cross-module generic accumulators, mutual recursion
 - Two traits on same type from different modules
 
+### Probes 881-930: All Passed (50 probes)
+Covered:
+- Nested generic types (Option[List[Int]], Option[Option[Int]])
+- Cross-module trait impl variants
+- Record types with generic field access
+- Pipeline patterns with annotated types
+- Recursive generic functions on custom types
+
+### Probes 931-980: All Passed (50 probes + 80 variants)
+Covered:
+- Nested generics: `Option[List[Int]]`, `Option[Option[Int]]`, `Result[List[Int], String]`
+- Generic type definitions with pattern matching (Wrapper, Pair, Tree)
+- Method chaining: `.map().filter().fold()` chains
+- Higher-order functions: compose, curried functions, partial application
+- Cross-module: generic Option/Box functions, re-export patterns (A->B->C)
+- Cross-module: overloaded functions, trait impls for shapes
+- Edge cases: conditional returning generic type, fold with different acc type
+- Extreme cases: 80 additional variant/edge/fragile/extreme probes all passed
+
+### Probes 981-1030: All Passed (50 probes)
+Covered:
+- Multiple concrete trait impls on same generic type (Pair[Int,Int] and Pair[String,String])
+- Trait impl on nested generic (Option[List[Int]])
+- Trait on builtin generic (List[Int])
+- Two-phase compilation ordering: reverse alphabetical, forward references, circular deps
+- Trait/type/impl across 3-4 different modules
+- Complex generic instantiation: nested generics, currying, function composition
+- Pattern matching: nested Option[Option[Int]], list patterns, recursive expression trees
+- Cross-module supertrait relationships
+- Monadic bind chains with pipeline operator
+
+### Probes 1031-1080: All Passed (50 probes)
+Covered:
+- Closures: capturing generic functions, records, nested closures, cross-module closures
+- Method chaining: `.map(f).filter(g).map(h)` with type changes, `.sort().map()`, `.flatMap()`
+- Recursive types across modules: Expr evaluator, mutual recursion, generic Tree[a]
+- Polymorphic functions: 4+ different type instantiations, passed as HOF arguments
+- Complex trait+generic: two traits on same type, recursive trait methods, cross-module impls
+- Action/state reducer pattern with variant match + record + closure + fold
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -634,3 +674,7 @@ Covered:
 | 16      | 6 (783-788)       | Trait impl on List[a] wrong fn key + cross-module Either2 | Yes (ff46dc8) | 789 |
 | 16b     | 40 (791-830)      | (none - clean run) | N/A | 830 |
 | 16c     | 50 (831-880)      | (none - clean run) | N/A | 880 |
+| 17      | 50 (881-930)      | (none - clean run) | N/A | 930 |
+| 17b     | 50+80 (931-980)   | (none - clean run) | N/A | 980 |
+| 18      | 50 (981-1030)     | (none - clean run) | N/A | 1030 |
+| 18b     | 50 (1031-1080)    | (none - clean run) | N/A | 1080 |
