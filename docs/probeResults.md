@@ -1126,6 +1126,32 @@ uses trait definition and implementation data rather than hardcoded method names
 
 **Commit**: `423a2a5` - Skip unique-type inference for methods from widely-implemented traits
 
+### Probes 2682-2710: Named args in trait UFCS not resolved during HM inference
+**Problem**: Cross-module trait method with named/default parameters called via UFCS
+(e.g., `s.doSetup(port: 3000)`) assigns named args to wrong positions because param
+names aren't found during HM inference.
+
+**Root cause**: `check_pending_method_calls` in infer.rs looked up param names under
+the bare method name (e.g., `"setup"`) but trait UFCS methods register param names under
+the qualified name (e.g., `"Server.setup"`).
+
+**Fix**: Two changes:
+1. In infer.rs: Also try looking up param names under `qualified_name` when reordering named args
+2. In compile.rs: Register param names for trait UFCS signatures under the qualified base name
+
+**Commit**: `f94f6b0`
+
+### Probes 2731-2780: All Passed (50 probes - trait interaction + widely-implemented traits)
+Covered:
+- show()/hash() on generic params in lambdas, HOFs, stored in variables
+- User-defined traits with single and multiple impls in lambdas and pipelines
+- Cross-module traits with two-phase compilation (trait defined alphabetically after impl)
+- Recursive data structures (tree traversal) with pattern matching
+- Nested generics (Option[List[Int]], nested records 3 levels deep)
+- Pipeline patterns (chained map/filter/fold with trait methods)
+- Multi-file projects up to 5 modules with cross-module trait definitions and usage
+- Generic functions (identity, HOF callbacks across modules)
+
 ## Summary
 
 | Session | Probes before error | Bug found | Fixed | Total probes |
@@ -1195,3 +1221,5 @@ uses trait definition and implementation data rather than hardcoded method names
 | 34c     | 22 (2609-2630)    | (none - after fix) | N/A | 2630 |
 | 35      | 50 (2631-2680)    | (none - clean run) | N/A | 2680 |
 | 35b     | 0 (2681)          | Widely-implemented trait method (.show()) inferred to wrong type | Yes (423a2a5) | 2681 |
+| 35c     | ~25 (2682-2707)   | Named args in trait UFCS not resolved during HM inference | Yes (f94f6b0) | ~2710 |
+| 35d     | 50 (2731-2780)    | (none - clean run) | N/A | 2780 |
