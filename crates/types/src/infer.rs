@@ -3502,13 +3502,16 @@ impl<'a> InferCtx<'a> {
                         "partition" | "zipWith"
                     );
                     // "map" and "flatMap" are shared between List, Option, and Result.
-                    // On iteration 0, defer them to allow one more pass for the receiver to
-                    // resolve (e.g., from function return type constraints). On subsequent
-                    // iterations, assume List (for function definition inference where the
-                    // receiver is truly unconstrained).
+                    // Only assume List if the return type has already been resolved to List
+                    // by other constraints. Otherwise defer to allow more iterations.
                     let is_shared_method = matches!(call.method_name.as_str(), "map" | "flatMap");
-                    let is_list_method = is_exclusive_list_method
-                        || (is_shared_method && iteration > 0);
+                    let assume_list_for_shared = if is_shared_method && iteration > 0 {
+                        let resolved_ret = self.env.apply_subst(&call.ret_ty);
+                        matches!(resolved_ret, Type::List(_))
+                    } else {
+                        false
+                    };
+                    let is_list_method = is_exclusive_list_method || assume_list_for_shared;
                     // Map-only methods (not on Set/List/String):
                     let is_map_method = matches!(call.method_name.as_str(),
                         "lookup" | "keys" | "values" | "getOrThrow" | "toList"
@@ -4425,7 +4428,7 @@ impl<'a> InferCtx<'a> {
                 // Use a narrower list than list_only_methods - only methods that are
                 // truly unique to Lists (not shared with String/Map/Set).
                 let infer_list_methods = [
-                    "map", "filter", "fold", "flatMap", "any", "all", "find",
+                    "filter", "fold", "any", "all", "find",
                     "sort", "sortBy", "head", "tail", "init", "last",
                     "reverse", "sum", "product", "zip", "unzip", "take", "drop",
                     "unique", "flatten", "position", "indexOf",
@@ -4435,7 +4438,17 @@ impl<'a> InferCtx<'a> {
                     "isSortedBy", "maximum", "minimum", "takeWhile", "dropWhile",
                     "partition", "zipWith",
                 ];
-                let can_infer_list = infer_list_methods.contains(&call.method_name.as_str());
+                // "map" and "flatMap" are shared between List, Option, and Result.
+                // Only assume List if the return type has already been resolved to List.
+                let is_shared_method = matches!(call.method_name.as_str(), "map" | "flatMap");
+                let assume_list_for_shared = if is_shared_method {
+                    let resolved_ret = self.env.apply_subst(&call.ret_ty);
+                    matches!(resolved_ret, Type::List(_))
+                } else {
+                    false
+                };
+                let can_infer_list = infer_list_methods.contains(&call.method_name.as_str())
+                    || assume_list_for_shared;
                 if matches!(&resolved, Type::Var(_)) && can_infer_list {
                     let elem_ty = self.fresh();
                     let list_ty = Type::List(Box::new(elem_ty));
