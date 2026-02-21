@@ -13821,7 +13821,14 @@ impl Compiler {
         // Reset for new function
         self.chunk = Chunk::new();
         self.locals = HashMap::new();
-        self.local_types = HashMap::new();
+        // For REPL eval/var wrapper functions, propagate outer local_types so that
+        // variable types set by the REPL (e.g., Buffer for `a`) are available for
+        // UFCS method dispatch inside the wrapper function body.
+        self.local_types = if def.name.node.starts_with("__repl_") {
+            saved_local_types.clone()
+        } else {
+            HashMap::new()
+        };
         self.next_reg = 0;
 
         // Use qualified name with type signature to support function overloading
