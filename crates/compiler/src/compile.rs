@@ -18166,11 +18166,13 @@ impl Compiler {
                                 span: method.span,
                             });
                         }
-                    } else if (type_name.starts_with('?') || self.is_current_type_param(&type_name))
+                    } else if (type_name.starts_with('?') || self.is_current_type_param(&type_name)
+                               || type_name.contains("(polymorphic)") || type_name.contains("(type parameter)"))
                                && (self.is_known_trait_method(&method.node) || Self::is_ambiguous_builtin_method(&method.node))
                                && !Self::is_generic_builtin_method(&method.node) {
-                        // Type is a type variable (from HM inference) or a type parameter,
-                        // and the method is a trait method or an ambiguous builtin (exists on
+                        // Type is a type variable (from HM inference), a type parameter,
+                        // or an unresolved polymorphic/type-parameter type from expr_type_name.
+                        // The method is a trait method or an ambiguous builtin (exists on
                         // multiple types like get/contains/isEmpty). This needs monomorphization
                         // to dispatch to the correct type-specific implementation.
                         return Err(CompileError::UnresolvedTraitMethod {
@@ -18426,6 +18428,31 @@ impl Compiler {
                                 }
                             }
                         }
+
+                        // For ambiguous builtin methods (reverse, take, drop, contains, get, set):
+                        // UFCS resolved to a stdlib function (e.g., stdlib.list.reverse), but if the
+                        // receiver type is unresolved (polymorphic or type parameter), the dispatch
+                        // may be wrong (e.g., String.reverse vs List.reverse). Defer to monomorphization.
+                        if Self::is_ambiguous_builtin_method(&method.node)
+                            && (self.current_fn_generic_hm || !self.current_fn_type_params.is_empty())
+                        {
+                            // Check if receiver has an unresolved HM type
+                            let receiver_unresolved = if let Some(hm_ty) = self.inferred_expr_types.get(&obj.span()) {
+                                matches!(hm_ty, nostos_types::Type::Var(_) | nostos_types::Type::TypeParam(_))
+                            } else {
+                                // No HM type at all - check expr_type_name for polymorphic markers
+                                self.expr_type_name(obj)
+                                    .map(|tn| tn.contains("(polymorphic)") || tn.contains("(type parameter)"))
+                                    .unwrap_or(true) // truly unknown type
+                            };
+                            if receiver_unresolved {
+                                return Err(CompileError::UnresolvedTraitMethod {
+                                    method: method.node.clone(),
+                                    span: method.span,
+                                });
+                            }
+                        }
+
                         Ok(r)
                     }
                     Err(CompileError::UnknownVariable { name, span, .. }) |
@@ -24188,6 +24215,20 @@ impl Compiler {
     fn expr_type(&self, expr: &Expr) -> Option<&nostos_types::Type> {
         if let Some(ty) = self.inferred_expr_types.get(&expr.span()) {
             if self.is_type_structurally_resolved(ty) {
+                // For variables, validate against param_types to catch stale types
+                // from previous monomorphized variant compilations that share AST spans.
+                // E.g., myTake$String_Int sets span(x)->String, then myTake$List_Int
+                // compiles but HM inference may not overwrite, leaving stale String type.
+                if let Expr::Var(ident) = expr {
+                    if let Some(param_type) = self.param_types.get(&ident.node) {
+                        if let Some(inferred_base) = self.get_type_base_name_from_type(ty) {
+                            let param_base = param_type.split('[').next().unwrap_or(param_type);
+                            if inferred_base != param_base {
+                                return None; // Stale inferred type, discard
+                            }
+                        }
+                    }
+                }
                 return Some(ty);
             }
         }
