@@ -20619,9 +20619,58 @@ impl Compiler {
                 return self.compile_record(&resolved_name, &record_fields);
             }
 
-            // Get argument types for function overloading resolution
+            // Get argument types for function overloading resolution.
+            // When an arg is a call to a polymorphic function, expr_type_name may return
+            // a generic type like "n (polymorphic)". But by this point, the inner call's
+            // monomorphized variant has been compiled (arg_regs compilation happens first).
+            // In that case, look up the monomorphized variant's return type from its signature.
             let arg_types: Vec<Option<String>> = args.iter()
-                .map(|arg| self.expr_type_name(Self::call_arg_expr(arg)))
+                .map(|arg| {
+                    let arg_expr = Self::call_arg_expr(arg);
+                    let ty = self.expr_type_name(arg_expr);
+                    // If expr_type_name returned a polymorphic/non-concrete type for a Call expr,
+                    // check if the called function has a monomorphized variant with a known return type
+                    if let Some(ref ty_str) = ty {
+                        if ty_str.contains("(polymorphic)") || ty_str.contains("(type parameter)") {
+                            if let Expr::Call(inner_func, _, _, _) = arg_expr {
+                                if let Expr::Var(inner_ident) = inner_func.as_ref() {
+                                    let inner_base = inner_ident.node.split('/').next().unwrap_or(&inner_ident.node);
+                                    let inner_resolved = self.resolve_name(&inner_ident.node);
+                                    let inner_resolved_base = inner_resolved.split('/').next().unwrap_or(&inner_resolved);
+                                    let prefix1 = format!("{}$", inner_base);
+                                    let prefix2 = format!("{}$", inner_resolved_base);
+                                    for (key, func_val) in &self.functions {
+                                        if (key.starts_with(&prefix1) || key.starts_with(&prefix2))
+                                            && !func_val.name.starts_with("__stale__")
+                                        {
+                                            // Try return_type first (explicit annotation)
+                                            if let Some(ref ret_type) = func_val.return_type {
+                                                if !ret_type.is_empty() && !ret_type.starts_with('?')
+                                                    && !ret_type.contains("(polymorphic)")
+                                                {
+                                                    return Some(ret_type.clone());
+                                                }
+                                            }
+                                            // Fall back to signature: extract return type from "A -> B -> C"
+                                            if let Some(ref sig) = func_val.signature {
+                                                if let Some(arrow_pos) = sig.rfind(" -> ") {
+                                                    let ret = &sig[arrow_pos + 4..];
+                                                    if !ret.is_empty() && !ret.starts_with('?')
+                                                        && !ret.contains("(polymorphic)")
+                                                        && self.is_type_concrete(ret)
+                                                    {
+                                                        return Some(ret.to_string());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ty
+                })
                 .collect();
 
             // Check trait bounds if the function has type parameters with constraints

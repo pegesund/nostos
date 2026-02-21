@@ -1,0 +1,32 @@
+# expect: 0
+# Test: chaining polymorphic functions that preserve container type
+
+step1(r) = r.map(x => x + 1)
+step2(r) = r.map(x => x * 2)
+doubleOpt(o) = o.flatMap(x => Some(x * 2))
+addOne(o) = o.map(x => x + 1)
+double(r) = r.map(x => x * 2)
+addTwo(r) = r.map(x => x + 2)
+
+main() = {
+  v1 = match step2(step1(Ok(30))) {
+    Ok(v) -> v
+    Err(_) -> -1
+  }
+  assert_eq(62, v1)
+  
+  v2 = match addOne(doubleOpt(Some(10))) {
+    Some(v) -> v
+    None -> -1
+  }
+  assert_eq(21, v2)
+  
+  r: Result[Int, String] = Ok(10)
+  v3 = match addTwo(double(r)) {
+    Ok(v) -> v
+    Err(_) -> -1
+  }
+  assert_eq(22, v3)
+  
+  0
+}
