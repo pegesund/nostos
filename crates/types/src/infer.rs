@@ -6949,23 +6949,24 @@ impl<'a> InferCtx<'a> {
 
             // Try/catch - unify try body with catch arm types (like if/then/else)
             Expr::Try(body, catch_arms, finally, _) => {
-                let body_ty = self.infer_expr(body)?;
+                let _body_ty = self.infer_expr(body)?;
 
                 // Exception type is a fresh variable since throw() can throw any type
                 let err_ty = self.fresh();
 
-                // Unify catch arm result types with try body type
+                // try/catch is dynamically typed - branches can return different types
+                // (like Python). Do NOT unify try body with catch arm types.
                 for arm in catch_arms {
                     let catch_result_ty = self.fresh();
                     self.infer_match_arm(arm, &err_ty, &catch_result_ty)?;
-                    self.unify(body_ty.clone(), catch_result_ty);
                 }
 
                 if let Some(finally_expr) = finally {
                     let _ = self.infer_expr(finally_expr)?;
                 }
 
-                Ok(body_ty)
+                // Return a fresh type - the actual type depends on which branch runs
+                Ok(self.fresh())
             }
 
             // Quote/Splice - macro-related

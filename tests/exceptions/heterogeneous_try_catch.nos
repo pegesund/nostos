@@ -1,0 +1,7 @@
+# expect: 42
+# Test that try/catch allows different types in branches (dynamically typed)
+foo() = ()
+main() = {
+    result = try { foo() } catch { _ -> 42 }
+    42
+}
