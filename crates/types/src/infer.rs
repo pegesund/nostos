@@ -695,9 +695,9 @@ impl<'a> InferCtx<'a> {
                     Type::Var(_) | Type::TypeParam(_) => true,
                     Type::List(inner) | Type::Set(inner) | Type::Array(inner) | Type::IO(inner) => is_fully_generic(inner),
                     Type::Map(k, v) => is_fully_generic(k) && is_fully_generic(v),
-                    Type::Tuple(elems) => elems.iter().all(|e| is_fully_generic(e)),
-                    Type::Named { args, .. } => args.iter().all(|a| is_fully_generic(a)),
-                    Type::Function(ft) => ft.params.iter().all(|p| is_fully_generic(p)) && is_fully_generic(&ft.ret),
+                    Type::Tuple(elems) => elems.iter().all(is_fully_generic),
+                    Type::Named { args, .. } => args.iter().all(is_fully_generic),
+                    Type::Function(ft) => ft.params.iter().all(is_fully_generic) && is_fully_generic(&ft.ret),
                     _ => false,
                 }
             }
@@ -2281,7 +2281,7 @@ impl<'a> InferCtx<'a> {
                 // from annotations (e.g., `f(t: BTree[a])` where `a` is Named("a")).
                 // Treat them as polymorphic - don't reject, just skip.
                 Type::Named { name, args } if args.is_empty() && name.len() == 1
-                    && name.chars().next().map_or(false, |c| c.is_ascii_lowercase()) => {}
+                    && name.starts_with(|c: char| c.is_ascii_lowercase()) => {}
                 Type::Function(_) => {
                     // Function types NEVER implement standard traits (Eq, Ord, Num, etc.)
                     // regardless of their parameter/return types. So even with unresolved
@@ -2368,7 +2368,7 @@ impl<'a> InferCtx<'a> {
                 Type::Var(_) | Type::TypeParam(_) => {} // Still unresolved or polymorphic, skip
                 // Named type params from annotations (e.g., Named("a")) - skip
                 Type::Named { name, args } if args.is_empty() && name.len() == 1
-                    && name.chars().next().map_or(false, |c| c.is_ascii_lowercase()) => {}
+                    && name.starts_with(|c: char| c.is_ascii_lowercase()) => {}
                 Type::Function(_) => {
                     return Err(TypeError::MissingTraitImpl {
                         ty: resolved.display(),
@@ -2556,7 +2556,7 @@ impl<'a> InferCtx<'a> {
                 Type::Var(_) | Type::TypeParam(_) => {} // Still unresolved or polymorphic, skip
                 // Named type params from annotations (e.g., Named("a")) - skip
                 Type::Named { name, args } if args.is_empty() && name.len() == 1
-                    && name.chars().next().map_or(false, |c| c.is_ascii_lowercase()) => {}
+                    && name.starts_with(|c: char| c.is_ascii_lowercase()) => {}
                 Type::Function(_) => {
                     return Err(TypeError::MissingTraitImpl {
                         ty: resolved.display(),
@@ -4599,7 +4599,7 @@ impl<'a> InferCtx<'a> {
                                 // Exec.run has String as first param, not Exec). Module functions
                                 // should NOT be used to infer receiver types since they're not
                                 // methods on values of that type.
-                                let is_ufcs_method = fn_type.params.first().map_or(false, |first_param| {
+                                let is_ufcs_method = fn_type.params.first().is_some_and(|first_param| {
                                     match first_param {
                                         Type::Named { name, .. } => {
                                             let base_name = name.split('.').last().unwrap_or(name);
@@ -7968,6 +7968,7 @@ impl<'a> InferCtx<'a> {
             true
         };
 
+        #[allow(clippy::redundant_closure)]
         let pre_registered = self.env.functions.get(name).cloned()
             .filter(|ft| check_param_compat(ft))
             .or_else(|| self.env.functions.get(&qualified_name).cloned()

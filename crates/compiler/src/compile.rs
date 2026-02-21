@@ -11083,8 +11083,7 @@ impl Compiler {
                             && !ret_type.chars().next().map(|c| c.is_lowercase()).unwrap_or(false)
                             && !ret_type.contains("->")
                         {
-                            let self_sub = generic_self_type.as_ref()
-                                .map(|s| s.as_str())
+                            let self_sub = generic_self_type.as_deref()
                                 .unwrap_or(unqualified_type_name.as_str());
                             let mut resolved_ret = ret_type.replace("Self", self_sub);
                             // Handle bare generic return types (e.g., "Either" → "Either[a, b]")
