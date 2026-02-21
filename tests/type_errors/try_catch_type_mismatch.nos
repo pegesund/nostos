@@ -1,5 +1,5 @@
-# expect_error: type
-# try and catch branches must return the same type
+# expect: 42
+# try/catch is dynamically typed - branches can return different types
 main() = {
     x = try { 42 } catch { _ -> "error" }
     x

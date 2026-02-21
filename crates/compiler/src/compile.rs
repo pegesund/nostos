@@ -34843,6 +34843,18 @@ fn find_lambda_captures_in_expr(
             find_lambda_captures_in_expr(cond, mutable_vars, captured);
             find_lambda_captures_in_expr(body, mutable_vars, captured);
         }
+        Expr::Record(_, fields, _) | Expr::RecordUpdate(_, _, fields, _) => {
+            if let Expr::RecordUpdate(_, base, _, _) = expr {
+                find_lambda_captures_in_expr(base, mutable_vars, captured);
+            }
+            for field in fields {
+                match field {
+                    RecordField::Positional(e) | RecordField::Named(_, e) => {
+                        find_lambda_captures_in_expr(e, mutable_vars, captured);
+                    }
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -34906,6 +34918,18 @@ fn find_lambda_mutations_in_expr(
             find_lambda_mutations_in_expr(r, mutable_vars, mutated);
         }
         Expr::UnaryOp(_, e, _) => find_lambda_mutations_in_expr(e, mutable_vars, mutated),
+        Expr::Record(_, fields, _) | Expr::RecordUpdate(_, _, fields, _) => {
+            if let Expr::RecordUpdate(_, base, _, _) = expr {
+                find_lambda_mutations_in_expr(base, mutable_vars, mutated);
+            }
+            for field in fields {
+                match field {
+                    RecordField::Positional(e) | RecordField::Named(_, e) => {
+                        find_lambda_mutations_in_expr(e, mutable_vars, mutated);
+                    }
+                }
+            }
+        }
         Expr::List(elems, tail, _) => {
             for e in elems {
                 find_lambda_mutations_in_expr(e, mutable_vars, mutated);
@@ -34950,15 +34974,6 @@ fn find_lambda_mutations_in_expr(
         Expr::Index(coll, idx, _) => {
             find_lambda_mutations_in_expr(coll, mutable_vars, mutated);
             find_lambda_mutations_in_expr(idx, mutable_vars, mutated);
-        }
-        Expr::Record(_, fields, _) => {
-            for field in fields {
-                match field {
-                    RecordField::Positional(e) | RecordField::Named(_, e) => {
-                        find_lambda_mutations_in_expr(e, mutable_vars, mutated);
-                    }
-                }
-            }
         }
         _ => {}
     }
