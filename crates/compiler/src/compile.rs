@@ -4020,6 +4020,12 @@ impl Compiler {
                             is_func_trait_error;
                         !is_spurious
                     }
+                    // UnresolvedTraitMethod from type_check_fn is NOT a hard error.
+                    // It happens when a function calls methods on polymorphic parameters
+                    // (e.g., `revId(x) = { y = id(x); y.reverse() }`). The actual body
+                    // compilation handles this by marking the function as polymorphic
+                    // and triggering monomorphization at call sites.
+                    CompileError::UnresolvedTraitMethod { .. } => false,
                     _ => true,
                 };
                 if should_report {
@@ -13810,10 +13816,12 @@ impl Compiler {
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_next_reg = self.next_reg;
         let saved_function_name = self.current_function_name.take();
+        let saved_local_types = std::mem::take(&mut self.local_types);
 
         // Reset for new function
         self.chunk = Chunk::new();
         self.locals = HashMap::new();
+        self.local_types = HashMap::new();
         self.next_reg = 0;
 
         // Use qualified name with type signature to support function overloading
@@ -14211,6 +14219,7 @@ impl Compiler {
                             // Restore state and return success
                             self.chunk = saved_chunk;
                             self.locals = saved_locals;
+                            self.local_types = saved_local_types;
                             self.next_reg = saved_next_reg;
                             self.current_function_name = saved_function_name;
                             self.param_types = saved_param_types;
@@ -14304,6 +14313,7 @@ impl Compiler {
                         // Restore state and return success
                         self.chunk = saved_chunk;
                         self.locals = saved_locals;
+                        self.local_types = saved_local_types;
                         self.next_reg = saved_next_reg;
                         self.current_function_name = saved_function_name;
                         self.param_types = saved_param_types;
@@ -14429,6 +14439,7 @@ impl Compiler {
         // Restore compiler state
         self.chunk = saved_chunk;
         self.locals = saved_locals;
+        self.local_types = saved_local_types;
         self.next_reg = saved_next_reg;
         self.current_function_name = saved_function_name;
         self.param_types = saved_param_types;
@@ -18058,9 +18069,6 @@ impl Compiler {
                         let param_defaults = self.get_function_param_defaults(&call_name);
                         let param_names = self.get_function_param_names(&call_name);
                         let has_named_args = args.iter().any(|a| matches!(a, CallArg::Named(_, _)));
-                        if has_named_args {
-                            eprintln!("DEBUG UFCS NAMED ARGS: call_name={}, param_names={:?}, qualified_method={}", call_name, param_names, qualified_method);
-                        }
 
                         if has_named_args && param_names.len() > 1 {
                             // Named args in UFCS call: reorder args to match param positions.
@@ -22016,6 +22024,19 @@ impl Compiler {
                                     && ret_display.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false);
                                 if !is_single_letter_type_param {
                                     return Some(ret_display);
+                                }
+                                // Return type is a type variable - try to substitute by matching
+                                // against param types. E.g., id: a -> a, called with String → returns String.
+                                if let nostos_types::Type::Var(ret_var_id) = fn_type.ret.as_ref() {
+                                    for (i, param_ty) in fn_type.params.iter().enumerate() {
+                                        if let nostos_types::Type::Var(param_var_id) = param_ty {
+                                            if param_var_id == ret_var_id && i < args.len() {
+                                                if let Some(arg_type) = self.expr_type_name(Self::call_arg_expr(&args[i])) {
+                                                    return Some(arg_type);
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
