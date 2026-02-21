@@ -12991,7 +12991,13 @@ impl Compiler {
             // List.set: [a] -> Int -> a -> [a] vs typed array set
             "set" |
             // stdlib.list.contains: List[T] -> T -> Bool vs Map/Set/String.contains
-            "contains"
+            "contains" |
+            // List.reverse vs String.reverse
+            "reverse" |
+            // List.take vs String.take
+            "take" |
+            // List.drop vs String.drop
+            "drop"
         )
     }
 
