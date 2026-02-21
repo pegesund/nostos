@@ -1,0 +1,40 @@
+# expect: 42
+# Test: if cond then x = expr (without braces)
+# This should be equivalent to: if cond then { x = expr } else ()
+main() = {
+    # Simple if-then assignment
+    var a = 0
+    if true then a = 42
+    assert_eq(42, a)
+
+    # if-then assignment in lambda
+    var b = 0
+    f = () => { if true then b = 10 }
+    f()
+    assert_eq(10, b)
+
+    # if-then assignment inside each
+    var c = 0
+    [1, 2, 3].each(x => {
+        if x > 1 then c = c + x
+    })
+    assert_eq(5, c)
+
+    # if-then-else still works normally
+    d = if true then 100 else 200
+    assert_eq(100, d)
+
+    # if-then assignment with complex rhs
+    var e = 0
+    if true then e = [1, 2, 3].fold(0, (acc, x) => acc + x)
+    assert_eq(6, e)
+
+    # for loop with if-then assignment
+    var g = 0
+    for i = 1 to 5 {
+        if i % 2 == 0 then g = g + i
+    }
+    assert_eq(6, g)
+
+    a
+}
