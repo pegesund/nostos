@@ -1,0 +1,21 @@
+# expect: 37
+# Test: mutable capture in match arms within closures
+main() = {
+    var total = 0
+    process = (v) => {
+        match v {
+            Some(x) -> {
+                match x > 5 {
+                    true -> { total = total + x * 2 }
+                    false -> { total = total + x }
+                }
+            }
+            None -> { total = total + 0 }
+        }
+    }
+    process(Some(3))
+    process(Some(10))
+    process(None)
+    process(Some(7))
+    total
+}

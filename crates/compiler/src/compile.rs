@@ -34813,6 +34813,42 @@ fn find_mutations_inside_lambda(
             find_mutations_inside_lambda(cond, mutable_vars, mutated);
             find_mutations_inside_lambda(body, mutable_vars, mutated);
         }
+        Expr::Match(scrutinee, arms, _) => {
+            find_mutations_inside_lambda(scrutinee, mutable_vars, mutated);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    find_mutations_inside_lambda(guard, mutable_vars, mutated);
+                }
+                find_mutations_inside_lambda(&arm.body, mutable_vars, mutated);
+            }
+        }
+        Expr::Try(body, catch_arms, finally, _) => {
+            find_mutations_inside_lambda(body, mutable_vars, mutated);
+            for arm in catch_arms {
+                find_mutations_inside_lambda(&arm.body, mutable_vars, mutated);
+            }
+            if let Some(f) = finally {
+                find_mutations_inside_lambda(f, mutable_vars, mutated);
+            }
+        }
+        Expr::For(_, start, end, body, _) => {
+            find_mutations_inside_lambda(start, mutable_vars, mutated);
+            find_mutations_inside_lambda(end, mutable_vars, mutated);
+            find_mutations_inside_lambda(body, mutable_vars, mutated);
+        }
+        Expr::Tuple(elems, _) => {
+            for e in elems {
+                find_mutations_inside_lambda(e, mutable_vars, mutated);
+            }
+        }
+        Expr::List(elems, tail, _) => {
+            for e in elems {
+                find_mutations_inside_lambda(e, mutable_vars, mutated);
+            }
+            if let Some(t) = tail {
+                find_mutations_inside_lambda(t, mutable_vars, mutated);
+            }
+        }
         _ => {}
     }
 }
