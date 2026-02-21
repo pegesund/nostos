@@ -18352,7 +18352,34 @@ impl Compiler {
 
                 let func_expr = Expr::Var(method.clone());
                 match self.compile_call(&func_expr, &[], &all_args, is_tail) {
-                    Ok(r) => Ok(r),
+                    Ok(r) => {
+                        // For shared methods (map/flatMap) that exist on List, Option, and Result:
+                        // UFCS resolved to stdlib.list.X, but if HM inference left the receiver
+                        // as an unresolved Var, the receiver might be Option/Result, not List.
+                        // In that case, defer to monomorphization where concrete types are known.
+                        if matches!(method.node.as_str(), "map" | "flatMap")
+                            && (self.current_fn_generic_hm || !self.current_fn_type_params.is_empty())
+                        {
+                            // Check if receiver is a simple variable reference (Expr::Var)
+                            // with unresolved HM type. This means the variable is likely a
+                            // function parameter that could be List, Option, or Result at runtime,
+                            // so UFCS resolution to stdlib.list.X may be wrong.
+                            // Don't trigger for call expressions (like range(0,len)) where
+                            // HM just didn't resolve the return type of a builtin.
+                            let is_param_var = matches!(obj.as_ref(), Expr::Var(_));
+                            if is_param_var {
+                                if let Some(hm_ty) = self.inferred_expr_types.get(&obj.span()) {
+                                    if matches!(hm_ty, nostos_types::Type::Var(_)) {
+                                        return Err(CompileError::UnresolvedTraitMethod {
+                                            method: method.node.clone(),
+                                            span: method.span,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        Ok(r)
+                    }
                     Err(CompileError::UnknownVariable { name, span, .. }) |
                     Err(CompileError::UnknownFunction { name, span, .. }) => {
                         // Improve error message: this was a method call, not a plain variable

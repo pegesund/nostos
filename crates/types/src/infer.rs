@@ -3532,12 +3532,8 @@ impl<'a> InferCtx<'a> {
                 // (lookup, param/return unification) instead of being silently dropped.
                 let type_name_opt = if type_name_opt.is_none() && matches!(&resolved_receiver, Type::Var(_)) {
                     // Last-resort inference: if receiver is still Var after all iterations,
-                    // assume List for methods that are primarily list operations.
-                    // "map" and "flatMap" are included here as a fallback since they're
-                    // most commonly used on lists (Option/Result cases should have resolved
-                    // the receiver type in earlier iterations).
-                    let is_list_method = matches!(call.method_name.as_str(),
-                        "map" | "flatMap" |
+                    // assume List for methods that uniquely identify list operations.
+                    let is_exclusive_list_method = matches!(call.method_name.as_str(),
                         "filter" | "fold" | "any" | "all" | "find" |
                         "sort" | "sortBy" | "head" | "tail" | "init" | "last" |
                         "reverse" | "sum" | "product" | "zip" | "unzip" | "take" | "drop" |
@@ -3548,6 +3544,20 @@ impl<'a> InferCtx<'a> {
                         "isSortedBy" | "maximum" | "minimum" | "takeWhile" | "dropWhile" |
                         "partition" | "zipWith"
                     );
+                    // "map" and "flatMap" are shared between List, Option, and Result.
+                    // Only assume List if the return type has already been resolved to List
+                    // by other constraints (e.g., from fold/filter/sort in the same chain).
+                    // Otherwise, leave the receiver unresolved for monomorphization to handle
+                    // (e.g., `addResults(r1, r2) = r1.flatMap(a => r2.map(b => a + b))`
+                    // should dispatch to Result.flatMap/map, not List.flatMap/map).
+                    let is_shared_method = matches!(call.method_name.as_str(), "map" | "flatMap");
+                    let assume_list_for_shared = if is_shared_method {
+                        let resolved_ret = self.env.apply_subst(&call.ret_ty);
+                        matches!(resolved_ret, Type::List(_))
+                    } else {
+                        false
+                    };
+                    let is_list_method = is_exclusive_list_method || assume_list_for_shared;
                     let is_map_method = matches!(call.method_name.as_str(),
                         "lookup" | "keys" | "values" | "getOrThrow" | "toList"
                     ) || (call.method_name == "insert" && call.arg_types.len() == 3);
