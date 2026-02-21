@@ -848,9 +848,52 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                             match target {
                                 Some(t) => Stmt::Assign(t, rhs, to_span(span)),
                                 None => {
-                                    // LHS can't be a pattern or assignment target - syntax error
-                                    // For now, just treat as expression (will fail later)
-                                    Stmt::Expr(lhs)
+                                    // Check for `if cond then VAR = expr` pattern.
+                                    // The parser sees `if cond then VAR` as the if-expression
+                                    // (with VAR as then-branch), then `= expr` as an assignment.
+                                    // Rewrite: move the assignment into the if's then-branch.
+                                    if let Expr::If(cond, then_branch, else_branch, if_span) = lhs {
+                                        // Rewrite `if cond then VAR = expr` → `if cond then { VAR = expr }`
+                                        // Build the assignment statement the same way the block
+                                        // parser would if the user wrote braces:
+                                        // `if c then { x = expr }` parses x=expr as Stmt::Let
+                                        // when x is a simple variable (expr_to_pattern succeeds).
+                                        let assign_stmt = if let Some(pat) = expr_to_pattern((*then_branch).clone()) {
+                                            Some(Stmt::Let(Binding {
+                                                visibility: Visibility::Private,
+                                                mutable: false,
+                                                pattern: pat,
+                                                ty: None,
+                                                value: rhs.clone(),
+                                                span: Span::default(),
+                                            }))
+                                        } else {
+                                            // Try AssignTarget for field/index assignment
+                                            let target = match then_branch.as_ref() {
+                                                Expr::FieldAccess(obj, field, _) => Some(AssignTarget::Field(obj.clone(), field.clone())),
+                                                Expr::Index(coll, idx, _) => Some(AssignTarget::Index(coll.clone(), idx.clone())),
+                                                _ => None,
+                                            };
+                                            target.map(|t| {
+                                                let assign_span = Span::new(get_span(then_branch.as_ref()).start, get_span(&rhs).end);
+                                                Stmt::Assign(t, rhs.clone(), assign_span)
+                                            })
+                                        };
+                                        if let Some(stmt) = assign_stmt {
+                                            let block_span = Span::new(get_span(then_branch.as_ref()).start, get_span(&rhs).end);
+                                            let new_then = Expr::Block(vec![stmt], block_span);
+                                            // The else branch was () (from no-else desugaring),
+                                            // which is correct: if cond then (assign) else ()
+                                            Stmt::Expr(Expr::If(cond, Box::new(new_then), else_branch, if_span))
+                                        } else {
+                                            // then-branch is not an assignable expression
+                                            Stmt::Expr(Expr::If(cond, then_branch, else_branch, if_span))
+                                        }
+                                    } else {
+                                        // LHS can't be a pattern or assignment target - syntax error
+                                        // For now, just treat as expression (will fail later)
+                                        Stmt::Expr(lhs)
+                                    }
                                 }
                             }
                         }
