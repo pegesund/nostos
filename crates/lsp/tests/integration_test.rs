@@ -25,6 +25,7 @@ struct Diagnostic {
     message: String,
 }
 
+#[allow(dead_code)]
 impl LspClient {
     fn new(lsp_binary: &str) -> Self {
         let mut process = Command::new(lsp_binary)
