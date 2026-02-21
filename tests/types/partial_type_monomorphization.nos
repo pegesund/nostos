@@ -1,0 +1,23 @@
+# expect: 0
+# Test: polymorphic functions work with partially-typed constructors
+# (e.g., Ok(25) where error type is unknown, None where inner type is unknown)
+
+doubleResult(r) = r.map(x => x * 2)
+process(opt) = opt.map(x => x + 1)
+
+main() = {
+  # Result with bare constructors
+  assert_eq(Ok(50), doubleResult(Ok(25)))
+  assert_eq(Err("bad"), doubleResult(Err("bad")))
+
+  # Option with bare None
+  assert_eq(None, process(None))
+  assert_eq(Some(6), process(Some(5)))
+
+  # Mix typed and untyped calls
+  val: Result[Int, String] = Ok(10)
+  assert_eq(Ok(20), doubleResult(val))
+  assert_eq(Ok(50), doubleResult(Ok(25)))
+
+  0
+}

@@ -20742,15 +20742,19 @@ impl Compiler {
                 self.is_type_concrete(t)
             });
 
-            // If polymorphic and at least some types are known and concrete, try monomorphization.
-            // Keep ALL known types (even partially-resolved ones like Either[Int, ?25]) because
-            // the base type name is sufficient for UFCS trait method resolution. Only use "_"
-            // for truly unknown types (None in arg_types).
-            let has_some_concrete = concrete_arg_types.iter().any(|t| self.is_type_concrete(t));
-            let final_call_name = if is_polymorphic && has_some_concrete {
-                // Build arg type list: keep all known types, "_" for unknown
+            // If polymorphic and at least some types are known, try monomorphization.
+            // The base type name is sufficient for UFCS trait method resolution (e.g.,
+            // "Option" is enough to dispatch .map() to optMap, even if inner params like
+            // Option[?X] are unresolved). Only use "_" for truly unknown types.
+            let has_some_known = concrete_arg_types.iter().any(|t| self.has_known_base_type(t));
+            let final_call_name = if is_polymorphic && has_some_known {
+                // Build arg type list: strip unresolved inner params for monomorphization key,
+                // use "_" for truly unknown types
                 let mono_arg_types: Vec<String> = arg_types.iter()
-                    .map(|t| t.clone().unwrap_or_else(|| "_".to_string()))
+                    .map(|t| match t {
+                        Some(ty) => self.strip_unresolved_params_for_mono(ty),
+                        None => "_".to_string(),
+                    })
                     .collect();
 
                 // Get parameter names from the function AST
@@ -20779,6 +20783,8 @@ impl Compiler {
                                 // Find existing variant matching on concrete positions.
                                 // Use bracket-aware splitting (split_type_args) because
                                 // types like "Map[a, b]" contain commas inside brackets.
+                                // Also match base types: if mono_ty is "Option" (stripped),
+                                // it should match existing "Option[Int]" because the base matches.
                                 let existing_variant = self.function_indices.keys()
                                     .find(|k| {
                                         if !k.starts_with(&prefix) {
@@ -20794,7 +20800,22 @@ impl Compiler {
                                             for (i, mono_ty) in mono_arg_types.iter().enumerate() {
                                                 if self.is_type_concrete(mono_ty) {
                                                     if i < existing_types.len() && existing_types[i] != *mono_ty {
-                                                        return false;
+                                                        // Also try base type match: "Option" matches "Option[Int]"
+                                                        let existing_base = existing_types[i].split('[').next().unwrap_or(&existing_types[i]);
+                                                        let mono_base = mono_ty.split('[').next().unwrap_or(mono_ty);
+                                                        if existing_base != mono_base {
+                                                            return false;
+                                                        }
+                                                    }
+                                                } else if self.has_known_base_type(mono_ty) {
+                                                    // Partially resolved type (e.g., "Option[?X]")
+                                                    // Match on base type
+                                                    let mono_base = mono_ty.split('[').next().unwrap_or(mono_ty);
+                                                    if i < existing_types.len() {
+                                                        let existing_base = existing_types[i].split('[').next().unwrap_or(&existing_types[i]);
+                                                        if existing_base != mono_base {
+                                                            return false;
+                                                        }
                                                     }
                                                 }
                                             }
@@ -23855,6 +23876,44 @@ impl Compiler {
         }
         // Unknown type format - assume concrete
         true
+    }
+
+    /// Check if a type string has a known base type, even if inner type params are unresolved.
+    /// E.g., "Option[?X]" has known base "Option", "Result[Int, ?E]" has known base "Result".
+    /// This is used for monomorphization: the base type is sufficient for method dispatch
+    /// (e.g., dispatching .map() to optMap vs listMap) even when inner params are unknown.
+    fn has_known_base_type(&self, t: &str) -> bool {
+        // Already fully concrete
+        if self.is_type_concrete(t) {
+            return true;
+        }
+        // Check parameterized types: extract base and check if it's concrete
+        if let Some(bracket_start) = t.find('[') {
+            if t.ends_with(']') {
+                let base = &t[..bracket_start];
+                return self.is_type_concrete(base);
+            }
+        }
+        false
+    }
+
+    /// Strip unresolved type parameters from a type string for monomorphization key matching.
+    /// E.g., "Option[?X]" → "Option", "Result[Int, ?E]" → "Result[Int, ?E]" (kept as-is since
+    /// some params are concrete), "Map[String, ?V]" → "Map[String, ?V]".
+    /// Only strips ALL params if none are concrete. Otherwise keeps the full type.
+    fn strip_unresolved_params_for_mono(&self, t: &str) -> String {
+        if self.is_type_concrete(t) {
+            return t.to_string();
+        }
+        if let Some(bracket_start) = t.find('[') {
+            if t.ends_with(']') {
+                let base = &t[..bracket_start];
+                if self.is_type_concrete(base) {
+                    return base.to_string();
+                }
+            }
+        }
+        t.to_string()
     }
 
     // =========================================================================
