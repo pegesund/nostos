@@ -1,0 +1,39 @@
+# expect: 0
+# Test mutable variable capture in closures
+# var bindings that are reassigned inside lambdas should be shared via mutable cells
+
+main() = {
+    # Test 1: Simple closure mutation
+    var x = 0
+    f = () => { x = 10 }
+    f()
+    assert(x == 10, "Test 1: simple closure mutation")
+
+    # Test 2: Mutation in each
+    var total = 0
+    [1, 2, 3, 4, 5].each(n => { total = total + n })
+    assert(total == 15, "Test 2: mutation in each")
+
+    # Test 3: Multiple calls to mutating closure
+    var count = 0
+    inc = () => { count = count + 1 }
+    inc()
+    inc()
+    inc()
+    assert(count == 3, "Test 3: multiple calls")
+
+    # Test 4: Closure with parameter that mutates captured var
+    var sum = 0
+    adder = n => { sum = sum + n }
+    adder(10)
+    adder(20)
+    adder(30)
+    assert(sum == 60, "Test 4: closure with params")
+
+    # Test 5: Normal var without closure should still work
+    var y = 5
+    y = y * 2
+    assert(y == 10, "Test 5: normal var still works")
+
+    0
+}

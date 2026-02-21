@@ -1466,6 +1466,36 @@ impl VM {
                 }
             }
 
+            // Mutable cells (for closure-captured mutable variables)
+            Instruction::MakeCell(dst, val) => {
+                let v = reg!(val).clone();
+                set_reg!(dst, Value::Array(Arc::new(std::sync::RwLock::new(vec![v]))));
+            }
+            Instruction::CellGet(dst, cell) => {
+                match reg!(cell) {
+                    Value::Array(arr) => {
+                        let value = arr.read().unwrap()[0].clone();
+                        set_reg!(dst, value);
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Cell (Array)".to_string(),
+                        found: reg!(cell).type_name().to_string(),
+                    }),
+                }
+            }
+            Instruction::CellSet(cell, val) => {
+                let new_val = reg!(val).clone();
+                match reg!(cell) {
+                    Value::Array(arr) => {
+                        arr.write().unwrap()[0] = new_val;
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "Cell (Array)".to_string(),
+                        found: reg!(cell).type_name().to_string(),
+                    }),
+                }
+            }
+
             // Error handling
             Instruction::PushHandler(offset) => {
                 let catch_ip = (self.frames.last().unwrap().ip as isize + offset as isize) as usize;

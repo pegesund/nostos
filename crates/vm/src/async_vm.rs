@@ -3571,6 +3571,36 @@ impl AsyncProcess {
                 }
             }
 
+            // === Mutable cells (for closure-captured mutable variables) ===
+            MakeCell(dst, val) => {
+                let initial = reg!(*val);
+                let ptr = self.heap.alloc_array(vec![initial]);
+                set_reg!(*dst, GcValue::Array(ptr));
+            }
+            CellGet(dst, cell) => {
+                let ptr = match reg!(*cell) {
+                    GcValue::Array(ptr) => ptr,
+                    other => return Err(RuntimeError::Panic(
+                        format!("CellGet: expected Cell (Array), got {:?}", other.type_name(&self.heap))
+                    )),
+                };
+                let arr = self.heap.get_array(ptr)
+                    .ok_or_else(|| RuntimeError::Panic("CellGet: invalid array reference".into()))?;
+                set_reg!(*dst, arr.items[0].clone());
+            }
+            CellSet(cell, val) => {
+                let ptr = match reg!(*cell) {
+                    GcValue::Array(ptr) => ptr,
+                    other => return Err(RuntimeError::Panic(
+                        format!("CellSet: expected Cell (Array), got {:?}", other.type_name(&self.heap))
+                    )),
+                };
+                let new_val = reg!(*val);
+                let arr = self.heap.get_array_mut(ptr)
+                    .ok_or_else(|| RuntimeError::Panic("CellSet: invalid array reference".into()))?;
+                arr.items[0] = new_val;
+            }
+
             // === Data structures ===
             MakeTuple(dst, ref elems) => {
                 let values: Vec<GcValue> = elems.iter().map(|r| reg!(*r)).collect();

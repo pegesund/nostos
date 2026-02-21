@@ -1632,6 +1632,15 @@ pub enum Instruction {
     /// Get captured variable: dst = captures[idx]
     GetCapture(Reg, u8),
 
+    // === Mutable cells (for closure-captured mutable variables) ===
+    /// Create a mutable cell: dst = Cell(initial_value)
+    /// Used when a `var` is captured by a closure - wraps value in a shared mutable cell
+    MakeCell(Reg, Reg),
+    /// Read cell value: dst = cell.get()
+    CellGet(Reg, Reg),
+    /// Write cell value: cell.set(new_value)
+    CellSet(Reg, Reg),
+
     // === Pattern matching ===
     /// Test if value matches constructor tag by name (stored in constants)
     /// dst = value.constructor == constants[ctor_idx]

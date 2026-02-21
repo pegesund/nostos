@@ -1182,6 +1182,9 @@ struct LocalInfo {
     reg: Reg,
     is_float: bool,
     mutable: bool,
+    /// True if this var is boxed in a mutable cell (for closure capture).
+    /// Reads emit CellGet, writes emit CellSet.
+    is_cell: bool,
 }
 
 /// Compilation context.
@@ -1194,6 +1197,10 @@ pub struct Compiler {
     next_reg: Reg,
     /// Captured variables for the current closure: name -> capture index
     capture_indices: HashMap<String, u8>,
+    /// Captured variables that are mutable cells (shared with outer scope)
+    capture_cells: HashSet<String>,
+    /// Var bindings in current scope that need cell boxing (captured+mutated by lambdas)
+    closure_mutated_vars: HashSet<String>,
     /// Compiled functions
     functions: HashMap<String, Arc<FunctionValue>>,
     /// Function name -> index mapping for direct calls (no HashMap lookup at runtime!)
@@ -1576,6 +1583,8 @@ impl Compiler {
             locals: HashMap::new(),
             next_reg: 0,
             capture_indices: HashMap::new(),
+            capture_cells: HashSet::new(),
+            closure_mutated_vars: HashSet::new(),
             functions: HashMap::new(),
             function_indices: HashMap::new(),
             function_list: Vec::new(),
@@ -5315,6 +5324,8 @@ impl Compiler {
             locals: HashMap::new(),
             next_reg: 0,
             capture_indices: HashMap::new(),
+            capture_cells: HashSet::new(),
+            closure_mutated_vars: HashSet::new(),
             functions: HashMap::new(),
             function_indices: HashMap::new(),
             function_list: Vec::new(),
@@ -14054,15 +14065,15 @@ impl Compiler {
                 self.locals.clear();
                 // Bind head and tail
                 if let Some(ref h) = head_binding {
-                    self.locals.insert(h.clone(), LocalInfo { reg: head_reg, is_float: false, mutable: false });
+                    self.locals.insert(h.clone(), LocalInfo { reg: head_reg, is_float: false, mutable: false, is_cell: false });
                 }
                 if let Some(ref t) = tail_binding {
-                    self.locals.insert(t.clone(), LocalInfo { reg: tail_reg, is_float: false, mutable: false });
+                    self.locals.insert(t.clone(), LocalInfo { reg: tail_reg, is_float: false, mutable: false, is_cell: false });
                 }
                 // Bind other params from clause 1 (cons case)
                 for (i, param) in def.clauses[1].params.iter().skip(1).enumerate() {
                     if let Some(n) = self.pattern_binding_name(&param.pattern) {
-                        self.locals.insert(n, LocalInfo { reg: (i + 1) as Reg, is_float: false, mutable: false });
+                        self.locals.insert(n, LocalInfo { reg: (i + 1) as Reg, is_float: false, mutable: false, is_cell: false });
                     }
                 }
                 // Compile cons case body
@@ -14081,7 +14092,7 @@ impl Compiler {
                 // Bind other params from clause 0 (empty case)
                 for (i, param) in def.clauses[0].params.iter().skip(1).enumerate() {
                     if let Some(n) = self.pattern_binding_name(&param.pattern) {
-                        self.locals.insert(n, LocalInfo { reg: (i + 1) as Reg, is_float: false, mutable: false });
+                        self.locals.insert(n, LocalInfo { reg: (i + 1) as Reg, is_float: false, mutable: false, is_cell: false });
                     }
                 }
                 // Compile empty case body
@@ -14126,7 +14137,7 @@ impl Compiler {
                                     _ => false,
                                 }
                             }).unwrap_or(false);
-                            self.locals.insert(n.clone(), LocalInfo { reg: i as Reg, is_float, mutable: false });
+                            self.locals.insert(n.clone(), LocalInfo { reg: i as Reg, is_float, mutable: false, is_cell: false });
                         }
                     }
 
@@ -14199,7 +14210,7 @@ impl Compiler {
 
                     // Add bindings to locals with type info from pattern
                     for (name, reg, is_float) in bindings {
-                        self.locals.insert(name, LocalInfo { reg, is_float, mutable: false });
+                        self.locals.insert(name, LocalInfo { reg, is_float, mutable: false, is_cell: false });
                     }
                 }
 
@@ -14286,7 +14297,7 @@ impl Compiler {
                             _ => false,
                         }
                     }).unwrap_or(false);
-                    self.locals.insert(n.clone(), LocalInfo { reg: i as Reg, is_float, mutable: false });
+                    self.locals.insert(n.clone(), LocalInfo { reg: i as Reg, is_float, mutable: false, is_cell: false });
                     // Record parameter as debug symbol
                     self.current_fn_debug_symbols.push(LocalVarSymbol {
                         name: n,
@@ -14720,8 +14731,13 @@ impl Compiler {
             Expr::Var(ident) => {
                 let name = &ident.node;
                 if let Some(info) = self.locals.get(name).copied() {
-                    // If in tail position, emit a Move to preserve line info for debugger
-                    if is_tail {
+                    if info.is_cell {
+                        // Dereference mutable cell
+                        let dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::CellGet(dst, info.reg), line);
+                        Ok(dst)
+                    } else if is_tail {
+                        // If in tail position, emit a Move to preserve line info for debugger
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::Move(dst, info.reg), line);
                         Ok(dst)
@@ -14732,7 +14748,14 @@ impl Compiler {
                     // It's a captured variable - load from closure environment
                     let dst = self.alloc_reg();
                     self.chunk.emit(Instruction::GetCapture(dst, capture_idx), line);
-                    Ok(dst)
+                    // If this capture is a cell, dereference it
+                    if self.capture_cells.contains(name) {
+                        let deref_dst = self.alloc_reg();
+                        self.chunk.emit(Instruction::CellGet(deref_dst, dst), line);
+                        Ok(deref_dst)
+                    } else {
+                        Ok(dst)
+                    }
                 } else if self.functions.contains_key(name) {
                     // It's a function reference (exact match)
                     let func = self.functions.get(name)
@@ -18760,7 +18783,7 @@ impl Compiler {
 
                     // Bind pattern variables with type info from pattern
                     for (name, reg, is_float) in bindings {
-                        self.locals.insert(name, LocalInfo { reg, is_float, mutable: false });
+                        self.locals.insert(name, LocalInfo { reg, is_float, mutable: false, is_cell: false });
                     }
 
                     // Compile guard if present
@@ -18929,7 +18952,7 @@ impl Compiler {
 
         // Bind loop variable to counter register (for loop counter is always int)
         let saved_var = self.locals.get(&var.node).cloned();
-        self.locals.insert(var.node.clone(), LocalInfo { reg: counter_reg, is_float: false, mutable: false });
+        self.locals.insert(var.node.clone(), LocalInfo { reg: counter_reg, is_float: false, mutable: false, is_cell: false });
 
         // Record loop start
         let loop_start = self.chunk.code.len();
@@ -19939,7 +19962,7 @@ impl Compiler {
                 for j in 0..i {
                     if let Some(Some(name)) = param_names.get(j) {
                         self.locals.insert(name.clone(), LocalInfo {
-                            reg: arg_regs[j], is_float: false, mutable: false
+                            reg: arg_regs[j], is_float: false, mutable: false, is_cell: false
                         });
                     }
                 }
@@ -21296,7 +21319,7 @@ impl Compiler {
                                         if let Some(name) = self.pattern_binding_name(&param.pattern) {
                                             if j < arg_regs.len() {
                                                 self.locals.insert(name, LocalInfo {
-                                                    reg: arg_regs[j], is_float: false, mutable: false
+                                                    reg: arg_regs[j], is_float: false, mutable: false, is_cell: false
                                                 });
                                             }
                                         }
@@ -23866,7 +23889,34 @@ impl Compiler {
                 param_names_set.insert(name);
             }
         }
-        let body_free_vars = free_vars(body, &param_names_set);
+        let mut body_free_vars = free_vars(body, &param_names_set);
+
+        // Also force-capture any mutable cell variables that the lambda reassigns
+        // (free_vars misses these because x = 10 is parsed as a let-binding, not an assignment)
+        for var_name in &self.closure_mutated_vars {
+            if !body_free_vars.contains(var_name) && !param_names_set.contains(var_name) {
+                // Check if this lambda actually reassigns this variable
+                let mut vars_set = std::collections::HashSet::new();
+                vars_set.insert(var_name.clone());
+                let mut mutated_set = std::collections::HashSet::new();
+                find_mutations_inside_lambda(body, &vars_set, &mut mutated_set);
+                if !mutated_set.is_empty() {
+                    body_free_vars.insert(var_name.clone());
+                }
+            }
+        }
+        // Also check capture_cells from parent closures
+        for var_name in &self.capture_cells {
+            if !body_free_vars.contains(var_name) && !param_names_set.contains(var_name) {
+                let mut vars_set = std::collections::HashSet::new();
+                vars_set.insert(var_name.clone());
+                let mut mutated_set = std::collections::HashSet::new();
+                find_mutations_inside_lambda(body, &vars_set, &mut mutated_set);
+                if !mutated_set.is_empty() {
+                    body_free_vars.insert(var_name.clone());
+                }
+            }
+        }
 
         // Step 2: Filter to variables that exist in outer scope (locals)
         let mut captures: Vec<(String, Reg)> = Vec::new();
@@ -23889,6 +23939,7 @@ impl Compiler {
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_next_reg = self.next_reg;
         let saved_capture_indices = std::mem::take(&mut self.capture_indices);
+        let saved_capture_cells = std::mem::take(&mut self.capture_cells);
         let saved_local_types = std::mem::take(&mut self.local_types);
         let saved_param_types = self.param_types.clone(); // Keep copy for captured var types
         let saved_current_function_name = self.current_function_name.take();
@@ -23900,6 +23951,7 @@ impl Compiler {
         self.chunk = Chunk::new();
         self.locals = HashMap::new();
         self.capture_indices = HashMap::new();
+        self.capture_cells = HashSet::new();
         self.local_types = HashMap::new();
         self.next_reg = 0;
 
@@ -23915,7 +23967,7 @@ impl Compiler {
             let arg_reg = i as Reg;
             if let Some(name) = self.pattern_binding_name(param) {
                 // Simple variable pattern - bind directly to param register
-                self.locals.insert(name.clone(), LocalInfo { reg: arg_reg, is_float: false, mutable: false });
+                self.locals.insert(name.clone(), LocalInfo { reg: arg_reg, is_float: false, mutable: false, is_cell: false });
                 // Add type from param_types if available
                 if let Some((_, ty)) = param_types.iter().find(|(n, _)| n == &name) {
                     self.local_types.insert(name.clone(), ty.clone());
@@ -23926,7 +23978,7 @@ impl Compiler {
                 param_names.push(format!("_arg{}", i));
                 let (_, bindings) = self.compile_pattern_test(param, arg_reg)?;
                 for (name, reg, is_float) in bindings {
-                    self.locals.insert(name, LocalInfo { reg, is_float, mutable: false });
+                    self.locals.insert(name, LocalInfo { reg, is_float, mutable: false, is_cell: false });
                 }
             }
         }
@@ -23935,6 +23987,16 @@ impl Compiler {
         // Also preserve type information for captured variables from outer scope
         for (i, (name, _)) in captures.iter().enumerate() {
             self.capture_indices.insert(name.clone(), i as u8);
+            // If captured var is a cell in outer scope, mark it as a cell capture
+            if let Some(info) = saved_locals.get(name) {
+                if info.is_cell {
+                    self.capture_cells.insert(name.clone());
+                }
+            }
+            // Also check if it's a cell capture from a parent closure
+            if saved_capture_cells.contains(name) {
+                self.capture_cells.insert(name.clone());
+            }
             // Copy type from outer local_types if available
             if let Some(ty) = saved_local_types.get(name) {
                 self.local_types.insert(name.clone(), ty.clone());
@@ -23955,6 +24017,7 @@ impl Compiler {
                 self.locals = saved_locals;
                 self.next_reg = saved_next_reg;
                 self.capture_indices = saved_capture_indices;
+                self.capture_cells = saved_capture_cells;
                 self.local_types = saved_local_types;
                 self.current_function_name = saved_current_function_name;
                 return Err(e);
@@ -24991,7 +25054,7 @@ impl Compiler {
 
             // Bind pattern variables with type info from pattern
             for (name, reg, is_float) in bindings {
-                self.locals.insert(name, LocalInfo { reg, is_float, mutable: false });
+                self.locals.insert(name, LocalInfo { reg, is_float, mutable: false, is_cell: false });
             }
 
             // Set types for pattern variables based on scrutinee type
@@ -25548,7 +25611,7 @@ impl Compiler {
 
             // Bind pattern variables with type info from pattern
             for (name, reg, is_float) in bindings {
-                self.locals.insert(name, LocalInfo { reg, is_float, mutable: false });
+                self.locals.insert(name, LocalInfo { reg, is_float, mutable: false, is_cell: false });
             }
 
             // Compile guard if present
@@ -26165,6 +26228,12 @@ impl Compiler {
         let saved_locals = self.locals.clone();
         let saved_local_types = self.local_types.clone();
 
+        // Pre-scan: find `var` bindings that are captured and mutated by lambdas
+        // These need to be boxed as mutable cells for shared closure capture
+        let block_closure_mutated = find_closure_mutated_vars(stmts);
+        let saved_closure_mutated = std::mem::take(&mut self.closure_mutated_vars);
+        self.closure_mutated_vars.extend(block_closure_mutated);
+
         let mut last_reg = 0;
         if stmts.is_empty() {
             let dst = self.alloc_reg();
@@ -26180,6 +26249,7 @@ impl Compiler {
         // --- END SCOPE ---
         self.locals = saved_locals;
         self.local_types = saved_local_types;
+        self.closure_mutated_vars = saved_closure_mutated;
 
         Ok(last_reg)
     }
@@ -26341,16 +26411,21 @@ impl Compiler {
                 if binding.mutable {
                     // New binding is mutable (var x = ...): create new mutable binding that shadows the old one
                     let is_float = self.is_float_type(&value_type) || self.is_float_expr(&binding.value);
-                    self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float, mutable: true });
+                    self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float, mutable: true, is_cell: false });
                     // Record explicit type if provided
                     if let Some(ty) = explicit_type {
                         self.local_types.insert(ident.node.clone(), ty);
                     }
                 } else if existing_info.mutable {
                     // Existing is mutable, new is immutable: allow reassignment
-                    let existing_reg = existing_info.reg;
-                    if existing_reg != value_reg {
-                        self.chunk.emit(Instruction::Move(existing_reg, value_reg), 0);
+                    if existing_info.is_cell {
+                        // Write through mutable cell
+                        self.chunk.emit(Instruction::CellSet(existing_info.reg, value_reg), 0);
+                    } else {
+                        let existing_reg = existing_info.reg;
+                        if existing_reg != value_reg {
+                            self.chunk.emit(Instruction::Move(existing_reg, value_reg), 0);
+                        }
                     }
                 } else {
                     // Both are immutable: this is an error - cannot reassign immutable variable
@@ -26372,10 +26447,28 @@ impl Compiler {
                     }
                     // Track mvar write for deadlock detection
                     self.current_fn_mvar_writes.insert(mvar_name);
+                } else if !binding.mutable && self.capture_cells.contains(&ident.node) {
+                    // Inside a lambda: reassigning a captured mutable cell variable
+                    // x = expr is parsed as Let, but x is a mutable capture - write through cell
+                    if let Some(&capture_idx) = self.capture_indices.get(&ident.node) {
+                        let cell_reg = self.alloc_reg();
+                        self.chunk.emit(Instruction::GetCapture(cell_reg, capture_idx), 0);
+                        self.chunk.emit(Instruction::CellSet(cell_reg, value_reg), 0);
+                    }
                 } else {
                     // New binding - determine if float from explicit type or value expression
                     let is_float = self.is_float_type(&value_type) || self.is_float_expr(&binding.value);
-                    self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float, mutable: binding.mutable });
+                    // Check if this mutable var needs cell boxing for closure capture
+                    let needs_cell = binding.mutable && self.closure_mutated_vars.contains(&ident.node);
+                    let (final_reg, is_cell) = if needs_cell {
+                        // Box the value in a mutable cell (single-element array)
+                        let cell_reg = self.alloc_reg();
+                        self.chunk.emit(Instruction::MakeCell(cell_reg, value_reg), 0);
+                        (cell_reg, true)
+                    } else {
+                        (value_reg, false)
+                    };
+                    self.locals.insert(ident.node.clone(), LocalInfo { reg: final_reg, is_float, mutable: binding.mutable, is_cell });
                     // Record debug symbol for this local variable
                     self.current_fn_debug_symbols.push(LocalVarSymbol {
                         name: ident.node.clone(),
@@ -26406,7 +26499,7 @@ impl Compiler {
             // For complex patterns, we need to deconstruct
             let (_, bindings) = self.compile_pattern_test(&binding.pattern, value_reg)?;
             for (name, reg, is_float) in bindings {
-                self.locals.insert(name.clone(), LocalInfo { reg, is_float, mutable: false });
+                self.locals.insert(name.clone(), LocalInfo { reg, is_float, mutable: false, is_cell: false });
                 // Record debug symbol for pattern binding
                 self.current_fn_debug_symbols.push(LocalVarSymbol {
                     name,
@@ -27349,8 +27442,13 @@ impl Compiler {
         match target {
             AssignTarget::Var(ident) => {
                 if let Some(info) = self.locals.get(&ident.node) {
-                    let var_reg = info.reg;
-                    self.chunk.emit(Instruction::Move(var_reg, value_reg), 0);
+                    if info.is_cell {
+                        // Write through mutable cell
+                        self.chunk.emit(Instruction::CellSet(info.reg, value_reg), 0);
+                    } else {
+                        let var_reg = info.reg;
+                        self.chunk.emit(Instruction::Move(var_reg, value_reg), 0);
+                    }
                 } else {
                     // Check if it's a module-level mutable variable (mvar)
                     let mvar_name = self.resolve_name(&ident.node);
@@ -27566,7 +27664,31 @@ impl Compiler {
                 param_names_set.insert(name);
             }
         }
-        let body_free_vars = free_vars(body, &param_names_set);
+        let mut body_free_vars = free_vars(body, &param_names_set);
+
+        // Also force-capture any mutable cell variables that the lambda reassigns
+        for var_name in &self.closure_mutated_vars {
+            if !body_free_vars.contains(var_name) && !param_names_set.contains(var_name) {
+                let mut vars_set = std::collections::HashSet::new();
+                vars_set.insert(var_name.clone());
+                let mut mutated_set = std::collections::HashSet::new();
+                find_mutations_inside_lambda(body, &vars_set, &mut mutated_set);
+                if !mutated_set.is_empty() {
+                    body_free_vars.insert(var_name.clone());
+                }
+            }
+        }
+        for var_name in &self.capture_cells {
+            if !body_free_vars.contains(var_name) && !param_names_set.contains(var_name) {
+                let mut vars_set = std::collections::HashSet::new();
+                vars_set.insert(var_name.clone());
+                let mut mutated_set = std::collections::HashSet::new();
+                find_mutations_inside_lambda(body, &vars_set, &mut mutated_set);
+                if !mutated_set.is_empty() {
+                    body_free_vars.insert(var_name.clone());
+                }
+            }
+        }
 
         // Step 2: Filter to variables that exist in outer scope (locals)
         let mut captures: Vec<(String, Reg)> = Vec::new();
@@ -27590,6 +27712,7 @@ impl Compiler {
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_next_reg = self.next_reg;
         let saved_capture_indices = std::mem::take(&mut self.capture_indices);
+        let saved_capture_cells = std::mem::take(&mut self.capture_cells);
         let saved_local_types = std::mem::take(&mut self.local_types);
         let saved_param_types = self.param_types.clone(); // Keep copy for captured var types
         // Save current_function_name to prevent self-call optimization inside lambdas
@@ -27600,6 +27723,7 @@ impl Compiler {
         self.chunk = Chunk::new();
         self.locals = HashMap::new();
         self.capture_indices = HashMap::new();
+        self.capture_cells = HashSet::new();
         self.local_types = HashMap::new();
         self.next_reg = 0;
         // Set to None - lambdas don't have a self-call target (they can't TailCallSelf)
@@ -27615,7 +27739,7 @@ impl Compiler {
             let arg_reg = i as Reg;
             if let Some(name) = self.pattern_binding_name(param) {
                 // Simple variable pattern - bind directly to param register
-                self.locals.insert(name.clone(), LocalInfo { reg: arg_reg, is_float: false, mutable: false });
+                self.locals.insert(name.clone(), LocalInfo { reg: arg_reg, is_float: false, mutable: false, is_cell: false });
                 param_names.push(name);
             } else {
                 // Complex pattern (tuple, etc.) - need to destructure
@@ -27624,7 +27748,7 @@ impl Compiler {
                 // Note: we ignore the success_reg since lambda params always match structurally
                 let (_, bindings) = self.compile_pattern_test(param, arg_reg)?;
                 for (name, reg, is_float) in bindings {
-                    self.locals.insert(name, LocalInfo { reg, is_float, mutable: false });
+                    self.locals.insert(name, LocalInfo { reg, is_float, mutable: false, is_cell: false });
                 }
             }
         }
@@ -27633,6 +27757,16 @@ impl Compiler {
         // Also preserve type information for captured variables from outer scope
         for (i, (name, _)) in captures.iter().enumerate() {
             self.capture_indices.insert(name.clone(), i as u8);
+            // If captured var is a cell in outer scope, mark it as a cell capture
+            if let Some(info) = saved_locals.get(name) {
+                if info.is_cell {
+                    self.capture_cells.insert(name.clone());
+                }
+            }
+            // Also check if it's a cell capture from a parent closure
+            if saved_capture_cells.contains(name) {
+                self.capture_cells.insert(name.clone());
+            }
             // Copy type from outer local_types if available
             if let Some(ty) = saved_local_types.get(name) {
                 self.local_types.insert(name.clone(), ty.clone());
@@ -27653,6 +27787,7 @@ impl Compiler {
                 self.locals = saved_locals;
                 self.next_reg = saved_next_reg;
                 self.capture_indices = saved_capture_indices;
+                self.capture_cells = saved_capture_cells;
                 self.local_types = saved_local_types;
                 self.current_function_name = saved_current_function_name;
                 return Err(e);
@@ -34455,6 +34590,231 @@ fn free_vars(expr: &Expr, bound: &std::collections::HashSet<String>) -> std::col
     }
 
     free
+}
+
+/// Find `var` bindings in a block that are reassigned inside lambdas.
+/// These vars need to be boxed as mutable cells for shared closure capture.
+fn find_closure_mutated_vars(stmts: &[Stmt]) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+    let mut mutable_vars: HashSet<String> = HashSet::new();
+    let mut mutated_in_closure: HashSet<String> = HashSet::new();
+
+    // Phase 1: Collect all `var` declarations in this block
+    for stmt in stmts {
+        if let Stmt::Let(binding) = stmt {
+            if binding.mutable {
+                if let Some(name) = pattern_var_name(&binding.pattern) {
+                    mutable_vars.insert(name);
+                }
+            }
+        }
+    }
+
+    if mutable_vars.is_empty() {
+        return mutated_in_closure;
+    }
+
+    // Phase 2: Find lambdas that reassign any mutable var
+    for stmt in stmts {
+        find_lambda_mutations_in_stmt(stmt, &mutable_vars, &mut mutated_in_closure);
+    }
+
+    mutated_in_closure
+}
+
+/// Recursively search for lambdas that reassign mutable vars from outer scope.
+fn find_lambda_mutations_in_stmt(
+    stmt: &Stmt,
+    mutable_vars: &std::collections::HashSet<String>,
+    mutated: &mut std::collections::HashSet<String>,
+) {
+    match stmt {
+        Stmt::Expr(e) => find_lambda_mutations_in_expr(e, mutable_vars, mutated),
+        Stmt::Let(binding) => find_lambda_mutations_in_expr(&binding.value, mutable_vars, mutated),
+        Stmt::Assign(_, val, _) => find_lambda_mutations_in_expr(val, mutable_vars, mutated),
+    }
+}
+
+/// Find lambdas in an expression that reassign mutable vars.
+fn find_lambda_mutations_in_expr(
+    expr: &Expr,
+    mutable_vars: &std::collections::HashSet<String>,
+    mutated: &mut std::collections::HashSet<String>,
+) {
+    match expr {
+        Expr::Lambda(_, body, _) => {
+            // Inside a lambda - check if it reassigns any mutable var
+            find_mutations_inside_lambda(body, mutable_vars, mutated);
+        }
+        Expr::Block(stmts, _) => {
+            for stmt in stmts {
+                find_lambda_mutations_in_stmt(stmt, mutable_vars, mutated);
+            }
+        }
+        Expr::If(cond, then_e, else_e, _) => {
+            find_lambda_mutations_in_expr(cond, mutable_vars, mutated);
+            find_lambda_mutations_in_expr(then_e, mutable_vars, mutated);
+            find_lambda_mutations_in_expr(else_e, mutable_vars, mutated);
+        }
+        Expr::Call(func, _, args, _) => {
+            find_lambda_mutations_in_expr(func, mutable_vars, mutated);
+            for arg in args {
+                match arg {
+                    CallArg::Positional(e) | CallArg::Named(_, e) => {
+                        find_lambda_mutations_in_expr(e, mutable_vars, mutated);
+                    }
+                }
+            }
+        }
+        Expr::MethodCall(recv, _, args, _) => {
+            find_lambda_mutations_in_expr(recv, mutable_vars, mutated);
+            for arg in args {
+                match arg {
+                    CallArg::Positional(e) | CallArg::Named(_, e) => {
+                        find_lambda_mutations_in_expr(e, mutable_vars, mutated);
+                    }
+                }
+            }
+        }
+        Expr::BinOp(l, _, r, _) => {
+            find_lambda_mutations_in_expr(l, mutable_vars, mutated);
+            find_lambda_mutations_in_expr(r, mutable_vars, mutated);
+        }
+        Expr::UnaryOp(_, e, _) => find_lambda_mutations_in_expr(e, mutable_vars, mutated),
+        Expr::List(elems, tail, _) => {
+            for e in elems {
+                find_lambda_mutations_in_expr(e, mutable_vars, mutated);
+            }
+            if let Some(t) = tail {
+                find_lambda_mutations_in_expr(t, mutable_vars, mutated);
+            }
+        }
+        Expr::Tuple(elems, _) => {
+            for e in elems {
+                find_lambda_mutations_in_expr(e, mutable_vars, mutated);
+            }
+        }
+        Expr::Match(scrutinee, arms, _) => {
+            find_lambda_mutations_in_expr(scrutinee, mutable_vars, mutated);
+            for arm in arms {
+                find_lambda_mutations_in_expr(&arm.body, mutable_vars, mutated);
+                if let Some(guard) = &arm.guard {
+                    find_lambda_mutations_in_expr(guard, mutable_vars, mutated);
+                }
+            }
+        }
+        Expr::Try(body, catch_arms, finally, _) => {
+            find_lambda_mutations_in_expr(body, mutable_vars, mutated);
+            for arm in catch_arms {
+                find_lambda_mutations_in_expr(&arm.body, mutable_vars, mutated);
+            }
+            if let Some(f) = finally {
+                find_lambda_mutations_in_expr(f, mutable_vars, mutated);
+            }
+        }
+        Expr::While(cond, body, _) => {
+            find_lambda_mutations_in_expr(cond, mutable_vars, mutated);
+            find_lambda_mutations_in_expr(body, mutable_vars, mutated);
+        }
+        Expr::For(_, iter, body, _step, _) => {
+            find_lambda_mutations_in_expr(iter, mutable_vars, mutated);
+            find_lambda_mutations_in_expr(body, mutable_vars, mutated);
+        }
+        Expr::FieldAccess(obj, _, _) => find_lambda_mutations_in_expr(obj, mutable_vars, mutated),
+        Expr::Index(coll, idx, _) => {
+            find_lambda_mutations_in_expr(coll, mutable_vars, mutated);
+            find_lambda_mutations_in_expr(idx, mutable_vars, mutated);
+        }
+        Expr::Record(_, fields, _) => {
+            for field in fields {
+                match field {
+                    RecordField::Positional(e) | RecordField::Named(_, e) => {
+                        find_lambda_mutations_in_expr(e, mutable_vars, mutated);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Inside a lambda body, check if any statement reassigns a mutable var from outer scope.
+/// Also recurse into nested lambdas.
+fn find_mutations_inside_lambda(
+    expr: &Expr,
+    mutable_vars: &std::collections::HashSet<String>,
+    mutated: &mut std::collections::HashSet<String>,
+) {
+    match expr {
+        Expr::Block(stmts, _) => {
+            for stmt in stmts {
+                match stmt {
+                    // `x = expr` where x is a simple var => parsed as Let binding
+                    Stmt::Let(binding) => {
+                        if let Some(name) = pattern_var_name(&binding.pattern) {
+                            if mutable_vars.contains(&name) && !binding.mutable {
+                                // Reassignment of outer mutable var (parsed as let-binding)
+                                mutated.insert(name);
+                            }
+                        }
+                        // Recurse into the value expression for nested lambdas
+                        find_lambda_mutations_in_expr(&binding.value, mutable_vars, mutated);
+                    }
+                    Stmt::Assign(AssignTarget::Var(ident), val, _) => {
+                        if mutable_vars.contains(&ident.node) {
+                            mutated.insert(ident.node.clone());
+                        }
+                        find_lambda_mutations_in_expr(val, mutable_vars, mutated);
+                    }
+                    Stmt::Assign(_, val, _) => {
+                        find_lambda_mutations_in_expr(val, mutable_vars, mutated);
+                    }
+                    Stmt::Expr(e) => {
+                        find_mutations_inside_lambda(e, mutable_vars, mutated);
+                    }
+                }
+            }
+        }
+        // Recurse into sub-expressions
+        Expr::Lambda(_, body, _) => {
+            // Nested lambda - continue searching
+            find_mutations_inside_lambda(body, mutable_vars, mutated);
+        }
+        Expr::If(cond, then_e, else_e, _) => {
+            find_mutations_inside_lambda(cond, mutable_vars, mutated);
+            find_mutations_inside_lambda(then_e, mutable_vars, mutated);
+            find_mutations_inside_lambda(else_e, mutable_vars, mutated);
+        }
+        Expr::Call(func, _, args, _) => {
+            find_mutations_inside_lambda(func, mutable_vars, mutated);
+            for arg in args {
+                match arg {
+                    CallArg::Positional(e) | CallArg::Named(_, e) => {
+                        find_mutations_inside_lambda(e, mutable_vars, mutated);
+                    }
+                }
+            }
+        }
+        Expr::MethodCall(recv, _, args, _) => {
+            find_mutations_inside_lambda(recv, mutable_vars, mutated);
+            for arg in args {
+                match arg {
+                    CallArg::Positional(e) | CallArg::Named(_, e) => {
+                        find_mutations_inside_lambda(e, mutable_vars, mutated);
+                    }
+                }
+            }
+        }
+        Expr::BinOp(l, _, r, _) => {
+            find_mutations_inside_lambda(l, mutable_vars, mutated);
+            find_mutations_inside_lambda(r, mutable_vars, mutated);
+        }
+        Expr::While(cond, body, _) => {
+            find_mutations_inside_lambda(cond, mutable_vars, mutated);
+            find_mutations_inside_lambda(body, mutable_vars, mutated);
+        }
+        _ => {}
+    }
 }
 
 fn pattern_var_name(pat: &Pattern) -> Option<String> {
