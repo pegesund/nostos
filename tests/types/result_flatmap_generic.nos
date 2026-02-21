@@ -1,0 +1,10 @@
+# expect: 0
+# Test that map/flatMap dispatch correctly to Result (not List) in generic functions
+parseNum(s) = if s == "1" then Ok(1) else if s == "2" then Ok(2) else Err("bad: " ++ s)
+addResults(r1, r2) = r1.flatMap(a => r2.map(b => a + b))
+main() = {
+  assert_eq(Ok(3), addResults(parseNum("1"), parseNum("2")))
+  assert_eq(Err("bad: x"), addResults(parseNum("x"), parseNum("2")))
+  assert_eq(Err("bad: y"), addResults(parseNum("1"), parseNum("y")))
+  0
+}
