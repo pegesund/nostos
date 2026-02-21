@@ -1,0 +1,14 @@
+# expect: 0
+# Test that spawn(expr) auto-wraps expressions in thunks
+# so they evaluate in the spawned process
+
+compute(n) = n * n + 1
+
+main() = {
+    me = self()
+    # spawn(send_expr) should work - auto-wrapped in thunk
+    spawn(me <- compute(10))
+    result = receive { r -> r }
+    assert_eq(101, result)
+    0
+}

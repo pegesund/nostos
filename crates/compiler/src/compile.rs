@@ -18705,12 +18705,16 @@ impl Compiler {
 
             // Spawn: spawn(func), spawn(() => expr), or spawn { block }
             Expr::Spawn(kind, func_expr, args, _span) => {
-                // If func_expr is a Block, wrap it in a zero-param Lambda (thunk)
+                // Wrap func_expr in a zero-param Lambda (thunk) when needed.
+                // Lambda and Var (function reference) are already callable - use as-is.
+                // Everything else (Block, Call, Send, etc.) gets wrapped in a thunk
+                // so it evaluates in the new process.
                 let effective_func = match func_expr.as_ref() {
-                    Expr::Block(_, block_span) => {
-                        Expr::Lambda(vec![], func_expr.clone(), block_span.clone())
+                    Expr::Lambda(_, _, _) | Expr::Var(_) => func_expr.as_ref().clone(),
+                    other => {
+                        let span = other.span();
+                        Expr::Lambda(vec![], func_expr.clone(), span)
                     }
-                    _ => func_expr.as_ref().clone(),
                 };
                 let func_reg = self.compile_expr_tail(&effective_func, false)?;
                 let mut arg_regs = Vec::new();

@@ -6867,20 +6867,35 @@ impl<'a> InferCtx<'a> {
 
             // Spawn
             Expr::Spawn(_, func, args, _) => {
-                let func_ty = self.infer_expr(func)?;
-                let mut arg_types = Vec::new();
-                for arg in args {
-                    arg_types.push(self.infer_expr(arg)?);
-                }
+                // Lambda and Var are already callable - unify with function type.
+                // Everything else (Block, Call, Send, etc.) gets auto-wrapped in a
+                // thunk by the compiler, so we just infer the inner expression type.
+                let is_already_callable = matches!(func.as_ref(),
+                    Expr::Lambda(_, _, _) | Expr::Var(_));
 
-                let ret_ty = self.fresh();
-                let expected = Type::Function(FunctionType { required_params: None,
-                    type_params: vec![],
-                    params: arg_types,
-                    ret: Box::new(ret_ty),
-                    var_bounds: vec![],
-                });
-                self.unify(func_ty, expected);
+                if is_already_callable {
+                    // func should be a callable (Lambda or Var pointing to a function)
+                    let func_ty = self.infer_expr(func)?;
+                    let mut arg_types = Vec::new();
+                    for arg in args {
+                        arg_types.push(self.infer_expr(arg)?);
+                    }
+
+                    let ret_ty = self.fresh();
+                    let expected = Type::Function(FunctionType { required_params: None,
+                        type_params: vec![],
+                        params: arg_types,
+                        ret: Box::new(ret_ty),
+                        var_bounds: vec![],
+                    });
+                    self.unify(func_ty, expected);
+                } else {
+                    // Auto-wrapped: just infer the expression type
+                    let _inner_ty = self.infer_expr(func)?;
+                    for arg in args {
+                        let _ = self.infer_expr(arg)?;
+                    }
+                }
 
                 Ok(Type::Pid)
             }
