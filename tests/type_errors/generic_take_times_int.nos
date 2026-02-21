@@ -1,4 +1,4 @@
-# expect_error: type mismatch
+# expect_error: Type error
 # Take returns a list, multiplying a list by Int is a type error
 f(xs) = xs.take(2) * 3
 main() = f([1, 2, 3])

@@ -1,4 +1,4 @@
-# expect_error: type mismatch
+# expect_error: Type error
 # Reverse returns a list, adding Int to a list is a type error
 f(xs) = xs.reverse() + 1
 main() = f([1, 2, 3])

@@ -3490,10 +3490,11 @@ impl<'a> InferCtx<'a> {
                 {
                     // Methods that uniquely identify the receiver type.
                     // List-only methods (excludes methods shared with String/Map/Set):
+                    // NOTE: "reverse", "take", "drop" are NOT exclusive - String also has them
                     let is_exclusive_list_method = matches!(call.method_name.as_str(),
                         "filter" | "fold" | "any" | "all" | "find" |
                         "sort" | "sortBy" | "head" | "tail" | "init" | "last" |
-                        "reverse" | "sum" | "product" | "zip" | "unzip" | "take" | "drop" |
+                        "sum" | "product" | "zip" | "unzip" |
                         "unique" | "flatten" | "position" | "indexOf" |
                         "push" | "pop" | "nth" | "slice" |
                         "scanl" | "foldl" | "foldr" | "enumerate" | "intersperse" |
@@ -3536,10 +3537,11 @@ impl<'a> InferCtx<'a> {
                 let type_name_opt = if type_name_opt.is_none() && matches!(&resolved_receiver, Type::Var(_)) {
                     // Last-resort inference: if receiver is still Var after all iterations,
                     // assume List for methods that uniquely identify list operations.
+                    // NOTE: "reverse", "take", "drop" are NOT exclusive - String also has them
                     let is_exclusive_list_method = matches!(call.method_name.as_str(),
                         "filter" | "fold" | "any" | "all" | "find" |
                         "sort" | "sortBy" | "head" | "tail" | "init" | "last" |
-                        "reverse" | "sum" | "product" | "zip" | "unzip" | "take" | "drop" |
+                        "sum" | "product" | "zip" | "unzip" |
                         "unique" | "flatten" | "position" | "indexOf" |
                         "push" | "pop" | "nth" | "slice" |
                         "scanl" | "foldl" | "foldr" | "enumerate" | "intersperse" |
@@ -4427,10 +4429,11 @@ impl<'a> InferCtx<'a> {
                 // (must return Bool) is never propagated to the inferred signature.
                 // Use a narrower list than list_only_methods - only methods that are
                 // truly unique to Lists (not shared with String/Map/Set).
+                // NOTE: "reverse", "take", "drop" are NOT unique to List - String also has them
                 let infer_list_methods = [
                     "filter", "fold", "any", "all", "find",
                     "sort", "sortBy", "head", "tail", "init", "last",
-                    "reverse", "sum", "product", "zip", "unzip", "take", "drop",
+                    "sum", "product", "zip", "unzip",
                     "unique", "flatten", "position", "indexOf",
                     "push", "pop", "nth", "slice",
                     "scanl", "foldl", "foldr", "enumerate", "intersperse",
