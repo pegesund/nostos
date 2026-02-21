@@ -1,0 +1,21 @@
+# expect: 0
+# Test: multi-method traits with separate impl blocks per method
+type Entity = { name: String, hp: Int }
+
+trait Combatant
+  takeDamage(self, amount: Int) -> Entity
+  isAlive(self) -> Bool
+end
+
+Entity: Combatant takeDamage(self, amount: Int) = Entity(name: self.name, hp: self.hp - amount) end
+Entity: Combatant isAlive(self) = self.hp > 0 end
+
+main() = {
+  e = Entity(name: "Hero", hp: 100)
+  e2 = e.takeDamage(30)
+  assert_eq(70, e2.hp)
+  assert_eq(true, e2.isAlive())
+  e3 = e2.takeDamage(80)
+  assert_eq(false, e3.isAlive())
+  0
+}

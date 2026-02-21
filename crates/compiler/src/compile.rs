@@ -1223,6 +1223,10 @@ pub struct Compiler {
     trait_defs: HashMap<String, TraitInfo>,
     /// Trait implementations: (type_name, trait_name) -> TraitImplInfo
     trait_impls: HashMap<(String, String), TraitImplInfo>,
+    /// Pending trait impl completeness checks.
+    /// Maps (unqualified_type, trait_name) → (method_names_seen, span).
+    /// Collected during compile_trait_impl_inner, verified after all impl blocks are processed.
+    pending_trait_completeness: HashMap<(String, String), (HashSet<String>, Span)>,
     /// Types to their implemented traits: type_name -> [trait_name, ...]
     type_traits: HashMap<String, Vec<String>>,
     /// Local variable type tracking: variable name -> type name
@@ -1586,6 +1590,7 @@ impl Compiler {
             type_visibility: HashMap::new(),
             trait_defs: HashMap::new(),
             trait_impls: HashMap::new(),
+            pending_trait_completeness: HashMap::new(),
             type_traits: HashMap::new(),
             local_types: HashMap::new(),
             param_types: HashMap::new(),
@@ -4804,6 +4809,9 @@ impl Compiler {
             }
         }
 
+        // Check trait impl completeness after all impl blocks have been compiled
+        self.check_trait_impl_completeness()?;
+
         // Fourth pass (b): compile generated items from type decorators
         let generated = std::mem::take(&mut self.generated_items);
         for item in &generated {
@@ -5315,6 +5323,7 @@ impl Compiler {
             type_visibility: HashMap::new(),
             trait_defs: HashMap::new(),
             trait_impls: HashMap::new(),
+            pending_trait_completeness: HashMap::new(),
             type_traits: HashMap::new(),
             local_types: HashMap::new(),
             param_types: HashMap::new(),
@@ -10735,21 +10744,17 @@ impl Compiler {
             }
         }
 
-        // Check that all required (non-default) trait methods are implemented
-        if let Some(trait_info) = self.trait_defs.get(&trait_name) {
-            let impl_method_names: HashSet<&str> = impl_def.methods.iter()
-                .map(|m| m.name.node.as_str())
+        // Record method names for deferred completeness check. Methods may be spread
+        // across multiple impl blocks for the same (type, trait) pair.
+        {
+            let key = (unqualified_type_name.clone(), trait_name.clone());
+            let method_names_this_block: HashSet<String> = impl_def.methods.iter()
+                .map(|m| m.name.node.clone())
                 .collect();
-            for trait_method in &trait_info.methods {
-                if !trait_method.has_default && !impl_method_names.contains(trait_method.name.as_str()) {
-                    return Err(CompileError::MissingTraitMethod {
-                        method: trait_method.name.clone(),
-                        ty: unqualified_type_name.clone(),
-                        trait_name: trait_name.clone(),
-                        span: impl_def.trait_name.span,
-                    });
-                }
-            }
+            let entry = self.pending_trait_completeness
+                .entry(key)
+                .or_insert_with(|| (HashSet::new(), impl_def.trait_name.span));
+            entry.0.extend(method_names_this_block);
         }
 
         // Check that impl method signatures match the trait definition
@@ -11617,14 +11622,51 @@ impl Compiler {
             }
         }
 
-        // Register the trait implementation with qualified type name
-        let impl_info = TraitImplInfo {
-            type_name: qualified_type_name.clone(),
-            trait_name: trait_name.clone(),
-            method_names,
-        };
-        self.trait_impls.insert((qualified_type_name, trait_name), impl_info);
+        // Register the trait implementation with qualified type name.
+        // Merge method_names with any existing entry (methods may be spread
+        // across multiple impl blocks for the same type+trait pair).
+        let key = (qualified_type_name.clone(), trait_name.clone());
+        if let Some(existing) = self.trait_impls.get_mut(&key) {
+            for name in method_names {
+                if !existing.method_names.contains(&name) {
+                    existing.method_names.push(name);
+                }
+            }
+        } else {
+            let impl_info = TraitImplInfo {
+                type_name: qualified_type_name.clone(),
+                trait_name: trait_name.clone(),
+                method_names,
+            };
+            self.trait_impls.insert(key, impl_info);
+        }
 
+        Ok(())
+    }
+
+    /// Check that all trait implementations have all required methods.
+    /// Uses pending_trait_completeness data recorded during compile_trait_impl_inner.
+    /// Called AFTER all impl blocks for the current scope have been pre-registered.
+    fn check_trait_impl_completeness(&mut self) -> Result<(), CompileError> {
+        let pending = std::mem::take(&mut self.pending_trait_completeness);
+        for ((unqualified_type_name, trait_name), (seen_methods, span)) in &pending {
+            if let Some(trait_info) = self.trait_defs.get(trait_name) {
+                let methods = trait_info.methods.clone();
+                for trait_method in &methods {
+                    if trait_method.has_default {
+                        continue;
+                    }
+                    if !seen_methods.contains(&trait_method.name) {
+                        return Err(CompileError::MissingTraitMethod {
+                            method: trait_method.name.clone(),
+                            ty: unqualified_type_name.clone(),
+                            trait_name: trait_name.clone(),
+                            span: *span,
+                        });
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -34857,6 +34899,9 @@ impl Compiler {
                 self.pre_register_trait_impl(trait_impl)?;
             }
         }
+
+        // Check trait impl completeness now that all impl blocks have been pre-registered
+        self.check_trait_impl_completeness()?;
 
         // Fifth pass (b): compile trait implementation bodies (all methods now visible!)
         for item in items {
