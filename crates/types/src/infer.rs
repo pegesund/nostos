@@ -3490,8 +3490,8 @@ impl<'a> InferCtx<'a> {
                 {
                     // Methods that uniquely identify the receiver type.
                     // List-only methods (excludes methods shared with String/Map/Set):
-                    let is_list_method = matches!(call.method_name.as_str(),
-                        "map" | "filter" | "fold" | "flatMap" | "any" | "all" | "find" |
+                    let is_exclusive_list_method = matches!(call.method_name.as_str(),
+                        "filter" | "fold" | "any" | "all" | "find" |
                         "sort" | "sortBy" | "head" | "tail" | "init" | "last" |
                         "reverse" | "sum" | "product" | "zip" | "unzip" | "take" | "drop" |
                         "unique" | "flatten" | "position" | "indexOf" |
@@ -3501,6 +3501,14 @@ impl<'a> InferCtx<'a> {
                         "isSortedBy" | "maximum" | "minimum" | "takeWhile" | "dropWhile" |
                         "partition" | "zipWith"
                     );
+                    // "map" and "flatMap" are shared between List, Option, and Result.
+                    // On iteration 0, defer them to allow one more pass for the receiver to
+                    // resolve (e.g., from function return type constraints). On subsequent
+                    // iterations, assume List (for function definition inference where the
+                    // receiver is truly unconstrained).
+                    let is_shared_method = matches!(call.method_name.as_str(), "map" | "flatMap");
+                    let is_list_method = is_exclusive_list_method
+                        || (is_shared_method && iteration > 0);
                     // Map-only methods (not on Set/List/String):
                     let is_map_method = matches!(call.method_name.as_str(),
                         "lookup" | "keys" | "values" | "getOrThrow" | "toList"
@@ -3523,8 +3531,14 @@ impl<'a> InferCtx<'a> {
                 // infer the receiver type. This ensures the method call gets processed
                 // (lookup, param/return unification) instead of being silently dropped.
                 let type_name_opt = if type_name_opt.is_none() && matches!(&resolved_receiver, Type::Var(_)) {
+                    // Last-resort inference: if receiver is still Var after all iterations,
+                    // assume List for methods that are primarily list operations.
+                    // "map" and "flatMap" are included here as a fallback since they're
+                    // most commonly used on lists (Option/Result cases should have resolved
+                    // the receiver type in earlier iterations).
                     let is_list_method = matches!(call.method_name.as_str(),
-                        "map" | "filter" | "fold" | "flatMap" | "any" | "all" | "find" |
+                        "map" | "flatMap" |
+                        "filter" | "fold" | "any" | "all" | "find" |
                         "sort" | "sortBy" | "head" | "tail" | "init" | "last" |
                         "reverse" | "sum" | "product" | "zip" | "unzip" | "take" | "drop" |
                         "unique" | "flatten" | "position" | "indexOf" |
