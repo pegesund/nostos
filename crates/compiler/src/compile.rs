@@ -34623,7 +34623,146 @@ fn find_closure_mutated_vars(stmts: &[Stmt]) -> std::collections::HashSet<String
         find_lambda_mutations_in_stmt(stmt, &mutable_vars, &mut mutated_in_closure);
     }
 
+    // Phase 3: Find vars that are CAPTURED by lambdas AND reassigned in the outer scope.
+    // Without cell-boxing, closures capture values by copy. If the outer scope later
+    // reassigns the var, the closure won't see the new value. Cell-boxing ensures
+    // both the closure and outer scope share the same mutable reference.
+    let mut captured_by_lambda: HashSet<String> = HashSet::new();
+    let mut reassigned_in_outer: HashSet<String> = HashSet::new();
+    let mut declared_vars: HashSet<String> = HashSet::new();
+
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let(binding) => {
+                if let Some(name) = pattern_var_name(&binding.pattern) {
+                    if mutable_vars.contains(&name) {
+                        if declared_vars.contains(&name) {
+                            // This is a reassignment (not the initial declaration)
+                            reassigned_in_outer.insert(name.clone());
+                        } else {
+                            declared_vars.insert(name.clone());
+                        }
+                    }
+                }
+                // Check if the value contains lambdas that capture mutable vars
+                find_lambda_captures_in_expr(&binding.value, &mutable_vars, &mut captured_by_lambda);
+            }
+            Stmt::Expr(e) => {
+                find_lambda_captures_in_expr(e, &mutable_vars, &mut captured_by_lambda);
+            }
+            Stmt::Assign(target, _, _) => {
+                if let AssignTarget::Var(ident) = target {
+                    if mutable_vars.contains(&ident.node) {
+                        reassigned_in_outer.insert(ident.node.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Any var that is both captured by a lambda AND reassigned in outer scope needs a cell
+    for name in &captured_by_lambda {
+        if reassigned_in_outer.contains(name) {
+            mutated_in_closure.insert(name.clone());
+        }
+    }
+
     mutated_in_closure
+}
+
+/// Find mutable vars that are captured (read or written) by lambdas in an expression.
+fn find_lambda_captures_in_expr(
+    expr: &Expr,
+    mutable_vars: &std::collections::HashSet<String>,
+    captured: &mut std::collections::HashSet<String>,
+) {
+    match expr {
+        Expr::Lambda(params, body, _) => {
+            // Find free vars in this lambda body
+            let mut param_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for p in params {
+                if let Some(name) = pattern_var_name(p) {
+                    param_names.insert(name);
+                }
+            }
+            let fv = free_vars(body, &param_names);
+            for name in &fv {
+                if mutable_vars.contains(name) {
+                    captured.insert(name.clone());
+                }
+            }
+            // Also recurse into body for nested lambdas
+            find_lambda_captures_in_expr(body, mutable_vars, captured);
+        }
+        Expr::Block(stmts, _) => {
+            for stmt in stmts {
+                match stmt {
+                    Stmt::Let(binding) => find_lambda_captures_in_expr(&binding.value, mutable_vars, captured),
+                    Stmt::Expr(e) => find_lambda_captures_in_expr(e, mutable_vars, captured),
+                    Stmt::Assign(_, val, _) => find_lambda_captures_in_expr(val, mutable_vars, captured),
+                }
+            }
+        }
+        Expr::If(cond, then_e, else_e, _) => {
+            find_lambda_captures_in_expr(cond, mutable_vars, captured);
+            find_lambda_captures_in_expr(then_e, mutable_vars, captured);
+            find_lambda_captures_in_expr(else_e, mutable_vars, captured);
+        }
+        Expr::Call(func, _, args, _) => {
+            find_lambda_captures_in_expr(func, mutable_vars, captured);
+            for arg in args {
+                match arg {
+                    CallArg::Positional(e) | CallArg::Named(_, e) => {
+                        find_lambda_captures_in_expr(e, mutable_vars, captured);
+                    }
+                }
+            }
+        }
+        Expr::MethodCall(recv, _, args, _) => {
+            find_lambda_captures_in_expr(recv, mutable_vars, captured);
+            for arg in args {
+                match arg {
+                    CallArg::Positional(e) | CallArg::Named(_, e) => {
+                        find_lambda_captures_in_expr(e, mutable_vars, captured);
+                    }
+                }
+            }
+        }
+        Expr::Tuple(elems, _) | Expr::List(elems, _, _) => {
+            for e in elems {
+                find_lambda_captures_in_expr(e, mutable_vars, captured);
+            }
+        }
+        Expr::BinOp(l, _, r, _) => {
+            find_lambda_captures_in_expr(l, mutable_vars, captured);
+            find_lambda_captures_in_expr(r, mutable_vars, captured);
+        }
+        Expr::Match(scrutinee, arms, _) => {
+            find_lambda_captures_in_expr(scrutinee, mutable_vars, captured);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    find_lambda_captures_in_expr(guard, mutable_vars, captured);
+                }
+                find_lambda_captures_in_expr(&arm.body, mutable_vars, captured);
+            }
+        }
+        Expr::Try(body, catch_arms, _, _) => {
+            find_lambda_captures_in_expr(body, mutable_vars, captured);
+            for arm in catch_arms {
+                find_lambda_captures_in_expr(&arm.body, mutable_vars, captured);
+            }
+        }
+        Expr::For(_, start_expr, end_expr, body, _) => {
+            find_lambda_captures_in_expr(start_expr, mutable_vars, captured);
+            find_lambda_captures_in_expr(end_expr, mutable_vars, captured);
+            find_lambda_captures_in_expr(body, mutable_vars, captured);
+        }
+        Expr::While(cond, body, _) => {
+            find_lambda_captures_in_expr(cond, mutable_vars, captured);
+            find_lambda_captures_in_expr(body, mutable_vars, captured);
+        }
+        _ => {}
+    }
 }
 
 /// Recursively search for lambdas that reassign mutable vars from outer scope.

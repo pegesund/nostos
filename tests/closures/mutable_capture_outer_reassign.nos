@@ -1,0 +1,9 @@
+# expect: 99
+# Test that outer scope reassignment of a `var` is visible to closures.
+# The closure and outer scope share the same mutable cell.
+main() = {
+    var x = 0
+    getX = () => x
+    x = 99
+    getX()
+}
