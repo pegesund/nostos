@@ -1,0 +1,23 @@
+# expect: 0
+# Result.map dispatch inside foldl accumulator
+checkNonNeg(n) = if n >= 0 then Ok(n) else Err("negative: " ++ show(n))
+main() = {
+  items1 = [1, 2, 3]
+  r1 = items1.foldl(Ok(0), (acc, item) => {
+    match acc {
+      Ok(total) -> checkNonNeg(item).map(val => total + val)
+      Err(msg) -> Err(msg)
+    }
+  })
+  assert_eq(Ok(6), r1)
+
+  items2 = [1, -2, 3]
+  r2 = items2.foldl(Ok(0), (acc, item) => {
+    match acc {
+      Ok(total) -> checkNonNeg(item).map(val => total + val)
+      Err(msg) -> Err(msg)
+    }
+  })
+  assert_eq(Err("negative: -2"), r2)
+  0
+}
