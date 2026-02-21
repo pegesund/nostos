@@ -27,6 +27,21 @@ main() = {
     Err(_) -> -1
   }
   assert_eq(22, v3)
-  
+
+  # Chained via let bindings (polymorphic result stored in variable)
+  intermediate = step1(Ok(31))
+  v4 = match step2(intermediate) {
+    Ok(v) -> v
+    Err(_) -> -1
+  }
+  assert_eq(64, v4)
+
+  # Three-deep chain
+  v5 = match addTwo(step2(step1(Ok(30)))) {
+    Ok(v) -> v
+    Err(_) -> -1
+  }
+  assert_eq(64, v5)
+
   0
 }

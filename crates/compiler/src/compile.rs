@@ -26114,6 +26114,62 @@ impl Compiler {
 
         let value_reg = self.compile_expr_tail(&binding.value, false)?;
 
+        // After compilation, re-check the type if it was polymorphic.
+        // Compilation may have triggered monomorphization of inner polymorphic calls,
+        // so the return type of the value expression may now be known.
+        // E.g., `intermediate = step1(Ok(31))` - after compiling step1(Ok(31)),
+        // step1$Result exists with a known return type in its signature.
+        let value_type = if let Some(ref ty_str) = value_type {
+            if ty_str.contains("(polymorphic)") || ty_str.contains("(type parameter)") {
+                // Try to get a better type after compilation
+                if let Expr::Call(inner_func, _, _, _) = &binding.value {
+                    if let Expr::Var(inner_ident) = inner_func.as_ref() {
+                        let inner_base = inner_ident.node.split('/').next().unwrap_or(&inner_ident.node);
+                        let inner_resolved = self.resolve_name(&inner_ident.node);
+                        let inner_resolved_base = inner_resolved.split('/').next().unwrap_or(&inner_resolved);
+                        let prefix1 = format!("{}$", inner_base);
+                        let prefix2 = format!("{}$", inner_resolved_base);
+                        let mut found_type = None;
+                        for (key, func_val) in &self.functions {
+                            if (key.starts_with(&prefix1) || key.starts_with(&prefix2))
+                                && !func_val.name.starts_with("__stale__")
+                            {
+                                if let Some(ref ret_type) = func_val.return_type {
+                                    if !ret_type.is_empty() && !ret_type.starts_with('?')
+                                        && !ret_type.contains("(polymorphic)")
+                                    {
+                                        found_type = Some(ret_type.clone());
+                                        break;
+                                    }
+                                }
+                                if let Some(ref sig) = func_val.signature {
+                                    if let Some(arrow_pos) = sig.rfind(" -> ") {
+                                        let ret = &sig[arrow_pos + 4..];
+                                        if !ret.is_empty() && !ret.starts_with('?')
+                                            && !ret.contains("(polymorphic)")
+                                            && self.is_type_concrete(ret)
+                                        {
+                                            found_type = Some(ret.to_string());
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        found_type.or_else(|| value_type.clone())
+                    } else {
+                        value_type.clone()
+                    }
+                } else {
+                    value_type.clone()
+                }
+            } else {
+                value_type.clone()
+            }
+        } else {
+            value_type.clone()
+        };
+
         // If value_reg belongs to a mutable variable, copy it to a new register
         // so the new binding captures the value, not a reference to the mutable cell.
         // Without this, `temp = b` where `var b` would alias b's register, and
