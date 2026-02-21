@@ -1,0 +1,9 @@
+# expect: 25
+main() = {
+    var total = 0
+    for i = 1 to 6 {
+        adder = () => { total = total + i }
+        adder()
+    }
+    total + 10
+}

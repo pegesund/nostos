@@ -34646,9 +34646,13 @@ fn find_closure_mutated_vars(stmts: &[Stmt]) -> std::collections::HashSet<String
                 }
                 // Check if the value contains lambdas that capture mutable vars
                 find_lambda_captures_in_expr(&binding.value, &mutable_vars, &mut captured_by_lambda);
+                // Also find reassignments inside nested expressions in binding value
+                find_reassignments_in_expr(&binding.value, &mutable_vars, &mut reassigned_in_outer);
             }
             Stmt::Expr(e) => {
                 find_lambda_captures_in_expr(e, &mutable_vars, &mut captured_by_lambda);
+                // Also find reassignments inside nested expressions (for-loop, while, if, etc.)
+                find_reassignments_in_expr(e, &mutable_vars, &mut reassigned_in_outer);
             }
             Stmt::Assign(target, _, _) => {
                 if let AssignTarget::Var(ident) = target {
@@ -34668,6 +34672,84 @@ fn find_closure_mutated_vars(stmts: &[Stmt]) -> std::collections::HashSet<String
     }
 
     mutated_in_closure
+}
+
+/// Recursively find assignments to mutable vars inside nested expressions
+/// (for-loop bodies, while bodies, if branches, etc.)
+fn find_reassignments_in_expr(
+    expr: &Expr,
+    mutable_vars: &std::collections::HashSet<String>,
+    reassigned: &mut std::collections::HashSet<String>,
+) {
+    match expr {
+        Expr::Block(stmts, _) => {
+            for stmt in stmts {
+                find_reassignments_in_stmt(stmt, mutable_vars, reassigned);
+            }
+        }
+        Expr::For(_, start, end, body, _) => {
+            find_reassignments_in_expr(start, mutable_vars, reassigned);
+            find_reassignments_in_expr(end, mutable_vars, reassigned);
+            find_reassignments_in_expr(body, mutable_vars, reassigned);
+        }
+        Expr::While(cond, body, _) => {
+            find_reassignments_in_expr(cond, mutable_vars, reassigned);
+            find_reassignments_in_expr(body, mutable_vars, reassigned);
+        }
+        Expr::If(cond, then_e, else_e, _) => {
+            find_reassignments_in_expr(cond, mutable_vars, reassigned);
+            find_reassignments_in_expr(then_e, mutable_vars, reassigned);
+            find_reassignments_in_expr(else_e, mutable_vars, reassigned);
+        }
+        Expr::Match(scrutinee, arms, _) => {
+            find_reassignments_in_expr(scrutinee, mutable_vars, reassigned);
+            for arm in arms {
+                find_reassignments_in_expr(&arm.body, mutable_vars, reassigned);
+            }
+        }
+        Expr::Try(body, catch_arms, finally, _) => {
+            find_reassignments_in_expr(body, mutable_vars, reassigned);
+            for arm in catch_arms {
+                find_reassignments_in_expr(&arm.body, mutable_vars, reassigned);
+            }
+            if let Some(f) = finally {
+                find_reassignments_in_expr(f, mutable_vars, reassigned);
+            }
+        }
+        // Don't recurse into lambdas - those are a different scope
+        Expr::Lambda(_, _, _) => {}
+        _ => {}
+    }
+}
+
+fn find_reassignments_in_stmt(
+    stmt: &Stmt,
+    mutable_vars: &std::collections::HashSet<String>,
+    reassigned: &mut std::collections::HashSet<String>,
+) {
+    match stmt {
+        Stmt::Assign(target, _, _) => {
+            if let AssignTarget::Var(ident) = target {
+                if mutable_vars.contains(&ident.node) {
+                    reassigned.insert(ident.node.clone());
+                }
+            }
+        }
+        Stmt::Expr(e) => find_reassignments_in_expr(e, mutable_vars, reassigned),
+        Stmt::Let(binding) => {
+            // A non-mutable Let binding with Pattern::Var that matches a mutable_var
+            // is a reassignment (parser creates Let instead of Assign for `x = expr` 
+            // when x is already in scope as a var).
+            if !binding.mutable {
+                if let Pattern::Var(ident) = &binding.pattern {
+                    if mutable_vars.contains(&ident.node) {
+                        reassigned.insert(ident.node.clone());
+                    }
+                }
+            }
+            find_reassignments_in_expr(&binding.value, mutable_vars, reassigned);
+        }
+    }
 }
 
 /// Find mutable vars that are captured (read or written) by lambdas in an expression.
@@ -34859,8 +34941,9 @@ fn find_lambda_mutations_in_expr(
             find_lambda_mutations_in_expr(cond, mutable_vars, mutated);
             find_lambda_mutations_in_expr(body, mutable_vars, mutated);
         }
-        Expr::For(_, iter, body, _step, _) => {
-            find_lambda_mutations_in_expr(iter, mutable_vars, mutated);
+        Expr::For(_, start, end, body, _) => {
+            find_lambda_mutations_in_expr(start, mutable_vars, mutated);
+            find_lambda_mutations_in_expr(end, mutable_vars, mutated);
             find_lambda_mutations_in_expr(body, mutable_vars, mutated);
         }
         Expr::FieldAccess(obj, _, _) => find_lambda_mutations_in_expr(obj, mutable_vars, mutated),
