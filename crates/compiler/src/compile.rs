@@ -19904,7 +19904,9 @@ impl Compiler {
             };
 
             // For default args, temporarily merge the function definer's imports
-            // so that names used in the default expression are resolved correctly
+            // so that names used in the default expression are resolved correctly.
+            // Also bind preceding parameter names to their already-compiled registers
+            // so defaults can reference earlier params (e.g., `fn(x, y, scale = x + y)`).
             let saved_imports_for_default = if is_default {
                 if let Some(ref qname) = maybe_qualified_name {
                     // Resolve the function name through imports to get the qualified name
@@ -19924,13 +19926,28 @@ impl Compiler {
                 } else { None }
             } else { None };
 
+            // For default args, temporarily bind preceding params in locals
+            // so the default expression can reference them
+            let saved_locals_for_default = if is_default && i > 0 {
+                let saved = self.locals.clone();
+                for j in 0..i {
+                    if let Some(Some(name)) = param_names.get(j) {
+                        self.locals.insert(name.clone(), LocalInfo {
+                            reg: arg_regs[j], is_float: false, mutable: false
+                        });
+                    }
+                }
+                Some(saved)
+            } else { None };
+
             // Get the expected parameter type and substitute any type parameters
             let expected_type = expected_param_types.get(i)
                 .and_then(|t| t.as_ref())
                 .map(|t| self.substitute_type_params(t, &type_param_map));
             let reg = self.compile_arg_with_expected_type(expr, expected_type.as_ref())?;
 
-            // Restore imports after default arg compilation
+            // Restore locals and imports after default arg compilation
+            if let Some(saved) = saved_locals_for_default { self.locals = saved; }
             if let Some(saved) = saved_imports_for_default { self.imports = saved; }
 
             // Check for implicit conversion: if the argument expression has a different type
@@ -21265,7 +21282,26 @@ impl Compiler {
                                     Some(saved)
                                 } else { None }
                             };
+                            // Bind preceding params so defaults can reference them
+                            let saved_locals = if i > 0 {
+                                let saved = self.locals.clone();
+                                for j in 0..i {
+                                    if let Some(param) = fn_def.clauses[0].params.get(j) {
+                                        if let Some(name) = self.pattern_binding_name(&param.pattern) {
+                                            if j < arg_regs.len() {
+                                                self.locals.insert(name, LocalInfo {
+                                                    reg: arg_regs[j], is_float: false, mutable: false
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                                Some(saved)
+                            } else { None };
                             let reg = self.compile_expr_tail(&default_expr.clone(), false)?;
+                            if let Some(saved) = saved_locals {
+                                self.locals = saved;
+                            }
                             if let Some(saved) = saved_imports {
                                 self.imports = saved;
                             }

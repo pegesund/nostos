@@ -1,0 +1,21 @@
+# expect: true
+# Default parameters can reference preceding parameters
+
+# Simple: scale defaults to x + y
+weighted(x, y, scale = x + y) = (x + y) * scale
+
+# String concatenation in default
+greet(name, msg = "Hello, " ++ name ++ "!") = msg
+
+# Default references first param
+double(x, y = x) = x + y
+
+main() = {
+    assert_eq(25, weighted(2, 3))
+    assert_eq(50, weighted(2, 3, 10))
+    assert_eq("Hello, World!", greet("World"))
+    assert_eq("Hi", greet("World", "Hi"))
+    assert_eq(10, double(5))
+    assert_eq(8, double(5, 3))
+    true
+}

@@ -4,28 +4,29 @@
 
 test_query_syntax_error(conn) = {
     # Catch SQL syntax error with pattern match
-    # Use Ok/Err to have consistent return type
-    result = try { Ok(Pg.query(conn, "SELEC INVALID SYNTAX", [])) } catch {
-        ("query_error", msg) -> Err(msg)
-        e -> Err("unexpected: " ++ show(e))
+    result = try {
+        Pg.query(conn, "SELEC INVALID SYNTAX", [])
+        "no_error"
+    } catch {
+        ("query_error", msg) -> msg
+        e -> "unexpected: " ++ show(e)
     }
-    # Result should be an error containing error info
-    match result {
-        Err(msg) -> assert(msg.length() > 0)
-        Ok(_) -> assert(false)  # Should have thrown
-    }
+    # Result should be an error message (not "no_error")
+    assert(result != "no_error")
+    assert(result.length() > 0)
 }
 
 test_query_missing_table(conn) = {
     # Catch missing table error
-    result = try { Ok(Pg.query(conn, "SELECT * FROM nonexistent_table_xyz_123", [])) } catch {
-        ("query_error", msg) -> Err(msg)
-        e -> Err("unexpected")
+    result = try {
+        Pg.query(conn, "SELECT * FROM nonexistent_table_xyz_123", [])
+        "no_error"
+    } catch {
+        ("query_error", msg) -> msg
+        e -> "unexpected"
     }
-    match result {
-        Err(msg) -> assert(msg.length() > 0)
-        Ok(_) -> assert(false)
-    }
+    assert(result != "no_error")
+    assert(result.length() > 0)
 }
 
 test_execute_syntax_error(conn) = {

@@ -6932,33 +6932,25 @@ impl<'a> InferCtx<'a> {
                 Ok(expected_ty)
             }
 
-            // Try/catch
-            // Note: The catch block can return a different type than the try block
-            // because exceptions are dynamic. We return a fresh type variable that
-            // is NOT unified with either branch, allowing the type to be inferred
-            // from usage context (e.g., assignment target or function argument).
+            // Try/catch - unify try body with catch arm types (like if/then/else)
             Expr::Try(body, catch_arms, finally, _) => {
-                // Infer try body type but don't unify with result
-                let _body_ty = self.infer_expr(body)?;
+                let body_ty = self.infer_expr(body)?;
 
                 // Exception type is a fresh variable since throw() can throw any type
-                // (integers, records, strings, etc.). Previously this was hardcoded to
-                // Type::String which caused false positives when catching non-string exceptions.
                 let err_ty = self.fresh();
 
-                // Infer catch arms but don't unify with result
+                // Unify catch arm result types with try body type
                 for arm in catch_arms {
                     let catch_result_ty = self.fresh();
                     self.infer_match_arm(arm, &err_ty, &catch_result_ty)?;
+                    self.unify(body_ty.clone(), catch_result_ty);
                 }
 
                 if let Some(finally_expr) = finally {
                     let _ = self.infer_expr(finally_expr)?;
                 }
 
-                // Return a fresh type - the actual type depends on which branch executes
-                // at runtime. The type checker can't determine this statically.
-                Ok(self.fresh())
+                Ok(body_ty)
             }
 
             // Quote/Splice - macro-related

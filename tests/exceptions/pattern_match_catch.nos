@@ -7,14 +7,14 @@ classify(code) =
         else if code == 2 then throw("forbidden")
         else "ok"
     } catch {
-        "not_found" -> 404
-        "forbidden" -> 403
-        _ -> 500
+        "not_found" -> "not_found"
+        "forbidden" -> "forbidden"
+        _ -> "error"
     }
 
 main() = {
-    assert_eq(404, classify(1))
-    assert_eq(403, classify(2))
+    assert_eq("not_found", classify(1))
+    assert_eq("forbidden", classify(2))
     assert_eq("ok", classify(99))
     0
 }

@@ -1,0 +1,6 @@
+# expect_error: type
+# try and catch branches must return the same type
+main() = {
+    x = try { 42 } catch { _ -> "error" }
+    x
+}
