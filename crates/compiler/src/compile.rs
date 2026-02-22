@@ -3687,350 +3687,11 @@ impl Compiler {
             Err(e) => {
                 // Report type errors - only filter truly spurious ones from inference limitations
                 let should_report = match &e {
-                    CompileError::TypeError { message, .. } => {
-                        // Only filter errors that are genuinely spurious from the inference engine:
-                        // - Unknown identifier/type: inference doesn't have all info
-                        // - "has no field": structural typing inference issue
-                        // - "() and ()": unit type comparison noise
-                        // - Cannot unify types with stdlib types: cross-module type confusion
-                        // - Cannot unify types involving type parameters: inference can't instantiate generics
-                        // DISABLED: is_overload_confusion - was hiding legitimate type errors like 5 + "hello"
-                        // DISABLED: is_type_var_confusion - was incorrectly hiding legitimate type errors
-                        // DISABLED: is_list_primitive_confusion - was hiding legitimate type errors
-                        // DISABLED: is_custom_type_confusion - was hiding legitimate type errors
-                        // DISABLED: List[Int]+String filter - was hiding legitimate concat type errors
-                        //   (e.g., xs.map(x => x * 2) ++ "hello" was not caught at compile time)
-                        // Tuple type errors: suppress unification errors involving tuples (HM false
-                        // positives from heterogeneous tuples/DB results), but DO report trait errors
-                        // like "Tuple does not implement Num" (real bugs: tuple + 1).
-                        // Also DO report "expected Collection[...]" errors from check_fn_call_mismatches
-                        // - these mean a function explicitly expects a collection and got a tuple instead.
-                        // Also DO report when the OTHER side is a concrete primitive - passing a tuple
-                        // where Int/String/Float/etc. is expected is always a real error.
-                        let has_primitive_mismatch = {
-                            let primitives = ["Int", "Float", "Bool", "String", "Char", "Unit",
-                                "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64",
-                                "Float32", "Float64", "BigInt", "Decimal"];
-                            let is_tuple = |s: &str| s.starts_with('(') && s.contains(',');
-                            // Check "Cannot unify types: X and Y" format
-                            let from_unify = if let Some(types_part) = message.strip_prefix("Cannot unify types: ") {
-                                let parts: Vec<&str> = types_part.split(" and ").collect();
-                                if parts.len() == 2 {
-                                    let ty1 = parts[0].trim();
-                                    let ty2 = parts[1].trim();
-                                    (is_tuple(ty1) && primitives.contains(&ty2)) ||
-                                    (is_tuple(ty2) && primitives.contains(&ty1))
-                                } else { false }
-                            } else { false };
-                            // Check "type mismatch: expected X, found Y" format
-                            let from_mismatch = if let Some(rest) = message.strip_prefix("type mismatch: expected ") {
-                                if let Some(comma_pos) = rest.find(", found ") {
-                                    let expected = rest[..comma_pos].trim();
-                                    let found = rest[comma_pos + 8..].trim();
-                                    (is_tuple(expected) && primitives.contains(&found)) ||
-                                    (is_tuple(found) && primitives.contains(&expected))
-                                } else { false }
-                            } else { false };
-                            from_unify || from_mismatch
-                        };
-                        // Check if the error involves a tuple vs a structurally different type
-                        // (collection or named/user-defined type). These are real errors.
-                        let is_tuple_vs_structural = {
-                            let is_collection = |s: &str| s.starts_with("List[") || s.starts_with("[") ||
-                                s.starts_with("Map[") || s.starts_with("Set[");
-                            let is_tuple = |s: &str| s.starts_with('(') && s.contains(',');
-                            let bt = ["Int", "Float", "Bool", "String", "Char", "Unit",
-                                "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64",
-                                "Float32", "Float64", "BigInt", "Decimal", "Pid", "Ref",
-                                "Option", "Result", "Json", "Buffer"];
-                            let is_named_or_record = |s: &str| {
-                                s.starts_with('{') ||
-                                (s.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) &&
-                                 !s.contains('?') &&
-                                 !bt.iter().any(|&b| s == b || s.starts_with(&format!("{}[", b))) &&
-                                 !is_collection(s) &&
-                                 !s.contains("->"))
-                            };
-                            // Tuple vs named type is ALWAYS a real error
-                            let tuple_vs_named = |t: &str, other: &str| {
-                                is_tuple(t) && is_named_or_record(other)
-                            };
-                            // Tuple vs collection is always a real structural mismatch
-                            // (e.g., passing List[Int] where (Int, Int) expected).
-                            let tuple_vs_collection = |t: &str, other: &str| {
-                                is_tuple(t) && is_collection(other)
-                            };
-                            let tuple_vs_other = |t: &str, other: &str| {
-                                tuple_vs_named(t, other) || tuple_vs_collection(t, other)
-                            };
-                            // Check "Cannot unify types: X and Y" format
-                            let from_unify = message.strip_prefix("Cannot unify types: ")
-                                .and_then(|types_part| {
-                                    let parts: Vec<&str> = types_part.split(" and ").collect();
-                                    if parts.len() == 2 {
-                                        Some(tuple_vs_other(parts[0].trim(), parts[1].trim()) ||
-                                             tuple_vs_other(parts[1].trim(), parts[0].trim()))
-                                    } else { None }
-                                }).unwrap_or(false);
-                            // Check "type mismatch: expected X, found Y" format
-                            let from_mismatch = message.strip_prefix("type mismatch: expected ")
-                                .and_then(|rest| rest.find(", found ").map(|pos| {
-                                    let expected = rest[..pos].trim().trim_matches('`');
-                                    let found = rest[pos + 8..].trim().trim_matches('`');
-                                    tuple_vs_other(expected, found) || tuple_vs_other(found, expected)
-                                })).unwrap_or(false);
-                            from_unify || from_mismatch
-                        };
-                        // Two tuples with different sizes are always a real error
-                        // E.g., (Int, Int) vs (Int, Int, Int)
-                        let has_tuple_size_mismatch = {
-                            let count_tuple_elements = |s: &str| -> Option<usize> {
-                                if !(s.starts_with('(') && s.contains(',')) { return None; }
-                                let mut depth = 0;
-                                let mut count = 1;
-                                for c in s.chars() {
-                                    match c {
-                                        '(' | '[' => depth += 1,
-                                        ')' | ']' => depth -= 1,
-                                        ',' if depth == 1 => count += 1,
-                                        _ => {}
-                                    }
-                                }
-                                Some(count)
-                            };
-                            let check_types = |t1: &str, t2: &str| -> bool {
-                                if let (Some(n1), Some(n2)) = (count_tuple_elements(t1), count_tuple_elements(t2)) {
-                                    n1 != n2
-                                } else {
-                                    false
-                                }
-                            };
-                            // Check "type mismatch: expected X, found Y" format
-                            message.strip_prefix("type mismatch: expected ")
-                                .and_then(|rest| rest.find(", found ").map(|pos| {
-                                    check_types(rest[..pos].trim(), rest[pos + 8..].trim())
-                                })).unwrap_or(false) ||
-                            // Check "Cannot unify types: X and Y" format
-                            message.strip_prefix("Cannot unify types: ")
-                                .and_then(|rest| {
-                                    let parts: Vec<&str> = rest.split(" and ").collect();
-                                    if parts.len() == 2 { Some(check_types(parts[0].trim(), parts[1].trim())) } else { None }
-                                }).unwrap_or(false)
-                        };
-                        let is_tuple_error = message.contains("(") && message.contains(",") && message.contains(")") &&
-                            (message.contains("Cannot unify") || message.contains("mismatch")) &&
-                            !message.contains("does not implement") &&
-                            !message.contains("Bool") && // tuple-vs-Bool is always a real error
-                            !has_primitive_mismatch && // tuple-vs-primitive is always a real error
-                            !is_tuple_vs_structural && // tuple-vs-collection/named is always a real error
-                            !has_tuple_size_mismatch && // different-sized tuples is always a real error
-                            !message.contains("expected List[") &&
-                            !message.contains("expected Map[") &&
-                            !message.contains("expected Set["); // tuple-vs-collection is always real
-                        // Nested tuple Num/Ord trait errors: when accessing tuple elements with .0, .1,
-                        // HM may incorrectly require Num/Ord on the whole tuple instead of the element.
-                        // E.g., ((Int, Int), (Int, Int)).0.0 + ... causes "nested tuple doesn't implement Num"
-                        let is_nested_tuple_trait_error = message.contains("does not implement Num") && {
-                            // Extract the type before " does not implement" and check if IT is nested tuple
-                            if let Some(impl_pos) = message.find(" does not implement") {
-                                let type_part = &message[..impl_pos];
-                                // Nested tuple starts with (( or ends with ))
-                                type_part.starts_with("((") || type_part.ends_with("))")
-                            } else {
-                                false
-                            }
-                        };
-                        // Trait dispatch syntax Type.Trait.method() is parsed as field access on constructor
-                        // E.g., Box.Doubler.doubler(b) where Box is resolved as constructor (Int) -> Box
-                        let is_trait_dispatch_confusion = message.contains("has no field") && {
-                            // Extract field name - it's after "has no field "
-                            if let Some(field_start) = message.find("has no field ") {
-                                let field_name = &message[field_start + 13..];
-                                // Trait names are capitalized
-                                field_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
-                            } else {
-                                false
-                            }
-                        };
-                        // Pid/() confusion happens in spawn-related code where HM can't properly track
-                        // that spawn returns Pid while the block evaluates to ()
-                        let is_spawn_confusion = message.contains("Pid") && message.contains("()");
-                        // Early return pattern: `return X` in a match/if branch makes HM see
-                        // () (unit) vs the other branch's type. This is valid code.
-                        // Match "Cannot unify types: () and X" or "X and ()" where one side is unit.
-                        // BUT: Don't suppress when the non-() type is a primitive - that's a real error
-                        // (e.g., f() + 1 where f() returns () should NOT be suppressed).
-                        let is_early_return_confusion = message.contains("Cannot unify types:") && {
-                            if let Some(types_part) = message.strip_prefix("Cannot unify types: ") {
-                                let parts: Vec<&str> = types_part.split(" and ").collect();
-                                if parts.len() == 2 {
-                                    let ty1 = parts[0].trim();
-                                    let ty2 = parts[1].trim();
-                                    let one_is_unit = ty1 == "()" || ty2 == "()";
-                                    if one_is_unit {
-                                        // Don't suppress if the non-() type is a primitive
-                                        // Primitives in arithmetic with () are real type errors
-                                        let other_ty = if ty1 == "()" { ty2 } else { ty1 };
-                                        let primitives = ["Int", "Int8", "Int16", "Int32", "Int64",
-                                            "UInt8", "UInt16", "UInt32", "UInt64",
-                                            "Float", "Float32", "Float64", "BigInt", "Decimal",
-                                            "String", "Char", "Bool"];
-                                        !primitives.contains(&other_ty)
-                                    } else {
-                                        false
-                                    }
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            }
-                        };
-                        // Int/String mismatch in try/catch: the try block may return Int but catch returns String
-                        // This is valid at runtime since exceptions are dynamic
-                        // IMPORTANT: Only match bare "Int" and "String" types, not compound types
-                        // like "List[Int]" - those are legitimate type errors.
-                        let is_try_catch_mismatch = false; // DISABLED: was hiding legitimate type errors
-                        // "has no field" errors: verify against the type registry.
-                        // - Type variable (starts with ?): suppress (unresolved type)
-                        // - Known type that HAS the field: suppress (HM false positive,
-                        //   e.g. from template-generated code)
-                        // - Known type that DOESN'T have the field: report (real error)
-                        // - Unknown type: suppress (can't verify)
-                        let is_field_error_on_unknown = message.contains("has no field") && {
-                            if let Some(pos) = message.find("has no field") {
-                                let prefix = message[..pos].trim();
-                                if let Some(type_name) = prefix.strip_prefix("Type ") {
-                                    let type_name = type_name.trim();
-                                    if type_name.starts_with('?') {
-                                        true // Type variable - suppress
-                                    } else {
-                                        // Extract field name from "has no field X"
-                                        let field_name = message[pos + "has no field ".len()..].trim();
-                                        // Strip type arguments for lookup: "Wrapper[Int]" -> "Wrapper"
-                                        let base_type_name = if let Some(bracket_pos) = type_name.find('[') {
-                                            &type_name[..bracket_pos]
-                                        } else {
-                                            type_name
-                                        };
-                                        // Look up the type to verify field existence
-                                        // Try direct lookup first, then search for qualified versions
-                                        let type_def_lookup = self.type_defs.get(base_type_name).or_else(|| {
-                                            // Try qualified names (e.g., "Config" -> "types.Config")
-                                            let suffix = format!(".{}", base_type_name);
-                                            self.type_defs.iter()
-                                                .find(|(k, _)| k.ends_with(&suffix))
-                                                .map(|(_, v)| v)
-                                        });
-                                        match type_def_lookup {
-                                            Some(td) => {
-                                                if td.reactive {
-                                                    true // Reactive types have runtime intrinsic methods - suppress
-                                                } else {
-                                                    match &td.body {
-                                                        TypeBody::Record(fields) => {
-                                                            // If the type HAS the field, suppress (HM false positive)
-                                                            fields.iter().any(|f| f.name.node == field_name)
-                                                        }
-                                                        TypeBody::Variant(variants) => {
-                                                            // Only suppress for single-constructor variants
-                                                            // where the field exists. Multi-constructor variants
-                                                            // require pattern matching.
-                                                            if variants.len() == 1 {
-                                                                if let VariantFields::Named(fields) = &variants[0].fields {
-                                                                    fields.iter().any(|f| f.name.node == field_name)
-                                                                } else {
-                                                                    false
-                                                                }
-                                                            } else {
-                                                                false // Multi-constructor: never suppress
-                                                            }
-                                                        }
-                                                        _ => true, // Alias/Empty type - suppress
-                                                    }
-                                                }
-                                            },
-                                            None => {
-                                                // Type not in registry - report for known primitives,
-                                                // suppress for tuple types (which have .0, .1 fields),
-                                                // function types, and unknown types
-                                                let primitives = ["Int", "Float", "Bool", "String", "Char",
-                                                    "Int8", "Int16", "Int32", "Int64",
-                                                    "UInt8", "UInt16", "UInt32", "UInt64",
-                                                    "Float32", "Float64", "BigInt", "Decimal"];
-                                                // Tuple types like (a, b) CAN have .0, .1 fields - but
-                                                // check if the field index is within bounds
-                                                let is_tuple_type = type_name.starts_with('(') && type_name.contains(',');
-                                                let is_tuple_oob = is_tuple_type && {
-                                                    // Count tuple elements by counting commas at depth 0
-                                                    let mut depth = 0;
-                                                    let mut count = 1;
-                                                    for c in type_name.chars() {
-                                                        match c {
-                                                            '(' | '[' => depth += 1,
-                                                            ')' | ']' => depth -= 1,
-                                                            ',' if depth == 1 => count += 1,
-                                                            _ => {}
-                                                        }
-                                                    }
-                                                    // Check if field is a numeric index beyond bounds
-                                                    field_name.parse::<usize>().map_or(true, |idx| idx >= count)
-                                                };
-                                                // Function types (at top level) can't have fields - report
-                                                let is_function_type = type_name.contains("->") && !is_tuple_type;
-                                                // Unit/Function/Record types can't have fields - report
-                                                let is_no_field_type = matches!(type_name, "Unit" | "Function" | "Record");
-                                                // Map/Set/List are built-in collection types that don't have
-                                                // arbitrary named fields - report field access errors on them
-                                                let is_collection_type = type_name.starts_with("Map[")
-                                                    || type_name.starts_with("Set[")
-                                                    || type_name.starts_with("List[");
-                                                // Suppress (return true) if NOT a primitive AND NOT a function type
-                                                // AND NOT a tuple with out-of-bounds access
-                                                // This includes tuples with valid fields and unknown types
-                                                !(primitives.contains(&type_name) || is_function_type || is_tuple_oob || is_no_field_type || is_collection_type)
-                                            },
-                                        }
-                                    }
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            }
-                        };
-                        // DISABLED: Heterogeneous map/collection value types are not supported.
-                        // All map values must have the same type.
-                        let is_collection_value_mismatch = false;
-                        // "Type annotation required" errors: HM can't handle multi-type-param
-                        // generics where if/else branches swap type params (e.g., pair[A,B]
-                        // returning (A,B) or (B,A)). The explicit annotations are authoritative.
-                        let is_annotation_error = message.contains("Type annotation required");
-                        // Function types "(X) -> Y does not implement Trait" can be HM false positives
-                        // where a lambda/callback is incorrectly resolved as needing a trait.
-                        // But Eq/Ord/Num errors on function types are ALWAYS real - functions never
-                        // implement these traits, so they are genuine type errors
-                        // (e.g., Set.fromList([lambda]) for Eq, myMax(fn1, fn2) for Ord).
-                        let is_func_trait_error = message.contains("does not implement") && message.contains("->")
-                            && !message.contains("does not implement Eq")
-                            && !message.contains("does not implement Ord")
-                            && !message.contains("does not implement Num")
-                            && !message.contains("does not implement Concat");
-                        let is_spurious = is_tuple_error || is_try_catch_mismatch ||
-                            is_nested_tuple_trait_error ||
-                            is_trait_dispatch_confusion ||
-                            message.contains("Unknown identifier") ||
-                            message.contains("Unknown type") ||
-                            is_field_error_on_unknown ||
-                            message.contains("() and ()") ||
-                            (message.contains("Cannot unify types") && message.contains("stdlib.")) ||
-                            is_collection_value_mismatch ||
-                            is_spawn_confusion ||
-                            is_early_return_confusion ||
-                            is_annotation_error ||
-                            is_func_trait_error;
-                        !is_spurious
-                    }
+                    // All type error filtering now happens in type_check_fn via
+                    // TypeError::should_suppress() and should_suppress_field_error(),
+                    // which operate on structured Type values instead of parsing
+                    // serialized error message strings.
+                    CompileError::TypeError { .. } => true,
                     // UnresolvedTraitMethod from type_check_fn is NOT a hard error.
                     // It happens when a function calls methods on polymorphic parameters
                     // (e.g., `revId(x) = { y = id(x); y.reverse() }`). The actual body
@@ -13540,282 +13201,9 @@ impl Compiler {
         Err(e) => {
             // Report type errors - only filter truly spurious ones from inference limitations
             let should_report = match &e {
-                CompileError::TypeError { message, .. } => {
-                    // Only filter errors that are genuinely spurious from the inference engine:
-                    // - Unknown identifier/type: inference doesn't have all info
-                    // - "has no field": structural typing inference issue
-                    // - "() and ()": unit type comparison noise
-                    // - List[Int] and String: polymorphic function calls (e.g., respond with String or bytes)
-                    // - Cannot unify types with stdlib types: cross-module type confusion
-                    // - Cannot unify types involving type parameters: inference can't instantiate generics
-                    // - Int and String: common overloading confusion (add(Int,Int) vs add(String,String))
-                    // DISABLED: This filter was hiding legitimate type errors like 5 + "hello"
-                    // The trait method issues are now handled in infer.rs check_pending_method_calls
-                    let is_overload_confusion = false;
-                    // DISABLED: This filter was incorrectly suppressing legitimate type errors
-                    // like zipWith called with wrong argument order (function instead of List)
-                    let is_type_var_confusion = false;
-                    // DISABLED: These filters were incorrectly hiding legitimate type errors
-                    // like List[Int] vs Int and Point vs Int
-                    let is_list_primitive_confusion = false;
-                    let is_custom_type_confusion = false;
-                    // Tuple type errors: suppress unification errors involving tuples (HM false
-                    // positives from try/catch, DB results, etc.), but DO report:
-                    // - Trait errors like "Tuple does not implement Num" (real bugs: tuple + 1)
-                    // - Function type mismatches with -> (real bugs: wrong arg order to filter/map)
-                    // - Tuple-vs-primitive mismatches (real bugs: passing Int where tuple expected)
-                    let has_primitive_mismatch = {
-                        let primitives = ["Int", "Float", "Bool", "String", "Char", "Unit",
-                            "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64",
-                            "Float32", "Float64", "BigInt", "Decimal"];
-                        let is_tuple = |s: &str| s.starts_with('(') && s.contains(',');
-                        // Check "Cannot unify types: X and Y" format
-                        let from_unify = if let Some(types_part) = message.strip_prefix("Cannot unify types: ") {
-                            let parts: Vec<&str> = types_part.split(" and ").collect();
-                            if parts.len() == 2 {
-                                let ty1 = parts[0].trim();
-                                let ty2 = parts[1].trim();
-                                (is_tuple(ty1) && primitives.contains(&ty2)) ||
-                                (is_tuple(ty2) && primitives.contains(&ty1))
-                            } else { false }
-                        } else { false };
-                        // Check "type mismatch: expected X, found Y" format
-                        let from_mismatch = if let Some(rest) = message.strip_prefix("type mismatch: expected ") {
-                            if let Some(comma_pos) = rest.find(", found ") {
-                                let expected = rest[..comma_pos].trim();
-                                let found = rest[comma_pos + 8..].trim();
-                                (is_tuple(expected) && primitives.contains(&found)) ||
-                                (is_tuple(found) && primitives.contains(&expected))
-                            } else { false }
-                        } else { false };
-                        from_unify || from_mismatch
-                    };
-                    // Check if tuple vs named/user-defined type (structural mismatch)
-                    let is_tuple_vs_structural = {
-                        let is_collection = |s: &str| s.starts_with("List[") || s.starts_with("[") ||
-                            s.starts_with("Map[") || s.starts_with("Set[");
-                        let is_tuple = |s: &str| s.starts_with('(') && s.contains(',');
-                        let btype = ["Int", "Float", "Bool", "String", "Char", "Unit",
-                            "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64",
-                            "Float32", "Float64", "BigInt", "Decimal", "Pid", "Ref",
-                            "Option", "Result", "Json", "Buffer"];
-                        let is_named_or_record = |s: &str| {
-                            s.starts_with('{') ||
-                            (s.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) &&
-                             !s.contains('?') &&
-                             !btype.iter().any(|&b| s == b || s.starts_with(&format!("{}[", b))) &&
-                             !is_collection(s) &&
-                             !s.contains("->"))
-                        };
-                        // Tuple vs named type is ALWAYS a real error
-                        let tuple_vs_named = |t: &str, other: &str| {
-                            is_tuple(t) && is_named_or_record(other)
-                        };
-                        // Tuple vs collection only real when tuple has type vars
-                        let tuple_vs_collection = |t: &str, other: &str| {
-                            is_tuple(t) && t.contains('?') && is_collection(other)
-                        };
-                        let tuple_vs_other = |t: &str, other: &str| {
-                            tuple_vs_named(t, other) || tuple_vs_collection(t, other)
-                        };
-                        let from_unify = message.strip_prefix("Cannot unify types: ")
-                            .and_then(|types_part| {
-                                let parts: Vec<&str> = types_part.split(" and ").collect();
-                                if parts.len() == 2 {
-                                    Some(tuple_vs_other(parts[0].trim(), parts[1].trim()) ||
-                                         tuple_vs_other(parts[1].trim(), parts[0].trim()))
-                                } else { None }
-                            }).unwrap_or(false);
-                        let from_mismatch = message.strip_prefix("type mismatch: expected ")
-                            .and_then(|rest| rest.find(", found ").map(|pos| {
-                                let expected = rest[..pos].trim().trim_matches('`');
-                                let found = rest[pos + 8..].trim().trim_matches('`');
-                                tuple_vs_other(expected, found) || tuple_vs_other(found, expected)
-                            })).unwrap_or(false);
-                        from_unify || from_mismatch
-                    };
-                    // Two tuples with different sizes are always a real error
-                    let has_tuple_size_mismatch = {
-                        let count_tuple_elements = |s: &str| -> Option<usize> {
-                            if !(s.starts_with('(') && s.contains(',')) { return None; }
-                            let mut depth = 0;
-                            let mut count = 1;
-                            for c in s.chars() {
-                                match c {
-                                    '(' | '[' => depth += 1,
-                                    ')' | ']' => depth -= 1,
-                                    ',' if depth == 1 => count += 1,
-                                    _ => {}
-                                }
-                            }
-                            Some(count)
-                        };
-                        let check_types = |t1: &str, t2: &str| -> bool {
-                            if let (Some(n1), Some(n2)) = (count_tuple_elements(t1), count_tuple_elements(t2)) {
-                                n1 != n2
-                            } else { false }
-                        };
-                        message.strip_prefix("type mismatch: expected ")
-                            .and_then(|rest| rest.find(", found ").map(|pos| {
-                                check_types(rest[..pos].trim(), rest[pos + 8..].trim())
-                            })).unwrap_or(false) ||
-                        message.strip_prefix("Cannot unify types: ")
-                            .and_then(|rest| {
-                                let parts: Vec<&str> = rest.split(" and ").collect();
-                                if parts.len() == 2 { Some(check_types(parts[0].trim(), parts[1].trim())) } else { None }
-                            }).unwrap_or(false)
-                    };
-                    let is_tuple_error = message.contains("(") && message.contains(",") && message.contains(")") &&
-                        (message.contains("Cannot unify") || message.contains("mismatch")) &&
-                        !message.contains("does not implement") &&
-                        !message.contains("->") &&
-                        !has_primitive_mismatch &&
-                        !is_tuple_vs_structural &&
-                        !has_tuple_size_mismatch &&
-                        !message.contains("Bool"); // tuple-vs-Bool is always a real error
-                    // Nested tuple Num/Ord trait errors: when accessing tuple elements with .0, .1,
-                    // HM may incorrectly require Num/Ord on the whole tuple instead of the element.
-                    // E.g., ((Int, Int), (Int, Int)).0.0 + ... causes "nested tuple doesn't implement Num"
-                    let is_nested_tuple_trait_error = message.contains("does not implement Num") && {
-                        // Extract the type before " does not implement" and check if IT is nested tuple
-                        if let Some(impl_pos) = message.find(" does not implement") {
-                            let type_part = &message[..impl_pos];
-                            // Nested tuple starts with (( or ends with ))
-                            type_part.starts_with("((") || type_part.ends_with("))")
-                        } else {
-                            false
-                        }
-                    };
-                    // Trait dispatch syntax Type.Trait.method() is parsed as field access on constructor
-                    // E.g., Box.Doubler.doubler(b) where Box is resolved as constructor (Int) -> Box
-                    let is_trait_dispatch_confusion = message.contains("has no field") && {
-                        // Extract field name - it's after "has no field "
-                        if let Some(field_start) = message.find("has no field ") {
-                            let field_name = &message[field_start + 13..];
-                            // Trait names are capitalized
-                            field_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
-                        } else {
-                            false
-                        }
-                    };
-                    // Pid/() confusion happens in spawn-related code where HM can't properly track
-                    // that spawn returns Pid while the block evaluates to ()
-                    let is_spawn_confusion = message.contains("Pid") && message.contains("()");
-                    // "has no field" errors: verify against the type registry
-                    let is_field_error_on_unknown = message.contains("has no field") && {
-                        if let Some(pos) = message.find("has no field") {
-                            let prefix = message[..pos].trim();
-                            if let Some(type_name) = prefix.strip_prefix("Type ") {
-                                let type_name = type_name.trim();
-                                if type_name.starts_with('?') {
-                                    true
-                                } else {
-                                    let field_name = message[pos + "has no field ".len()..].trim();
-                                    // Strip type arguments for lookup: "Wrapper[Int]" -> "Wrapper"
-                                    let base_type_name = if let Some(bracket_pos) = type_name.find('[') {
-                                        &type_name[..bracket_pos]
-                                    } else {
-                                        type_name
-                                    };
-                                    // Try direct lookup first, then search for qualified versions
-                                    let type_def_lookup = self.type_defs.get(base_type_name).or_else(|| {
-                                        let suffix = format!(".{}", base_type_name);
-                                        self.type_defs.iter()
-                                            .find(|(k, _)| k.ends_with(&suffix))
-                                            .map(|(_, v)| v)
-                                    });
-                                    match type_def_lookup {
-                                        Some(td) => {
-                                            if td.reactive {
-                                                true // Reactive types have runtime intrinsic methods
-                                            } else {
-                                                match &td.body {
-                                                    TypeBody::Record(fields) => {
-                                                        fields.iter().any(|f| f.name.node == field_name)
-                                                    }
-                                                    TypeBody::Variant(variants) => {
-                                                        // Only suppress for single-constructor variants
-                                                        if variants.len() == 1 {
-                                                            if let VariantFields::Named(fields) = &variants[0].fields {
-                                                                fields.iter().any(|f| f.name.node == field_name)
-                                                            } else {
-                                                                false
-                                                            }
-                                                        } else {
-                                                            false // Multi-constructor: never suppress
-                                                        }
-                                                    }
-                                                    _ => true, // Alias/Empty type - suppress
-                                                }
-                                            }
-                                        },
-                                        None => {
-                                            // Type not in registry - report for known primitives,
-                                            // suppress for tuple types (which have .0, .1 fields),
-                                            // function types, and unknown types
-                                            let primitives = ["Int", "Float", "Bool", "String", "Char",
-                                                "Int8", "Int16", "Int32", "Int64",
-                                                "UInt8", "UInt16", "UInt32", "UInt64",
-                                                "Float32", "Float64", "BigInt", "Decimal"];
-                                            // Tuple types like (a, b) CAN have .0, .1 fields - suppress
-                                            let is_tuple_type = type_name.starts_with('(') && type_name.contains(',');
-                                            // Function types (at top level) can't have fields - report
-                                            let is_function_type = type_name.contains("->") && !is_tuple_type;
-                                            // Map/Set/List are built-in collection types that don't have
-                                            // arbitrary named fields - report field access errors on them
-                                            let is_collection_type = type_name.starts_with("Map[")
-                                                || type_name.starts_with("Set[")
-                                                || type_name.starts_with("List[");
-                                            // Suppress (return true) if NOT a primitive AND NOT a function type
-                                            // This includes tuples and unknown types
-                                            !(primitives.contains(&type_name) || is_function_type || is_collection_type)
-                                        },
-                                    }
-                                }
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        }
-                    };
-                    // Function types "(X) -> Y does not implement Trait" are HM false positives
-                    // where a lambda/callback is incorrectly resolved as needing a trait.
-                    // Real trait bound violations from user-defined generic functions are caught
-                    // by check_generic_trait_bounds which returns Mismatch errors that bypass filters.
-                    let is_func_trait_error = message.contains("does not implement") && message.contains("->");
-                    // Early return pattern: `return X` in a match/if branch makes HM see
-                    // () vs the other branch's type. This is valid code.
-                    let is_early_return_confusion = message.contains("Cannot unify types:") && {
-                        if let Some(types_part) = message.strip_prefix("Cannot unify types: ") {
-                            let parts: Vec<&str> = types_part.split(" and ").collect();
-                            parts.len() == 2 && (parts[0].trim() == "()" || parts[1].trim() == "()")
-                        } else {
-                            false
-                        }
-                    };
-                    // "no method X for type unknown" is spurious from type_check_fn
-                    // because HM inference can't resolve cross-module qualified calls
-                    // (e.g., helper.process(names) where helper is a module)
-                    let is_unknown_method = message.contains("no method") && message.contains("type `unknown`");
-                    let is_spurious = is_tuple_error ||
-                        is_nested_tuple_trait_error ||
-                        is_trait_dispatch_confusion ||
-                        message.contains("Unknown identifier") ||
-                        message.contains("Unknown type") ||
-                        is_field_error_on_unknown ||
-                        message.contains("() and ()") ||
-                        (message.contains("Cannot unify types") && message.contains("stdlib.")) ||
-                        is_overload_confusion ||
-                        is_type_var_confusion ||
-                        is_list_primitive_confusion ||
-                        is_custom_type_confusion ||
-                        is_spawn_confusion ||
-                        is_early_return_confusion ||
-                        is_func_trait_error ||
-                        is_unknown_method;
-                    !is_spurious
-                }
+                // All type error filtering now happens in type_check_fn via
+                // TypeError::should_suppress() and should_suppress_field_error().
+                CompileError::TypeError { .. } => true,
                 // UnresolvedTraitMethod from type_check_fn is NOT a hard error.
                 // It happens when a function calls methods on polymorphic parameters
                 // (e.g., `myInsert(m, k, v) = m.insert(k, v)`). The actual body
@@ -32326,11 +31714,26 @@ impl Compiler {
 
         // Infer the function type - this generates constraints
         let span = def.name.span;
-        ctx.infer_function(def).map_err(|e| {
-            // Use the precise span from inference if available (e.g., for arity errors at call sites)
-            let error_span = ctx.last_error_span().unwrap_or(span);
-            self.convert_type_error(e, error_span)
-        })?;
+        if let Err(e) = ctx.infer_function(def) {
+            // Apply the same suppression logic as for solve() errors.
+            // HM inference doesn't know about all identifiers (e.g., throw, panic,
+            // stdlib functions) or types (e.g., RHtml), so UnknownIdent/UnknownType
+            // from inference are noise that should be filtered.
+            let suppress = if e.should_suppress() {
+                true
+            } else if let nostos_types::TypeError::NoSuchField { ref ty, ref field } = e {
+                self.should_suppress_field_error(ty, field)
+            } else {
+                false
+            };
+            if !suppress {
+                let error_span = ctx.last_error_span().unwrap_or(span);
+                return Err(self.convert_type_error(e, error_span));
+            }
+            // Inference failed with a suppressed error — constraints are incomplete,
+            // so skip solve() and return empty resolved types.
+            return Ok(vec![]);
+        }
 
         // Solve constraints - this is where type mismatches are detected
         let solve_result = ctx.solve();
@@ -32369,9 +31772,17 @@ impl Compiler {
                 let error_span = ctx.last_error_span().unwrap_or(span);
                 return Err(self.convert_type_error(branch_err, error_span));
             }
-            // Suppress errors that are likely HM inference noise (bare type variables,
-            // occurs check, etc.) using proper Type-based logic instead of string matching.
-            if !e.should_suppress() {
+            // Suppress errors that are likely HM inference noise using proper Type-based
+            // logic instead of string matching on error messages.
+            let suppress = if e.should_suppress() {
+                true
+            } else if let nostos_types::TypeError::NoSuchField { ref ty, ref field } = e {
+                // NoSuchField needs compiler context (type_defs) for full validation
+                self.should_suppress_field_error(ty, field)
+            } else {
+                false
+            };
+            if !suppress {
                 let error_span = ctx.last_error_span().unwrap_or(span);
                 return Err(self.convert_type_error(e, error_span));
             }
@@ -32452,6 +31863,83 @@ impl Compiler {
             .collect();
 
         Ok(resolved_types)
+    }
+
+    /// Check if a NoSuchField error should be suppressed by consulting the type registry.
+    /// This needs compiler context (self.type_defs) which should_suppress() can't access.
+    fn should_suppress_field_error(&self, ty: &str, field: &str) -> bool {
+        // Strip type arguments for lookup: "Wrapper[Int]" -> "Wrapper"
+        let base_type_name = if let Some(bracket_pos) = ty.find('[') {
+            &ty[..bracket_pos]
+        } else {
+            ty
+        };
+        // Look up the type - try direct lookup first, then search for qualified versions
+        let type_def_lookup = self.type_defs.get(base_type_name).or_else(|| {
+            let suffix = format!(".{}", base_type_name);
+            self.type_defs.iter()
+                .find(|(k, _)| k.ends_with(&suffix))
+                .map(|(_, v)| v)
+        });
+        match type_def_lookup {
+            Some(td) => {
+                if td.reactive {
+                    return true; // Reactive types have runtime intrinsic methods
+                }
+                match &td.body {
+                    TypeBody::Record(fields) => {
+                        // If the type HAS the field, suppress (HM false positive)
+                        fields.iter().any(|f| f.name.node == field)
+                    }
+                    TypeBody::Variant(variants) => {
+                        // Only suppress for single-constructor variants with the field
+                        if variants.len() == 1 {
+                            if let VariantFields::Named(fields) = &variants[0].fields {
+                                fields.iter().any(|f| f.name.node == field)
+                            } else {
+                                false
+                            }
+                        } else {
+                            false // Multi-constructor: never suppress
+                        }
+                    }
+                    _ => true, // Alias/Empty type - suppress
+                }
+            }
+            None => {
+                // Type not in registry - report for known primitives/functions/collections,
+                // suppress for tuples with valid fields and unknown types
+                let primitives = ["Int", "Float", "Bool", "String", "Char",
+                    "Int8", "Int16", "Int32", "Int64",
+                    "UInt8", "UInt16", "UInt32", "UInt64",
+                    "Float32", "Float64", "BigInt", "Decimal"];
+                let is_tuple_type = ty.starts_with('(') && ty.contains(',');
+                let is_tuple_oob = is_tuple_type && {
+                    // Count tuple elements at depth 0
+                    let mut depth = 0;
+                    let mut count = 1usize;
+                    for c in ty.chars() {
+                        match c {
+                            '(' | '[' => depth += 1,
+                            ')' | ']' => depth -= 1,
+                            ',' if depth == 1 => count += 1,
+                            _ => {}
+                        }
+                    }
+                    // Check if field is a numeric index beyond bounds
+                    field.parse::<usize>().map_or(true, |idx| idx >= count)
+                };
+                let is_function_type = ty.contains("->") && !is_tuple_type;
+                let is_no_field_type = ty == "Unit" || ty == "Function" || ty == "Record";
+                let is_collection_type = ty.starts_with("Map[")
+                    || ty.starts_with("Set[")
+                    || ty.starts_with("List[");
+                // Suppress if NOT a known-bad type (primitives, functions, collections,
+                // OOB tuple access). This includes tuples with valid fields and unknown types.
+                !(primitives.contains(&ty) || is_function_type || is_tuple_oob
+                    || is_no_field_type || is_collection_type)
+            }
+        }
     }
 
     /// Convert a TypeError to a CompileError, using richer error types when available.

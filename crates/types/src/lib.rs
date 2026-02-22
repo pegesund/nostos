@@ -356,9 +356,23 @@ impl TypeError {
                 if is_bare_var(ty) || is_type_param(ty) {
                     return true;
                 }
-                // Function types with vars that don't implement Eq/Ord/Num/Concat are always real
-                if ty.contains("->") && ["Eq", "Ord", "Num", "Concat"].contains(&trait_name.as_str()) {
-                    return false;
+                // HasMethod is an internal HM inference constraint for UFCS dispatch;
+                // it should never surface as a user-facing error
+                if trait_name.starts_with("HasMethod") {
+                    return true;
+                }
+                // Function types: Eq/Ord/Num/Concat are real (functions never implement these),
+                // all other traits on function types are HM false positives
+                if ty.contains("->") {
+                    if ["Eq", "Ord", "Num", "Concat"].contains(&trait_name.as_str()) {
+                        return false;
+                    }
+                    return true;
+                }
+                // Nested tuple with Num: HM puts Num on whole tuple instead of element
+                // E.g., ((Int, Int), (Int, Int)).0.0 + ... → "((Int, Int), ...) doesn't implement Num"
+                if trait_name == "Num" && (ty.starts_with("((") || ty.ends_with("))")) {
+                    return true;
                 }
                 // Type with unresolved vars → suppress
                 if ty.contains('?') {
@@ -367,10 +381,50 @@ impl TypeError {
                 false
             }
 
-            // Mismatch with bare type variable → suppress
+            // Mismatch with bare type variable or identical types → suppress
             TypeError::Mismatch { expected, found } => {
                 let is_bare_var = |s: &str| s.starts_with('?') && s[1..].chars().all(|c| c.is_ascii_digit());
-                is_bare_var(expected) || is_bare_var(found)
+                if is_bare_var(expected) || is_bare_var(found) {
+                    return true;
+                }
+                // Identical types: spurious unification noise
+                if expected == found {
+                    return true;
+                }
+                // Internal HM constraints (HasMethod/HasField) should never surface
+                if expected.contains("HasMethod") || expected.contains("HasField") {
+                    return true;
+                }
+                false
+            }
+
+            // HM doesn't have all identifiers/types in scope - suppress
+            TypeError::UnknownIdent(_) => true,
+            TypeError::UnknownType(_) => true,
+
+            // AnnotationRequired: shared type variables with conflicting concrete types.
+            // This is a REAL error - not suppressed.
+            TypeError::AnnotationRequired { .. } => false,
+
+            // "no method X for type unknown" from cross-module inference
+            TypeError::UndefinedMethod { receiver_type, .. } => {
+                receiver_type == "unknown" || receiver_type.starts_with('?')
+            }
+
+            // Field access on unresolved or trait-dispatch types
+            TypeError::NoSuchField { ty, field } => {
+                // Type variable: unresolved type, suppress
+                if ty.starts_with('?') {
+                    return true;
+                }
+                // Trait dispatch confusion: Type.Trait.method() parsed as field access,
+                // where the "field" is actually a Trait name (uppercase)
+                if field.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                    return true;
+                }
+                // Other NoSuchField errors may need compiler context (type_defs lookup)
+                // to determine if they're real - return false to let compiler-level check handle
+                false
             }
 
             // All other errors are real
@@ -380,6 +434,18 @@ impl TypeError {
 
     /// Check if a unification failure between two types should be suppressed.
     fn should_suppress_unification(t1: &Type, t2: &Type) -> bool {
+        // Identical types → suppress (clearly spurious unification failure)
+        // Also handle Unit vs Tuple([]) which both represent () but are different variants
+        fn normalize_unit(t: &Type) -> &Type {
+            match t {
+                Type::Tuple(f) if f.is_empty() => &Type::Unit,
+                other => other,
+            }
+        }
+        if normalize_unit(t1) == normalize_unit(t2) {
+            return true;
+        }
+
         // Bare type vars → suppress (HM couldn't resolve)
         if matches!(t1, Type::Var(_) | Type::TypeParam(_)) || matches!(t2, Type::Var(_) | Type::TypeParam(_)) {
             return true;
@@ -394,6 +460,32 @@ impl TypeError {
             )
         };
         if is_qmark_confusion(t1, t2) || is_qmark_confusion(t2, t1) {
+            return true;
+        }
+
+        // Early return confusion: `return X` in a branch makes HM see () vs X.
+        // Suppress Unit vs non-primitive (valid early return pattern).
+        // Keep Unit vs primitive (real: f() + 1 where f returns ()).
+        fn is_unit_type(t: &Type) -> bool {
+            matches!(t, Type::Unit) || matches!(t, Type::Tuple(f) if f.is_empty())
+        }
+        fn is_primitive_type(t: &Type) -> bool {
+            matches!(t, Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64
+                | Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64
+                | Type::Float | Type::Float32 | Type::Float64
+                | Type::BigInt | Type::Decimal
+                | Type::String | Type::Char | Type::Bool)
+        }
+        if is_unit_type(t1) && !is_unit_type(t2) && !is_primitive_type(t2) {
+            return true;
+        }
+        if is_unit_type(t2) && !is_unit_type(t1) && !is_primitive_type(t1) {
+            return true;
+        }
+
+        // Pid vs Unit: spawn returns Pid, block evaluates to ()
+        if (matches!(t1, Type::Pid) && is_unit_type(t2))
+            || (matches!(t2, Type::Pid) && is_unit_type(t1)) {
             return true;
         }
 
@@ -420,6 +512,15 @@ impl TypeError {
                 return true; // Both unresolved containers → suppress
             }
             return false;
+        }
+
+        // Types with stdlib-qualified names: cross-module name confusion
+        // (e.g., "stdlib.list.Option[Int]" vs "Option[Int]")
+        fn has_stdlib_name(t: &Type) -> bool {
+            matches!(t, Type::Named { name, .. } if name.starts_with("stdlib."))
+        }
+        if has_stdlib_name(t1) || has_stdlib_name(t2) {
+            return true;
         }
 
         // Same kind: check for named type mismatches
