@@ -20116,17 +20116,17 @@ impl Compiler {
                         self.emit_call_native(dst, "eval", arg_regs.into(), line);
                         return Ok(dst);
                     }
-                    "head" if arg_regs.len() == 1 => {
+                    "head" if arg_regs.len() == 1 && !self.has_user_function("head", 1) => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ListHead(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "tail" if arg_regs.len() == 1 => {
+                    "tail" if arg_regs.len() == 1 && !self.has_user_function("tail", 1) => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ListTail(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "isEmpty" | "empty" if arg_regs.len() == 1 => {
+                    "isEmpty" | "empty" if arg_regs.len() == 1 && !self.has_user_function("isEmpty", 1) && !self.has_user_function("empty", 1) => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::ListIsEmpty(dst, arg_regs[0]), line);
                         return Ok(dst);
@@ -20195,7 +20195,7 @@ impl Compiler {
                         self.emit_call_native(dst, "range", vec![arg_regs[0], arg_regs[1]].into(), line);
                         return Ok(dst);
                     }
-                    "length" | "len" if arg_regs.len() == 1 => {
+                    "length" | "len" if arg_regs.len() == 1 && !self.has_user_function("length", 1) && !self.has_user_function("len", 1) => {
                         let dst = self.alloc_reg();
                         self.chunk.emit(Instruction::Length(dst, arg_regs[0]), line);
                         return Ok(dst);
