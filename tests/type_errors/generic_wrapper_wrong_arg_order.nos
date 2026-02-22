@@ -1,0 +1,10 @@
+# expect_error: type mismatch
+# Generic wrapper function with wrong argument order to builtins.
+# map expects (list, func) but gets (func, list).
+# filter expects (list, pred) but gets (pred, result_of_map).
+# The type error should be caught even though all params are untyped.
+mapThenFilter(xs, f, pred) = filter(pred, map(f, xs))
+
+main() = {
+  mapThenFilter([1, 2, 3, 4, 5], x => x * 2, x => x <= 6)
+}

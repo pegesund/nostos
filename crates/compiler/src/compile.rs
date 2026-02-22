@@ -1244,6 +1244,8 @@ pub struct Compiler {
     /// Function ASTs for monomorphization: function name -> FnDef
     /// Used to recompile functions with different type contexts
     fn_asts: HashMap<String, FnDef>,
+    /// Structural type errors from try_hm_inference that would be lost when it returns None.
+    hm_inference_errors: Vec<(String, nostos_types::TypeError)>,
     /// Imports that were active when each fn_ast was registered.
     /// Used to restore the correct import context during monomorphization.
     fn_ast_imports: HashMap<String, HashMap<String, String>>,
@@ -1604,6 +1606,7 @@ impl Compiler {
             local_types: HashMap::new(),
             param_types: HashMap::new(),
             fn_asts: HashMap::new(),
+            hm_inference_errors: Vec::new(),
             fn_ast_imports: HashMap::new(),
             module_imports: HashMap::new(),
             fn_sources: HashMap::new(),
@@ -3601,7 +3604,7 @@ impl Compiler {
                         // Try HM inference again now that all dependencies are compiled
                         // Use reference to fn_ast - no need to clone the entire AST
                         let inferred = self.fn_asts.get(fn_name)
-                            .and_then(|fn_ast| self.try_hm_inference(fn_ast));
+                            .and_then(|fn_ast| self.try_hm_inference(fn_ast).0);
 
                         if let Some((inferred_sig, _expr_types)) = inferred {
                             // Check if signature actually changed
@@ -4050,6 +4053,56 @@ impl Compiler {
             } // end match
 
             self.module_path = saved_path;
+        }
+
+        // Report structural type errors from try_hm_inference.
+        {
+            let mut reported_fns: HashSet<String> = HashSet::new();
+            for (fn_name, type_err) in std::mem::take(&mut self.hm_inference_errors) {
+                let base_name = fn_name.split('/').next().unwrap_or(&fn_name).to_string();
+                if !reported_fns.insert(base_name.clone()) { continue; }
+                fn clean_type_vars(s: &str) -> String {
+                    let mut var_map: Vec<(String, char)> = Vec::new();
+                    let mut next = b'a';
+                    let mut i = 0;
+                    let bytes = s.as_bytes();
+                    while i < bytes.len() {
+                        if bytes[i] == b'?' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
+                            let start = i;
+                            i += 1;
+                            while i < bytes.len() && bytes[i].is_ascii_digit() { i += 1; }
+                            let var = s[start..i].to_string();
+                            if !var_map.iter().any(|(v, _)| v == &var) {
+                                var_map.push((var, next as char));
+                                next = std::cmp::min(next + 1, b'z');
+                            }
+                        } else { i += 1; }
+                    }
+                    let mut result = s.to_string();
+                    for (var, letter) in &var_map {
+                        result = result.replace(var, &letter.to_string());
+                    }
+                    result
+                }
+                let error_message = match &type_err {
+                    nostos_types::TypeError::UnificationFailed(a, b) |
+                    nostos_types::TypeError::Mismatch { expected: a, found: b } =>
+                        format!("type mismatch: expected `{}`, found `{}`", clean_type_vars(a), clean_type_vars(b)),
+                    other => format!("{:?}", other),
+                };
+                let fn_key = self.fn_sources.keys()
+                    .find(|k| k.starts_with(&fn_name) || k.split('/').next() == Some(&fn_name))
+                    .cloned();
+                if let Some(key) = fn_key {
+                    if let Some((source_name, source)) = self.fn_sources.get(&key).cloned() {
+                        if let Some(fn_ast) = self.fn_asts.get(&key) {
+                            let span = fn_ast.name.span;
+                            let compile_error = CompileError::TypeError { message: error_message, span };
+                            errors.push((fn_name.clone(), compile_error, source_name, source));
+                        }
+                    }
+                }
+            }
         }
 
         // Merge resolved expression types from per-function inference.
@@ -5345,6 +5398,7 @@ impl Compiler {
             local_types: HashMap::new(),
             param_types: HashMap::new(),
             fn_asts: HashMap::new(),
+            hm_inference_errors: Vec::new(),
             fn_ast_imports: HashMap::new(),
             module_imports: HashMap::new(),
             fn_sources: HashMap::new(),
@@ -13446,7 +13500,7 @@ impl Compiler {
             // inferred_expr_types - this is needed for UFCS method resolution on
             // intermediate expressions (e.g., `transformed = p.mapFirst(f); transformed.display()`).
             if is_monomorphized {
-                let hm_result = self.try_hm_inference(def);
+                let (hm_result, _) = self.try_hm_inference(def);
                 if let Some((_, expr_types)) = hm_result {
                     for (span, ty) in expr_types {
                         self.inferred_expr_types.insert(span, ty);
@@ -30265,7 +30319,10 @@ impl Compiler {
         // (e.g., Eq from ==, Ord from <, Num from +) that explicit annotations don't express.
         // Previously stdlib functions with annotations skipped HM inference, which meant
         // trait bounds were lost and couldn't propagate through generic wrapper functions.
-        let hm_result = self.try_hm_inference(def);
+        let (hm_result, hm_err) = self.try_hm_inference(def);
+        if let Some(err) = hm_err {
+            self.hm_inference_errors.push(err);
+        }
         if let Some((sig, expr_types)) = hm_result {
             // Store resolved expr types from per-function inference.
             // These may provide better type resolution than batch inference
@@ -30300,7 +30357,7 @@ impl Compiler {
     /// Try full Hindley-Milner type inference for a function.
     /// Returns None if inference fails, allowing fallback to AST-based signature.
     /// Also returns resolved expression types for the function body.
-    fn try_hm_inference(&self, def: &FnDef) -> Option<(String, Vec<(Span, nostos_types::Type)>)> {
+    fn try_hm_inference(&self, def: &FnDef) -> (Option<(String, Vec<(Span, nostos_types::Type)>)>, Option<(String, nostos_types::TypeError)>) {
         // Create a fresh type environment for inference
         let mut env = nostos_types::standard_env();
 
@@ -30938,13 +30995,28 @@ impl Compiler {
         let func_ty = match ctx.infer_function(def) {
             Ok(ft) => ft,
             Err(_e) => {
-                return None;
+                return (None, None);
             }
         };
 
         // Solve constraints (this can hang on unresolved type vars with HasField)
-        if let Err(_solve_errs) = ctx.solve() {
-            return None;
+        if let Err(solve_err) = ctx.solve() {
+            // Check if this is a structural mismatch (e.g., List vs Function).
+            use nostos_types::TypeError;
+            let is_structural = match &solve_err {
+                TypeError::UnificationFailed(a, b) | TypeError::Mismatch { expected: a, found: b } => {
+                    let a_is_list = a.starts_with("List[") || a.starts_with("[");
+                    let a_is_fn = a.contains("->");
+                    let b_is_list = b.starts_with("List[") || b.starts_with("[");
+                    let b_is_fn = b.contains("->");
+                    (a_is_list && b_is_fn) || (a_is_fn && b_is_list)
+                }
+                _ => false,
+            };
+            if is_structural {
+                return (None, Some((def.name.node.clone(), solve_err)));
+            }
+            return (None, None);
         }
 
         // When a function has multiple explicit type params (e.g., pair[A, B]),
@@ -31055,9 +31127,9 @@ impl Compiler {
                     .filter(|(_, ty)| !matches!(ty, nostos_types::Type::Var(_) | nostos_types::Type::TypeParam(_)))
                     .collect();
                 return if bounds.is_empty() {
-                    Some((type_sig, resolved_expr_types))
+                    (Some((type_sig, resolved_expr_types)), None)
                 } else {
-                    Some((format!("{} => {}", bounds.join(", "), type_sig), resolved_expr_types))
+                    (Some((format!("{} => {}", bounds.join(", "), type_sig), resolved_expr_types)), None)
                 };
             }
         }
@@ -31393,7 +31465,7 @@ impl Compiler {
             })
             .collect();
 
-        Some((sig, resolved_expr_types))
+        (Some((sig, resolved_expr_types)), None)
     }
 
     /// Type check a function definition using Hindley-Milner type inference.
