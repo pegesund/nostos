@@ -4145,12 +4145,12 @@ impl<'a> InferCtx<'a> {
                                                         found: resolved_ret.display(),
                                                     });
                                                 }
-                                                // Both-concrete case
-                                                if !a.contains('?') && !b.contains('?') {
+                                                // Both-concrete case: use resolved Type values instead of error strings
+                                                if !resolved_ret.has_any_type_var() && !resolved_expected_ret.has_any_type_var() {
                                                     self.last_error_span = call.span;
                                                     return Err(TypeError::Mismatch {
-                                                        expected: b.clone(),
-                                                        found: a.clone(),
+                                                        expected: resolved_expected_ret.display(),
+                                                        found: resolved_ret.display(),
                                                     });
                                                 }
                                             }
@@ -4173,13 +4173,16 @@ impl<'a> InferCtx<'a> {
                                                 let resolved_lambda_param = self.env.apply_subst(lambda_param);
                                                 match self.unify_types(&resolved_lambda_param, &resolved_tuple_elem) {
                                                     Ok(()) => {}
-                                                    Err(TypeError::UnificationFailed(ref a, ref b)) => {
+                                                    Err(TypeError::UnificationFailed(..)) => {
                                                         // Check if both types are concrete (no type vars)
-                                                        if !a.contains('?') && !b.contains('?') {
+                                                        // Re-resolve after unify_types may have updated substitution
+                                                        let fresh_elem = self.env.apply_subst(tuple_elem);
+                                                        let fresh_param = self.env.apply_subst(lambda_param);
+                                                        if !fresh_elem.has_any_type_var() && !fresh_param.has_any_type_var() {
                                                             self.last_error_span = call.span;
                                                             return Err(TypeError::Mismatch {
-                                                                expected: b.clone(),
-                                                                found: a.clone(),
+                                                                expected: fresh_param.display(),
+                                                                found: fresh_elem.display(),
                                                             });
                                                         }
                                                     }
@@ -4209,12 +4212,12 @@ impl<'a> InferCtx<'a> {
                                                             found: resolved_ret.display(),
                                                         });
                                                     }
-                                                    // Also check both-concrete case
-                                                    if !a.contains('?') && !b.contains('?') {
+                                                    // Also check both-concrete case using resolved Type values
+                                                    if !resolved_ret.has_any_type_var() && !resolved_expected_ret.has_any_type_var() {
                                                         self.last_error_span = call.span;
                                                         return Err(TypeError::Mismatch {
-                                                            expected: b.clone(),
-                                                            found: a.clone(),
+                                                            expected: resolved_expected_ret.display(),
+                                                            found: resolved_ret.display(),
                                                         });
                                                     }
                                                 }
@@ -4336,35 +4339,25 @@ impl<'a> InferCtx<'a> {
                                             });
                                         }
                                     }
-                                    // General case: only error if both types in the error are fully resolved.
-                                    // Check the error message strings (a and b) instead of the original
-                                    // resolved types, because unify_types may have updated the substitution
-                                    // for type variables that appeared in resolved_arg/resolved_param.
-                                    let a_has_var = a.contains('?');
-                                    let b_has_var = b.contains('?');
-                                    if !a_has_var && !b_has_var {
+                                    // General case: re-resolve types after unify_types may have
+                                    // updated the substitution, then check using actual Type values.
+                                    let fresh_arg = self.env.apply_subst(arg_ty);
+                                    let fresh_param = self.env.apply_subst(param_ty);
+                                    if !fresh_arg.has_any_type_var() && !fresh_param.has_any_type_var() {
                                         self.last_error_span = call.span;
                                         return Err(TypeError::Mismatch {
-                                            expected: b.clone(),
-                                            found: a.clone(),
+                                            expected: fresh_param.display(),
+                                            found: fresh_arg.display(),
                                         });
                                     }
-                                    // Structural mismatch: primitive vs wrapper can never unify
+                                    // Structural mismatch: different type kinds can never unify
                                     // regardless of type variables (e.g., Int vs List[?1] from
                                     // [1,2,3].flatten() where flatten expects List[List[a]]).
-                                    let is_prim = |s: &str| matches!(s,
-                                        "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
-                                        "UInt8" | "UInt16" | "UInt32" | "UInt64" |
-                                        "Float" | "Float32" | "Float64" |
-                                        "BigInt" | "Decimal" | "String" | "Bool" | "Char" | "()");
-                                    let is_wrap = |s: &str| s.starts_with("List[") || s.starts_with('[')
-                                        || s.starts_with("Map[") || s.starts_with("Set[")
-                                        || (s.starts_with('(') && s.contains(','));
-                                    if (is_prim(a) && is_wrap(b)) || (is_wrap(a) && is_prim(b)) {
+                                    if is_structural_mismatch(&fresh_arg, &fresh_param) {
                                         self.last_error_span = call.span;
                                         return Err(TypeError::Mismatch {
-                                            expected: resolved_param.display(),
-                                            found: resolved_arg.display(),
+                                            expected: fresh_param.display(),
+                                            found: fresh_arg.display(),
                                         });
                                     }
                                 }
