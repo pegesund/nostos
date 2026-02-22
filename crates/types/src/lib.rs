@@ -213,8 +213,8 @@ pub enum TypeError {
     #[error("Wrong number of type arguments: expected {expected}, found {found}")]
     TypeArityMismatch { expected: usize, found: usize },
 
-    #[error("Cannot unify types: {0} and {1}")]
-    UnificationFailed(String, String),
+    #[error("Cannot unify types: {} and {}", .0.display(), .1.display())]
+    UnificationFailed(Type, Type),
 
     #[error("Infinite type: {0} contains itself")]
     InfiniteType(String),
@@ -300,6 +300,162 @@ pub enum TypeError {
     /// Carries the actual Type values for proper pattern matching.
     #[error("type mismatch: expected `{}`, found `{}`", .0.display(), .1.display())]
     StructuralMismatch(Type, Type),
+}
+
+/// Returns true when two types have fundamentally incompatible top-level constructors
+/// and neither is a type variable. These mismatches are always real errors.
+pub fn is_structural_mismatch(t1: &Type, t2: &Type) -> bool {
+    if matches!(t1, Type::Var(_) | Type::TypeParam(_)) || matches!(t2, Type::Var(_) | Type::TypeParam(_)) {
+        return false;
+    }
+    fn type_kind(t: &Type) -> u8 {
+        match t {
+            Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64
+            | Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64
+            | Type::Float | Type::Float32 | Type::Float64
+            | Type::BigInt | Type::Decimal
+            | Type::Bool | Type::Char | Type::String | Type::Unit | Type::Never
+            | Type::Pid | Type::Ref => 0,
+            Type::List(_) | Type::Array(_) => 1,
+            Type::Map(_, _) => 2,
+            Type::Set(_) => 3,
+            Type::Tuple(fields) if fields.is_empty() => 0, // Empty tuple is Unit
+            Type::Tuple(_) => 4,
+            Type::Function(_) => 5,
+            Type::Record(_) => 6,
+            Type::Variant(_) => 7,
+            Type::Named { .. } => 8,
+            Type::IO(_) => 9,
+            Type::Var(_) | Type::TypeParam(_) => 10,
+        }
+    }
+    type_kind(t1) != type_kind(t2)
+}
+
+impl TypeError {
+    /// Returns true if this error should be suppressed (likely HM inference noise,
+    /// not a real type error the user should see). Uses proper Type-based logic
+    /// instead of string pattern matching on error messages.
+    pub fn should_suppress(&self) -> bool {
+        match self {
+            // Structural mismatches (different type constructors) are always real
+            TypeError::StructuralMismatch(_, _) => false,
+
+            // Unification failures: check if it's a real error or HM noise
+            TypeError::UnificationFailed(t1, t2) => {
+                Self::should_suppress_unification(t1, t2)
+            }
+
+            // Occurs check errors from recursive generic functions are often false positives
+            TypeError::OccursCheck(_, _) => true,
+
+            // Trait bound errors: suppress when type is a bare variable
+            TypeError::MissingTraitImpl { ty, trait_name } => {
+                let is_bare_var = |s: &str| s.starts_with('?') && s[1..].chars().all(|c| c.is_ascii_digit());
+                let is_type_param = |s: &str| s.len() == 1 && s.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false);
+                if is_bare_var(ty) || is_type_param(ty) {
+                    return true;
+                }
+                // Function types with vars that don't implement Eq/Ord/Num/Concat are always real
+                if ty.contains("->") && ["Eq", "Ord", "Num", "Concat"].contains(&trait_name.as_str()) {
+                    return false;
+                }
+                // Type with unresolved vars → suppress
+                if ty.contains('?') {
+                    return true;
+                }
+                false
+            }
+
+            // Mismatch with bare type variable → suppress
+            TypeError::Mismatch { expected, found } => {
+                let is_bare_var = |s: &str| s.starts_with('?') && s[1..].chars().all(|c| c.is_ascii_digit());
+                is_bare_var(expected) || is_bare_var(found)
+            }
+
+            // All other errors are real
+            _ => false,
+        }
+    }
+
+    /// Check if a unification failure between two types should be suppressed.
+    fn should_suppress_unification(t1: &Type, t2: &Type) -> bool {
+        // Bare type vars → suppress (HM couldn't resolve)
+        if matches!(t1, Type::Var(_) | Type::TypeParam(_)) || matches!(t2, Type::Var(_) | Type::TypeParam(_)) {
+            return true;
+        }
+
+        // Exception: Bool vs Result[..., ?var] is ? operator false positive
+        let is_qmark_confusion = |a: &Type, b: &Type| -> bool {
+            matches!(a, Type::Bool) && matches!(b,
+                Type::Named { name, args } if
+                    (name == "Result" || name.ends_with(".Result")) &&
+                    args.iter().any(|a| a.has_any_type_var())
+            )
+        };
+        if is_qmark_confusion(t1, t2) || is_qmark_confusion(t2, t1) {
+            return true;
+        }
+
+        // Different type constructors → real structural mismatch
+        if is_structural_mismatch(t1, t2) {
+            // Exception: when both types are parameterized containers (Set, Map, Named)
+            // with ALL type-variable params (e.g., Set[?25] vs Map[?27, ?28]),
+            // HM couldn't determine the actual types, so the mismatch is likely
+            // from incomplete inference. List/Array/Tuple/Function/primitives
+            // are always treated as concrete constructors.
+            fn is_unresolved_container(t: &Type) -> bool {
+                match t {
+                    Type::Set(inner) | Type::IO(inner) =>
+                        inner.has_any_type_var(),
+                    Type::Map(k, v) =>
+                        k.has_any_type_var() && v.has_any_type_var(),
+                    Type::Named { args, .. } =>
+                        !args.is_empty() && args.iter().all(|a| a.has_any_type_var()),
+                    // List, Array, Tuple, Function, primitives → concrete
+                    _ => false,
+                }
+            }
+            if is_unresolved_container(t1) && is_unresolved_container(t2) {
+                return true; // Both unresolved containers → suppress
+            }
+            return false;
+        }
+
+        // Same kind: check for named type mismatches
+        if let (Type::Named { name: n1, args: a1 }, Type::Named { name: n2, args: a2 }) = (t1, t2) {
+            if n1 != n2 {
+                // Different named types - suppress only if either has ALL var params
+                // (indicating HM couldn't determine the actual type).
+                // Empty args means a concrete type with no type params - never suppress.
+                let all_vars = |args: &[Type]| !args.is_empty() && args.iter().all(|a| matches!(a, Type::Var(_) | Type::TypeParam(_)));
+                if all_vars(a1) || all_vars(a2) {
+                    return true;
+                }
+                return false; // Real: different named types with concrete args
+            }
+        }
+
+        // Same kind: check nested function structural mismatches
+        if let (Type::Function(f1), Type::Function(f2)) = (t1, t2) {
+            for (p1, p2) in f1.params.iter().zip(f2.params.iter()) {
+                if is_structural_mismatch(p1, p2) {
+                    return false; // Nested structural mismatch is real
+                }
+            }
+            if is_structural_mismatch(&f1.ret, &f2.ret) {
+                return false;
+            }
+        }
+
+        // If either type has type vars → suppress
+        if t1.has_any_type_var() || t2.has_any_type_var() {
+            return true;
+        }
+
+        // Both fully concrete, same kind, but couldn't unify → real error
+        false
+    }
 }
 
 /// A type error with optional source span for precise error reporting.

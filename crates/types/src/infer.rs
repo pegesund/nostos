@@ -187,35 +187,7 @@ pub struct InferCtx<'a> {
     freshened_binding_vars: Vec<(u32, u32, Span)>,
 }
 
-/// Returns true when two types have fundamentally incompatible top-level constructors
-/// and neither is a type variable. These mismatches are always real errors.
-fn is_structural_mismatch(t1: &Type, t2: &Type) -> bool {
-    if matches!(t1, Type::Var(_) | Type::TypeParam(_)) || matches!(t2, Type::Var(_) | Type::TypeParam(_)) {
-        return false;
-    }
-    fn type_kind(t: &Type) -> u8 {
-        match t {
-            Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64
-            | Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64
-            | Type::Float | Type::Float32 | Type::Float64
-            | Type::BigInt | Type::Decimal
-            | Type::Bool | Type::Char | Type::String | Type::Unit | Type::Never
-            | Type::Pid | Type::Ref => 0,
-            Type::List(_) | Type::Array(_) => 1,
-            Type::Map(_, _) => 2,
-            Type::Set(_) => 3,
-            Type::Tuple(fields) if fields.is_empty() => 0, // Empty tuple is Unit
-            Type::Tuple(_) => 4,
-            Type::Function(_) => 5,
-            Type::Record(_) => 6,
-            Type::Variant(_) => 7,
-            Type::Named { .. } => 8,
-            Type::IO(_) => 9,
-            Type::Var(_) | Type::TypeParam(_) => 10,
-        }
-    }
-    type_kind(t1) != type_kind(t2)
-}
+use crate::is_structural_mismatch;
 
 impl<'a> InferCtx<'a> {
     pub fn new(env: &'a mut TypeEnv) -> Self {
@@ -2047,11 +2019,11 @@ impl<'a> InferCtx<'a> {
                                         } else {
                                             match &e {
                                                 TypeError::UnificationFailed(a, b) => {
-                                                    let call_params: Vec<String> = f_call.params.iter()
-                                                        .map(|p| self.apply_full_subst(p).display())
+                                                    let call_params: Vec<Type> = f_call.params.iter()
+                                                        .map(|p| self.apply_full_subst(p))
                                                         .collect();
-                                                    let a_in_args = call_params.iter().any(|p| *p == *a);
-                                                    let b_in_args = call_params.iter().any(|p| *p == *b);
+                                                    let a_in_args = call_params.iter().any(|p| p == a);
+                                                    let b_in_args = call_params.iter().any(|p| p == b);
                                                     a_in_args && b_in_args
                                                 }
                                                 _ => false,
@@ -4109,7 +4081,7 @@ impl<'a> InferCtx<'a> {
                                         // Unify return types - catch structural mismatches
                                         match self.unify_types(&actual_fn.ret, &expected_ret) {
                                             Ok(()) => {}
-                                            Err(TypeError::UnificationFailed(ref a, ref b)) => {
+                                            Err(TypeError::UnificationFailed(..)) => {
                                                 let resolved_ret = self.env.apply_subst(&actual_fn.ret);
                                                 let resolved_expected_ret = self.env.apply_subst(&expected_ret);
                                                 let ret_is_simple = matches!(&resolved_ret,
@@ -4192,7 +4164,7 @@ impl<'a> InferCtx<'a> {
                                             // Unify return types - catch structural mismatches
                                             match self.unify_types(&actual_fn.ret, &expected_fn.ret) {
                                                 Ok(()) => {}
-                                                Err(TypeError::UnificationFailed(ref a, ref b)) => {
+                                                Err(TypeError::UnificationFailed(..)) => {
                                                     // Check structural incompatibility: simple type vs wrapper
                                                     let resolved_ret = self.env.apply_subst(&actual_fn.ret);
                                                     let resolved_expected_ret = self.env.apply_subst(&expected_fn.ret);
@@ -4240,7 +4212,7 @@ impl<'a> InferCtx<'a> {
                             // Also check if return type structures conflict (e.g., Int vs Option[?1]).
                             match self.unify_types(&resolved_arg, &resolved_param) {
                                 Ok(()) => {}
-                                Err(TypeError::UnificationFailed(ref a, ref b)) => {
+                                Err(TypeError::UnificationFailed(..)) => {
                                     // Structural mismatch: the argument has a fundamentally
                                     // different type structure than the parameter expects.
                                     // These mismatches are always errors regardless of type variables
@@ -4380,8 +4352,8 @@ impl<'a> InferCtx<'a> {
                                 if !resolved_ret.has_any_type_var() && !resolved_ft_ret.has_any_type_var() {
                                     self.last_error_span = call.span;
                                     return Err(TypeError::Mismatch {
-                                        expected: b.clone(),
-                                        found: a.clone(),
+                                        expected: b.display(),
+                                        found: a.display(),
                                     });
                                 }
                                 // Also report error for structural incompatibility even with type vars:
@@ -5404,7 +5376,7 @@ impl<'a> InferCtx<'a> {
                 let resolved2 = self.env.resolve_type_name(n2);
 
                 if resolved1 != resolved2 {
-                    return Err(TypeError::UnificationFailed(t1.display(), t2.display()));
+                    return Err(TypeError::UnificationFailed(t1.clone(), t2.clone()));
                 }
                 if a1.len() != a2.len() {
                     // When one side has 0 type args and the other doesn't,
@@ -5446,7 +5418,7 @@ impl<'a> InferCtx<'a> {
                         // Constrain the element type to Int
                         self.unify_types(elem, &Type::Int)
                     }
-                    _ => Err(TypeError::UnificationFailed(t1.display(), t2.display())),
+                    _ => Err(TypeError::UnificationFailed(t1.clone(), t2.clone())),
                 }
             }
             // Float64Array <-> List[Float] or List[Float64]
@@ -5461,7 +5433,7 @@ impl<'a> InferCtx<'a> {
                         // Constrain the element type to Float
                         self.unify_types(elem, &Type::Float)
                     }
-                    _ => Err(TypeError::UnificationFailed(t1.display(), t2.display())),
+                    _ => Err(TypeError::UnificationFailed(t1.clone(), t2.clone())),
                 }
             }
 
@@ -5534,13 +5506,13 @@ impl<'a> InferCtx<'a> {
                         self.unify_types(&prim, other)
                     }
                 } else {
-                    Err(TypeError::UnificationFailed(t1.display(), t2.display()))
+                    Err(TypeError::UnificationFailed(t1.clone(), t2.clone()))
                 }
             }
 
             // Mismatch
             _ => {
-                Err(TypeError::UnificationFailed(t1.display(), t2.display()))
+                Err(TypeError::UnificationFailed(t1.clone(), t2.clone()))
             }
         }
     }
@@ -7311,8 +7283,8 @@ impl<'a> InferCtx<'a> {
                     // List ++ String or String ++ List is always a type error
                     (Type::List(_), Type::String) | (Type::String, Type::List(_)) => {
                         Err(TypeError::UnificationFailed(
-                            resolved_left.display(),
-                            resolved_right.display(),
+                            resolved_left.clone(),
+                            resolved_right.clone(),
                         ))
                     }
                     // Both are type variables - defer check until types resolve

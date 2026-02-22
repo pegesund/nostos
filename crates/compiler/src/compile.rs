@@ -4024,7 +4024,6 @@ impl Compiler {
                             is_field_error_on_unknown ||
                             message.contains("() and ()") ||
                             (message.contains("Cannot unify types") && message.contains("stdlib.")) ||
-                            Self::is_type_variable_only_error(message) ||
                             is_collection_value_mismatch ||
                             is_spawn_confusion ||
                             is_early_return_confusion ||
@@ -4088,7 +4087,9 @@ impl Compiler {
                     nostos_types::TypeError::StructuralMismatch(a, b) =>
                         format!("type mismatch: expected `{}`, found `{}`",
                             clean_type_vars(&a.display()), clean_type_vars(&b.display())),
-                    nostos_types::TypeError::UnificationFailed(a, b) |
+                    nostos_types::TypeError::UnificationFailed(a, b) =>
+                        format!("type mismatch: expected `{}`, found `{}`",
+                            clean_type_vars(&a.display()), clean_type_vars(&b.display())),
                     nostos_types::TypeError::Mismatch { expected: a, found: b } =>
                         format!("type mismatch: expected `{}`, found `{}`", clean_type_vars(a), clean_type_vars(b)),
                     other => format!("{:?}", other),
@@ -13805,7 +13806,6 @@ impl Compiler {
                         is_field_error_on_unknown ||
                         message.contains("() and ()") ||
                         (message.contains("Cannot unify types") && message.contains("stdlib.")) ||
-                        Self::is_type_variable_only_error(message) ||
                         is_overload_confusion ||
                         is_type_var_confusion ||
                         is_list_primitive_confusion ||
@@ -32369,8 +32369,12 @@ impl Compiler {
                 let error_span = ctx.last_error_span().unwrap_or(span);
                 return Err(self.convert_type_error(branch_err, error_span));
             }
-            let error_span = ctx.last_error_span().unwrap_or(span);
-            return Err(self.convert_type_error(e, error_span));
+            // Suppress errors that are likely HM inference noise (bare type variables,
+            // occurs check, etc.) using proper Type-based logic instead of string matching.
+            if !e.should_suppress() {
+                let error_span = ctx.last_error_span().unwrap_or(span);
+                return Err(self.convert_type_error(e, error_span));
+            }
         }
 
         // Even if solve succeeded, check for structural mismatches that
@@ -32482,246 +32486,9 @@ impl Compiler {
         }
     }
 
-    /// Check if an error is an inference limitation (only type variables, no concrete types).
-    /// We should report errors that involve concrete type mismatches like "Int and String".
-    fn is_type_variable_only_error(message: &str) -> bool {
-        // Check for "Cannot unify types: X and Y" pattern
-        if message.contains("Cannot unify types:") {
-            // Extract the two types from the message
-            if let Some(types_part) = message.strip_prefix("Cannot unify types: ") {
-                let parts: Vec<&str> = types_part.split(" and ").collect();
-                if parts.len() == 2 {
-                    let type1 = parts[0].trim();
-                    let type2 = parts[1].trim();
-
-                    // Check for structural type mismatch (e.g., List vs Function, List vs primitive)
-                    // These are REAL errors even if types contain variables
-                    let is_list_type = |s: &str| s.starts_with("List[") || s.starts_with("[");
-                    let is_func_type = |s: &str| s.contains("->");
-                    let builtin_types = ["Int", "Float", "Bool", "String", "Char", "Unit", "Never",
-                                         "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64",
-                                         "Float32", "Float64", "BigInt", "Decimal", "Pid", "Ref", "Option", "Result"];
-                    let is_primitive = |s: &str| s == "Int" || s == "Float" || s == "Bool" || s == "String" || s == "()";
-                    let is_user_record_type = |s: &str| {
-                        // Must start with uppercase, not contain type params or arrow, and NOT be a builtin type
-                        // Also exclude type parameters (single or double uppercase letters/digits like T, T1, E, K, V)
-                        let is_type_param = s.len() <= 2 && s.chars().all(|c| c.is_uppercase() || c.is_numeric());
-                        if is_type_param {
-                            return false;
-                        }
-                        s.starts_with("{") ||
-                        (s.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) &&
-                         !s.contains('[') && !s.contains("->") &&
-                         !builtin_types.iter().any(|&b| s == b))
-                    };
-
-                    // If one type is a List and the other is a Function, this is a real error
-                    // (common when passing arguments in wrong order to filter/map)
-                    if (is_list_type(type1) && is_func_type(type2)) ||
-                       (is_list_type(type2) && is_func_type(type1)) {
-                        return false;  // NOT a type-variable-only error - report it!
-                    }
-
-                    // If one type is a List and the other is a primitive, this is a real error
-                    // (e.g., passing Int where List[Int] expected)
-                    if (is_list_type(type1) && is_primitive(type2)) ||
-                       (is_list_type(type2) && is_primitive(type1)) {
-                        return false;  // NOT a type-variable-only error - report it!
-                    }
-
-                    // If one type is a user-defined record/named type and the other is a primitive, this is a real error
-                    // (e.g., passing Point where Int expected)
-                    if (is_user_record_type(type1) && is_primitive(type2)) ||
-                       (is_user_record_type(type2) && is_primitive(type1)) {
-                        return false;  // NOT a type-variable-only error - report it!
-                    }
-
-                    // If one type is a List and the other is a user-defined record/named type, this is a real error
-                    if (is_list_type(type1) && is_user_record_type(type2)) ||
-                       (is_list_type(type2) && is_user_record_type(type1)) {
-                        return false;  // NOT a type-variable-only error - report it!
-                    }
-
-                    // If one type is a primitive and the other is a function type, this is a real error
-                    // (e.g., using Int as a function: f = 42; f(10))
-                    if (is_primitive(type1) && is_func_type(type2)) ||
-                       (is_primitive(type2) && is_func_type(type1)) {
-                        return false;  // NOT a type-variable-only error - report it!
-                    }
-
-                    // If one type is a user-defined record/named type and the other is a function type,
-                    // this is a real error (e.g., passing a Record where a function is expected)
-                    if (is_user_record_type(type1) && is_func_type(type2)) ||
-                       (is_user_record_type(type2) && is_func_type(type1)) {
-                        return false;  // NOT a type-variable-only error - report it!
-                    }
-
-                    // Named generic types (like Option[?5], Result[Int, ?3], MyType[?2])
-                    // are structurally incompatible with primitives, lists, and functions
-                    // even if they contain type variables in their parameters
-                    let is_named_generic = |s: &str| {
-                        s.contains('[') && !s.starts_with('[') && !s.starts_with('(')
-                    };
-                    let is_tuple_type = |s: &str| s.starts_with('(') && s.contains(',');
-
-                    if (is_named_generic(type1) && (is_primitive(type2) || is_func_type(type2) || is_user_record_type(type2) || is_list_type(type2) || is_tuple_type(type2))) ||
-                       (is_named_generic(type2) && (is_primitive(type1) || is_func_type(type1) || is_user_record_type(type1) || is_list_type(type1) || is_tuple_type(type1))) {
-                        // Exception: Bool vs Result with unresolved error type is a false positive
-                        // from the ? operator on functions that use throw instead of returning Result
-                        let is_qmark_confusion = |prim: &str, generic: &str| {
-                            prim == "Bool" && generic.starts_with("Result[") && generic.contains('?')
-                        };
-                        if is_qmark_confusion(type1, type2) || is_qmark_confusion(type2, type1) {
-                            return true;  // Suppress ? operator false positive
-                        }
-                        return false;  // Real structural mismatch
-                    }
-
-                    // Two different named generic types (e.g., Option[Int] and List[String])
-                    if is_named_generic(type1) && is_named_generic(type2) {
-                        // Extract the base type names (before the [)
-                        let base1 = type1.split('[').next().unwrap_or(type1);
-                        let base2 = type2.split('[').next().unwrap_or(type2);
-                        if base1 != base2 {
-                            // Only treat as real error if both types have at least some
-                            // concrete (non-variable) parameters. If either type has ALL
-                            // type-variable params (e.g., Map[?51, ?52]), HM couldn't
-                            // determine the actual type, so the mismatch is likely spurious.
-                            let has_all_type_var_params = |s: &str| {
-                                if let Some(start) = s.find('[') {
-                                    let inner = &s[start+1..s.len().saturating_sub(1)];
-                                    inner.split(", ").all(|p| p.trim().starts_with('?'))
-                                } else {
-                                    false
-                                }
-                            };
-                            if !has_all_type_var_params(type1) && !has_all_type_var_params(type2) {
-                                return false;  // Both have concrete params - real error
-                            }
-                            // Otherwise fall through to contains_type_var check
-                        }
-                    }
-
-                    // If one type is a tuple and the other is a primitive,
-                    // this is a real structural mismatch - a primitive can NEVER unify
-                    // with a tuple regardless of type variables inside the tuple.
-                    // (e.g., Map.fromList([1,2,3]) where Int vs (?k, ?v) is always wrong)
-                    if (is_tuple_type(type1) && is_primitive(type2)) ||
-                       (is_tuple_type(type2) && is_primitive(type1)) {
-                        return false;  // Tuple vs primitive - always a real error!
-                    }
-
-                    // List vs Tuple with type vars in the tuple (e.g., List[?24] vs (?27, ?27))
-                    // is a real structural mismatch from pattern matching.
-                    // But concrete tuple vs List (e.g., (Int, String, Float) vs List[String])
-                    // is a false positive from HM trying to treat tuple as list for [] indexing.
-                    if (is_list_type(type1) && is_tuple_type(type2) && type2.contains('?')) ||
-                       (is_list_type(type2) && is_tuple_type(type1) && type1.contains('?')) {
-                        return false;  // Tuple with type vars vs List - real error!
-                    }
-
-                    // Tuple vs named user-defined type is always a structural mismatch
-                    if (is_tuple_type(type1) && is_user_record_type(type2)) ||
-                       (is_tuple_type(type2) && is_user_record_type(type1)) {
-                        return false;  // Tuple vs Named type - real error!
-                    }
-
-                    // Tuple vs Function is a real structural mismatch
-                    // (e.g., calling a tuple as a function: f = (1,2); f(3))
-                    if (is_tuple_type(type1) && is_func_type(type2)) ||
-                       (is_tuple_type(type2) && is_func_type(type1)) {
-                        return false;  // Tuple vs Function - real error!
-                    }
-
-                    // Check if a type contains type variables (used in higher-order function inference)
-                    let contains_type_var = |s: &str| {
-                        s.contains('?') ||  // Internal type variable like ?5 or (?2, ?3) -> ?2
-                        (s.len() == 1 && s.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false))  // Single lowercase letter like a, b (NOT uppercase - those are user types like R, S)
-                    };
-
-                    // Suppress if either type contains type variables
-                    // Errors involving function types with type variables like "(?2, ?3) -> ?2 and Int"
-                    // are inference limitations with higher-order functions
-                    if contains_type_var(type1) || contains_type_var(type2) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        // Trait bound errors with type parameters should be suppressed
-        // Type parameters are single uppercase/lowercase letters followed by "does not implement"
-        if message.contains("does not implement") {
-            // Check if there's a single-letter type parameter before "does not implement"
-            if let Some(pos) = message.find("does not implement") {
-                let prefix = &message[..pos].trim();
-                let words: Vec<&str> = prefix.split_whitespace().collect();
-                if let Some(&last_word) = words.last() {
-                    // Type parameters are single letters (uppercase or lowercase)
-                    if last_word.len() == 1 && last_word.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        // Trait errors where the type itself is a type variable should be suppressed
-        // e.g., "?5 does not implement Num" is spurious (type not yet resolved)
-        // But "Result[Int, ?y] does not implement Num" is a real error (Result doesn't
-        // implement Num regardless of type parameters). The last "word" from whitespace
-        // splitting could be "?y]" which starts with ? but is actually part of a named
-        // generic type, not a bare type variable.
-        // EXCEPTION: Function types (containing "->") NEVER implement Eq/Ord/Num
-        // regardless of type variables, so those errors are always real.
-        if message.contains("does not implement") && message.contains('?') {
-            // Function types with type vars like "(?25) -> ?25 does not implement Ord"
-            // are always real errors - functions never implement Eq/Ord/Num/Concat
-            let is_func_type_trait = message.contains("->") && (
-                message.contains("does not implement Eq") ||
-                message.contains("does not implement Ord") ||
-                message.contains("does not implement Num") ||
-                message.contains("does not implement Concat"));
-            if !is_func_type_trait {
-                if let Some(pos) = message.find("does not implement") {
-                    let prefix = &message[..pos].trim();
-                    let words: Vec<&str> = prefix.split_whitespace().collect();
-                    if let Some(&last_word) = words.last() {
-                        // Only suppress if the type name is a bare type variable (e.g., "?5")
-                        // NOT a trailing type param inside brackets (e.g., "?y]" from "Result[Int, ?y]")
-                        if last_word.starts_with('?') && !last_word.contains(']') {
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-
-        // "type mismatch: expected X, found Y" format - suppress when either type is
-        // a BARE type variable (like "?554"). This happens when HM inference can't fully
-        // resolve types (e.g., UFCS .map() with lambdas containing literals).
-        // Only suppress bare type vars, NOT type vars embedded in structures like "List[?4]"
-        // or "(?1) -> ?2" - those structural mismatches are real errors.
-        if let Some(rest) = message.strip_prefix("type mismatch: expected ") {
-            if let Some(comma_pos) = rest.find(", found ") {
-                let expected = rest[..comma_pos].trim();
-                let found = rest[comma_pos + 8..].trim();
-                let is_bare_type_var = |s: &str| {
-                    s.starts_with('?') && s[1..].chars().all(|c| c.is_ascii_digit())
-                };
-                if is_bare_type_var(expected) || is_bare_type_var(found) {
-                    return true;
-                }
-            }
-        }
-
-        // Occurs check errors from recursive generic functions are often false positives
-        // in the per-function pass. Suppress when type variables are involved.
-        if message.contains("Occurs check failed") || message.contains("cannot unify a type with a type containing itself") {
-            return true;
-        }
-
-        false
-    }
+    // NOTE: is_type_variable_only_error has been removed. Type error filtering now
+    // happens in type_check_fn via TypeError::should_suppress(), which operates on
+    // the actual Type enum values instead of parsing error message strings.
 
     /// Check if a function definition is recursive (calls itself)
     fn is_recursive_fn(def: &FnDef) -> bool {
