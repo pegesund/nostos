@@ -4085,6 +4085,9 @@ impl Compiler {
                     result
                 }
                 let error_message = match &type_err {
+                    nostos_types::TypeError::StructuralMismatch(a, b) =>
+                        format!("type mismatch: expected `{}`, found `{}`",
+                            clean_type_vars(&a.display()), clean_type_vars(&b.display())),
                     nostos_types::TypeError::UnificationFailed(a, b) |
                     nostos_types::TypeError::Mismatch { expected: a, found: b } =>
                         format!("type mismatch: expected `{}`, found `{}`", clean_type_vars(a), clean_type_vars(b)),
@@ -31001,19 +31004,11 @@ impl Compiler {
 
         // Solve constraints (this can hang on unresolved type vars with HasField)
         if let Err(solve_err) = ctx.solve() {
-            // Check if this is a structural mismatch (e.g., List vs Function).
-            use nostos_types::TypeError;
-            let is_structural = match &solve_err {
-                TypeError::UnificationFailed(a, b) | TypeError::Mismatch { expected: a, found: b } => {
-                    let a_is_list = a.starts_with("List[") || a.starts_with("[");
-                    let a_is_fn = a.contains("->");
-                    let b_is_list = b.starts_with("List[") || b.starts_with("[");
-                    let b_is_fn = b.contains("->");
-                    (a_is_list && b_is_fn) || (a_is_fn && b_is_list)
-                }
-                _ => false,
-            };
-            if is_structural {
+            // StructuralMismatch errors (produced by sequential deferred overload
+            // resolution in solve()) are always real errors — they mean two types
+            // with incompatible top-level constructors (e.g., List vs Function)
+            // were unified after constraint propagation between chained calls.
+            if matches!(&solve_err, nostos_types::TypeError::StructuralMismatch(_, _)) {
                 return (None, Some((def.name.node.clone(), solve_err)));
             }
             return (None, None);

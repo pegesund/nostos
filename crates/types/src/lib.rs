@@ -294,6 +294,12 @@ pub enum TypeError {
         expected: String,
         found: String,
     },
+
+    /// Structural type mismatch: two types with fundamentally incompatible
+    /// top-level constructors (e.g., List vs Function, Named vs Tuple).
+    /// Carries the actual Type values for proper pattern matching.
+    #[error("type mismatch: expected `{}`, found `{}`", .0.display(), .1.display())]
+    StructuralMismatch(Type, Type),
 }
 
 /// A type error with optional source span for precise error reporting.

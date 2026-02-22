@@ -1,0 +1,13 @@
+# expect_error: type
+# Lambda with Num constraint passed through generic wrapper to String list.
+# applyToList(xs, f) = xs.map(f) is generic, but when called with
+# [String] and (x => x * 2), the Num constraint on x should conflict
+# with String at compile time.
+applyToList(xs, f) = xs.map(f)
+
+main() = {
+  strs = ["a", "b", "c"]
+  f = x => x * 2
+  r = applyToList(strs, f)
+  show(r)
+}

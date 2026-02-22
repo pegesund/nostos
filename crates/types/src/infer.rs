@@ -187,6 +187,36 @@ pub struct InferCtx<'a> {
     freshened_binding_vars: Vec<(u32, u32, Span)>,
 }
 
+/// Returns true when two types have fundamentally incompatible top-level constructors
+/// and neither is a type variable. These mismatches are always real errors.
+fn is_structural_mismatch(t1: &Type, t2: &Type) -> bool {
+    if matches!(t1, Type::Var(_) | Type::TypeParam(_)) || matches!(t2, Type::Var(_) | Type::TypeParam(_)) {
+        return false;
+    }
+    fn type_kind(t: &Type) -> u8 {
+        match t {
+            Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64
+            | Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64
+            | Type::Float | Type::Float32 | Type::Float64
+            | Type::BigInt | Type::Decimal
+            | Type::Bool | Type::Char | Type::String | Type::Unit | Type::Never
+            | Type::Pid | Type::Ref => 0,
+            Type::List(_) | Type::Array(_) => 1,
+            Type::Map(_, _) => 2,
+            Type::Set(_) => 3,
+            Type::Tuple(fields) if fields.is_empty() => 0, // Empty tuple is Unit
+            Type::Tuple(_) => 4,
+            Type::Function(_) => 5,
+            Type::Record(_) => 6,
+            Type::Variant(_) => 7,
+            Type::Named { .. } => 8,
+            Type::IO(_) => 9,
+            Type::Var(_) | Type::TypeParam(_) => 10,
+        }
+    }
+    type_kind(t1) != type_kind(t2)
+}
+
 impl<'a> InferCtx<'a> {
     pub fn new(env: &'a mut TypeEnv) -> Self {
         Self {
@@ -1950,31 +1980,40 @@ impl<'a> InferCtx<'a> {
                         // CONTINUE solving so the substitution is more complete for enrichment.
                         // Simple type mismatches (Int vs String) may be from heterogeneous
                         // containers or overloading, so we return early (old behavior).
-                        let is_structural_mismatch = match &e {
-                            TypeError::UnificationFailed(a, b) => {
-                                let a_compound = a.contains('[') || a.contains("->") || a.contains('(');
-                                let b_compound = b.contains('[') || b.contains("->") || b.contains('(');
-                                // Structural mismatch: one side is compound, the other isn't,
-                                // or both are compound but structurally different
-                                (a_compound != b_compound) || (a_compound && b_compound && {
-                                    // Both compound: check if they're DIFFERENT structures
-                                    let a_is_list = a.starts_with("List[");
-                                    let b_is_list = b.starts_with("List[");
-                                    let a_is_map = a.starts_with("Map[");
-                                    let b_is_map = b.starts_with("Map[");
-                                    let a_is_fn = a.contains("->");
-                                    let b_is_fn = b.contains("->");
-                                    // Different structure kinds
-                                    (a_is_list != b_is_list) || (a_is_map != b_is_map) || (a_is_fn != b_is_fn)
-                                })
+                        let mut structural = is_structural_mismatch(&t1r, &t2r);
+                        let mut e = e;
+
+                        // When top-level types are both Functions (from call constraints),
+                        // the mismatch may be nested in param/return positions.
+                        // E.g., filter(pred, map(f, xs)) with swapped args produces
+                        // Function((List[?], ? -> Bool) -> ...) vs Function((?, List[?]) -> ...)
+                        // where inner param types List vs Function are structurally mismatched.
+                        if !structural {
+                            if let (Type::Function(f1), Type::Function(f2)) = (&t1r, &t2r) {
+                                for (p1, p2) in f1.params.iter().zip(f2.params.iter()) {
+                                    let rp1 = self.apply_full_subst(p1);
+                                    let rp2 = self.apply_full_subst(p2);
+                                    if is_structural_mismatch(&rp1, &rp2) {
+                                        structural = true;
+                                        e = TypeError::StructuralMismatch(rp1, rp2);
+                                        break;
+                                    }
+                                }
+                                if !structural {
+                                    let rr1 = self.apply_full_subst(&f1.ret);
+                                    let rr2 = self.apply_full_subst(&f2.ret);
+                                    if is_structural_mismatch(&rr1, &rr2) {
+                                        structural = true;
+                                        e = TypeError::StructuralMismatch(rr1, rr2);
+                                    }
+                                }
                             }
-                            _ => false,
-                        };
+                        }
 
                         // Check if this unification failure involves a parameter that needs annotation
                         match self.check_annotation_required(&t1, &t2, &e) {
                             Some(better_error) => {
-                                if is_structural_mismatch {
+                                if structural {
                                     if first_unification_error.is_none() {
                                         first_unification_error = Some(better_error);
                                     }
@@ -2002,39 +2041,27 @@ impl<'a> InferCtx<'a> {
                                         // call-site args (indicating HM param merging). If one type
                                         // comes from an external constraint (e.g., another function's
                                         // param annotation), it's a real error.
-                                        match &e {
-                                            TypeError::UnificationFailed(a, b) => {
-                                                let is_structural = a.contains("->") || b.contains("->")
-                                                    || a.contains("List[") || b.contains("List[")
-                                                    || a.contains("Map[") || b.contains("Map[")
-                                                    || a.contains("Set[") || b.contains("Set[");
-                                                if is_structural {
-                                                    false
-                                                } else {
-                                                    // Check the OTHER side (call-site args) for both error types.
-                                                    // If both types appear in the call args, it's a false positive
-                                                    // from HM merging distinct type params at the call site.
-                                                    // If one type doesn't appear, an external constraint
-                                                    // provides it, making this a real error.
+                                        // Structural mismatches are always real, never false positives
+                                        if structural {
+                                            false
+                                        } else {
+                                            match &e {
+                                                TypeError::UnificationFailed(a, b) => {
                                                     let call_params: Vec<String> = f_call.params.iter()
                                                         .map(|p| self.apply_full_subst(p).display())
                                                         .collect();
-                                                    // Use exact equality, not substring matching.
-                                                    // contains() would match "Int" inside "(Int) -> String",
-                                                    // incorrectly suppressing real errors like apply(stringify, "hello")
-                                                    // where stringify: Int -> String and "hello": String conflict on a.
                                                     let a_in_args = call_params.iter().any(|p| *p == *a);
                                                     let b_in_args = call_params.iter().any(|p| *p == *b);
                                                     a_in_args && b_in_args
                                                 }
+                                                _ => false,
                                             }
-                                            _ => false,
                                         }
                                     }
                                     _ => false,
                                 };
                                 if !is_multi_tp_false_positive {
-                                    if is_structural_mismatch {
+                                    if structural {
                                         if first_unification_error.is_none() {
                                             first_unification_error = Some(e);
                                         }
@@ -2353,6 +2380,87 @@ impl<'a> InferCtx<'a> {
                 }
             }
             deferred_overloads = still_deferred;
+        }
+
+        // Sequential deferred overload resolution: when chained calls have all-Var args
+        // (e.g., filter(pred, map(f, xs))), try committing overloads sequentially so
+        // constraints from resolving one call (map) flow into checking the next (filter).
+        if !deferred_overloads.is_empty() {
+            let saved_subst = self.env.substitution.clone();
+            let saved_bounds = self.trait_bounds.clone();
+            let mut sequential_error: Option<TypeError> = None;
+
+            for (overloads, arg_types, ret_ty, _span) in &deferred_overloads {
+                let resolved_args: Vec<Type> = arg_types.iter()
+                    .map(|t| self.env.apply_subst(t))
+                    .collect();
+
+                let mut call_resolved = false;
+                for sig in overloads {
+                    let saved_inner = self.env.substitution.clone();
+                    let saved_bounds_inner = self.trait_bounds.clone();
+                    let func_ty = self.instantiate_function(sig);
+
+                    let ok = if let Type::Function(ref ft) = func_ty {
+                        let mut ok = true;
+                        for (a, p) in resolved_args.iter().zip(ft.params.iter()) {
+                            if self.unify_types(a, p).is_err() {
+                                ok = false;
+                                break;
+                            }
+                        }
+                        if ok && self.unify_types(ret_ty, &ft.ret).is_err() {
+                            ok = false;
+                        }
+                        ok
+                    } else { false };
+
+                    if ok {
+                        call_resolved = true;
+                        break; // Keep substitution — constraints flow to next call
+                    } else {
+                        self.env.substitution = saved_inner;
+                        self.trait_bounds = saved_bounds_inner;
+                    }
+                }
+
+                if !call_resolved {
+                    // All overloads failed. Check for structural mismatch using
+                    // the current substitution (which has constraints from prior calls).
+                    let re_resolved: Vec<Type> = arg_types.iter()
+                        .map(|t| self.env.apply_subst(t))
+                        .collect();
+                    if let Some(sig) = overloads.first() {
+                        let saved_check = self.env.substitution.clone();
+                        let saved_bounds_check = self.trait_bounds.clone();
+                        let func_ty = self.instantiate_function(sig);
+                        if let Type::Function(ref ft) = func_ty {
+                            for (a, p) in re_resolved.iter().zip(ft.params.iter()) {
+                                let ra = self.env.apply_subst(a);
+                                let rp = self.env.apply_subst(p);
+                                // Use is_structural_mismatch on actual Type values
+                                if is_structural_mismatch(&ra, &rp) {
+                                    sequential_error = Some(TypeError::StructuralMismatch(
+                                        ra.clone(), rp.clone(),
+                                    ));
+                                    break;
+                                }
+                            }
+                        }
+                        self.env.substitution = saved_check;
+                        self.trait_bounds = saved_bounds_check;
+                    }
+                    if sequential_error.is_some() { break; }
+                }
+            }
+
+            // Restore original state — this was a validation pass
+            self.env.substitution = saved_subst;
+            self.trait_bounds = saved_bounds;
+
+            if let Some(err) = sequential_error {
+                return Err(err);
+            }
         }
 
         // Post-solve: check pending method calls now that types are resolved
