@@ -13387,10 +13387,13 @@ impl Compiler {
         // Check if function name shadows a built-in function
         // Only check for user-defined functions (not stdlib)
         // Also skip trait method implementations (contain '.') - they're called via method syntax
+        // In multi-file projects, skip the check: functions are module-qualified (e.g., types.eval)
+        // and accessed via imports, so they don't truly shadow builtins.
         let is_stdlib = self.module_path.first().map_or(false, |m| m == "stdlib")
             || self.current_source_name.as_ref().map(|s| s.contains("stdlib/") || s.starts_with("stdlib")).unwrap_or(false);
         let is_trait_impl = def.name.node.contains('.');
-        if !is_stdlib && !is_trait_impl {
+        let is_multifile_module = !self.module_path.is_empty();
+        if !is_stdlib && !is_trait_impl && !is_multifile_module {
             // Check for builtin shadowing
             if let Some((builtin_name, builtin_doc)) = check_builtin_shadowing(&def.name.node) {
                 return Err(CompileError::DefinitionError {
@@ -32104,7 +32107,8 @@ impl Compiler {
 
         // Copy function imports from compiler to TypeEnv for cross-module resolution
         // This allows imported functions like `query` from `stdlib.pool` to be found
-        // during type inference even when called by their short name
+        // during type inference even when called by their short name.
+        // First: add global imports (from self.imports)
         for (short_name, qualified_name) in &self.imports {
             // Only add function aliases (skip type aliases which are handled separately)
             let is_type = qualified_name.split('.').last()
@@ -32112,6 +32116,24 @@ impl Compiler {
                 .unwrap_or(false);
             if !is_type {
                 env.function_aliases.insert(short_name.clone(), qualified_name.clone());
+            }
+        }
+        // Second: overlay per-module imports from module_imports.
+        // During second-pass type checking, self.imports may not contain module-specific
+        // imports (e.g., `eval` → `types.eval` from `use types.*` in main.nos).
+        // The module_imports map, populated during Pass 1.5b, has the correct per-module imports.
+        {
+            let module_key = qualified_name.split('/').next().unwrap_or(qualified_name);
+            // Extract module path: "main.foo" → "main", "types.eval" → "types"
+            let module_path = if let Some(dot_pos) = module_key.rfind('.') {
+                &module_key[..dot_pos]
+            } else {
+                module_key
+            };
+            if let Some(mod_imports) = self.module_imports.get(module_path) {
+                for (short, qualified) in mod_imports {
+                    env.function_aliases.insert(short.clone(), qualified.clone());
+                }
             }
         }
 

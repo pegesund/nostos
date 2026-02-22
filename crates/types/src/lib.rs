@@ -529,11 +529,19 @@ impl TypeEnv {
             None
         };
 
-        // Collect candidates from both the resolved (imported) name AND the original name.
+        // Collect candidates from the resolved (imported) name and optionally the original name.
         // Also include module-qualified name for same-module function resolution.
-        // This allows local functions with different arities to coexist with imported functions.
+        // When the name resolves to a non-stdlib user function via import, DON'T include
+        // the bare name — it may be a builtin (e.g., "eval: String -> String") that should
+        // be shadowed by the user's imported function (e.g., "types.eval: Expr -> Int").
         let mut names_to_check: Vec<&str> = if resolved_name != name {
-            vec![resolved_name, name]
+            if resolved_name.starts_with("stdlib.") {
+                // Stdlib imports: include both resolved and bare name for coexistence
+                vec![resolved_name, name]
+            } else {
+                // User function import: only use the resolved name, shadow builtins
+                vec![resolved_name]
+            }
         } else {
             vec![resolved_name]
         };
@@ -639,10 +647,15 @@ impl TypeEnv {
             None
         };
 
-        // Check both the resolved (imported) name and the original name.
+        // Check the resolved (imported) name and optionally the original name.
         // Also include module-qualified name for same-module function calls.
+        // When resolved to a non-stdlib user function, DON'T check bare name (may be a builtin).
         let mut names_to_check: Vec<&str> = if resolved_name != name {
-            vec![resolved_name, name]
+            if resolved_name.starts_with("stdlib.") {
+                vec![resolved_name, name]
+            } else {
+                vec![resolved_name]
+            }
         } else {
             vec![resolved_name]
         };
