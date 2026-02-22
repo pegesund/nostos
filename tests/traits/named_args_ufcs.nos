@@ -1,0 +1,35 @@
+# expect: ok
+# Test: named arguments in trait method UFCS calls with skipped default params
+trait Configurable
+    configure(self, verbose: Bool = false, level: Int = 1) -> String
+end
+
+type App = App { name: String }
+
+App: Configurable
+    configure(self, verbose: Bool = false, level: Int = 1) = {
+        self.name ++ " L" ++ show(level)
+    }
+end
+
+main() = {
+    app = App(name: "Test")
+
+    # Named arg skipping earlier default param
+    r1 = app.configure(level: 3)
+    assert_eq("Test L3", r1)
+
+    # All defaults
+    r2 = app.configure()
+    assert_eq("Test L1", r2)
+
+    # Positional args
+    r3 = app.configure(true, 5)
+    assert_eq("Test L5", r3)
+
+    # First named arg only
+    r4 = app.configure(verbose: true)
+    assert_eq("Test L1", r4)
+
+    "ok"
+}

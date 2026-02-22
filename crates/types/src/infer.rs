@@ -3921,6 +3921,15 @@ impl<'a> InferCtx<'a> {
                                     // Try with arity suffix patterns
                                     let qualified = format!("{}/", call.method_name);
                                     self.env.function_param_names.get(&qualified)
+                                })
+                                .or_else(|| {
+                                    // Try any key ending with ".{method}" - handles trait-qualified
+                                    // keys like "App.Configurable.configure" when we look for
+                                    // "App.configure" or just "configure".
+                                    self.env.function_param_names.iter()
+                                        .find(|(k, _)| k.ends_with(&format!(".{}", call.method_name))
+                                            && k.starts_with(&type_name))
+                                        .map(|(_, v)| v)
                                 });
                             if let Some(param_names) = param_names_opt {
                                 let mut result: Vec<Option<Type>> = vec![None; ft.params.len()];
@@ -6779,7 +6788,10 @@ impl<'a> InferCtx<'a> {
                 // Create a fresh return type variable
                 let ret_ty = self.fresh();
 
-                // Try immediate UFCS lookup if receiver type is already resolved
+                // Try immediate UFCS lookup if receiver type is already resolved.
+                // Skip when there are named args - let the deferred check_pending_method_calls
+                // handle reordering them to the correct parameter positions.
+                if named_args.is_empty() {
                 if let Some(type_name) = self.get_type_name(&receiver_ty) {
                     let qualified_name = format!("{}.{}", type_name, method.node);
                     // Only look up qualified names (e.g., List.get, List.head)
@@ -6811,6 +6823,7 @@ impl<'a> InferCtx<'a> {
                         }
                     }
                 }
+                } // end named_args.is_empty() guard
 
                 // Record method call for post-solve UFCS type checking
                 // This handles cases where receiver type is not yet resolved

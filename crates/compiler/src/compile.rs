@@ -18066,7 +18066,11 @@ impl Compiler {
                             .map(|a| self.expr_type_name(a))
                             .collect();
 
-                        let call_name = if let Some(resolved) = self.resolve_function_call(&qualified_method, &arg_types) {
+                        // When named args skip default params, the caller provides fewer args
+                        // than the function declares. Try resolution with both the caller's
+                        // arg count and the function's full param count.
+                        let has_named = args.iter().any(|a| matches!(a, CallArg::Named(_, _)));
+                        let mut call_name = if let Some(resolved) = self.resolve_function_call(&qualified_method, &arg_types) {
                             resolved
                         } else {
                             // resolve_function_call couldn't match types exactly.
@@ -18077,7 +18081,9 @@ impl Compiler {
                                 .find(|k| {
                                     if let Some(suffix) = k.strip_prefix(&prefix) {
                                         let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
-                                        param_count == arity
+                                        // Match either caller arity or any arity when named args
+                                        // may have skipped default params
+                                        param_count == arity || (has_named && param_count > arity)
                                     } else {
                                         false
                                     }
@@ -18095,9 +18101,24 @@ impl Compiler {
                         // Compile arguments, filling in defaults for missing parameters.
                         // Handle named arguments by reordering to match parameter positions.
                         let mut arg_regs = Vec::new();
-                        let param_defaults = self.get_function_param_defaults(&call_name);
-                        let param_names = self.get_function_param_names(&call_name);
+                        let mut param_defaults = self.get_function_param_defaults(&call_name);
+                        let mut param_names = self.get_function_param_names(&call_name);
                         let has_named_args = args.iter().any(|a| matches!(a, CallArg::Named(_, _)));
+
+                        // If param names not found with full call_name (e.g., "App.Configurable.configure/App,Bool,Int"),
+                        // try with just the method name or qualified_method base.
+                        if param_names.is_empty() && has_named_args {
+                            param_names = self.get_function_param_names(&qualified_method);
+                            if param_names.is_empty() {
+                                param_names = self.get_function_param_names(&method.node);
+                            }
+                            if !param_names.is_empty() && param_defaults.is_empty() {
+                                param_defaults = self.get_function_param_defaults(&qualified_method);
+                                if param_defaults.is_empty() {
+                                    param_defaults = self.get_function_param_defaults(&method.node);
+                                }
+                            }
+                        }
 
                         if has_named_args && param_names.len() > 1 {
                             // Named args in UFCS call: reorder args to match param positions.
