@@ -30694,10 +30694,23 @@ impl Compiler {
                 bounds.push(format!("{} {}", trait_name, var_name));
             }
         }
-        // Also collect trait bounds for TypeParams through type_param_mappings
+        // Also collect trait bounds for TypeParams through type_param_mappings.
+        // The mapping stores the original Var created for the type param during inference.
+        // After solve, apply_subst may resolve the Var to TypeParam("T") (when annotations
+        // fully determine the type), making `if let Type::Var` fail. To capture bounds
+        // discovered through usage (e.g., Eq from ==), also check the ORIGINAL Var ID.
         for (tp_name, &tp_char) in &type_param_map {
             if let Some(var_type) = ctx.get_type_param_mapping(tp_name) {
-                if let nostos_types::Type::Var(var_id) = ctx.env.apply_subst(&var_type) {
+                // Try resolved var first
+                let var_id_opt = if let nostos_types::Type::Var(var_id) = ctx.env.apply_subst(&var_type) {
+                    Some(var_id)
+                } else if let nostos_types::Type::Var(var_id) = &var_type {
+                    // Var resolved to TypeParam — use original Var ID for bound lookup
+                    Some(*var_id)
+                } else {
+                    None
+                };
+                if let Some(var_id) = var_id_opt {
                     let trait_names = ctx.get_trait_bounds(var_id);
                     for trait_name in trait_names {
                         if trait_name.starts_with("HasField(") || trait_name.starts_with("HasMethod(") {
@@ -30705,6 +30718,23 @@ impl Compiler {
                         }
                         bounds.push(format!("{} {}", trait_name, tp_char));
                     }
+                }
+            }
+        }
+        // Also collect trait bounds from deferred_has_trait for TypeParam types.
+        // For single-clause functions with type annotations (e.g., contains[T]),
+        // the type params stay as TypeParam("T") throughout inference (no Var mapping).
+        // Trait constraints (e.g., Eq from x == y) are stored in deferred_has_trait
+        // as (TypeParam("T"), "Eq") rather than in trait_bounds (which is keyed by Var ID).
+        let deferred_traits = ctx.get_deferred_has_trait().to_vec();
+        for (ty, trait_name) in &deferred_traits {
+            if trait_name.starts_with("HasField(") || trait_name.starts_with("HasMethod(") {
+                continue;
+            }
+            let resolved = ctx.env.apply_subst(ty);
+            if let nostos_types::Type::TypeParam(ref tp_name) = resolved {
+                if let Some(&tp_char) = type_param_map.get(tp_name) {
+                    bounds.push(format!("{} {}", trait_name, tp_char));
                 }
             }
         }
@@ -30903,7 +30933,6 @@ impl Compiler {
         } else {
             format!("{} => {}", bounds.join(", "), type_sig)
         };
-
 
         // Extract resolved expression types from inference.
         // Filter to include types with resolved params (for overload selection)
@@ -31169,11 +31198,6 @@ impl Compiler {
         let mut fn_names_sorted: Vec<&String> = self.functions.keys().collect();
         fn_names_sorted.sort();
         for fn_name in fn_names_sorted {
-            // Skip stdlib functions - they'll be registered from pending_fn_signatures
-            // with proper type_params preserved.
-            if fn_name.starts_with("stdlib.") {
-                continue;
-            }
             let fn_val = match self.functions.get(fn_name) {
                 Some(v) => v,
                 None => continue,
@@ -31371,7 +31395,23 @@ impl Compiler {
                 // propagate bounds through wrapper functions.
                 let existing_has_constraints = env.functions.get(fn_name)
                     .map(|existing| existing.type_params.iter().any(|tp| !tp.constraints.is_empty()))
-                    .unwrap_or(false);
+                    .unwrap_or(false)
+                    || {
+                        // Also check typed overloads with the same base name.
+                        // e.g., pending has "stdlib.list.contains/_,_" (wildcard, no Eq)
+                        // but self.functions registered "stdlib.list.contains/List[T],T" (typed, WITH Eq).
+                        // The wildcard key doesn't match the typed key, so the exact check above misses it.
+                        // lookup_function_with_arity tries wildcards FIRST, so registering a
+                        // constraint-free wildcard shadows the typed entry with constraints.
+                        let base = fn_name.split('/').next().unwrap_or(fn_name);
+                        env.functions_by_base.get(base)
+                            .map(|keys| keys.iter().any(|k| {
+                                k != fn_name && env.functions.get(k)
+                                    .map(|ft| ft.type_params.iter().any(|tp| !tp.constraints.is_empty()))
+                                    .unwrap_or(false)
+                            }))
+                            .unwrap_or(false)
+                    };
                 if !existing_has_constraints {
                     env.insert_function(fn_name.clone(), fn_type.clone());
                 }

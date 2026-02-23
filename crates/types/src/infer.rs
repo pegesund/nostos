@@ -373,6 +373,13 @@ impl<'a> InferCtx<'a> {
         self.type_param_mappings.get(name).cloned()
     }
 
+    /// Get deferred HasTrait constraints (type, trait_name pairs).
+    /// Used by try_hm_inference to discover trait bounds on TypeParams
+    /// that were deferred during solve() rather than stored in trait_bounds.
+    pub fn get_deferred_has_trait(&self) -> &[(Type, String)] {
+        &self.deferred_has_trait
+    }
+
     /// Generate a fresh type variable.
     pub fn fresh(&mut self) -> Type {
         self.env.fresh_var()
@@ -2066,6 +2073,15 @@ impl<'a> InferCtx<'a> {
                             // bound is declared on the function, so this is always valid.
                             // Defer to post-solve - the TypeParam will be replaced with
                             // concrete types during monomorphization.
+                            //
+                            // ALSO store the trait bound on the original Var ID (if the
+                            // original `ty` was a Var that resolved to TypeParam via subst).
+                            // This is needed for try_hm_inference to discover usage-based
+                            // trait bounds (e.g., Eq from `x == y` in `contains[T]`) and
+                            // include them in the function's signature string.
+                            if let Type::Var(orig_var_id) = &ty {
+                                self.add_trait_bound(*orig_var_id, trait_name.clone());
+                            }
                             self.deferred_has_trait.push((ty, trait_name));
                             deferred_count = 0; // Made progress (recorded the bound)
                         }
@@ -3854,7 +3870,34 @@ impl<'a> InferCtx<'a> {
                         // Skip full dispatch to avoid over-constraining type vars through
                         // cross-context unification (e.g., forcing a generic param to be List
                         // because length's first param is [a]).
+                        // BUT: still unify non-receiver params to propagate trait bounds.
+                        // e.g., hasItem(xs, item) = xs.contains(item) — the Eq bound from
+                        // contains' element param must flow to hasItem's item param.
                         if call.span.is_none() {
+                            // Unify non-receiver args to propagate trait bounds.
+                            // call.arg_types[0] is the receiver; skip it to avoid
+                            // forcing the receiver to a specific collection type.
+                            // ft.params[0] is the method's receiver param.
+                            if call.arg_types.len() > 1 && ft.params.len() > 1 {
+                                for (call_arg, method_param) in call.arg_types[1..].iter().zip(ft.params[1..].iter()) {
+                                    let _ = self.unify_types(call_arg, method_param);
+                                }
+                            }
+                            // Also unify return type to flow result type info
+                            let _ = self.unify_types(&call.ret_ty, &ft.ret);
+                            // Drain any HasTrait constraints pushed by instantiate_function
+                            // and add them to deferred_has_trait so they get checked in the
+                            // post-method-call retry pass. The main constraint loop has
+                            // already finished, so self.constraints won't be processed again.
+                            let remaining = std::mem::take(&mut self.constraints);
+                            for constraint in remaining {
+                                if let Constraint::HasTrait(ty, trait_name) = constraint {
+                                    self.deferred_has_trait.push((ty, trait_name));
+                                } else {
+                                    // Put back non-HasTrait constraints
+                                    self.constraints.push(constraint);
+                                }
+                            }
                             made_progress = true;
                             continue;
                         }
