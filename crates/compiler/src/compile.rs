@@ -23016,6 +23016,41 @@ impl Compiler {
     fn parse_type_string_to_type_expr(type_str: &str) -> TypeExpr {
         let type_str = type_str.trim();
 
+        // Check for function type FIRST: (Params) -> RetType or ParamType -> RetType
+        // This must come before the tuple check because function types like
+        // "((String, Int)) -> (String, Int)" start with '(' and end with ')',
+        // which would be incorrectly parsed as a tuple.
+        {
+            let bytes = type_str.as_bytes();
+            let mut depth = 0i32;
+            for i in 0..bytes.len() {
+                match bytes[i] {
+                    b'(' | b'[' | b'{' => depth += 1,
+                    b')' | b']' | b'}' => depth = (depth - 1).max(0),
+                    b'-' if depth == 0 && i + 1 < bytes.len() && bytes[i + 1] == b'>' => {
+                        let params_str = type_str[..i].trim();
+                        let ret_str = type_str[i + 2..].trim();
+
+                        let param_types = if params_str == "()" || params_str.is_empty() {
+                            vec![]
+                        } else if params_str.starts_with('(') && params_str.ends_with(')') {
+                            let inner = &params_str[1..params_str.len() - 1];
+                            Self::split_type_args(inner)
+                                .into_iter()
+                                .map(|s| Self::parse_type_string_to_type_expr(&s))
+                                .collect()
+                        } else {
+                            vec![Self::parse_type_string_to_type_expr(params_str)]
+                        };
+
+                        let ret_type = Self::parse_type_string_to_type_expr(ret_str);
+                        return TypeExpr::Function(param_types, Box::new(ret_type));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         // Check for tuple type: (Type1, Type2, ...)
         if type_str.starts_with('(') && type_str.ends_with(')') {
             let inner = &type_str[1..type_str.len() - 1];
@@ -23062,38 +23097,6 @@ impl Compiler {
                     Spanned::new(container.to_string(), Span::default()),
                     type_args,
                 );
-            }
-        }
-
-        // Check for function type: (Params) -> RetType or ParamType -> RetType
-        {
-            let bytes = type_str.as_bytes();
-            let mut depth = 0i32;
-            for i in 0..bytes.len() {
-                match bytes[i] {
-                    b'(' | b'[' | b'{' => depth += 1,
-                    b')' | b']' | b'}' => depth = (depth - 1).max(0),
-                    b'-' if depth == 0 && i + 1 < bytes.len() && bytes[i + 1] == b'>' => {
-                        let params_str = type_str[..i].trim();
-                        let ret_str = type_str[i + 2..].trim();
-
-                        let param_types = if params_str == "()" || params_str.is_empty() {
-                            vec![]
-                        } else if params_str.starts_with('(') && params_str.ends_with(')') {
-                            let inner = &params_str[1..params_str.len() - 1];
-                            Self::split_type_args(inner)
-                                .into_iter()
-                                .map(|s| Self::parse_type_string_to_type_expr(&s))
-                                .collect()
-                        } else {
-                            vec![Self::parse_type_string_to_type_expr(params_str)]
-                        };
-
-                        let ret_type = Self::parse_type_string_to_type_expr(ret_str);
-                        return TypeExpr::Function(param_types, Box::new(ret_type));
-                    }
-                    _ => {}
-                }
             }
         }
 
