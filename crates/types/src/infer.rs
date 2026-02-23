@@ -6722,9 +6722,23 @@ impl<'a> InferCtx<'a> {
                                     self.require_field(obj_ty, &field.node, expr_ty);
                                 }
                                 nostos_syntax::ast::AssignTarget::Index(obj, idx) => {
-                                    let _obj_ty = self.infer_expr(obj)?;
-                                    let _idx_ty = self.infer_expr(idx)?;
-                                    // Index assignment - simplified for now
+                                    let obj_ty = self.infer_expr(obj)?;
+                                    let idx_ty = self.infer_expr(idx)?;
+                                    // Constrain value type based on container type
+                                    let resolved_obj = self.env.apply_subst(&obj_ty);
+                                    match &resolved_obj {
+                                        Type::Map(key_ty, val_ty) => {
+                                            self.unify(idx_ty, (**key_ty).clone());
+                                            self.unify(expr_ty, (**val_ty).clone());
+                                        }
+                                        Type::List(elem_ty) => {
+                                            self.unify(idx_ty, Type::Int);
+                                            self.unify(expr_ty, (**elem_ty).clone());
+                                        }
+                                        _ => {
+                                            // Unknown container type - no constraint
+                                        }
+                                    }
                                 }
                             }
                         }

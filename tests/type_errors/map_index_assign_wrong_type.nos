@@ -1,0 +1,7 @@
+# expect_error: mismatch
+# m["key"] = value should enforce value type matches map's value type
+main() = {
+  var m: Map[String, Int] = %{ "a": 1 }
+  m["b"] = "two"
+  m
+}
