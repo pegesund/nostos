@@ -10296,6 +10296,75 @@ impl Compiler {
         matches!(name, "Hash" | "Show" | "Copy" | "Eq" | "Num" | "Ord")
     }
 
+    /// Unified UFCS signature registration for trait methods.
+    ///
+    /// Registers a trait method's type signature under ALL key variants needed
+    /// for method resolution. This ensures both local and cross-module lookups
+    /// can find the method, regardless of whether the caller uses a qualified
+    /// or unqualified type name.
+    ///
+    /// Key variants registered:
+    /// - `{BareType}.{method}/{arity}` (e.g., "Either.mapLeft/_,_")
+    /// - `{Module.BareType}.{method}/{arity}` (e.g., "types.Either.mapLeft/_,_")
+    /// - fn_asts entry under bare UFCS key for named argument resolution
+    fn register_ufcs_method(
+        &mut self,
+        unqualified_type_name: &str,
+        qualified_type_name: &str,
+        method_name: &str,
+        fn_type: nostos_types::FunctionType,
+        method_def: Option<&FnDef>,
+    ) {
+        // Strip type args from type names (e.g., "Either[Int, String]" -> "Either")
+        let bare_unqualified = if let Some(bracket_pos) = unqualified_type_name.find('[') {
+            &unqualified_type_name[..bracket_pos]
+        } else {
+            unqualified_type_name
+        };
+        let bare_qualified = if let Some(bracket_pos) = qualified_type_name.find('[') {
+            &qualified_type_name[..bracket_pos]
+        } else {
+            qualified_type_name
+        };
+
+        // Build arity suffix: "/_,_,..." for N params, "/" for 0 params
+        let arity = fn_type.params.len();
+        let ufcs_arity_suffix = if arity == 0 {
+            "/".to_string()
+        } else {
+            format!("/{}", vec!["_"; arity].join(","))
+        };
+
+        // Register under bare (unqualified) type name
+        let bare_ufcs_key = format!("{}.{}", bare_unqualified, method_name);
+        let bare_ufcs_fn_name = format!("{}{}", bare_ufcs_key, ufcs_arity_suffix);
+        self.trait_method_ufcs_signatures.insert(
+            bare_ufcs_fn_name.clone(),
+            fn_type.clone(),
+        );
+
+        // Register fn_asts entry under UFCS key for named argument resolution.
+        // Without this, trait method calls with named args that skip defaults
+        // (e.g., s.setup(port: 3000)) fail because param names lookup uses
+        // the UFCS key "Server.setup" but fn_asts has "Server.Configurable.setup".
+        if let Some(def) = method_def {
+            if !self.fn_asts.contains_key(&bare_ufcs_fn_name) {
+                self.fn_asts.insert(bare_ufcs_fn_name, def.clone());
+            }
+        }
+
+        // Register under qualified type name for cross-module lookups.
+        // e.g., "shapes.Circle.area/_" so that imported type names can find the method.
+        if bare_qualified != bare_unqualified {
+            let qualified_ufcs_key = format!("{}.{}", bare_qualified, method_name);
+            let qualified_ufcs_fn_name = format!("{}{}", qualified_ufcs_key, ufcs_arity_suffix);
+            self.trait_method_ufcs_signatures.insert(
+                qualified_ufcs_fn_name,
+                fn_type,
+            );
+        }
+    }
+
     /// Check if a type is a numeric type that implements Num trait.
     fn is_numeric_type(type_name: &str) -> bool {
         matches!(type_name,
@@ -10777,30 +10846,12 @@ impl Compiler {
                 self.function_list.push(full_name.clone());
             }
 
-            // Register trait method in trait_method_ufcs_signatures for HM inference.
+            // Register trait method UFCS signature for HM inference via unified registration.
             // This enables check_pending_method_calls to find trait methods on custom
             // types, which is essential for chained method calls (e.g., x.bimap(...).bimap(...)).
-            // Key format: {TypeName}.{method}/_,_,... (matches lookup_function_with_arity).
             // NOTE: Cannot use pending_fn_signatures because compile_all clears non-stdlib entries.
             {
-                // Strip type args from unqualified_type_name for the UFCS key.
-                // E.g., "Either[Int, String]" -> "Either" so that
-                // check_pending_method_calls can find the method via get_type_name()
-                // which returns just the base name (e.g., "Either").
-                let bare_type_name = if let Some(bracket_pos) = unqualified_type_name.find('[') {
-                    &unqualified_type_name[..bracket_pos]
-                } else {
-                    unqualified_type_name.as_str()
-                };
-                let ufcs_key = format!("{}.{}", bare_type_name, method_name);
-                let ufcs_arity_suffix = if arity == 0 {
-                    "/".to_string()
-                } else {
-                    format!("/{}", vec!["_"; arity].join(","))
-                };
-                let ufcs_fn_name = format!("{}{}", ufcs_key, ufcs_arity_suffix);
-
-                // Build function type with unique var IDs for untyped params
+                // Build function type with unique var IDs for untyped params.
                 // Start counter high to avoid conflicts with a=1, b=2, etc.
                 let mut trait_var_counter = 100u32;
                 let hm_param_types: Vec<nostos_types::Type> = param_types.iter()
@@ -10814,9 +10865,7 @@ impl Compiler {
                             // generalize the self type to use fresh type variables
                             // (e.g., Holder[?X] instead of Holder[Int]).
                             // Without this, multiple impls (Holder[Int], Holder[String])
-                            // overwrite each other in trait_method_ufcs_signatures under
-                            // the same key "Holder.measure/_", and whichever is registered
-                            // last wins, causing type errors for the other instantiation.
+                            // overwrite each other under the same key and the last wins.
                             let base_ty = self.type_name_to_type(pt);
                             if let nostos_types::Type::Named { ref name, ref args } = base_ty {
                                 if !args.is_empty() {
@@ -10863,9 +10912,6 @@ impl Compiler {
                             }
                             self.type_name_to_type(&resolved_ret)
                         } else {
-                            // Trait definition doesn't specify return type.
-                            // Analyze the method implementation body to find constructor
-                            // calls, which tell us the concrete return type.
                             self.infer_return_type_from_method_body(method, &unqualified_type_name, &generic_self_type)
                                 .unwrap_or_else(|| {
                                     trait_var_counter += 1;
@@ -10883,8 +10929,6 @@ impl Compiler {
 
                 let fn_type = nostos_types::FunctionType {
                     required_params: {
-                        // Compute required_params for trait methods with default parameters
-                        // so that HM inference arity check allows calls with fewer arguments
                         if let Some(clause) = method.clauses.first() {
                             let req = clause.params.iter().filter(|p| p.default.is_none()).count();
                             if req < arity { Some(req) } else { None }
@@ -10897,35 +10941,15 @@ impl Compiler {
                     ret: Box::new(hm_ret_type),
                     var_bounds: vec![],
                 };
-                self.trait_method_ufcs_signatures.insert(
-                    ufcs_fn_name.clone(),
-                    fn_type.clone(),
+
+                // Use unified registration to ensure all key variants are registered consistently.
+                self.register_ufcs_method(
+                    &unqualified_type_name,
+                    &qualified_type_name,
+                    &method_name,
+                    fn_type,
+                    Some(method),
                 );
-                // Register fn_asts entry under UFCS key so get_function_param_names
-                // can find param names for named argument resolution.
-                // Without this, trait method calls with named args that skip defaults
-                // (e.g., s.setup(port: 3000)) fail because param names lookup
-                // uses the UFCS key "Server.setup" but fn_asts has "Server.Configurable.setup".
-                if !self.fn_asts.contains_key(&ufcs_fn_name) {
-                    self.fn_asts.insert(ufcs_fn_name.clone(), method.clone());
-                }
-                // Also register under qualified type name for cross-module lookups.
-                // e.g., "Circle.area/_" AND "shapes.Circle.area/_" so that both
-                // local and imported type names can find the method.
-                if qualified_type_name != unqualified_type_name {
-                    // Strip type args from qualified_type_name too
-                    let bare_qualified = if let Some(bracket_pos) = qualified_type_name.find('[') {
-                        &qualified_type_name[..bracket_pos]
-                    } else {
-                        qualified_type_name.as_str()
-                    };
-                    let qualified_ufcs_key = format!("{}.{}", bare_qualified, method_name);
-                    let qualified_ufcs_fn_name = format!("{}{}", qualified_ufcs_key, ufcs_arity_suffix);
-                    self.trait_method_ufcs_signatures.insert(
-                        qualified_ufcs_fn_name,
-                        fn_type,
-                    );
-                }
             }
         }
 
