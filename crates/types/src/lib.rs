@@ -220,7 +220,7 @@ pub enum TypeError {
     InfiniteType(String),
 
     #[error("Missing trait implementation: {ty} does not implement {trait_name}")]
-    MissingTraitImpl { ty: String, trait_name: String },
+    MissingTraitImpl { ty: String, trait_name: String, resolved_type: Option<Type> },
 
     #[error("Missing trait method: {method} not implemented for {ty}")]
     MissingTraitMethod { ty: String, method: String },
@@ -350,32 +350,54 @@ impl TypeError {
             TypeError::OccursCheck(_, _) => true,
 
             // Trait bound errors: suppress when type is a bare variable
-            TypeError::MissingTraitImpl { ty, trait_name } => {
-                let is_bare_var = |s: &str| s.starts_with('?') && s[1..].chars().all(|c| c.is_ascii_digit());
-                let is_type_param = |s: &str| s.len() == 1 && s.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false);
-                if is_bare_var(ty) || is_type_param(ty) {
-                    return true;
+            TypeError::MissingTraitImpl { ty, trait_name, resolved_type } => {
+                // Use resolved Type enum when available (preferred over string checks)
+                if let Some(ref rty) = resolved_type {
+                    if matches!(rty, Type::Var(_) | Type::TypeParam(_)) {
+                        return true;
+                    }
+                    if rty.has_any_type_var() {
+                        return true;
+                    }
+                } else {
+                    // Fallback string checks when resolved_type not available
+                    let is_bare_var = |s: &str| s.starts_with('?') && s[1..].chars().all(|c| c.is_ascii_digit());
+                    let is_type_param = |s: &str| s.len() == 1 && s.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false);
+                    if is_bare_var(ty) || is_type_param(ty) {
+                        return true;
+                    }
+                    if ty.contains('?') {
+                        return true;
+                    }
                 }
-                // HasMethod is an internal HM inference constraint for UFCS dispatch;
-                // it should never surface as a user-facing error
+                // HasMethod is an internal HM inference constraint for UFCS dispatch
                 if trait_name.starts_with("HasMethod") {
                     return true;
                 }
-                // Function types: Eq/Ord/Num/Concat are real (functions never implement these),
-                // all other traits on function types are HM false positives
-                if ty.contains("->") {
+                // Function types: Eq/Ord/Num/Concat are real, other traits are HM noise
+                if let Some(ref rty) = resolved_type {
+                    if matches!(rty, Type::Function(_)) {
+                        if ["Eq", "Ord", "Num", "Concat"].contains(&trait_name.as_str()) {
+                            return false;
+                        }
+                        return true;
+                    }
+                } else if ty.contains("->") {
                     if ["Eq", "Ord", "Num", "Concat"].contains(&trait_name.as_str()) {
                         return false;
                     }
                     return true;
                 }
                 // Nested tuple with Num: HM puts Num on whole tuple instead of element
-                // E.g., ((Int, Int), (Int, Int)).0.0 + ... → "((Int, Int), ...) doesn't implement Num"
-                if trait_name == "Num" && (ty.starts_with("((") || ty.ends_with("))")) {
-                    return true;
-                }
-                // Type with unresolved vars → suppress
-                if ty.contains('?') {
+                if let Some(ref rty) = resolved_type {
+                    if trait_name == "Num" {
+                        if let Type::Tuple(elems) = rty {
+                            if elems.iter().any(|e| matches!(e, Type::Tuple(_))) {
+                                return true;
+                            }
+                        }
+                    }
+                } else if trait_name == "Num" && (ty.starts_with("((") || ty.ends_with("))")) {
                     return true;
                 }
                 false

@@ -2094,6 +2094,7 @@ impl<'a> InferCtx<'a> {
                                     return Err(TypeError::MissingTraitImpl {
                                         ty: resolved.display(),
                                         trait_name,
+                                        resolved_type: Some(resolved.clone()),
                                     });
                                 }
                             } else if resolved.has_any_type_var() {
@@ -2108,6 +2109,7 @@ impl<'a> InferCtx<'a> {
                                     return Err(TypeError::MissingTraitImpl {
                                         ty: resolved.display(),
                                         trait_name,
+                                        resolved_type: Some(resolved.clone()),
                                     });
                                 }
                                 // Save for post-solve retry - type vars may resolve later
@@ -2118,6 +2120,7 @@ impl<'a> InferCtx<'a> {
                                 return Err(TypeError::MissingTraitImpl {
                                     ty: resolved.display(),
                                     trait_name,
+                                    resolved_type: Some(resolved.clone()),
                                 });
                             }
                         }
@@ -2289,6 +2292,7 @@ impl<'a> InferCtx<'a> {
                     return Err(TypeError::MissingTraitImpl {
                         ty: resolved.display(),
                         trait_name: trait_name.clone(),
+                        resolved_type: Some(resolved.clone()),
                     });
                 }
                 _ => {
@@ -2317,6 +2321,7 @@ impl<'a> InferCtx<'a> {
                         return Err(TypeError::MissingTraitImpl {
                             ty: display_ty,
                             trait_name: trait_name.clone(),
+                            resolved_type: Some(resolved.clone()),
                         });
                     }
                 }
@@ -2453,6 +2458,7 @@ impl<'a> InferCtx<'a> {
                     return Err(TypeError::MissingTraitImpl {
                         ty: resolved.display(),
                         trait_name: trait_name.clone(),
+                        resolved_type: Some(resolved.clone()),
                     });
                 }
                 _ => {
@@ -2474,6 +2480,7 @@ impl<'a> InferCtx<'a> {
                         return Err(TypeError::MissingTraitImpl {
                             ty: display_ty,
                             trait_name: trait_name.clone(),
+                            resolved_type: Some(resolved.clone()),
                         });
                     }
                 }
@@ -2641,6 +2648,7 @@ impl<'a> InferCtx<'a> {
                     return Err(TypeError::MissingTraitImpl {
                         ty: resolved.display(),
                         trait_name: trait_name.clone(),
+                        resolved_type: Some(resolved.clone()),
                     });
                 }
                 _ => {
@@ -2662,6 +2670,7 @@ impl<'a> InferCtx<'a> {
                         return Err(TypeError::MissingTraitImpl {
                             ty: display_ty,
                             trait_name: trait_name.clone(),
+                            resolved_type: Some(resolved.clone()),
                         });
                     }
                 }
@@ -2860,6 +2869,7 @@ impl<'a> InferCtx<'a> {
                     return Err(TypeError::MissingTraitImpl {
                         ty: resolved.display(),
                         trait_name: "Concat".to_string(),
+                        resolved_type: Some(resolved.clone()),
                     });
                 }
             }
@@ -2897,6 +2907,7 @@ impl<'a> InferCtx<'a> {
                         return Err(TypeError::MissingTraitImpl {
                             ty: resolved_elem.display(),
                             trait_name: "Eq".to_string(), // User-facing: say Eq (Hash is internal)
+                            resolved_type: Some(resolved_elem.clone()),
                         });
                     }
                     if self.env.definitely_not_implements(&resolved_elem, "Eq") {
@@ -2904,6 +2915,7 @@ impl<'a> InferCtx<'a> {
                         return Err(TypeError::MissingTraitImpl {
                             ty: resolved_elem.display(),
                             trait_name: "Eq".to_string(),
+                            resolved_type: Some(resolved_elem.clone()),
                         });
                     }
                 }
@@ -2914,6 +2926,7 @@ impl<'a> InferCtx<'a> {
                         return Err(TypeError::MissingTraitImpl {
                             ty: resolved_key.display(),
                             trait_name: "Eq".to_string(),
+                            resolved_type: Some(resolved_key.clone()),
                         });
                     }
                     if self.env.definitely_not_implements(&resolved_key, "Eq") {
@@ -2921,6 +2934,7 @@ impl<'a> InferCtx<'a> {
                         return Err(TypeError::MissingTraitImpl {
                             ty: resolved_key.display(),
                             trait_name: "Eq".to_string(),
+                            resolved_type: Some(resolved_key.clone()),
                         });
                     }
                 }
@@ -2953,6 +2967,7 @@ impl<'a> InferCtx<'a> {
                             return Err(TypeError::MissingTraitImpl {
                                 ty: resolved.display(),
                                 trait_name: bound.clone(),
+                                resolved_type: Some(resolved.clone()),
                             });
                         }
                     }
@@ -2971,6 +2986,7 @@ impl<'a> InferCtx<'a> {
                                 return Err(TypeError::MissingTraitImpl {
                                     ty: resolved.display(),
                                     trait_name: bound.clone(),
+                                    resolved_type: Some(resolved.clone()),
                                 });
                             }
                         }
@@ -2988,6 +3004,7 @@ impl<'a> InferCtx<'a> {
                             return Err(TypeError::MissingTraitImpl {
                                 ty: resolved.display(),
                                 trait_name: bound.clone(),
+                                resolved_type: Some(resolved.clone()),
                             });
                         }
                     }
@@ -3006,6 +3023,7 @@ impl<'a> InferCtx<'a> {
                             return Err(TypeError::MissingTraitImpl {
                                 ty: resolved.display(),
                                 trait_name: bound.clone(),
+                                resolved_type: Some(resolved.clone()),
                             });
                         }
                     }
@@ -3854,6 +3872,7 @@ impl<'a> InferCtx<'a> {
                                     return Err(TypeError::MissingTraitImpl {
                                         ty: resolved_elem.display(),
                                         trait_name: "Num".to_string(),
+                                        resolved_type: Some(resolved_elem.clone()),
                                     });
                                 }
                             }
@@ -3876,6 +3895,7 @@ impl<'a> InferCtx<'a> {
                                     return Err(TypeError::MissingTraitImpl {
                                         ty: resolved_elem.display(),
                                         trait_name: "Ord".to_string(),
+                                        resolved_type: Some(resolved_elem.clone()),
                                     });
                                 }
                             }
@@ -3891,6 +3911,7 @@ impl<'a> InferCtx<'a> {
                                     return Err(TypeError::MissingTraitImpl {
                                         ty: resolved_elem.display(),
                                         trait_name: "Eq".to_string(),
+                                        resolved_type: Some(resolved_elem.clone()),
                                     });
                                 }
                             }
@@ -3910,6 +3931,7 @@ impl<'a> InferCtx<'a> {
                                         return Err(TypeError::MissingTraitImpl {
                                             ty: key_ty.display(),
                                             trait_name: "Eq".to_string(),
+                                            resolved_type: Some(key_ty.clone()),
                                         });
                                     }
                                 }
@@ -3975,6 +3997,7 @@ impl<'a> InferCtx<'a> {
                                                         return Err(TypeError::MissingTraitImpl {
                                                             ty: resolved_elem.display(),
                                                             trait_name: "Num".to_string(),
+                                                            resolved_type: Some(resolved_elem.clone()),
                                                         });
                                                     }
                                                 }
@@ -7307,6 +7330,7 @@ impl<'a> InferCtx<'a> {
                         Err(TypeError::MissingTraitImpl {
                             ty: bad_type.display(),
                             trait_name: "Concat".to_string(),
+                            resolved_type: Some(bad_type.clone()),
                         })
                     }
                 }

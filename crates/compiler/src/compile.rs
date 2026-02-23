@@ -2473,6 +2473,39 @@ impl Compiler {
                 })
                 .collect();
 
+            // Register trait implementations so definitely_not_implements() is accurate
+            {
+                let builtin_traits = ["Hash", "Show", "Eq", "Copy"];
+                for (type_name, _) in &self.types {
+                    let for_type = nostos_types::Type::Named {
+                        name: type_name.clone(),
+                        args: vec![],
+                    };
+                    for trait_name in &builtin_traits {
+                        env.impls.push(nostos_types::TraitImpl {
+                            trait_name: trait_name.to_string(),
+                            for_type: for_type.clone(),
+                            constraints: vec![],
+                        });
+                    }
+                }
+                for (type_name, traits) in &self.type_traits {
+                    let for_type = nostos_types::Type::Named {
+                        name: type_name.clone(),
+                        args: vec![],
+                    };
+                    for trait_name in traits {
+                        if !builtin_traits.contains(&trait_name.as_str()) {
+                            env.impls.push(nostos_types::TraitImpl {
+                                trait_name: trait_name.clone(),
+                                for_type: for_type.clone(),
+                                constraints: vec![],
+                            });
+                        }
+                    }
+                }
+            }
+
             // Infer ALL user functions to capture expression types for compilation.
             // Even functions with complete type annotations need body inference for
             // proper method dispatch and expression type recording.
@@ -2520,22 +2553,24 @@ impl Compiler {
                 // Only surface MissingTraitImpl errors for types that can NEVER implement
                 // the trait (tuples, containers, Bool, etc.). User-defined Named types might
                 // have custom trait implementations that the inference env doesn't know about.
-                if let TypeError::MissingTraitImpl { ref ty, ref trait_name } = e {
-                    // Check if the type definitely can't implement the trait.
-                    let is_type_param = ty.len() <= 2 && ty.chars().next().map_or(false, |c| c.is_alphabetic());
-                    let is_type_var = ty.starts_with('?');
+                if let TypeError::MissingTraitImpl { ref ty, ref trait_name, ref resolved_type } = e {
+                    // Use resolved Type enum when available for type classification
+                    let is_type_param = if let Some(ref rty) = resolved_type {
+                        matches!(rty, nostos_types::Type::TypeParam(_))
+                    } else {
+                        ty.len() <= 2 && ty.chars().next().map_or(false, |c| c.is_alphabetic())
+                    };
+                    let is_type_var = if let Some(ref rty) = resolved_type {
+                        matches!(rty, nostos_types::Type::Var(_))
+                    } else {
+                        ty.starts_with('?')
+                    };
 
                     // For type parameters used with Num/Ord, check if the function has that trait bound.
-                    // Only require explicit bounds when the user explicitly declared type params
-                    // via `fn[a: Ord](...)`. When type params come from annotations only
-                    // (e.g., `fn(t: BTree[a])` with no explicit `[a]`), HM inference handles
-                    // bound propagation into the signature automatically.
                     if is_type_param && matches!(trait_name.as_str(), "Num" | "Ord") {
-                        // Check if ANY function in this batch has explicit type param declarations
                         let has_explicit_type_params = user_fns.iter().any(|(_, (fn_def, _, _, _, _, _))| {
                             !fn_def.type_params.is_empty()
                         });
-                        // Only check explicit bounds when the user declared type params explicitly
                         let has_required_bound = if has_explicit_type_params {
                             user_fns.iter().any(|(_, (fn_def, _, _, _, _, _))| {
                                 fn_def.type_params.iter().any(|tp| {
@@ -2544,8 +2579,6 @@ impl Compiler {
                                 })
                             })
                         } else {
-                            // No explicit type params - type params come from annotations only,
-                            // HM inference will handle the bounds in the signature
                             true
                         };
                         if !has_required_bound {
@@ -2566,37 +2599,13 @@ impl Compiler {
                         }
                     }
 
-                    // Skip type parameters (already handled above) and type variables (?a).
-                    let is_definitely_non_implementing = !is_type_param && !is_type_var && (
-                        ty.starts_with('(') ||         // Tuple: (Int, String)
-                        ty.starts_with("List[") ||     // List
-                        ty.starts_with("Map[") ||      // Map
-                        ty.starts_with("Set[") ||      // Set
-                        ty.starts_with("Option[") ||   // Option
-                        ty.starts_with("Result[") ||   // Result
-                        ty.contains(" -> ") ||         // Function types never implement traits
-                        ty == "Bool" ||                 // Bool never implements Num/Ord
-                        (ty == "String" && trait_name == "Num") || // String doesn't implement Num
-                        // Numeric types don't implement Concat
-                        (matches!(trait_name.as_str(), "Concat") && matches!(ty.as_str(),
-                            "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
-                            "UInt8" | "UInt16" | "UInt32" | "UInt64" |
-                            "Float" | "Float32" | "Float64" | "BigInt" | "Decimal" |
-                            "Bool" | "Char" | "Unit")) ||
-                        // For user-defined types: only check Num/Ord traits (never auto-derived).
-                        // Other traits (Eq, Hash, Show) are auto-derived and not in trait_impls.
-                        (matches!(trait_name.as_str(), "Num" | "Ord") &&
-                         ty.chars().next().map_or(false, |c| c.is_uppercase()) &&
-                         !ty.contains('[') && !ty.contains('(') && !ty.contains("->") &&
-                         !["Int", "Int8", "Int16", "Int32", "Int64",
-                           "UInt8", "UInt16", "UInt32", "UInt64",
-                           "Float", "Float32", "Float64", "BigInt", "Decimal",
-                           "String", "Char", "Bool"].contains(&ty.as_str()) &&
-                         !self.trait_impls.iter().any(|((impl_ty, impl_trait), _)| {
-                             impl_trait == trait_name && (impl_ty == ty ||
-                                 impl_ty.rsplit('.').next() == Some(ty.as_str()))
-                         }))
-                    );
+                    // Use TypeEnv::definitely_not_implements() with the actual Type enum
+                    let is_definitely_non_implementing = if let Some(ref resolved) = resolved_type {
+                        !is_type_param && !is_type_var &&
+                        ctx.env.definitely_not_implements(resolved, trait_name)
+                    } else {
+                        false
+                    };
                     if is_definitely_non_implementing {
                         let error_span = ctx.last_error_span().unwrap_or_else(|| Span::new(0, 0));
                         let compile_error = self.convert_type_error(e.clone(), error_span);
@@ -3753,7 +3762,7 @@ impl Compiler {
                             clean_type_vars(&a.display()), clean_type_vars(&b.display())),
                     nostos_types::TypeError::Mismatch { expected: a, found: b } =>
                         format!("type mismatch: expected `{}`, found `{}`", clean_type_vars(a), clean_type_vars(b)),
-                    nostos_types::TypeError::MissingTraitImpl { ty, trait_name } =>
+                    nostos_types::TypeError::MissingTraitImpl { ty, trait_name, .. } =>
                         format!("Type error: {} does not implement {}",
                             clean_type_vars(ty), clean_type_vars(trait_name)),
                     other => format!("{:?}", other),
