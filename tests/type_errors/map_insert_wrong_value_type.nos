@@ -1,0 +1,6 @@
+# expect_error: mismatch
+# Map.insert should reject wrong value type when map type is known
+main() = {
+  m: Map[String, Int] = Map.fromList([("a", 1)])
+  Map.insert(m, "b", "two")
+}

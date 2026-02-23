@@ -386,7 +386,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Regex.captures", signature: "String -> String -> Option[List[String]]", doc: "Get capture groups from first match" },
 
     // === Map Functions ===
-    BuiltinInfo { name: "Map.insert", signature: "Map k v -> k -> w -> Map k v", doc: "Insert key-value pair, returns new map" },
+    BuiltinInfo { name: "Map.insert", signature: "Map k v -> k -> v -> Map k v", doc: "Insert key-value pair, returns new map" },
     BuiltinInfo { name: "Map.remove", signature: "Map k v -> k -> Map k v", doc: "Remove key from map, returns new map" },
     BuiltinInfo { name: "Map.get", signature: "Map k v -> k -> v", doc: "Get value for key, returns unit if not found" },
     BuiltinInfo { name: "Map.lookup", signature: "Map k v -> k -> Option v", doc: "Lookup key, returns Some(value) or None" },
