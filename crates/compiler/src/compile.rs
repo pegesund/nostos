@@ -14242,10 +14242,10 @@ impl Compiler {
                             // Multiple overloads - use HM inference to pick the right one
                             if let Some(inferred_ty) = self.inferred_expr_types.get(&ident.span) {
                                 if let nostos_types::Type::Function(ref ft) = inferred_ty {
-                                    let param_types: Vec<String> = ft.params.iter()
-                                        .map(|t| t.display())
-                                        .collect();
-                                    if param_types.iter().all(|t| self.is_type_concrete(t)) {
+                                    if ft.params.iter().all(|t| t.is_concrete()) {
+                                        let param_types: Vec<String> = ft.params.iter()
+                                            .map(|t| t.display())
+                                            .collect();
                                         let expected_name = format!("{}/{}", resolved, param_types.join(","));
                                         if matching_keys.contains(&expected_name) {
                                             Some(expected_name)
@@ -14281,10 +14281,10 @@ impl Compiler {
                             // using the HM-inferred type for this expression.
                             if let Some(inferred_ty) = self.inferred_expr_types.get(&ident.span).cloned() {
                                 if let nostos_types::Type::Function(ref ft) = inferred_ty {
+                                    let all_concrete = ft.params.iter().all(|t| t.is_concrete());
                                     let param_types: Vec<String> = ft.params.iter()
                                         .map(|t| t.display())
                                         .collect();
-                                    let all_concrete = param_types.iter().all(|t| self.is_type_concrete(t));
 
                                     if all_concrete && !param_types.is_empty() {
                                         if let Some(fn_def) = self.fn_asts.get(&key).cloned() {
@@ -14428,8 +14428,8 @@ impl Compiler {
                         if let Some(inferred_ty) = self.inferred_expr_types.get(&ident.span).cloned() {
                             if let nostos_types::Type::Function(ref ft) = inferred_ty {
                                 if let Some(first_param) = ft.params.first() {
-                                    let type_name = first_param.display();
-                                    if self.is_type_concrete(&type_name) {
+                                    if first_param.is_concrete() {
+                                        let type_name = first_param.display();
                                         if let Some(trait_fn) = self.find_trait_method(&type_name, name) {
                                             let arg_types: Vec<Option<String>> = ft.params.iter()
                                                 .map(|t| Some(t.display()))
@@ -14595,9 +14595,8 @@ impl Compiler {
                             .zip(hm_params.iter())
                             .filter_map(|(p, ty)| {
                                 if let Some(name) = self.pattern_binding_name(p) {
-                                    let type_str = ty.display();
-                                    if !type_str.starts_with('?') && self.is_type_concrete(&type_str) {
-                                        return Some((name, type_str));
+                                    if ty.is_concrete() {
+                                        return Some((name, ty.display()));
                                     }
                                 }
                                 None
