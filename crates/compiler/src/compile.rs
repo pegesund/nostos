@@ -18050,7 +18050,10 @@ impl Compiler {
             // Index access
             Expr::Index(coll, index, _) => {
                 // Check for custom type index dispatch: MyType[i] -> myTypeGet(coll, i)
-                if let Some(coll_type) = self.expr_type_name(coll) {
+                let coll_type_for_dispatch = self.expr_type(coll)
+                    .and_then(|ty| self.get_type_base_name_from_type(ty))
+                    .or_else(|| self.expr_type_name(coll));
+                if let Some(coll_type) = coll_type_for_dispatch {
                     if !Self::is_primitive_type(&coll_type) && self.types.contains_key(&coll_type) {
                         // Build the get function name: {module}.{typeNameLower}Get
                         let func_name = if let Some(dot_pos) = coll_type.rfind('.') {
@@ -18650,7 +18653,11 @@ impl Compiler {
         // If the left operand has a known custom type that implements the relevant trait,
         // dispatch to the trait method instead of using primitive VM instructions
         if let Some((trait_name, method_name)) = Self::operator_to_trait_method(op) {
-            if let Some(left_type) = self.expr_type_name(left) {
+            // Try structural type first, fall back to expr_type_name
+            let left_type = self.expr_type(left)
+                .and_then(|ty| self.get_type_base_name_from_type(ty))
+                .or_else(|| self.expr_type_name(left));
+            if let Some(left_type) = left_type {
                 // Check if left_type is a type parameter with the appropriate trait bound.
                 // If so, trigger monomorphization - the function will be specialized
                 // for each concrete type at the call site.
@@ -18704,7 +18711,10 @@ impl Compiler {
         // Scalar method fallback: if left is a custom type and right is a numeric type,
         // try to dispatch to a scalar function (e.g., vecMulScalar for Vec * Float)
         if let Some(scalar_method) = Self::operator_to_scalar_method(op) {
-            if let Some(left_type) = self.expr_type_name(left) {
+            let left_type = self.expr_type(left)
+                .and_then(|ty| self.get_type_base_name_from_type(ty))
+                .or_else(|| self.expr_type_name(left));
+            if let Some(left_type) = left_type {
                 if !Self::is_primitive_type(&left_type) && self.types.contains_key(&left_type) {
                     // Check if right operand is a numeric type
                     let right_type = self.expr_type_name(right);
