@@ -250,7 +250,7 @@ pub enum TypeError {
     NotIndexable(String),
 
     #[error("Type {ty} has no field {field}")]
-    NoSuchField { ty: String, field: String },
+    NoSuchField { ty: String, field: String, resolved_type: Option<Type> },
 
     #[error("Ambiguous type: cannot infer type for {0}")]
     AmbiguousType(String),
@@ -434,10 +434,18 @@ impl TypeError {
             }
 
             // Field access on unresolved or trait-dispatch types
-            TypeError::NoSuchField { ty, field } => {
-                // Type variable: unresolved type, suppress
-                if ty.starts_with('?') {
-                    return true;
+            TypeError::NoSuchField { ty, field, ref resolved_type } => {
+                // Use structural Type when available for more reliable checks
+                if let Some(ref resolved) = resolved_type {
+                    // Unresolved type variables - suppress
+                    if matches!(resolved, Type::Var(_)) || resolved.has_any_type_var() {
+                        return true;
+                    }
+                } else {
+                    // String fallback: Type variable: unresolved type, suppress
+                    if ty.starts_with('?') {
+                        return true;
+                    }
                 }
                 // Trait dispatch confusion: Type.Trait.method() parsed as field access,
                 // where the "field" is actually a Trait name (uppercase)

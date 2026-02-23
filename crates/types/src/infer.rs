@@ -2138,6 +2138,7 @@ impl<'a> InferCtx<'a> {
                                 return Err(TypeError::NoSuchField {
                                     ty: resolved.display(),
                                     field,
+                                    resolved_type: Some(resolved.clone()),
                                 });
                             }
                             deferred_count = 0; // Made progress
@@ -2163,6 +2164,7 @@ impl<'a> InferCtx<'a> {
                                             return Err(TypeError::NoSuchField {
                                                 ty: resolved.display(),
                                                 field,
+                                                resolved_type: Some(resolved.clone()),
                                             });
                                         }
                                     }
@@ -2185,18 +2187,21 @@ impl<'a> InferCtx<'a> {
                                                     return Err(TypeError::NoSuchField {
                                                         ty: resolved.display(),
                                                         field,
+                                                        resolved_type: Some(resolved.clone()),
                                                     });
                                                 }
                                             } else {
                                                 return Err(TypeError::NoSuchField {
                                                     ty: resolved.display(),
                                                     field,
+                                                    resolved_type: Some(resolved.clone()),
                                                 });
                                             }
                                         } else {
                                             return Err(TypeError::NoSuchField {
                                                 ty: resolved.display(),
                                                 field,
+                                                resolved_type: Some(resolved.clone()),
                                             });
                                         }
                                     }
@@ -2204,6 +2209,7 @@ impl<'a> InferCtx<'a> {
                                         return Err(TypeError::NoSuchField {
                                             ty: resolved.display(),
                                             field,
+                                            resolved_type: Some(resolved.clone()),
                                         });
                                     }
                                 }
@@ -2211,6 +2217,7 @@ impl<'a> InferCtx<'a> {
                                 return Err(TypeError::NoSuchField {
                                     ty: resolved.display(),
                                     field,
+                                    resolved_type: Some(resolved.clone()),
                                 });
                             }
                         }
@@ -2238,12 +2245,14 @@ impl<'a> InferCtx<'a> {
                                     return Err(TypeError::NoSuchField {
                                         ty: resolved.display(),
                                         field,
+                                        resolved_type: Some(resolved.clone()),
                                     });
                                 }
                             } else {
                                 return Err(TypeError::NoSuchField {
                                     ty: resolved.display(),
                                     field,
+                                    resolved_type: Some(resolved.clone()),
                                 });
                             }
                         }
@@ -2253,12 +2262,14 @@ impl<'a> InferCtx<'a> {
                             return Err(TypeError::NoSuchField {
                                 ty: resolved.display(),
                                 field,
+                                resolved_type: Some(resolved.clone()),
                             });
                         }
                         _ => {
                             return Err(TypeError::NoSuchField {
                                 ty: resolved.display(),
                                 field,
+                                resolved_type: Some(resolved.clone()),
                             });
                         }
                     }
@@ -2513,6 +2524,7 @@ impl<'a> InferCtx<'a> {
                         return Err(TypeError::NoSuchField {
                             ty: resolved.display(),
                             field,
+                            resolved_type: Some(resolved.clone()),
                         });
                     }
                 }
@@ -2531,6 +2543,7 @@ impl<'a> InferCtx<'a> {
                                     return Err(TypeError::NoSuchField {
                                         ty: resolved.display(),
                                         field,
+                                        resolved_type: Some(resolved.clone()),
                                     });
                                 }
                             }
@@ -2549,18 +2562,21 @@ impl<'a> InferCtx<'a> {
                                             return Err(TypeError::NoSuchField {
                                                 ty: resolved.display(),
                                                 field,
+                                                resolved_type: Some(resolved.clone()),
                                             });
                                         }
                                     } else {
                                         return Err(TypeError::NoSuchField {
                                             ty: resolved.display(),
                                             field,
+                                            resolved_type: Some(resolved.clone()),
                                         });
                                     }
                                 } else {
                                     return Err(TypeError::NoSuchField {
                                         ty: resolved.display(),
                                         field,
+                                        resolved_type: Some(resolved.clone()),
                                     });
                                 }
                             }
@@ -2568,6 +2584,7 @@ impl<'a> InferCtx<'a> {
                                 return Err(TypeError::NoSuchField {
                                     ty: resolved.display(),
                                     field,
+                                    resolved_type: Some(resolved.clone()),
                                 });
                             }
                         }
@@ -2575,6 +2592,7 @@ impl<'a> InferCtx<'a> {
                         return Err(TypeError::NoSuchField {
                             ty: resolved.display(),
                             field,
+                            resolved_type: Some(resolved.clone()),
                         });
                     }
                 }
@@ -2586,12 +2604,14 @@ impl<'a> InferCtx<'a> {
                             return Err(TypeError::NoSuchField {
                                 ty: resolved.display(),
                                 field,
+                                resolved_type: Some(resolved.clone()),
                             });
                         }
                     } else {
                         return Err(TypeError::NoSuchField {
                             ty: resolved.display(),
                             field,
+                            resolved_type: Some(resolved.clone()),
                         });
                     }
                 }
@@ -2602,6 +2622,7 @@ impl<'a> InferCtx<'a> {
                     return Err(TypeError::NoSuchField {
                         ty: resolved.display(),
                         field,
+                        resolved_type: Some(resolved.clone()),
                     });
                 }
                 Type::Var(_) => {
@@ -2613,6 +2634,7 @@ impl<'a> InferCtx<'a> {
                     return Err(TypeError::NoSuchField {
                         ty: resolved.display(),
                         field,
+                        resolved_type: Some(resolved.clone()),
                     });
                 }
             }
@@ -6272,6 +6294,7 @@ impl<'a> InferCtx<'a> {
                                             return Err(TypeError::NoSuchField {
                                                 ty: resolved_type_name.clone(),
                                                 field: fname.node.clone(),
+                                                resolved_type: None,
                                             });
                                         }
                                     }
@@ -6356,6 +6379,7 @@ impl<'a> InferCtx<'a> {
                                     return Err(TypeError::NoSuchField {
                                         ty: resolved_type_name.clone(),
                                         field: fname.node.clone(),
+                                        resolved_type: None,
                                     });
                                 }
                             }
@@ -6407,6 +6431,7 @@ impl<'a> InferCtx<'a> {
                                                 return Err(TypeError::NoSuchField {
                                                     ty: resolved_type_name.clone(),
                                                     field: fname.node.clone(),
+                                                    resolved_type: None,
                                                 });
                                             }
                                         }
@@ -7606,6 +7631,7 @@ impl<'a> InferCtx<'a> {
                                                     return Err(TypeError::NoSuchField {
                                                         ty: name.node.clone(),
                                                         field: fname.node.clone(),
+                                                        resolved_type: None,
                                                     });
                                                 }
                                             } else {
@@ -7622,6 +7648,7 @@ impl<'a> InferCtx<'a> {
                                                     return Err(TypeError::NoSuchField {
                                                         ty: name.node.clone(),
                                                         field: fname.node.clone(),
+                                                        resolved_type: None,
                                                     });
                                                 }
                                             } else {

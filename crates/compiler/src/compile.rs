@@ -2650,19 +2650,30 @@ impl Compiler {
                             .unwrap_or_else(|| ("unknown".to_string(), Arc::new(String::new())));
                         errors.push(("".to_string(), compile_error, source_name, source));
                     }
-                } else if let TypeError::NoSuchField { ref ty, ref field } = e {
+                } else if let TypeError::NoSuchField { ref ty, ref field, ref resolved_type } = e {
                     // NoSuchField from deferred_has_field is definitive only for
                     // built-in types where HM inference has complete field knowledge.
                     // For user-defined Named types, HM may not know about reactive
                     // fields, private fields, or module-specific fields - those are
                     // better handled by later compilation stages.
-                    let is_builtin_type = ty.starts_with("List[") // List
-                        || ty.starts_with("Map[") // Map
-                        || ty.starts_with("Set[") // Set
-                        || (ty.starts_with('(') && !ty.contains("->")) // Tuple (not function)
-                        || ty == "Int" || ty == "String" || ty == "Bool"
-                        || ty == "Float" || ty == "Char" || ty == "Unit";
-                    if is_builtin_type && !ty.starts_with('?') {
+                    let is_builtin_type = if let Some(ref resolved) = resolved_type {
+                        use nostos_types::Type;
+                        matches!(resolved,
+                            Type::List(_) | Type::Map(_, _) | Type::Set(_)
+                            | Type::Tuple(_)
+                            | Type::Int | Type::String | Type::Bool
+                            | Type::Float | Type::Char | Type::Unit
+                        ) && !matches!(resolved, Type::Var(_))
+                    } else {
+                        // String fallback
+                        (ty.starts_with("List[") || ty.starts_with("Map[")
+                            || ty.starts_with("Set[")
+                            || (ty.starts_with('(') && !ty.contains("->"))
+                            || ty == "Int" || ty == "String" || ty == "Bool"
+                            || ty == "Float" || ty == "Char" || ty == "Unit")
+                            && !ty.starts_with('?')
+                    };
+                    if is_builtin_type {
                         let error_span = ctx.last_error_span().unwrap_or_else(|| Span::new(0, 0));
                         let compile_error = self.convert_type_error(e.clone(), error_span);
                         let (source_name, source) = user_fns.first()
@@ -27059,22 +27070,27 @@ impl Compiler {
                 }
 
                 // Check for Map type - use Map.insert for map[key] = value syntax
-                if let Some(coll_type) = self.expr_type_name(coll) {
-                    if coll_type.starts_with("Map[") || coll_type == "Map" {
-                        let coll_reg = self.compile_expr_tail(coll, false)?;
-                        let idx_reg = self.compile_expr_tail(idx, false)?;
-                        let result_reg = self.alloc_reg();
-                        self.emit_call_native(result_reg, "Map.insert", vec![coll_reg, idx_reg, value_reg].into(), 0);
+                // Try structural type from HM inference first
+                let is_map = self.expr_type(coll)
+                    .map(|ty| matches!(ty, nostos_types::Type::Map(_, _)))
+                    .unwrap_or(false)
+                    || self.expr_type_name(coll)
+                        .map(|t| t.starts_with("Map[") || t == "Map")
+                        .unwrap_or(false);
+                if is_map {
+                    let coll_reg = self.compile_expr_tail(coll, false)?;
+                    let idx_reg = self.compile_expr_tail(idx, false)?;
+                    let result_reg = self.alloc_reg();
+                    self.emit_call_native(result_reg, "Map.insert", vec![coll_reg, idx_reg, value_reg].into(), 0);
 
-                        // For variable targets, update the variable binding with the new map
-                        if let Expr::Var(ident) = coll.as_ref() {
-                            if let Some(local_info) = self.locals.get(&ident.node) {
-                                let local_reg = local_info.reg;
-                                self.chunk.emit(Instruction::Move(local_reg, result_reg), 0);
-                            }
+                    // For variable targets, update the variable binding with the new map
+                    if let Expr::Var(ident) = coll.as_ref() {
+                        if let Some(local_info) = self.locals.get(&ident.node) {
+                            let local_reg = local_info.reg;
+                            self.chunk.emit(Instruction::Move(local_reg, result_reg), 0);
                         }
-                        return Ok(self.alloc_reg()); // Return unit
                     }
+                    return Ok(self.alloc_reg()); // Return unit
                 }
 
                 // Default: use built-in IndexSet instruction for arrays
@@ -31785,8 +31801,8 @@ impl Compiler {
             // from inference are noise that should be filtered.
             let suppress = if e.should_suppress() {
                 true
-            } else if let nostos_types::TypeError::NoSuchField { ref ty, ref field } = e {
-                self.should_suppress_field_error(ty, field)
+            } else if let nostos_types::TypeError::NoSuchField { ref ty, ref field, ref resolved_type } = e {
+                self.should_suppress_field_error(ty, field, resolved_type)
             } else {
                 false
             };
@@ -31840,9 +31856,9 @@ impl Compiler {
             // logic instead of string matching on error messages.
             let suppress = if e.should_suppress() {
                 true
-            } else if let nostos_types::TypeError::NoSuchField { ref ty, ref field } = e {
+            } else if let nostos_types::TypeError::NoSuchField { ref ty, ref field, ref resolved_type } = e {
                 // NoSuchField needs compiler context (type_defs) for full validation
-                self.should_suppress_field_error(ty, field)
+                self.should_suppress_field_error(ty, field, resolved_type)
             } else {
                 false
             };
@@ -31931,7 +31947,7 @@ impl Compiler {
 
     /// Check if a NoSuchField error should be suppressed by consulting the type registry.
     /// This needs compiler context (self.type_defs) which should_suppress() can't access.
-    fn should_suppress_field_error(&self, ty: &str, field: &str) -> bool {
+    fn should_suppress_field_error(&self, ty: &str, field: &str, resolved_type: &Option<nostos_types::Type>) -> bool {
         // Strip type arguments for lookup: "Wrapper[Int]" -> "Wrapper"
         let base_type_name = if let Some(bracket_pos) = ty.find('[') {
             &ty[..bracket_pos]
@@ -31971,37 +31987,55 @@ impl Compiler {
                 }
             }
             None => {
-                // Type not in registry - report for known primitives/functions/collections,
-                // suppress for tuples with valid fields and unknown types
-                let primitives = ["Int", "Float", "Bool", "String", "Char",
-                    "Int8", "Int16", "Int32", "Int64",
-                    "UInt8", "UInt16", "UInt32", "UInt64",
-                    "Float32", "Float64", "BigInt", "Decimal"];
-                let is_tuple_type = ty.starts_with('(') && ty.contains(',');
-                let is_tuple_oob = is_tuple_type && {
-                    // Count tuple elements at depth 0
-                    let mut depth = 0;
-                    let mut count = 1usize;
-                    for c in ty.chars() {
-                        match c {
-                            '(' | '[' => depth += 1,
-                            ')' | ']' => depth -= 1,
-                            ',' if depth == 1 => count += 1,
-                            _ => {}
+                // Type not in registry - use structural Type when available
+                if let Some(ref resolved) = resolved_type {
+                    use nostos_types::Type;
+                    match resolved {
+                        // Primitives can't have fields - report error
+                        Type::Int | Type::Float | Type::Bool | Type::String | Type::Char
+                        | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64
+                        | Type::UInt8 | Type::UInt16 | Type::UInt32 | Type::UInt64
+                        | Type::Float32 | Type::Float64 | Type::BigInt | Type::Decimal
+                        | Type::Unit => false,
+                        // Functions can't have fields - report error
+                        Type::Function(_) => false,
+                        // Collections can't have fields - report error
+                        Type::List(_) | Type::Map(_, _) | Type::Set(_) => false,
+                        // Tuples: check if field index is in bounds
+                        Type::Tuple(elems) => {
+                            field.parse::<usize>().map_or(true, |idx| idx < elems.len())
                         }
+                        // Unknown/other types - suppress (may be valid)
+                        _ => true,
                     }
-                    // Check if field is a numeric index beyond bounds
-                    field.parse::<usize>().map_or(true, |idx| idx >= count)
-                };
-                let is_function_type = ty.contains("->") && !is_tuple_type;
-                let is_no_field_type = ty == "Unit" || ty == "Function" || ty == "Record";
-                let is_collection_type = ty.starts_with("Map[")
-                    || ty.starts_with("Set[")
-                    || ty.starts_with("List[");
-                // Suppress if NOT a known-bad type (primitives, functions, collections,
-                // OOB tuple access). This includes tuples with valid fields and unknown types.
-                !(primitives.contains(&ty) || is_function_type || is_tuple_oob
-                    || is_no_field_type || is_collection_type)
+                } else {
+                    // String fallback for when resolved_type is not available
+                    let primitives = ["Int", "Float", "Bool", "String", "Char",
+                        "Int8", "Int16", "Int32", "Int64",
+                        "UInt8", "UInt16", "UInt32", "UInt64",
+                        "Float32", "Float64", "BigInt", "Decimal"];
+                    let is_tuple_type = ty.starts_with('(') && ty.contains(',');
+                    let is_tuple_oob = is_tuple_type && {
+                        let mut depth = 0;
+                        let mut count = 1usize;
+                        for c in ty.chars() {
+                            match c {
+                                '(' | '[' => depth += 1,
+                                ')' | ']' => depth -= 1,
+                                ',' if depth == 1 => count += 1,
+                                _ => {}
+                            }
+                        }
+                        field.parse::<usize>().map_or(true, |idx| idx >= count)
+                    };
+                    let is_function_type = ty.contains("->") && !is_tuple_type;
+                    let is_no_field_type = ty == "Unit" || ty == "Function" || ty == "Record";
+                    let is_collection_type = ty.starts_with("Map[")
+                        || ty.starts_with("Set[")
+                        || ty.starts_with("List[");
+                    !(primitives.contains(&ty) || is_function_type || is_tuple_oob
+                        || is_no_field_type || is_collection_type)
+                }
             }
         }
     }
