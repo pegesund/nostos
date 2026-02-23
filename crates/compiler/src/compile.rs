@@ -3753,6 +3753,9 @@ impl Compiler {
                             clean_type_vars(&a.display()), clean_type_vars(&b.display())),
                     nostos_types::TypeError::Mismatch { expected: a, found: b } =>
                         format!("type mismatch: expected `{}`, found `{}`", clean_type_vars(a), clean_type_vars(b)),
+                    nostos_types::TypeError::MissingTraitImpl { ty, trait_name } =>
+                        format!("Type error: {} does not implement {}",
+                            clean_type_vars(ty), clean_type_vars(trait_name)),
                     other => format!("{:?}", other),
                 };
                 let fn_key = self.fn_sources.keys()
@@ -29924,6 +29927,40 @@ impl Compiler {
             }
         }
 
+        // Register trait implementations for custom types so MissingTraitImpl
+        // errors from solve() are accurate (not false positives from missing impls).
+        {
+            let builtin_traits = ["Hash", "Show", "Eq", "Copy"];
+            for (type_name, _) in &self.types {
+                let for_type = nostos_types::Type::Named {
+                    name: type_name.clone(),
+                    args: vec![],
+                };
+                for trait_name in &builtin_traits {
+                    env.impls.push(nostos_types::TraitImpl {
+                        trait_name: trait_name.to_string(),
+                        for_type: for_type.clone(),
+                        constraints: vec![],
+                    });
+                }
+            }
+            for (type_name, traits) in &self.type_traits {
+                let for_type = nostos_types::Type::Named {
+                    name: type_name.clone(),
+                    args: vec![],
+                };
+                for trait_name in traits {
+                    if !builtin_traits.contains(&trait_name.as_str()) {
+                        env.impls.push(nostos_types::TraitImpl {
+                            trait_name: trait_name.clone(),
+                            for_type: for_type.clone(),
+                            constraints: vec![],
+                        });
+                    }
+                }
+            }
+        }
+
         // Register mvars as bindings so type inference can resolve mvar references
         for (mvar_name, mvar_info) in &self.mvars {
             let mvar_type = self.type_name_to_type(&mvar_info.type_name);
@@ -30392,11 +30429,20 @@ impl Compiler {
 
         // Solve constraints (this can hang on unresolved type vars with HasField)
         if let Err(solve_err) = ctx.solve() {
-            // StructuralMismatch errors (produced by sequential deferred overload
-            // resolution in solve()) are always real errors — they mean two types
-            // with incompatible top-level constructors (e.g., List vs Function)
-            // were unified after constraint propagation between chained calls.
-            if matches!(&solve_err, nostos_types::TypeError::StructuralMismatch(_, _)) {
+            // In try_hm_inference, we analyze functions in isolation. Non-specialized
+            // functions (no '$' in name) produce many false positives from heterogeneous
+            // maps, unresolved generics, etc. Only keep errors from:
+            // 1. StructuralMismatch — always reliable (different type constructors)
+            // 2. Specialized functions (name contains '$') — types are concrete, so
+            //    errors that pass should_suppress() are real, EXCEPT UndefinedMethod
+            //    which can arise from named-arg reordering confusing the receiver type
+            let keep = match &solve_err {
+                nostos_types::TypeError::StructuralMismatch(_, _) => true,
+                nostos_types::TypeError::UndefinedMethod { .. } => false,
+                _ if def.name.node.contains('$') => !solve_err.should_suppress(),
+                _ => false,
+            };
+            if keep {
                 return (None, Some((def.name.node.clone(), solve_err)));
             }
             return (None, None);
