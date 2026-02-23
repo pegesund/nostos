@@ -8109,6 +8109,15 @@ impl Compiler {
                     None
                 }
             })
+            .or_else(|| {
+                // resolve_name may short-circuit (e.g., known_constructors has bare name)
+                // before checking imports. Try imports directly as fallback.
+                if let Some(imported) = self.imports.get(name) {
+                    self.type_defs.get(imported)
+                } else {
+                    None
+                }
+            })
     }
 
     /// Resolve a name with ambiguity checking.
