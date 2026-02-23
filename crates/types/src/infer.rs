@@ -149,11 +149,12 @@ pub struct InferCtx<'a> {
     /// paired with the shared result type variable. After solve(), check for
     /// structural container mismatches (e.g., List vs Set in different branches).
     deferred_branch_type_checks: Vec<(Type, Type, Span)>,
-    /// Deferred index access checks: (container_type, index_type, elem_type, span).
+    /// Deferred index access checks: (container_type, index_type, elem_type, span, literal_index).
     /// When an Index expression's container is an unresolved Var, defer the check
     /// until after solve() resolves the container type. This correctly handles
     /// Map[K,V] indexing where m["key"] should return V, not assume List indexing.
-    deferred_index_checks: Vec<(Type, Type, Type, Span)>,
+    /// The optional literal_index stores the compile-time integer index for tuple access.
+    deferred_index_checks: Vec<(Type, Type, Type, Span, Option<i64>)>,
     /// Known implicit conversion function names (e.g., "tensorFromList").
     /// Populated by the compiler from functions matching the naming convention.
     known_implicit_fns: HashSet<String>,
@@ -2718,7 +2719,7 @@ impl<'a> InferCtx<'a> {
         // Process deferred index access checks.
         // When Index expressions had unresolved container types (Var), we deferred them.
         // Now that solve() has run, resolve the container and add proper constraints.
-        for (container_ty, index_ty, elem_ty, _span) in std::mem::take(&mut self.deferred_index_checks) {
+        for (container_ty, index_ty, elem_ty, _span, literal_index) in std::mem::take(&mut self.deferred_index_checks) {
             let resolved = self.env.apply_subst(&container_ty);
             match &resolved {
                 Type::Map(key_ty, val_ty) => {
@@ -2736,8 +2737,19 @@ impl<'a> InferCtx<'a> {
                     let _ = self.unify_types(&self.env.apply_subst(&index_ty), &Type::Int);
                     let _ = self.unify_types(&self.env.apply_subst(&elem_ty), list_elem_ty);
                 }
-                Type::Tuple(_) | Type::Named { .. } => {
-                    // Tuple or custom type indexing: index must be Int
+                Type::Tuple(elems) => {
+                    // Tuple indexing: index must be Int
+                    let _ = self.unify_types(&self.env.apply_subst(&index_ty), &Type::Int);
+                    // If literal index available, resolve to specific element type
+                    if let Some(n) = literal_index {
+                        let idx = n as usize;
+                        if idx < elems.len() {
+                            let _ = self.unify_types(&self.env.apply_subst(&elem_ty), &elems[idx]);
+                        }
+                    }
+                }
+                Type::Named { .. } => {
+                    // Custom type indexing: index must be Int
                     let _ = self.unify_types(&self.env.apply_subst(&index_ty), &Type::Int);
                 }
                 Type::Var(_) => {
@@ -2745,12 +2757,20 @@ impl<'a> InferCtx<'a> {
                     // is Int (suggesting List access like xs[0]) vs a type variable
                     // (suggesting Map access like m[k]).
                     let resolved_idx = self.env.apply_subst(&index_ty);
-                    if matches!(&resolved_idx, Type::Int) {
-                        // Index is Int - assume List. Use unify_types directly (not
-                        // constraint push) because the main constraint loop has already
-                        // exited. This ensures the container var gets unified with
-                        // List[elem], linking element type to trait bounds
-                        // (e.g., Num from `xs[0] + 1`).
+                    if matches!(&resolved_idx, Type::Int) && literal_index.is_none() {
+                        // Index is Int from a variable expression (not a literal) -
+                        // assume List. Use unify_types directly (not constraint push)
+                        // because the main constraint loop has already exited. This
+                        // ensures the container var gets unified with List[elem],
+                        // linking element type to trait bounds (e.g., Num from `xs[i] + 1`).
+                        //
+                        // When literal_index is Some, we DON'T assume List because the
+                        // container could be a Tuple (e.g., kv[0], kv[1] on a (String, Int)).
+                        // Tuples support literal integer indexing just like Lists. In batch
+                        // inference, the container may remain Var because instantiate_function
+                        // creates independent vars that aren't linked to the function body's
+                        // HasMethod constraints. Forcing List here would wrongly unify
+                        // heterogeneous tuple elements to a single type.
                         let list_ty = Type::List(Box::new(elem_ty.clone()));
                         let _ = self.unify_types(&container_ty, &list_ty);
                     }
@@ -3874,9 +3894,22 @@ impl<'a> InferCtx<'a> {
                         // e.g., hasItem(xs, item) = xs.contains(item) — the Eq bound from
                         // contains' element param must flow to hasItem's item param.
                         if call.span.is_none() {
+                            // HasMethod-sourced calls from signature constraints.
+                            // call.arg_types[0] is the receiver; normally we skip unifying it
+                            // to avoid forcing an unresolved receiver to a specific collection type
+                            // (e.g., applyLen(x) = x.length() shouldn't force x to be List).
+                            // BUT: when the receiver IS already resolved (from the calling context),
+                            // we MUST unify it with the method's first param to establish element type
+                            // connections. Example: myMapper(lst, f) = lst.map(f) called with
+                            // List[(String, Int)] — unifying the receiver links elem=(String, Int)
+                            // so the callback parameter f gets the correct element type.
+                            if !call.arg_types.is_empty() && !ft.params.is_empty() {
+                                let resolved_first = self.env.apply_subst(&call.arg_types[0]);
+                                if !matches!(&resolved_first, Type::Var(_)) {
+                                    let _ = self.unify_types(&call.arg_types[0], &ft.params[0]);
+                                }
+                            }
                             // Unify non-receiver args to propagate trait bounds.
-                            // call.arg_types[0] is the receiver; skip it to avoid
-                            // forcing the receiver to a specific collection type.
                             // ft.params[0] is the method's receiver param.
                             if call.arg_types.len() > 1 && ft.params.len() > 1 {
                                 for (call_arg, method_param) in call.arg_types[1..].iter().zip(ft.params[1..].iter()) {
@@ -6631,6 +6664,12 @@ impl<'a> InferCtx<'a> {
                 let index_ty = self.infer_expr(index)?;
                 let elem_ty = self.fresh();
 
+                // Extract literal integer index for tuple element type resolution
+                let literal_index = match index.as_ref() {
+                    Expr::Int(n, _) => Some(*n),
+                    _ => None,
+                };
+
                 // Apply substitutions to get resolved container type
                 let resolved_container = self.env.apply_subst(&container_ty);
 
@@ -6641,7 +6680,7 @@ impl<'a> InferCtx<'a> {
                         // Unresolved type variable - defer the index check until after solve()
                         // This correctly handles cases like m["key"] where m is a Map returned
                         // from a function call whose return type hasn't been resolved yet.
-                        self.deferred_index_checks.push((container_ty.clone(), index_ty, elem_ty.clone(), *span));
+                        self.deferred_index_checks.push((container_ty.clone(), index_ty, elem_ty.clone(), *span, literal_index));
                         Ok(elem_ty)
                     }
                     Type::Named { .. } => {
@@ -6678,10 +6717,21 @@ impl<'a> InferCtx<'a> {
                         ));
                         Ok(elem_ty)
                     }
-                    Type::Tuple(_) => {
+                    Type::Tuple(elems) => {
                         // Tuple indexing: t[i] where i is Int
-                        // Return type is unconstrained since tuples are heterogeneous
                         self.unify(index_ty, Type::Int);
+                        // If index is a literal integer, resolve to the specific element type
+                        // This enables heterogeneous tuple access: t[0]: String, t[1]: Int
+                        if let Some(n) = literal_index {
+                            let idx = n as usize;
+                            if idx < elems.len() {
+                                self.constraints.push(Constraint::Equal(
+                                    elem_ty.clone(),
+                                    elems[idx].clone(),
+                                    Some(*span),
+                                ));
+                            }
+                        }
                         Ok(elem_ty)
                     }
                     _ => {

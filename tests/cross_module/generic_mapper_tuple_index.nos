@@ -1,0 +1,29 @@
+# expect: 2
+# Generic mapper function using HasMethod constraint (lst.map(f))
+# must correctly propagate element type to lambda parameters.
+# When lst: List[(String, Int)] is mapped, the lambda's kv param
+# must resolve to (String, Int) so kv[0]: String and kv[1]: Int.
+
+module Utils
+    pub myMapper(lst, f) = lst.map(f)
+end
+
+module Process
+    use Utils.{myMapper}
+    pub processMap(m: Map[String, Int]) = {
+        pairs = m.toList()
+        newPairs = myMapper(pairs, (kv) => (kv[0], kv[1]))
+        Map.fromList(newPairs)
+    }
+end
+
+use Process.{processMap}
+
+main() = {
+    m = Map.fromList([("a", 1), ("b", 2)])
+    m2 = processMap(m)
+    match m2.lookup("b") {
+        Some(v) -> v
+        None -> 0
+    }
+}
