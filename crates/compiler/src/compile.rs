@@ -1784,6 +1784,11 @@ pub struct Compiler {
     /// Counter for generating unique identifiers in templates (gensym)
     /// Uses Cell for interior mutability since substitute_splices_in_ast takes &self
     gensym_counter: std::cell::Cell<u64>,
+    /// Cached base TypeEnv for try_hm_inference. Built lazily on first use per compilation pass.
+    /// Contains everything stable during Pass 2: standard_env, types, traits, impls, builtins,
+    /// mvars, top_level_bindings, pending_fn_signatures. Excludes volatile parts: self.functions,
+    /// import-based aliases, and per-function registrations. Invalidated at start of compile_all.
+    cached_hm_base_env: Option<nostos_types::TypeEnv>,
 }
 
 /// Information about a module-level mutable variable (mvar).
@@ -2047,6 +2052,7 @@ impl Compiler {
             trait_method_ufcs_signatures: HashMap::new(),
             generated_items: Vec::new(),
             gensym_counter: std::cell::Cell::new(0),
+            cached_hm_base_env: None,
         };
 
         // Register builtin types for autocomplete
@@ -2660,6 +2666,7 @@ impl Compiler {
             trait_method_ufcs_signatures: HashMap::new(),
             generated_items: Vec::new(),
             gensym_counter: std::cell::Cell::new(0),
+            cached_hm_base_env: None,
         };
 
         // Pre-parse all BUILTINS signatures (avoids re-parsing per function)
@@ -24622,16 +24629,14 @@ impl Compiler {
         fallback
     }
 
-    /// Try full Hindley-Milner type inference for a function.
-    /// Returns None if inference fails, allowing fallback to AST-based signature.
-    /// Also returns resolved expression types for the function body.
-    fn try_hm_inference(&self, def: &FnDef) -> (Option<(String, Vec<(Span, nostos_types::Type)>)>, Option<(String, nostos_types::TypeError)>) {
-        // Create a fresh type environment for inference
+    /// Build the base TypeEnv for HM inference. Contains everything stable during Pass 2:
+    /// standard_env, types, traits, impls, builtins, mvars, top_level_bindings,
+    /// pending_fn_signatures, trait_method_ufcs_signatures, trait method bare names.
+    /// Excludes volatile parts: self.functions, import-based aliases, per-function registrations.
+    fn build_hm_base_env(&self) -> nostos_types::TypeEnv {
         let mut env = nostos_types::standard_env();
 
         // Register ALL builtins from cached parsed signatures
-        // Don't override functions that are already in standard_env (like println, print, show)
-        // because those have manually crafted type params
         for &(name, _sig, ref func_type) in &self.cached_builtin_signatures {
             if env.functions.contains_key(name) {
                 continue;
@@ -24641,7 +24646,6 @@ impl Compiler {
 
         // Register known types from the compiler context
         for (name, type_info) in &self.types {
-            // Get type parameters from the original TypeDef if available
             let type_params: Vec<nostos_types::TypeParam> = self.type_defs.get(name)
                 .map(|td| td.type_params.iter().map(|p| nostos_types::TypeParam {
                     name: p.name.node.clone(),
@@ -24665,7 +24669,6 @@ impl Compiler {
                     );
                 }
                 TypeInfoKind::Reactive { fields } => {
-                    // Reactive records are treated like mutable records in the type system
                     let field_types: Vec<(String, nostos_types::Type, bool)> = fields
                         .iter()
                         .map(|(n, ty)| (n.clone(), Self::vars_to_type_params(&self.type_name_to_type(ty), &type_params), false))
@@ -24709,7 +24712,6 @@ impl Compiler {
                     );
                 }
                 TypeInfoKind::ReactiveVariant { constructors } => {
-                    // Reactive variants are treated like variants in the type system
                     let ctors: Vec<nostos_types::Constructor> = constructors
                         .iter()
                         .map(|(ctor_name, field_types)| match field_types {
@@ -24741,29 +24743,13 @@ impl Compiler {
             }
         }
 
-        // Register type aliases from imports (e.g., "Option" -> "stdlib.list.Option")
-        // This allows type annotations like "-> Option[Int]" to resolve correctly
-        for (short_name, qualified_name) in &self.imports {
-            // Only add alias if the qualified name is a known type
-            if self.types.contains_key(qualified_name) {
-                env.add_type_alias(short_name.clone(), qualified_name.clone());
-            }
-        }
-
-        // Add type aliases with current module's types taking priority
-        self.add_type_aliases_to_env(&mut env);
-
         // Register user-defined traits in the type environment
-        // This enables trait method lookup when receiver is a type variable with trait bounds
         for (trait_name, trait_info) in &self.trait_defs {
             let methods: Vec<nostos_types::TraitMethod> = trait_info.methods.iter()
                 .map(|m| {
-                    // For trait methods, the first parameter is "self" of type Self (the implementing type)
-                    // Other params need to be parsed from return_type (we don't store full param types yet)
                     let mut params = vec![
                         ("self".to_string(), nostos_types::Type::TypeParam("Self".to_string()))
                     ];
-                    // Add placeholder params for additional arguments
                     for i in 1..m.param_count {
                         params.push((format!("arg{}", i), nostos_types::Type::TypeParam(format!("T{}", i))));
                     }
@@ -24786,7 +24772,6 @@ impl Compiler {
                 defaults: vec![],
             });
 
-            // Also register without module prefix for lookup
             if let Some(dot_pos) = trait_name.rfind('.') {
                 let short_name = &trait_name[dot_pos + 1..];
                 if !env.traits.contains_key(short_name) {
@@ -24797,8 +24782,7 @@ impl Compiler {
             }
         }
 
-        // Register trait implementations for custom types so MissingTraitImpl
-        // errors from solve() are accurate (not false positives from missing impls).
+        // Register trait implementations for custom types
         {
             let builtin_traits = ["Hash", "Show", "Eq", "Copy"];
             for (type_name, _) in &self.types {
@@ -24831,12 +24815,10 @@ impl Compiler {
             }
         }
 
-        // Register mvars as bindings so type inference can resolve mvar references
+        // Register mvars as bindings
         for (mvar_name, mvar_info) in &self.mvars {
             let mvar_type = self.type_name_to_type(&mvar_info.type_name);
-            // Register with both qualified and unqualified names
             env.bindings.insert(mvar_name.clone(), (mvar_type.clone(), true));
-            // Also register with just the local name (strip module prefix)
             if let Some(dot_pos) = mvar_name.rfind('.') {
                 let local_name = &mvar_name[dot_pos + 1..];
                 if !env.bindings.contains_key(local_name) {
@@ -24845,10 +24827,7 @@ impl Compiler {
             }
         }
 
-        // Register top-level bindings so functions referencing module-level values
-        // get correct type inference. Without this, `baseUrl = "http://..."; makeUrl(path) = baseUrl ++ path`
-        // would fail because baseUrl is unknown, causing try_hm_inference to bail out
-        // and miss the Concat trait bound on `path`.
+        // Register top-level bindings (expensive: involves InferCtx)
         {
             let mut to_infer: Vec<(&str, &str, &nostos_syntax::Expr)> = Vec::new();
             for (binding_name, (binding, _, _)) in &self.top_level_bindings {
@@ -24886,28 +24865,17 @@ impl Compiler {
             }
         }
 
-        // Register built-in functions from cached parsed signatures for type inference
-        // This allows functions calling Panel.*, String.*, etc. to have proper return types
+        // Register built-in functions with type suffixes for overload resolution
         for &(name, sig, ref fn_type) in &self.cached_builtin_signatures {
-            // Create a typed suffix for overload resolution (e.g., "length/String" or "length/List")
             let type_suffix = fn_type.params.iter()
                 .map(|p| self.format_type_for_suffix(p))
                 .collect::<Vec<_>>()
                 .join(",");
             let qualified_name = format!("{}/{}", name, type_suffix);
-
-            // Always register with type suffix (allows multiple overloads)
             env.insert_function(qualified_name, fn_type.clone());
-
-            // Also register under bare name if not already present
             if !env.functions.contains_key(name) {
                 env.insert_function(name.to_string(), fn_type.clone());
             }
-
-            // Register list methods with "List." prefix for UFCS type inference.
-            // Without this, phase2 of check_pending_method_calls only finds
-            // String.take (registered as a named BUILTIN) but not List.take,
-            // causing it to incorrectly unify generic receivers with String.
             if sig.starts_with("[a]") && !name.contains('.') {
                 let has_single_type_param = !sig.contains(" b")
                     && !sig.contains("(b");
@@ -24921,6 +24889,129 @@ impl Compiler {
                 }
             }
         }
+
+        // NOTE: pending_fn_signatures are NOT included in the base env because they need
+        // to be filtered against compiled_base_names (from self.functions) which is volatile.
+        // They are added per-call in try_hm_inference after the self.functions loop.
+
+        // Register trait method UFCS signatures
+        for (fn_name, fn_type) in &self.trait_method_ufcs_signatures {
+            if !env.functions.contains_key(fn_name) {
+                env.insert_function(fn_name.clone(), fn_type.clone());
+            }
+        }
+
+        // Register trait methods under bare names with generic signatures
+        {
+            let mut trait_var_base = 200u32;
+            for trait_info in self.trait_defs.values() {
+                for method in &trait_info.methods {
+                    let method_name = &method.name;
+                    let mut params = Vec::new();
+                    trait_var_base += 1;
+                    params.push(nostos_types::Type::Var(trait_var_base));
+                    for _ in 1..method.param_count {
+                        trait_var_base += 1;
+                        params.push(nostos_types::Type::Var(trait_var_base));
+                    }
+                    let ret = if method.return_type != "()" && !method.return_type.is_empty()
+                        && !method.return_type.chars().next().map(|c| c.is_lowercase()).unwrap_or(false)
+                        && !method.return_type.contains("->")
+                    {
+                        self.type_name_to_type(&method.return_type)
+                    } else {
+                        trait_var_base += 1;
+                        nostos_types::Type::Var(trait_var_base)
+                    };
+                    let arity_suffix = if method.param_count == 0 {
+                        "/".to_string()
+                    } else {
+                        format!("/{}", vec!["_"; method.param_count].join(","))
+                    };
+                    let fn_key = format!("{}{}", method_name, arity_suffix);
+                    env.insert_function(fn_key, nostos_types::FunctionType {
+                        required_params: None,
+                        type_params: vec![],
+                        params,
+                        ret: Box::new(ret),
+                        var_bounds: vec![],
+                    });
+                    env.insert_function(method_name.clone(), nostos_types::FunctionType {
+                        required_params: None,
+                        type_params: vec![],
+                        params: {
+                            let mut p = Vec::new();
+                            trait_var_base += 1;
+                            p.push(nostos_types::Type::Var(trait_var_base));
+                            for _ in 1..method.param_count {
+                                trait_var_base += 1;
+                                p.push(nostos_types::Type::Var(trait_var_base));
+                            }
+                            p
+                        },
+                        ret: Box::new(if method.return_type != "()" && !method.return_type.is_empty()
+                            && !method.return_type.chars().next().map(|c| c.is_lowercase()).unwrap_or(false)
+                            && !method.return_type.contains("->")
+                        {
+                            self.type_name_to_type(&method.return_type)
+                        } else {
+                            trait_var_base += 1;
+                            nostos_types::Type::Var(trait_var_base)
+                        }),
+                        var_bounds: vec![],
+                    });
+                }
+            }
+        }
+
+        // Bind REPL local variables
+        for (var_name, ty) in &self.local_types {
+            env.bind(var_name.clone(), ty.clone(), false);
+        }
+
+        // Add throw/panic to the inference env
+        {
+            let throw_type = nostos_types::FunctionType {
+                type_params: vec![
+                    nostos_types::TypeParam { name: "a".to_string(), constraints: vec![] },
+                    nostos_types::TypeParam { name: "b".to_string(), constraints: vec![] },
+                ],
+                params: vec![nostos_types::Type::TypeParam("a".to_string())],
+                ret: Box::new(nostos_types::Type::TypeParam("b".to_string())),
+                required_params: None,
+                var_bounds: vec![],
+            };
+            env.insert_function("throw".to_string(), throw_type.clone());
+            env.insert_function("panic".to_string(), throw_type);
+        }
+
+        env
+    }
+
+    /// Try full Hindley-Milner type inference for a function.
+    /// Returns None if inference fails, allowing fallback to AST-based signature.
+    /// Also returns resolved expression types for the function body.
+    fn try_hm_inference(&mut self, def: &FnDef) -> (Option<(String, Vec<(Span, nostos_types::Type)>)>, Option<(String, nostos_types::TypeError)>) {
+        // Use cached base env if available, otherwise build and cache it
+        let mut env = if let Some(ref cached) = self.cached_hm_base_env {
+            cached.clone()
+        } else {
+            let base = self.build_hm_base_env();
+            self.cached_hm_base_env = Some(base.clone());
+            base
+        };
+
+        // === Per-call additions (volatile, depend on current module or self.functions) ===
+
+        // Register type aliases from imports (module-specific)
+        for (short_name, qualified_name) in &self.imports {
+            if self.types.contains_key(qualified_name) {
+                env.add_type_alias(short_name.clone(), qualified_name.clone());
+            }
+        }
+
+        // Add type aliases with current module's types taking priority
+        self.add_type_aliases_to_env(&mut env);
 
         // Build a set of trait method names from trait definitions.
         // Used below to avoid registering concrete trait method impls under bare method names
@@ -25069,28 +25160,18 @@ impl Compiler {
         }
 
         // Register pending function signatures for functions not yet compiled
-        // This enables correct type inference for mutual recursion across compilation order
-        // Pre-compute set of base names that have compiled signatures (O(n) instead of O(n²))
-        // Exclude stdlib functions - they should be registered from pending_fn_signatures
-        // with proper type_params preserved from the cache.
+        // Must come AFTER self.functions loop so compiled_base_names filter works correctly
         let compiled_base_names: std::collections::HashSet<&str> = self.functions.iter()
             .filter(|(k, fv)| fv.signature.is_some() && !k.starts_with("stdlib."))
             .map(|(k, _)| k.split('/').next().unwrap_or(k))
             .collect();
 
         for (fn_name, fn_type) in &self.pending_fn_signatures {
-            // Get the base name to check if any overload is compiled
             let base_name = fn_name.split('/').next().unwrap_or(fn_name);
             if compiled_base_names.contains(base_name) {
                 continue;
             }
-
-            // User-defined functions (no module dots in base_name) should ALWAYS overwrite
-            // existing entries, including those from stdlib. This ensures that a user's
-            // `stringify(n: Int)` takes precedence over stdlib's `stringify(json)` during
-            // batch inference, regardless of processing order.
             let is_user_defined = !base_name.contains('.');
-
             if is_user_defined || !env.functions.contains_key(fn_name) {
                 env.insert_function(fn_name.clone(), fn_type.clone());
             }
@@ -25100,96 +25181,14 @@ impl Compiler {
                 if let Some(dot_pos) = base_name.rfind('.') {
                     let short_name = &base_name[dot_pos + 1..];
                     let short_qualified = format!("{}{}", short_name, arity_suffix);
-                    // Register with arity suffix for overload resolution
                     if !env.functions.contains_key(&short_qualified) {
                         env.insert_function(short_qualified, fn_type.clone());
                     }
-                    // Also register bare name for simple lookups
                     if !env.functions.contains_key(short_name) {
                         env.insert_function(short_name.to_string(), fn_type.clone());
                     }
                 } else if is_user_defined {
-                    // User-defined function with no module prefix: also overwrite bare name
-                    // so that `stringify` (user) takes precedence over stdlib's `stringify`
                     env.insert_function(base_name.to_string(), fn_type.clone());
-                }
-            }
-        }
-
-        // Register trait method UFCS signatures for check_pending_method_calls.
-        // These are stored separately from pending_fn_signatures because compile_all
-        // clears non-stdlib entries. Format: {TypeName}.{method}/_,_,...
-        for (fn_name, fn_type) in &self.trait_method_ufcs_signatures {
-            if !env.functions.contains_key(fn_name) {
-                env.insert_function(fn_name.clone(), fn_type.clone());
-            }
-        }
-
-        // Register trait methods under their bare names with generic signatures.
-        // This allows trait methods to be called in function form (e.g., `display(w)`)
-        // with different types without type conflicts. The signature uses type variables
-        // for `self` so `display(Widget(...))` and `display(Button(...))` both work.
-        {
-            let mut trait_var_base = 200u32; // High base to avoid collisions
-            for trait_info in self.trait_defs.values() {
-                for method in &trait_info.methods {
-                    let method_name = &method.name;
-                    // Build generic function type: self param is a fresh type var
-                    let mut params = Vec::new();
-                    trait_var_base += 1;
-                    params.push(nostos_types::Type::Var(trait_var_base)); // self
-                    for _ in 1..method.param_count {
-                        trait_var_base += 1;
-                        params.push(nostos_types::Type::Var(trait_var_base));
-                    }
-                    let ret = if method.return_type != "()" && !method.return_type.is_empty()
-                        && !method.return_type.chars().next().map(|c| c.is_lowercase()).unwrap_or(false)
-                        && !method.return_type.contains("->")
-                    {
-                        self.type_name_to_type(&method.return_type)
-                    } else {
-                        trait_var_base += 1;
-                        nostos_types::Type::Var(trait_var_base)
-                    };
-                    let arity_suffix = if method.param_count == 0 {
-                        "/".to_string()
-                    } else {
-                        format!("/{}", vec!["_"; method.param_count].join(","))
-                    };
-                    let fn_key = format!("{}{}", method_name, arity_suffix);
-                    // Overwrite any concrete impl that was incorrectly registered
-                    env.insert_function(fn_key, nostos_types::FunctionType {
-                        required_params: None,
-                        type_params: vec![],
-                        params,
-                        ret: Box::new(ret),
-                        var_bounds: vec![],
-                    });
-                    // Also register bare name
-                    env.insert_function(method_name.clone(), nostos_types::FunctionType {
-                        required_params: None,
-                        type_params: vec![],
-                        params: {
-                            let mut p = Vec::new();
-                            trait_var_base += 1;
-                            p.push(nostos_types::Type::Var(trait_var_base));
-                            for _ in 1..method.param_count {
-                                trait_var_base += 1;
-                                p.push(nostos_types::Type::Var(trait_var_base));
-                            }
-                            p
-                        },
-                        ret: Box::new(if method.return_type != "()" && !method.return_type.is_empty()
-                            && !method.return_type.chars().next().map(|c| c.is_lowercase()).unwrap_or(false)
-                            && !method.return_type.contains("->")
-                        {
-                            self.type_name_to_type(&method.return_type)
-                        } else {
-                            trait_var_base += 1;
-                            nostos_types::Type::Var(trait_var_base)
-                        }),
-                        var_bounds: vec![],
-                    });
                 }
             }
         }
@@ -25246,16 +25245,7 @@ impl Compiler {
             );
         }
 
-        // Bind REPL local variables in the TypeEnv for HM inference
-        // This allows expressions like `v * 2.0` to know that `v: testvec.Vec`
-        // and dispatch correctly to scalar operations
-        for (var_name, ty) in &self.local_types {
-            env.bind(var_name.clone(), ty.clone(), false);
-        }
-
-        // Copy function imports from compiler to TypeEnv for cross-module resolution
-        // This allows imported functions like `query` from `stdlib.pool` to be found
-        // during type inference even when called by their short name
+        // Copy function imports from compiler to TypeEnv for cross-module resolution (per-call, module-specific)
         for (short_name, qualified_name) in &self.imports {
             let is_type = qualified_name.split('.').last()
                 .map(|s| s.chars().next().map(|c| c.is_uppercase()).unwrap_or(false))
@@ -25263,25 +25253,6 @@ impl Compiler {
             if !is_type {
                 env.function_aliases.insert(short_name.clone(), qualified_name.clone());
             }
-        }
-
-        // Add throw/panic to the inference env so they don't cause UnknownIdent failure.
-        // The signature `a -> b` means "takes any type, returns any type" (acts as bottom/Never).
-        // type_params MUST list both a and b so instantiate_function creates fresh vars for them.
-        // Without this, TypeParam("b") wouldn't unify with other branch types in if-then-else.
-        {
-            let throw_type = nostos_types::FunctionType {
-                type_params: vec![
-                    nostos_types::TypeParam { name: "a".to_string(), constraints: vec![] },
-                    nostos_types::TypeParam { name: "b".to_string(), constraints: vec![] },
-                ],
-                params: vec![nostos_types::Type::TypeParam("a".to_string())],
-                ret: Box::new(nostos_types::Type::TypeParam("b".to_string())),
-                required_params: None,
-                var_bounds: vec![],
-            };
-            env.insert_function("throw".to_string(), throw_type.clone());
-            env.insert_function("panic".to_string(), throw_type);
         }
 
         // Create inference context

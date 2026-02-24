@@ -30,6 +30,9 @@ impl Compiler {
         let pending = std::mem::take(&mut self.pending_functions);
         let mut errors: Vec<(String, CompileError, String, Arc<String>)> = Vec::new();
 
+        // Invalidate cached HM base env — types/traits/pending_fn_signatures will be rebuilt
+        self.cached_hm_base_env = None;
+
         // Pre-build function signatures for type checking (done once, not per-function)
         // Preserve cached stdlib signatures (loaded from cache via register_function_signature_from_cache)
         // which start with "stdlib." - only clear non-stdlib entries.
@@ -1870,9 +1873,9 @@ impl Compiler {
                         let saved_path = std::mem::replace(&mut self.module_path, module_path);
 
                         // Try HM inference again now that all dependencies are compiled
-                        // Use reference to fn_ast - no need to clone the entire AST
-                        let inferred = self.fn_asts.get(fn_name)
-                            .and_then(|fn_ast| self.try_hm_inference(fn_ast).0);
+                        // Clone the fn_ast to avoid borrow conflict with &mut self in try_hm_inference
+                        let inferred = self.fn_asts.get(fn_name).cloned()
+                            .and_then(|fn_ast| self.try_hm_inference(&fn_ast).0);
 
                         if let Some((inferred_sig, _expr_types)) = inferred {
                             // Check if signature actually changed
