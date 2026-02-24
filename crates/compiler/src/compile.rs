@@ -22,6 +22,130 @@ mod traits;
 mod patterns;
 mod modules;
 
+/// Builtin UFCS method dispatch table.
+/// Maps (base_type, method_name) → qualified_function_name.
+/// Used by compile_expr for MethodCall dispatch on builtin types.
+static BUILTIN_METHODS: &[(&str, &str, &str)] = &[
+    // Map methods
+    ("Map", "get", "Map.get"),
+    ("Map", "lookup", "Map.lookup"),
+    ("Map", "getOrThrow", "Map.getOrThrow"),
+    ("Map", "insert", "Map.insert"),
+    ("Map", "remove", "Map.remove"),
+    ("Map", "contains", "Map.contains"),
+    ("Map", "keys", "Map.keys"),
+    ("Map", "values", "Map.values"),
+    ("Map", "size", "Map.size"),
+    ("Map", "isEmpty", "Map.isEmpty"),
+    ("Map", "union", "Map.union"),
+    ("Map", "intersection", "Map.intersection"),
+    ("Map", "difference", "Map.difference"),
+    ("Map", "toList", "Map.toList"),
+    // Set methods
+    ("Set", "contains", "Set.contains"),
+    ("Set", "insert", "Set.insert"),
+    ("Set", "remove", "Set.remove"),
+    ("Set", "size", "Set.size"),
+    ("Set", "isEmpty", "Set.isEmpty"),
+    ("Set", "union", "Set.union"),
+    ("Set", "intersection", "Set.intersection"),
+    ("Set", "difference", "Set.difference"),
+    ("Set", "symmetricDifference", "Set.symmetricDifference"),
+    ("Set", "isSubset", "Set.isSubset"),
+    ("Set", "isProperSubset", "Set.isProperSubset"),
+    ("Set", "toList", "Set.toList"),
+    // String methods
+    ("String", "length", "String.length"),
+    ("String", "chars", "String.chars"),
+    ("String", "toInt", "String.toInt"),
+    ("String", "toFloat", "String.toFloat"),
+    ("String", "trim", "String.trim"),
+    ("String", "trimStart", "String.trimStart"),
+    ("String", "trimEnd", "String.trimEnd"),
+    ("String", "toUpper", "String.toUpper"),
+    ("String", "toLower", "String.toLower"),
+    ("String", "contains", "String.contains"),
+    ("String", "startsWith", "String.startsWith"),
+    ("String", "endsWith", "String.endsWith"),
+    ("String", "replace", "String.replace"),
+    ("String", "replaceAll", "String.replaceAll"),
+    ("String", "indexOf", "String.indexOf"),
+    ("String", "lastIndexOf", "String.lastIndexOf"),
+    ("String", "substring", "String.substring"),
+    ("String", "repeat", "String.repeat"),
+    ("String", "padStart", "String.padStart"),
+    ("String", "padEnd", "String.padEnd"),
+    ("String", "reverse", "String.reverse"),
+    ("String", "lines", "String.lines"),
+    ("String", "words", "String.words"),
+    ("String", "isEmpty", "String.isEmpty"),
+    ("String", "split", "String.split"),
+    ("String", "drop", "String.drop"),
+    ("String", "take", "String.take"),
+    // List methods (join dispatches to String.join)
+    ("List", "join", "String.join"),
+    // Float64Array methods
+    ("Float64Array", "length", "Float64Array.length"),
+    ("Float64Array", "get", "Float64Array.get"),
+    ("Float64Array", "set", "Float64Array.set"),
+    ("Float64Array", "toList", "Float64Array.toList"),
+    // Int64Array methods
+    ("Int64Array", "length", "Int64Array.length"),
+    ("Int64Array", "get", "Int64Array.get"),
+    ("Int64Array", "set", "Int64Array.set"),
+    ("Int64Array", "toList", "Int64Array.toList"),
+    // Float32Array methods
+    ("Float32Array", "length", "Float32Array.length"),
+    ("Float32Array", "get", "Float32Array.get"),
+    ("Float32Array", "set", "Float32Array.set"),
+    ("Float32Array", "toList", "Float32Array.toList"),
+];
+
+/// Option method aliasing table.
+/// Maps method_name → stdlib function name (e.g., opt.map(f) → optMap(opt, f))
+static OPTION_METHODS: &[(&str, &str)] = &[
+    ("map", "optMap"),
+    ("flatMap", "optFlatMap"),
+    ("unwrap", "optUnwrap"),
+    ("unwrapOr", "optUnwrapOr"),
+    ("isSome", "optIsSome"),
+    ("isNone", "optIsNone"),
+];
+
+/// Result method aliasing table.
+/// Maps method_name → stdlib function name (e.g., res.map(f) → resMap(res, f))
+static RESULT_METHODS: &[(&str, &str)] = &[
+    ("map", "resMap"),
+    ("mapErr", "resMapErr"),
+    ("flatMap", "resFlatMap"),
+    ("unwrap", "resUnwrap"),
+    ("unwrapOr", "resUnwrapOr"),
+    ("isOk", "resIsOk"),
+    ("isErr", "resIsErr"),
+    ("toOption", "resToOption"),
+];
+
+/// Look up a builtin UFCS method by base type and method name.
+fn resolve_builtin_method(base_type: &str, method_name: &str) -> Option<&'static str> {
+    BUILTIN_METHODS.iter()
+        .find(|(ty, meth, _)| *ty == base_type && *meth == method_name)
+        .map(|(_, _, func)| *func)
+}
+
+/// Look up an Option method alias.
+fn resolve_option_method(method_name: &str) -> Option<&'static str> {
+    OPTION_METHODS.iter()
+        .find(|(meth, _)| *meth == method_name)
+        .map(|(_, func)| *func)
+}
+
+/// Look up a Result method alias.
+fn resolve_result_method(method_name: &str) -> Option<&'static str> {
+    RESULT_METHODS.iter()
+        .find(|(meth, _)| *meth == method_name)
+        .map(|(_, func)| *func)
+}
+
 /// Metadata for a built-in function.
 pub struct BuiltinInfo {
     pub name: &'static str,
@@ -13007,273 +13131,156 @@ impl Compiler {
                     // Use structural base type if available, otherwise parse from string
                     let base_type = structural_base_type.as_deref();
 
-                    // Determine type category using structural type first, string fallback only if needed
-                    let is_map = base_type == Some("Map")
-                        || (base_type.is_none() && (type_name.starts_with("Map[") || type_name == "Map"));
-                    let is_set = base_type == Some("Set")
-                        || (base_type.is_none() && (type_name.starts_with("Set[") || type_name == "Set"));
-                    let is_string = base_type == Some("String")
-                        || (base_type.is_none() && type_name == "String");
-                    let is_list = base_type == Some("List")
-                        || (base_type.is_none() && (type_name.starts_with("List[") || type_name == "List" || (type_name.starts_with("[") && type_name.ends_with("]"))));
+                    // Determine effective base type for method dispatch.
+                    // Use structural type if available, otherwise parse from type_name string.
+                    let effective_base_type = base_type
+                        .or_else(|| {
+                            // String fallback: extract base type from parameterized forms
+                            if type_name.starts_with("Map[") || type_name == "Map" { Some("Map") }
+                            else if type_name.starts_with("Set[") || type_name == "Set" { Some("Set") }
+                            else if type_name == "String" { Some("String") }
+                            else if type_name.starts_with("List[") || type_name == "List"
+                                || (type_name.starts_with("[") && type_name.ends_with("]")) { Some("List") }
+                            else if type_name == "Buffer" { Some("Buffer") }
+                            else if type_name == "Float64Array" { Some("Float64Array") }
+                            else if type_name == "Int64Array" { Some("Int64Array") }
+                            else if type_name == "Float32Array" { Some("Float32Array") }
+                            else if type_name == "Server" { Some("Server") }
+                            else if type_name == "WebSocket" { Some("WebSocket") }
+                            else { None }
+                        });
 
-                    // Check for Map type
-                    let builtin_name: Option<&str> = if is_map {
-                        match method.node.as_str() {
-                            "get" => Some("Map.get"),
-                            "lookup" => Some("Map.lookup"),
-                            "getOrThrow" => Some("Map.getOrThrow"),
-                            "insert" => Some("Map.insert"),
-                            "remove" => Some("Map.remove"),
-                            "contains" => Some("Map.contains"),
-                            "keys" => Some("Map.keys"),
-                            "values" => Some("Map.values"),
-                            "size" => Some("Map.size"),
-                            "isEmpty" => Some("Map.isEmpty"),
-                            "union" => Some("Map.union"),
-                            "intersection" => Some("Map.intersection"),
-                            "difference" => Some("Map.difference"),
-                            "toList" => Some("Map.toList"),
-                            _ => None,
-                        }
-                    } else if is_set {
-                        match method.node.as_str() {
-                            "contains" => Some("Set.contains"),
-                            "insert" => Some("Set.insert"),
-                            "remove" => Some("Set.remove"),
-                            "size" => Some("Set.size"),
-                            "isEmpty" => Some("Set.isEmpty"),
-                            "union" => Some("Set.union"),
-                            "intersection" => Some("Set.intersection"),
-                            "difference" => Some("Set.difference"),
-                            "symmetricDifference" => Some("Set.symmetricDifference"),
-                            "isSubset" => Some("Set.isSubset"),
-                            "isProperSubset" => Some("Set.isProperSubset"),
-                            "toList" => Some("Set.toList"),
-                            _ => None,
-                        }
-                    } else if is_string {
-                        match method.node.as_str() {
-                            "length" => Some("String.length"),
-                            "chars" => Some("String.chars"),
-                            "toInt" => Some("String.toInt"),
-                            "toFloat" => Some("String.toFloat"),
-                            "trim" => Some("String.trim"),
-                            "trimStart" => Some("String.trimStart"),
-                            "trimEnd" => Some("String.trimEnd"),
-                            "toUpper" => Some("String.toUpper"),
-                            "toLower" => Some("String.toLower"),
-                            "contains" => Some("String.contains"),
-                            "startsWith" => Some("String.startsWith"),
-                            "endsWith" => Some("String.endsWith"),
-                            "replace" => Some("String.replace"),
-                            "replaceAll" => Some("String.replaceAll"),
-                            "indexOf" => Some("String.indexOf"),
-                            "lastIndexOf" => Some("String.lastIndexOf"),
-                            "substring" => Some("String.substring"),
-                            "repeat" => Some("String.repeat"),
-                            "padStart" => Some("String.padStart"),
-                            "padEnd" => Some("String.padEnd"),
-                            "reverse" => Some("String.reverse"),
-                            "lines" => Some("String.lines"),
-                            "words" => Some("String.words"),
-                            "isEmpty" => Some("String.isEmpty"),
-                            "split" => Some("String.split"),
-                            "drop" => Some("String.drop"),
-                            "take" => Some("String.take"),
-                            _ => None,
-                        }
-                    } else if is_list {
-                        match method.node.as_str() {
-                            "join" => Some("String.join"),
-                            _ => None,
-                        }
-                    } else if base_type.as_deref() == Some("Buffer") || type_name == "Buffer" {
-                        // Buffer uses special bytecode instructions, handle directly
-                        match method.node.as_str() {
-                            "append" => {
-                                if args.len() == 1 {
+                    // Table-driven builtin method dispatch
+                    let builtin_name: Option<&str> = effective_base_type
+                        .and_then(|bt| resolve_builtin_method(bt, &method.node));
+
+                    // Bytecode-special types: emit custom instructions directly (early return)
+                    if builtin_name.is_none() {
+                        match effective_base_type {
+                            Some("Buffer") => match method.node.as_str() {
+                                "append" if args.len() == 1 => {
                                     let buf_reg = self.compile_expr_tail(obj, false)?;
                                     let str_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                                     self.chunk.emit(Instruction::BufferAppend(buf_reg, str_reg), line);
                                     return Ok(buf_reg);
                                 }
-                                None
-                            }
-                            "toString" => {
-                                if args.is_empty() {
+                                "toString" if args.is_empty() => {
                                     let buf_reg = self.compile_expr_tail(obj, false)?;
                                     let dst = self.alloc_reg();
                                     self.chunk.emit(Instruction::BufferToString(dst, buf_reg), line);
                                     return Ok(dst);
                                 }
-                                None
+                                _ => {}
                             }
-                            _ => None,
-                        }
-                    } else if base_type.as_deref() == Some("Float64Array") || type_name == "Float64Array" {
-                        match method.node.as_str() {
-                            "length" => Some("Float64Array.length"),
-                            "get" => Some("Float64Array.get"),
-                            "set" => Some("Float64Array.set"),
-                            "toList" => Some("Float64Array.toList"),
-                            _ => None,
-                        }
-                    } else if base_type.as_deref() == Some("Int64Array") || type_name == "Int64Array" {
-                        match method.node.as_str() {
-                            "length" => Some("Int64Array.length"),
-                            "get" => Some("Int64Array.get"),
-                            "set" => Some("Int64Array.set"),
-                            "toList" => Some("Int64Array.toList"),
-                            _ => None,
-                        }
-                    } else if base_type.as_deref() == Some("Float32Array") || type_name == "Float32Array" {
-                        match method.node.as_str() {
-                            "length" => Some("Float32Array.length"),
-                            "get" => Some("Float32Array.get"),
-                            "set" => Some("Float32Array.set"),
-                            "toList" => Some("Float32Array.toList"),
-                            _ => None,
-                        }
-                    } else if base_type.as_deref() == Some("Server") || type_name == "Server" {
-                        // Server methods use specialized bytecode instructions
-                        match method.node.as_str() {
-                            "accept" if args.is_empty() => {
-                                let obj_reg = self.compile_expr_tail(obj, false)?;
-                                let dst = self.alloc_reg();
-                                self.chunk.emit(Instruction::ServerAccept(dst, obj_reg), line);
-                                return Ok(dst);
-                            }
-                            "close" if args.is_empty() => {
-                                let obj_reg = self.compile_expr_tail(obj, false)?;
-                                let dst = self.alloc_reg();
-                                self.chunk.emit(Instruction::ServerClose(dst, obj_reg), line);
-                                return Ok(dst);
-                            }
-                            _ => None,
-                        }
-                    } else if base_type.as_deref() == Some("WebSocket") || type_name == "WebSocket" {
-                        // WebSocket methods use specialized bytecode instructions
-                        match method.node.as_str() {
-                            "send" if args.len() == 1 => {
-                                let obj_reg = self.compile_expr_tail(obj, false)?;
-                                let msg_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
-                                let dst = self.alloc_reg();
-                                self.chunk.emit(Instruction::WebSocketSend(dst, obj_reg, msg_reg), line);
-                                return Ok(dst);
-                            }
-                            "recv" if args.is_empty() => {
-                                let obj_reg = self.compile_expr_tail(obj, false)?;
-                                let dst = self.alloc_reg();
-                                self.chunk.emit(Instruction::WebSocketReceive(dst, obj_reg), line);
-                                return Ok(dst);
-                            }
-                            "close" if args.is_empty() => {
-                                let obj_reg = self.compile_expr_tail(obj, false)?;
-                                let dst = self.alloc_reg();
-                                self.chunk.emit(Instruction::WebSocketClose(dst, obj_reg), line);
-                                return Ok(dst);
-                            }
-                            "split" if args.is_empty() => {
-                                let obj_reg = self.compile_expr_tail(obj, false)?;
-                                let dst = self.alloc_reg();
-                                self.chunk.emit(Instruction::WebSocketSplit(dst, obj_reg), line);
-                                return Ok(dst);
-                            }
-                            _ => None,
-                        }
-                    } else if self.types.get(&type_name)
-                        .map(|info| matches!(&info.kind, TypeInfoKind::Reactive { .. }))
-                        .unwrap_or(false)
-                    {
-                        // Reactive record special methods
-                        match method.node.as_str() {
-                            "onChange" => {
-                                if args.len() == 1 {
-                                    let obj_reg = self.compile_expr_tail(obj, false)?;
-                                    let callback_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
-                                    self.chunk.emit(Instruction::ReactiveAddCallback(obj_reg, callback_reg), line);
-                                    // Return unit
-                                    let dst = self.alloc_reg();
-                                    self.chunk.emit(Instruction::LoadUnit(dst), line);
-                                    return Ok(dst);
-                                }
-                                None
-                            }
-                            "onRead" => {
-                                if args.len() == 1 {
-                                    let obj_reg = self.compile_expr_tail(obj, false)?;
-                                    let callback_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
-                                    self.chunk.emit(Instruction::ReactiveAddReadCallback(obj_reg, callback_reg), line);
-                                    // Return unit
-                                    let dst = self.alloc_reg();
-                                    self.chunk.emit(Instruction::LoadUnit(dst), line);
-                                    return Ok(dst);
-                                }
-                                None
-                            }
-                            _ => None,
-                        }
-                    } else if self.types.get(&type_name)
-                        .map(|info| matches!(&info.kind, TypeInfoKind::ReactiveVariant { .. }))
-                        .unwrap_or(false)
-                    {
-                        // Reactive variant special methods
-                        match method.node.as_str() {
-                            "get" => {
-                                // .get() returns the current variant value
-                                if args.is_empty() {
+                            Some("Server") => match method.node.as_str() {
+                                "accept" if args.is_empty() => {
                                     let obj_reg = self.compile_expr_tail(obj, false)?;
                                     let dst = self.alloc_reg();
-                                    self.chunk.emit(Instruction::ReactiveVariantGet(dst, obj_reg), line);
+                                    self.chunk.emit(Instruction::ServerAccept(dst, obj_reg), line);
                                     return Ok(dst);
                                 }
-                                None
-                            }
-                            "set" => {
-                                // .set(newValue) replaces the variant value
-                                if args.len() == 1 {
+                                "close" if args.is_empty() => {
                                     let obj_reg = self.compile_expr_tail(obj, false)?;
-                                    let value_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
-                                    self.chunk.emit(Instruction::ReactiveVariantSet(obj_reg, value_reg), line);
-                                    // Return unit
                                     let dst = self.alloc_reg();
-                                    self.chunk.emit(Instruction::LoadUnit(dst), line);
+                                    self.chunk.emit(Instruction::ServerClose(dst, obj_reg), line);
                                     return Ok(dst);
                                 }
-                                None
+                                _ => {}
                             }
-                            "onChange" => {
-                                // .onChange(callback) registers a callback for value changes
-                                if args.len() == 1 {
+                            Some("WebSocket") => match method.node.as_str() {
+                                "send" if args.len() == 1 => {
                                     let obj_reg = self.compile_expr_tail(obj, false)?;
-                                    let callback_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
-                                    self.chunk.emit(Instruction::ReactiveVariantAddCallback(obj_reg, callback_reg), line);
-                                    // Return unit
+                                    let msg_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                                     let dst = self.alloc_reg();
-                                    self.chunk.emit(Instruction::LoadUnit(dst), line);
+                                    self.chunk.emit(Instruction::WebSocketSend(dst, obj_reg, msg_reg), line);
                                     return Ok(dst);
                                 }
-                                None
-                            }
-                            "onRead" => {
-                                // .onRead(callback) registers a callback for reads
-                                if args.len() == 1 {
+                                "recv" if args.is_empty() => {
                                     let obj_reg = self.compile_expr_tail(obj, false)?;
-                                    let callback_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
-                                    self.chunk.emit(Instruction::ReactiveVariantAddReadCallback(obj_reg, callback_reg), line);
-                                    // Return unit
                                     let dst = self.alloc_reg();
-                                    self.chunk.emit(Instruction::LoadUnit(dst), line);
+                                    self.chunk.emit(Instruction::WebSocketReceive(dst, obj_reg), line);
                                     return Ok(dst);
                                 }
-                                None
+                                "close" if args.is_empty() => {
+                                    let obj_reg = self.compile_expr_tail(obj, false)?;
+                                    let dst = self.alloc_reg();
+                                    self.chunk.emit(Instruction::WebSocketClose(dst, obj_reg), line);
+                                    return Ok(dst);
+                                }
+                                "split" if args.is_empty() => {
+                                    let obj_reg = self.compile_expr_tail(obj, false)?;
+                                    let dst = self.alloc_reg();
+                                    self.chunk.emit(Instruction::WebSocketSplit(dst, obj_reg), line);
+                                    return Ok(dst);
+                                }
+                                _ => {}
                             }
-                            _ => None,
+                            _ => {
+                                // Reactive record/variant special methods
+                                if self.types.get(&type_name)
+                                    .map(|info| matches!(&info.kind, TypeInfoKind::Reactive { .. }))
+                                    .unwrap_or(false)
+                                {
+                                    match method.node.as_str() {
+                                        "onChange" if args.len() == 1 => {
+                                            let obj_reg = self.compile_expr_tail(obj, false)?;
+                                            let callback_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                                            self.chunk.emit(Instruction::ReactiveAddCallback(obj_reg, callback_reg), line);
+                                            let dst = self.alloc_reg();
+                                            self.chunk.emit(Instruction::LoadUnit(dst), line);
+                                            return Ok(dst);
+                                        }
+                                        "onRead" if args.len() == 1 => {
+                                            let obj_reg = self.compile_expr_tail(obj, false)?;
+                                            let callback_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                                            self.chunk.emit(Instruction::ReactiveAddReadCallback(obj_reg, callback_reg), line);
+                                            let dst = self.alloc_reg();
+                                            self.chunk.emit(Instruction::LoadUnit(dst), line);
+                                            return Ok(dst);
+                                        }
+                                        _ => {}
+                                    }
+                                } else if self.types.get(&type_name)
+                                    .map(|info| matches!(&info.kind, TypeInfoKind::ReactiveVariant { .. }))
+                                    .unwrap_or(false)
+                                {
+                                    match method.node.as_str() {
+                                        "get" if args.is_empty() => {
+                                            let obj_reg = self.compile_expr_tail(obj, false)?;
+                                            let dst = self.alloc_reg();
+                                            self.chunk.emit(Instruction::ReactiveVariantGet(dst, obj_reg), line);
+                                            return Ok(dst);
+                                        }
+                                        "set" if args.len() == 1 => {
+                                            let obj_reg = self.compile_expr_tail(obj, false)?;
+                                            let value_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                                            self.chunk.emit(Instruction::ReactiveVariantSet(obj_reg, value_reg), line);
+                                            let dst = self.alloc_reg();
+                                            self.chunk.emit(Instruction::LoadUnit(dst), line);
+                                            return Ok(dst);
+                                        }
+                                        "onChange" if args.len() == 1 => {
+                                            let obj_reg = self.compile_expr_tail(obj, false)?;
+                                            let callback_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                                            self.chunk.emit(Instruction::ReactiveVariantAddCallback(obj_reg, callback_reg), line);
+                                            let dst = self.alloc_reg();
+                                            self.chunk.emit(Instruction::LoadUnit(dst), line);
+                                            return Ok(dst);
+                                        }
+                                        "onRead" if args.len() == 1 => {
+                                            let obj_reg = self.compile_expr_tail(obj, false)?;
+                                            let callback_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                                            self.chunk.emit(Instruction::ReactiveVariantAddReadCallback(obj_reg, callback_reg), line);
+                                            let dst = self.alloc_reg();
+                                            self.chunk.emit(Instruction::LoadUnit(dst), line);
+                                            return Ok(dst);
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
                         }
-                    } else {
-                        None
-                    };
+                    }
 
                     if let Some(native_name) = builtin_name {
                         // Check if user defined a NON-BUILTIN trait method with this name
@@ -13323,27 +13330,9 @@ impl Compiler {
                         ));
 
                     let stdlib_alias: Option<&str> = if is_option {
-                        match method.node.as_str() {
-                            "map" => Some("optMap"),
-                            "flatMap" => Some("optFlatMap"),
-                            "unwrap" => Some("optUnwrap"),
-                            "unwrapOr" => Some("optUnwrapOr"),
-                            "isSome" => Some("optIsSome"),
-                            "isNone" => Some("optIsNone"),
-                            _ => None,
-                        }
+                        resolve_option_method(&method.node)
                     } else if is_result {
-                        match method.node.as_str() {
-                            "map" => Some("resMap"),
-                            "mapErr" => Some("resMapErr"),
-                            "flatMap" => Some("resFlatMap"),
-                            "unwrap" => Some("resUnwrap"),
-                            "unwrapOr" => Some("resUnwrapOr"),
-                            "isOk" => Some("resIsOk"),
-                            "isErr" => Some("resIsErr"),
-                            "toOption" => Some("resToOption"),
-                            _ => None,
-                        }
+                        resolve_result_method(&method.node)
                     } else {
                         None
                     };
