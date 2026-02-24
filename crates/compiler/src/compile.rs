@@ -14026,9 +14026,8 @@ impl Compiler {
             // Index access
             Expr::Index(coll, index, _) => {
                 // Check for custom type index dispatch: MyType[i] -> myTypeGet(coll, i)
-                let coll_type_for_dispatch = self.expr_type(coll)
-                    .and_then(|ty| self.get_type_base_name_from_type(ty))
-                    .or_else(|| self.expr_type_name(coll));
+                let coll_info = self.expr_type_info(coll);
+                let coll_type_for_dispatch = coll_info.display_name();
                 if let Some(coll_type) = coll_type_for_dispatch {
                     if !Self::is_primitive_type(&coll_type) && self.types.contains_key(&coll_type) {
                         // Build the get function name: {module}.{typeNameLower}Get
@@ -14065,45 +14064,20 @@ impl Compiler {
                     }
                 }
 
-                // Check for Map type - use Map.get builtin for map[key] syntax
-                // First try structural type from HM inference
-                if let Some(ty) = self.expr_type(coll) {
-                    if matches!(ty, nostos_types::Type::Map(_, _)) {
-                        let coll_reg = self.compile_expr_tail(coll, false)?;
-                        let idx_reg = self.compile_expr_tail(index, false)?;
-                        let dst = self.alloc_reg();
-                        self.emit_call_native(dst, "Map.get", vec![coll_reg, idx_reg].into(), line);
-                        return Ok(dst);
-                    }
-                    if matches!(ty, nostos_types::Type::Set(_)) {
-                        let coll_reg = self.compile_expr_tail(coll, false)?;
-                        let idx_reg = self.compile_expr_tail(index, false)?;
-                        let dst = self.alloc_reg();
-                        self.emit_call_native(dst, "Set.contains", vec![coll_reg, idx_reg].into(), line);
-                        return Ok(dst);
-                    }
+                // Check for Map/Set type - unified structural + string detection via ExprTypeInfo
+                if coll_info.is_map() {
+                    let coll_reg = self.compile_expr_tail(coll, false)?;
+                    let idx_reg = self.compile_expr_tail(index, false)?;
+                    let dst = self.alloc_reg();
+                    self.emit_call_native(dst, "Map.get", vec![coll_reg, idx_reg].into(), line);
+                    return Ok(dst);
                 }
-                if let Some(coll_type) = self.expr_type_name(coll) {
-                    // Handle Map types: "Map[K, V]", "Map", "Map k v" (from builtin signatures)
-                    if coll_type.starts_with("Map[") || coll_type == "Map" || coll_type.starts_with("Map ") {
-                        let coll_reg = self.compile_expr_tail(coll, false)?;
-                        let idx_reg = self.compile_expr_tail(index, false)?;
-                        let dst = self.alloc_reg();
-                        self.emit_call_native(dst, "Map.get", vec![coll_reg, idx_reg].into(), line);
-                        return Ok(dst);
-                    }
-                }
-
-                // Check for Set type - use Set.contains builtin for set[elem] syntax
-                if let Some(coll_type) = self.expr_type_name(coll) {
-                    // Handle Set types: "Set[T]", "Set", "Set t" (from builtin signatures)
-                    if coll_type.starts_with("Set[") || coll_type == "Set" || coll_type.starts_with("Set ") {
-                        let coll_reg = self.compile_expr_tail(coll, false)?;
-                        let idx_reg = self.compile_expr_tail(index, false)?;
-                        let dst = self.alloc_reg();
-                        self.emit_call_native(dst, "Set.contains", vec![coll_reg, idx_reg].into(), line);
-                        return Ok(dst);
-                    }
+                if coll_info.is_set() {
+                    let coll_reg = self.compile_expr_tail(coll, false)?;
+                    let idx_reg = self.compile_expr_tail(index, false)?;
+                    let dst = self.alloc_reg();
+                    self.emit_call_native(dst, "Set.contains", vec![coll_reg, idx_reg].into(), line);
+                    return Ok(dst);
                 }
 
                 // Default: use built-in Index instruction for lists/tuples/arrays
