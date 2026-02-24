@@ -6635,6 +6635,13 @@ impl Compiler {
         type_names.sort();
         for type_name in type_names {
             if let Some(info) = self.types.get(type_name) {
+                // Check Record types: for `type Point = { x: Int, y: Int }`,
+                // the constructor name is the type name itself.
+                if let TypeInfoKind::Record { fields, .. } = &info.kind {
+                    if type_name == ctor_name || type_name.ends_with(&format!(".{}", ctor_name)) {
+                        return fields.iter().map(|(_, ty)| ty.clone()).collect();
+                    }
+                }
                 if let TypeInfoKind::Variant { constructors } = &info.kind {
                     for (name, fields_info) in constructors {
                         if name == ctor_name {
@@ -6659,6 +6666,13 @@ impl Compiler {
         type_names.sort();
         for type_name in type_names {
             if let Some(info) = self.types.get(type_name) {
+                // Check Record types: for `type Point = { x: Int, y: Int }`,
+                // the constructor name is the type name itself.
+                if let TypeInfoKind::Record { fields, .. } = &info.kind {
+                    if type_name == ctor_name || type_name.ends_with(&format!(".{}", ctor_name)) {
+                        return fields.iter().map(|(name, _)| name.clone()).collect();
+                    }
+                }
                 if let TypeInfoKind::Variant { constructors } = &info.kind {
                     for (name, _) in constructors {
                         if name == ctor_name {
@@ -25028,9 +25042,19 @@ impl Compiler {
         // Sort function names to ensure deterministic processing order - this matters for overloaded
         // functions with different arities. When sorted, "foo/" comes before "foo/_", so the
         // 0-arity version gets registered as the base name "foo" first.
+        // TWO-PASS: Process module/stdlib functions first (which register short-name aliases),
+        // then user-defined functions second (which can overwrite those aliases).
+        // This prevents stdlib functions from shadowing user-defined functions with the same name.
+        // E.g., user's `stringify(x) = show(x)` should shadow `stdlib.json.stringify`.
         let mut fn_names: Vec<&String> = self.functions.keys().collect();
         fn_names.sort();
-        for fn_name in fn_names {
+        for pass in 0..2u8 {
+        for fn_name_ref in &fn_names {
+            let fn_name = *fn_name_ref;
+            let base = fn_name.split('/').next().unwrap_or(fn_name);
+            let is_user_defined = !base.contains('.');
+            // Pass 0: module/stdlib functions; Pass 1: user-defined functions
+            if (pass == 0) == is_user_defined { continue; }
             let fn_val = match self.functions.get(fn_name) {
                 Some(v) => v,
                 None => continue,
@@ -25040,8 +25064,10 @@ impl Compiler {
             // Previously, stdlib was skipped and only registered from pending_fn_signatures,
             // which lacks inferred trait bounds. This fix allows trait bounds to propagate
             // through generic wrapper functions like: mySort(xs) = xs.sort()
-            if env.functions.contains_key(fn_name) {
-                // Skip - don't overwrite built-in functions with proper type params/constraints
+            if env.functions.contains_key(fn_name) && !is_user_defined {
+                // Skip module/stdlib functions that would overwrite builtins with proper constraints.
+                // User-defined functions (pass 1) should ALWAYS overwrite stdlib aliases
+                // so they correctly shadow stdlib functions of the same name.
                 continue;
             }
             // Skip placeholder functions - they have no signature yet and would have wrong param types
@@ -25160,6 +25186,7 @@ impl Compiler {
                 }
             }
         }
+        } // end for pass in 0..2
 
         // Register pending function signatures for functions not yet compiled
         // Must come AFTER self.functions loop so compiled_base_names filter works correctly
@@ -26268,7 +26295,15 @@ impl Compiler {
                     // This ensures stdlib functions take precedence over builtins
                     // BUT: don't overwrite user-defined functions with stdlib short names
                     // (e.g., user's "stringify/_" should not be overwritten by "stdlib.json.stringify/_")
-                    let has_user_defined = self.functions.contains_key(&local_name);
+                    // Check both exact key and base name (user may have "stringify/_" while
+                    // stdlib has "stringify/Json" — different arity suffixes)
+                    let has_user_defined = self.functions.contains_key(&local_name) || {
+                        let base_local = local_name.split('/').next().unwrap_or(&local_name);
+                        let base_prefix = format!("{}/", base_local);
+                        self.functions.keys().any(|k| {
+                            k.starts_with(&base_prefix) && !k.contains('.')
+                        })
+                    };
                     if !has_user_defined {
                         if let Some(fn_type) = env.functions.get(fn_name).cloned() {
                             env.insert_function(local_name, fn_type);
