@@ -1275,7 +1275,7 @@ pub struct Compiler {
     current_fn_generic_hm: bool,
     /// Type parameter bindings for current monomorphization: T -> Sum
     /// Used to substitute type parameters with concrete types in expressions
-    current_type_bindings: HashMap<String, String>,
+    current_type_bindings: HashMap<String, nostos_types::Type>,
     /// Loop context stack for break/continue
     loop_stack: Vec<LoopContext>,
     /// Line starts: byte offsets where each line begins (line 1 is at index 0)
@@ -5332,6 +5332,11 @@ impl Compiler {
         self.local_types.get(name).map(|ty| ty.display())
     }
 
+    /// Get type binding as string (bridge for gradual migration)
+    fn get_type_binding_str(&self, name: &str) -> Option<String> {
+        self.current_type_bindings.get(name).map(|ty| ty.display())
+    }
+
     /// Convert a TypeExpr AST node to a Type value.
     fn type_expr_to_type(&self, ty: &nostos_syntax::TypeExpr) -> nostos_types::Type {
         self.type_name_to_type(&self.type_expr_to_string(ty))
@@ -7512,7 +7517,7 @@ impl Compiler {
             TypeExpr::Name(name) => {
                 // Check if this is a type parameter that should be substituted
                 if let Some(concrete) = self.current_type_bindings.get(&name.node) {
-                    concrete.clone()
+                    concrete.display()
                 } else {
                     name.node.clone()
                 }
@@ -7520,7 +7525,7 @@ impl Compiler {
             TypeExpr::Generic(name, params) => {
                 // First check if the generic name itself is a type parameter
                 let base_name = if let Some(concrete) = self.current_type_bindings.get(&name.node) {
-                    concrete.clone()
+                    concrete.display()
                 } else {
                     name.node.clone()
                 };
@@ -13589,7 +13594,7 @@ impl Compiler {
                     if !self.current_type_bindings.is_empty() {
                         let method_name = &method.node;
                         // Collect just the values (not keys) to avoid cloning entire HashMap
-                        let concrete_types: Vec<String> = self.current_type_bindings.values().cloned().collect();
+                        let concrete_types: Vec<String> = self.current_type_bindings.values().map(|t| t.display()).collect();
                         for concrete_type in &concrete_types {
                             // Check if this type implements any trait with this method
                             if let Some(impl_traits) = self.type_traits.get(concrete_type) {
@@ -15661,7 +15666,7 @@ impl Compiler {
                         // then fall back to type_expr_name which resolves imports
                         let type_name = if let TypeExpr::Name(ref name) = type_args[0] {
                             if let Some(concrete) = self.current_type_bindings.get(&name.node) {
-                                concrete.clone()
+                                concrete.display()
                             } else {
                                 self.type_expr_name(&type_args[0])
                             }
@@ -16621,7 +16626,7 @@ impl Compiler {
                                         if let Some(ty_expr) = &p.ty {
                                             if let nostos_syntax::TypeExpr::Name(ident) = ty_expr {
                                                 if let Some(concrete) = self.current_type_bindings.get(&ident.node) {
-                                                    return Some(concrete.clone());
+                                                    return Some(concrete.display());
                                                 }
                                             }
                                         }
@@ -17085,7 +17090,7 @@ impl Compiler {
             if let nostos_types::Type::TypeParam(name) = ty {
                 // Check if we have a type binding for this type parameter (during monomorphization)
                 if let Some(concrete_type) = self.current_type_bindings.get(name) {
-                    return Some(concrete_type.clone());
+                    return Some(concrete_type.display());
                 }
                 hm_fallback = Some(format!("{} (type parameter)", name));
             }
@@ -18131,7 +18136,7 @@ impl Compiler {
                             let param_type_name = &type_ident.node;
                             let is_type_param = fn_def.type_params.iter().any(|tp| tp.name.node == *param_type_name);
                             if is_type_param {
-                                self.current_type_bindings.insert(param_type_name.clone(), arg_type.clone());
+                                self.current_type_bindings.insert(param_type_name.clone(), self.type_name_to_type(arg_type));
                             }
                         }
                         // Parameterized type: List[T], Option[T], etc.
@@ -18149,7 +18154,7 @@ impl Compiler {
                                             let type_param_name = &type_param_ident.node;
                                             let is_type_param = fn_def.type_params.iter().any(|tp| tp.name.node == *type_param_name);
                                             if is_type_param {
-                                                self.current_type_bindings.insert(type_param_name.clone(), inner.to_string());
+                                                self.current_type_bindings.insert(type_param_name.clone(), self.type_name_to_type(inner));
                                             }
                                         }
                                         // Handle List[(T, T)] - tuple inside generic container
@@ -18164,7 +18169,7 @@ impl Compiler {
                                                             let type_param_name = &type_param_ident.node;
                                                             let is_type_param = fn_def.type_params.iter().any(|tp| tp.name.node == *type_param_name);
                                                             if is_type_param {
-                                                                self.current_type_bindings.insert(type_param_name.clone(), arg_elem_types[j].clone());
+                                                                self.current_type_bindings.insert(type_param_name.clone(), self.type_name_to_type(&arg_elem_types[j]));
                                                             }
                                                         }
                                                     }
@@ -18189,7 +18194,7 @@ impl Compiler {
                                             let type_param_name = &type_param_ident.node;
                                             let is_type_param = fn_def.type_params.iter().any(|tp| tp.name.node == *type_param_name);
                                             if is_type_param {
-                                                self.current_type_bindings.insert(type_param_name.clone(), arg_elem_types[j].clone());
+                                                self.current_type_bindings.insert(type_param_name.clone(), self.type_name_to_type(&arg_elem_types[j]));
                                             }
                                         }
                                     }
@@ -18389,7 +18394,7 @@ impl Compiler {
             if i < type_arg_names.len() {
                 self.current_type_bindings.insert(
                     type_param.name.node.clone(),
-                    type_arg_names[i].clone()
+                    self.type_name_to_type(&type_arg_names[i])
                 );
             }
         }
@@ -18668,7 +18673,7 @@ impl Compiler {
                 // Also include current_type_bindings for any params not yet mapped
                 for (k, v) in &self.current_type_bindings {
                     if !type_map.contains_key(k) {
-                        type_map.insert(k.clone(), v.clone());
+                        type_map.insert(k.clone(), v.display());
                     }
                 }
 
@@ -19180,7 +19185,7 @@ impl Compiler {
                         } else {
                             // Type parameter - try to substitute from current_type_bindings
                             if let TypeExpr::Name(ident) = *t {
-                                self.current_type_bindings.get(&ident.node).cloned()
+                                self.current_type_bindings.get(&ident.node).map(|t| t.display())
                                     .or_else(|| {
                                         // If it's one of the current function's type params,
                                         // use it as-is. This allows trait method resolution
@@ -19926,10 +19931,7 @@ impl Compiler {
         if self.current_type_bindings.is_empty() {
             return ty.clone();
         }
-        let subst: HashMap<String, nostos_types::Type> = self.current_type_bindings.iter()
-            .map(|(k, v)| (k.clone(), self.type_name_to_type(v)))
-            .collect();
-        nostos_types::infer::InferCtx::substitute_type_params(ty, &subst)
+        nostos_types::infer::InferCtx::substitute_type_params(ty, &self.current_type_bindings)
     }
 
     /// Substitute type parameters in a type string using current_type_bindings.
@@ -19940,7 +19942,8 @@ impl Compiler {
         }
 
         let mut result = type_str.to_string();
-        for (param, concrete) in &self.current_type_bindings {
+        for (param, concrete_ty) in &self.current_type_bindings {
+            let concrete = &concrete_ty.display();
             // Replace type parameter at word boundaries
             // This handles cases like "List[T]" -> "List[Int]", "(T, T)" -> "(Val, Val)", etc.
             let patterns = [
