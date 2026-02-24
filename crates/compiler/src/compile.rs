@@ -15451,7 +15451,7 @@ impl Compiler {
                             .map(|qualified| self.fn_asts_by_base.contains_key(qualified.as_str()))
                             .unwrap_or(false);
                     if !has_user_defined {
-                        if let Some(arg_type) = self.expr_type_name(arg_exprs[0]) {
+                        if let Some(arg_type) = self.expr_type_info(arg_exprs[0]).display_name() {
                             // Type variables (?N) might resolve to numeric types, so allow them
                             let is_type_variable = arg_type.starts_with('?');
                             let is_numeric = matches!(arg_type.as_str(),
@@ -15552,7 +15552,7 @@ impl Compiler {
                 // (e.g., toFloat(c: Celsius)), the builtin should only be used for numeric args.
                 let first_arg_is_numeric = if arg_regs.len() == 1 {
                     arg_exprs.first()
-                        .and_then(|e| self.expr_type_name(e))
+                        .and_then(|e| self.expr_type_info(e).display_name())
                         .map(|t| t.starts_with('?') || matches!(t.as_str(),
                             "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
                             "UInt8" | "UInt16" | "UInt32" | "UInt64" |
@@ -15852,7 +15852,7 @@ impl Compiler {
 
                         // Get the actual inferred type of the argument
                         let arg_expr = Self::call_arg_expr(&args[0]);
-                        let actual_type = self.expr_type_name(arg_expr)
+                        let actual_type = self.expr_type_info(arg_expr).display_name()
                             .unwrap_or_else(|| "unknown".to_string());
 
                         // Normalize both types for comparison (handle List[T] vs [T] etc.)
@@ -20629,7 +20629,7 @@ impl Compiler {
 
         // Determine type from explicit annotation or infer from value
         let explicit_type = binding.ty.as_ref().map(|t| self.type_expr_name(t));
-        let inferred_type = self.expr_type_name(&binding.value);
+        let inferred_type = self.expr_type_info(&binding.value).display_name();
         let value_type = explicit_type.clone().or_else(|| inferred_type.clone());
 
 
