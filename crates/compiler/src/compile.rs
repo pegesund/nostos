@@ -10862,25 +10862,7 @@ impl Compiler {
                 // Resolve field name to numeric index at compile time when type is known
                 let mut field_index: Option<usize> = None;
 
-                // Try structural type first to get base type name
-                let base_type_structural = self.inferred_expr_types.get(&obj.span())
-                    .and_then(|ty| self.get_type_base_name_from_type(ty));
-
-                // Fall back to string-based if structural not available
-                let base_type_string = if base_type_structural.is_none() {
-                    self.expr_type_name(obj).map(|type_name| {
-                        // Strip type parameters to get base type (e.g., Box[Int] -> Box)
-                        if let Some(bracket_pos) = type_name.find('[') {
-                            type_name[..bracket_pos].to_string()
-                        } else {
-                            type_name
-                        }
-                    })
-                } else {
-                    None
-                };
-
-                let base_type = base_type_structural.or(base_type_string);
+                let base_type = self.expr_type_info(obj).base_name().map(|s| s.to_string());
                 if let Some(ref base_type) = base_type {
                     if let Some(type_def) = self.lookup_type_def(base_type) {
                         // Skip compile-time index resolution for reactive records
@@ -13482,7 +13464,7 @@ impl Compiler {
                 }
 
                 // Try trait method dispatch if we can determine the type of obj
-                if let Some(type_name) = self.expr_type_name(obj) {
+                if let Some(type_name) = self.expr_type_info(obj).display_name() {
                     if let Some(qualified_method) = self.find_trait_method(&type_name, &method.node) {
                         // If type is not concrete (e.g., type parameter T), trigger
                         // monomorphization instead of emitting call to placeholder.
@@ -13809,7 +13791,7 @@ impl Compiler {
                 // e.g., `cb.action(5)` where `action` is a field of type `(Int) -> Int`
                 // In this case, compile as field access + call, not UFCS.
                 let fn_field_index: Option<usize> = {
-                    let receiver_type = self.expr_type_name(obj);
+                    let receiver_type = self.expr_type_info(obj).display_name();
                     if let Some(ref type_name) = receiver_type {
                         let base_type = if let Some(bracket_pos) = type_name.find('[') {
                             &type_name[..bracket_pos]
@@ -13933,8 +13915,8 @@ impl Compiler {
                             let receiver_unresolved = if let Some(hm_ty) = self.inferred_expr_types.get(&obj.span()) {
                                 matches!(hm_ty, nostos_types::Type::Var(_) | nostos_types::Type::TypeParam(_))
                             } else {
-                                // No HM type at all - check expr_type_name for polymorphic markers
-                                self.expr_type_name(obj)
+                                // No HM type at all - check expr_type_info for polymorphic markers
+                                self.expr_type_info(obj).display_name()
                                     .map(|tn| tn.contains("(polymorphic)") || tn.contains("(type parameter)"))
                                     .unwrap_or(true) // truly unknown type
                             };
@@ -13951,7 +13933,7 @@ impl Compiler {
                     Err(CompileError::UnknownVariable { name, span, .. }) |
                     Err(CompileError::UnknownFunction { name, span, .. }) => {
                         // Improve error message: this was a method call, not a plain variable
-                        let receiver_type = self.expr_type_name(obj)
+                        let receiver_type = self.expr_type_info(obj).display_name()
                             .unwrap_or_else(|| "unknown".to_string());
 
                         // Check if this is a polymorphic type (type variable)
@@ -21709,20 +21691,7 @@ impl Compiler {
                 let obj_reg = self.compile_expr_tail(obj, false)?;
                 // Try to resolve field index at compile time
                 let mut resolved_idx: Option<usize> = None;
-                let base_type_structural = self.inferred_expr_types.get(&obj.span())
-                    .and_then(|ty| self.get_type_base_name_from_type(ty));
-                let base_type_string = if base_type_structural.is_none() {
-                    self.expr_type_name(obj).map(|type_name| {
-                        if let Some(bracket_pos) = type_name.find('[') {
-                            type_name[..bracket_pos].to_string()
-                        } else {
-                            type_name
-                        }
-                    })
-                } else {
-                    None
-                };
-                let base_type = base_type_structural.or(base_type_string);
+                let base_type = self.expr_type_info(obj).base_name().map(|s| s.to_string());
                 if let Some(ref base_type) = base_type {
                     if let Some(type_def) = self.lookup_type_def(base_type) {
                         // Skip for reactive records (they use Arc-based storage with callbacks)
@@ -21752,7 +21721,8 @@ impl Compiler {
             }
             AssignTarget::Index(coll, idx) => {
                 // Check for custom type index assignment dispatch: MyType[i] = v -> myTypeSet(coll, i, v)
-                if let Some(coll_type) = self.expr_type_name(coll) {
+                let coll_info = self.expr_type_info(coll);
+                if let Some(coll_type) = coll_info.display_name() {
                     if !Self::is_primitive_type(&coll_type) && self.types.contains_key(&coll_type) {
                         // Build the set function name: {module}.{typeNameLower}Set
                         let func_name = if let Some(dot_pos) = coll_type.rfind('.') {
@@ -21797,13 +21767,7 @@ impl Compiler {
                 }
 
                 // Check for Map type - use Map.insert for map[key] = value syntax
-                // Try structural type from HM inference first
-                let is_map = self.expr_type(coll)
-                    .map(|ty| matches!(ty, nostos_types::Type::Map(_, _)))
-                    .unwrap_or(false)
-                    || self.expr_type_name(coll)
-                        .map(|t| t.starts_with("Map[") || t == "Map")
-                        .unwrap_or(false);
+                let is_map = coll_info.is_map();
                 if is_map {
                     let coll_reg = self.compile_expr_tail(coll, false)?;
                     let idx_reg = self.compile_expr_tail(idx, false)?;
