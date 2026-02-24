@@ -13299,34 +13299,12 @@ impl Compiler {
 
                 // Type-based builtin method dispatch for receiver-style calls
                 // Handles m.get(k) where m is a Map, s.toUpper() where s is a String, etc.
+                let obj_type_info = self.expr_type_info(obj);
 
-                // Try structural type matching first (more reliable when type is resolved)
-                // Use expr_type() to get the structural Type, then get_type_base_name_from_type()
-                let structural_base_type: Option<String> = self.expr_type(obj)
-                    .and_then(|ty| self.get_type_base_name_from_type(ty));
-
-                if let Some(type_name) = self.expr_type_name(obj) {
-                    // Use structural base type if available, otherwise parse from string
-                    let base_type = structural_base_type.as_deref();
-
-                    // Determine effective base type for method dispatch.
-                    // Use structural type if available, otherwise parse from type_name string.
-                    let effective_base_type = base_type
-                        .or_else(|| {
-                            // String fallback: extract base type from parameterized forms
-                            if type_name.starts_with("Map[") || type_name == "Map" { Some("Map") }
-                            else if type_name.starts_with("Set[") || type_name == "Set" { Some("Set") }
-                            else if type_name == "String" { Some("String") }
-                            else if type_name.starts_with("List[") || type_name == "List"
-                                || (type_name.starts_with("[") && type_name.ends_with("]")) { Some("List") }
-                            else if type_name == "Buffer" { Some("Buffer") }
-                            else if type_name == "Float64Array" { Some("Float64Array") }
-                            else if type_name == "Int64Array" { Some("Int64Array") }
-                            else if type_name == "Float32Array" { Some("Float32Array") }
-                            else if type_name == "Server" { Some("Server") }
-                            else if type_name == "WebSocket" { Some("WebSocket") }
-                            else { None }
-                        });
+                if let Some(type_name) = obj_type_info.display_name() {
+                    // Use ExprTypeInfo for unified base type extraction
+                    // (tries structural Type first, falls back to string parsing)
+                    let effective_base_type = obj_type_info.base_name();
 
                     // Table-driven builtin method dispatch
                     let builtin_name: Option<&str> = effective_base_type
@@ -13482,30 +13460,9 @@ impl Compiler {
 
                     // Option/Result method aliasing - redirect to prefixed stdlib functions
                     // This allows opt.map(fn) to call optMap(opt, fn) instead of List.map
-
-                    // Check structurally first for Option/Result using helper methods
-                    let is_option_structural = self.inferred_expr_types.get(&obj.span())
-                        .map(|ty| self.is_option_type(ty))
-                        .unwrap_or(false);
-                    let is_result_structural = self.inferred_expr_types.get(&obj.span())
-                        .map(|ty| self.is_result_type(ty))
-                        .unwrap_or(false);
-
-                    // Use structural type first, string fallback only if HM inference didn't provide a type
-                    let is_option = is_option_structural
-                        || (!is_option_structural && !is_result_structural && (
-                            type_name.starts_with("Option[")
-                            || type_name == "Option"
-                            || type_name.starts_with("stdlib.list.Option[")
-                            || type_name == "stdlib.list.Option"
-                        ));
-                    let is_result = is_result_structural
-                        || (!is_option_structural && !is_result_structural && (
-                            type_name.starts_with("Result[")
-                            || type_name == "Result"
-                            || type_name.starts_with("stdlib.list.Result[")
-                            || type_name == "stdlib.list.Result"
-                        ));
+                    // Uses ExprTypeInfo for unified structural + string detection
+                    let is_option = obj_type_info.is_option();
+                    let is_result = obj_type_info.is_result();
 
                     let stdlib_alias: Option<&str> = if is_option {
                         resolve_option_method(&method.node)
