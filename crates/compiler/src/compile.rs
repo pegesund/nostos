@@ -13066,7 +13066,7 @@ impl Compiler {
 
                     // Compute argument types for function overloading
                     let arg_types: Vec<Option<String>> = args.iter()
-                        .map(|a| self.expr_type_name(Self::call_arg_expr(a)))
+                        .map(|a| self.expr_type_info(Self::call_arg_expr(a)).display_name())
                         .collect();
 
                     // Resolve to the correct function variant using signature matching
@@ -13213,7 +13213,7 @@ impl Compiler {
                         // Check if this is a polymorphic function that needs monomorphization
                         let final_call_name = if self.polymorphic_fns.contains(&call_name) {
                             let mod_arg_types: Vec<Option<String>> = args.iter()
-                                .map(|a| self.expr_type_name(Self::call_arg_expr(a)))
+                                .map(|a| self.expr_type_info(Self::call_arg_expr(a)).display_name())
                                 .collect();
                             let concrete_types: Vec<String> = mod_arg_types.iter()
                                 .filter_map(|t| t.clone())
@@ -13611,7 +13611,7 @@ impl Compiler {
 
                         // Compute argument types for function overloading
                         let arg_types: Vec<Option<String>> = all_args.iter()
-                            .map(|a| self.expr_type_name(a))
+                            .map(|a| self.expr_type_info(a).display_name())
                             .collect();
 
                         // When named args skip default params, the caller provides fewer args
@@ -13807,7 +13807,7 @@ impl Compiler {
                                             let mut all_args = vec![obj.as_ref().clone()];
                                             all_args.extend(args.iter().map(|a| Self::call_arg_expr(a).clone()));
                                             let arg_types: Vec<Option<String>> = all_args.iter()
-                                                .map(|a| self.expr_type_name(a).or_else(|| Some(concrete_type.clone())))
+                                                .map(|a| self.expr_type_info(a).display_name().or_else(|| Some(concrete_type.clone())))
                                                 .collect();
 
                                             if let Some(resolved_fn) = self.resolve_function_call(&impl_fn_name, &arg_types) {
@@ -15396,7 +15396,7 @@ impl Compiler {
             if !all_clause_types.is_empty() {
                 // Get inferred types for all arguments
                 let arg_types: Vec<Option<String>> = arg_exprs.iter()
-                    .map(|e| self.expr_type_name(e))
+                    .map(|e| self.expr_type_info(e).display_name())
                     .collect();
 
                 // Check if any clause matches
@@ -16104,7 +16104,7 @@ impl Compiler {
                     // First try trait dispatch, then fall back to native
                     builtin @ ("show" | "copy" | "hash") if arg_regs.len() == 1 => {
                         // Try to dispatch to trait method if type is known
-                        let arg_type = self.expr_type_name(Self::call_arg_expr(&args[0]));
+                        let arg_type = self.expr_type_info(Self::call_arg_expr(&args[0])).display_name();
 
                         if let Some(ref concrete_type) = arg_type {
                             if let Some(qualified_method) = self.find_trait_method(concrete_type, &qualified_name) {
@@ -16308,7 +16308,7 @@ impl Compiler {
             let arg_types: Vec<Option<String>> = args.iter()
                 .map(|arg| {
                     let arg_expr = Self::call_arg_expr(arg);
-                    let ty = self.expr_type_name(arg_expr);
+                    let ty = self.expr_type_info(arg_expr).display_name();
                     // If expr_type_name returned a polymorphic/non-concrete type for a Call expr,
                     // check if the called function has a monomorphized variant with a known return type
                     if let Some(ref ty_str) = ty {
@@ -16974,7 +16974,7 @@ impl Compiler {
                 // e.g., display(w) where display is a trait method of Showable.
                 // Use the first argument's type to find the right trait impl.
                 if !arg_regs.is_empty() {
-                    let first_arg_type = self.expr_type_name(Self::call_arg_expr(&args[0]));
+                    let first_arg_type = self.expr_type_info(Self::call_arg_expr(&args[0])).display_name();
                     if let Some(ref arg_type) = first_arg_type {
                         if let Some(trait_fn_base) = self.find_trait_method(arg_type, &qualified_name) {
                             // If arg type is not concrete (e.g., type parameter T), trigger
@@ -16989,7 +16989,7 @@ impl Compiler {
                             }
                             // Found trait method impl - resolve to full function key with arity
                             let trait_arg_types: Vec<Option<String>> = args.iter()
-                                .map(|arg| self.expr_type_name(Self::call_arg_expr(arg)))
+                                .map(|arg| self.expr_type_info(Self::call_arg_expr(arg)).display_name())
                                 .collect();
                             let call_name = self.resolve_function_call(&trait_fn_base, &trait_arg_types)
                                 .unwrap_or_else(|| {
@@ -19990,7 +19990,7 @@ impl Compiler {
         // First pass: find type parameter mappings
         for (expected, arg) in expected_types.iter().zip(args.iter()) {
             if let Some(type_expr) = expected {
-                if let Some(concrete_type) = self.expr_type_name(arg) {
+                if let Some(concrete_type) = self.expr_type_info(arg).display_name() {
                     // Extract type bindings recursively
                     Self::extract_type_bindings(type_expr, &concrete_type, &mut map);
                 }
@@ -20007,7 +20007,7 @@ impl Compiler {
         // First pass: find type parameter mappings
         for (expected, arg) in expected_types.iter().zip(args.iter()) {
             if let Some(type_expr) = expected {
-                if let Some(concrete_type) = self.expr_type_name(arg) {
+                if let Some(concrete_type) = self.expr_type_info(arg).display_name() {
                     // Extract type bindings recursively
                     Self::extract_type_bindings(type_expr, &concrete_type, &mut map);
                 }
