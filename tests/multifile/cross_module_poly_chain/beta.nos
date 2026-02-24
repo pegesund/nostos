@@ -1,0 +1,2 @@
+# beta: polymorphic function with UFCS method call
+pub doubleAll(xs) = xs.map(x => x * 2)

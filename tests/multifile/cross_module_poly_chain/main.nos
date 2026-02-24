@@ -1,0 +1,7 @@
+# expect: [2, 4, 6]
+# Test: Transitive polymorphism propagation in reverse-alphabetical module ordering.
+# alpha.run(xs) calls beta.doubleAll(xs) which uses xs.map().
+# Since alpha is compiled first (alphabetically), it must be marked as polymorphic
+# transitively so that main's call run([1,2,3]) triggers monomorphization through the chain.
+use alpha.*
+main() = run([1, 2, 3])

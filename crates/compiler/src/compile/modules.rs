@@ -1635,10 +1635,19 @@ impl Compiler {
         }
 
         // Recompilation pass: if new polymorphic functions were discovered during the first pass,
-        // recompile callers that emitted CallDirect to them instead of monomorphizing.
+        // propagate polymorphism transitively and recompile concrete callers.
         // This handles cross-module cases where a caller is compiled before its polymorphic callee.
-        let new_poly_fns: Vec<String> = self.polymorphic_fns.difference(&poly_fns_before).cloned().collect();
-        if !new_poly_fns.is_empty() {
+        // Loop until no new polymorphic functions are discovered (handles transitive chains like
+        // main → alpha.run → beta.doubleAll where each level needs to be marked polymorphic).
+        let mut current_poly_set = poly_fns_before.clone();
+        for _poly_iter in 0..5 {
+            let new_poly_fns: Vec<String> = self.polymorphic_fns.difference(&current_poly_set).cloned().collect();
+            if new_poly_fns.is_empty() {
+                break;
+            }
+            // Update current set so next iteration only looks at newly added
+            current_poly_set = self.polymorphic_fns.clone();
+
             // Extract base names of newly-polymorphic functions for matching
             // e.g., "helper.process/_" → "helper.process"
             let new_poly_bases: Vec<String> = new_poly_fns.iter()
@@ -1680,7 +1689,7 @@ impl Compiler {
                     };
                     format!("{}/{}", base_name, param_types.join(","))
                 };
-                // Skip stdlib functions and polymorphic functions themselves
+                // Skip stdlib functions and already-polymorphic functions
                 if is_fn_stdlib || self.polymorphic_fns.contains(&fn_key) || self.polymorphic_fns.contains(&fn_key_wildcard) {
                     continue;
                 }
@@ -1716,6 +1725,34 @@ impl Compiler {
                     continue;
                 }
 
+                // If this function has untyped params and calls a polymorphic function,
+                // mark it as polymorphic too. This propagates polymorphism transitively:
+                // when alpha.run(xs) calls beta.doubleAll(xs) and beta.doubleAll is polymorphic,
+                // alpha.run also needs monomorphization so that concrete types from its callers
+                // (e.g., main calling run([1,2,3])) flow through to beta.doubleAll.
+                let has_untyped_params = fn_def.clauses.first()
+                    .map(|c| c.params.iter().any(|p| p.ty.is_none()))
+                    .unwrap_or(false);
+                if has_untyped_params {
+                    self.polymorphic_fns.insert(fn_key.clone());
+                    self.polymorphic_fns.insert(fn_key_wildcard.clone());
+                    // Also compute HM-inferred signature for the now-polymorphic function
+                    // so monomorphized variants can use type parameter relationships.
+                    let saved_path2 = std::mem::replace(&mut self.module_path, module_path.clone());
+                    let saved_imports2 = self.imports.clone();
+                    self.imports.extend(imports.clone());
+                    let sig = self.infer_signature(fn_def);
+                    let lookup_key = if self.functions.contains_key(&fn_key) { &fn_key } else { &fn_key_wildcard };
+                    if let Some(fn_val) = self.functions.get(lookup_key) {
+                        let mut new_fn_val = (**fn_val).clone();
+                        new_fn_val.signature = Some(sig);
+                        self.functions.insert(lookup_key.clone(), Arc::new(new_fn_val));
+                    }
+                    self.module_path = saved_path2;
+                    self.imports = saved_imports2;
+                    continue;
+                }
+
                 let saved_path = std::mem::replace(&mut self.module_path, module_path.clone());
                 let saved_imports = self.imports.clone();
                 self.imports.extend(imports.clone());
@@ -1747,8 +1784,9 @@ impl Compiler {
         // if their error involves any of the newly-polymorphic functions. This handles cases
         // where main() calls a newly-polymorphic function and monomorphization failed because
         // the function's code wasn't available yet (e.g., lambdas calling polymorphic functions).
-        if !new_poly_fns.is_empty() && !errors.is_empty() {
-            let new_poly_bases: Vec<String> = new_poly_fns.iter()
+        let all_new_poly_fns: Vec<String> = self.polymorphic_fns.difference(&poly_fns_before).cloned().collect();
+        if !all_new_poly_fns.is_empty() && !errors.is_empty() {
+            let new_poly_bases: Vec<String> = all_new_poly_fns.iter()
                 .map(|n| n.split('/').next().unwrap_or(n).to_string())
                 .collect();
             let error_fn_names: Vec<String> = errors.iter()

@@ -1,0 +1,4 @@
+# alpha: comes FIRST alphabetically, depends on beta (reverse-alpha ordering)
+use beta.*
+
+pub run(xs) = doubleAll(xs)
