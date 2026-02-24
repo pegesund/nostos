@@ -354,9 +354,9 @@ pub struct GcFloat32Array {
 /// Avoids GcValue boxing overhead for integer lists.
 #[derive(Clone)]
 pub struct GcInt64List {
-    data: ImblVector<i64>,
+    pub data: ImblVector<i64>,
     /// Offset into data - allows O(1) tail by just incrementing offset
-    offset: usize,
+    pub offset: usize,
 }
 
 impl std::fmt::Debug for GcInt64List {
@@ -375,6 +375,12 @@ impl GcInt64List {
     #[inline]
     pub fn from_vec(v: Vec<i64>) -> Self {
         GcInt64List { data: v.into_iter().collect(), offset: 0 }
+    }
+
+    /// Create from raw parts (data vector and offset)
+    #[inline]
+    pub fn from_parts(data: ImblVector<i64>, offset: usize) -> Self {
+        GcInt64List { data, offset }
     }
 
     #[inline]

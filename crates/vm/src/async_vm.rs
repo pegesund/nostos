@@ -4809,7 +4809,28 @@ impl AsyncProcess {
                         }
                         array.items[idx_val] = new_value;
                     }
-                    _ => return Err(RuntimeError::Panic("IndexSet expects array".into())),
+                    GcValue::List(list) => {
+                        let new_value = reg!(val);
+                        let actual_idx = list.offset + idx_val;
+                        if idx_val >= list.len() {
+                            return Err(RuntimeError::Panic(format!("Index {} out of bounds", idx_val)));
+                        }
+                        let new_data = list.data.update(actual_idx, new_value);
+                        set_reg!(coll, GcValue::List(crate::gc::GcList { data: new_data, offset: list.offset }));
+                    }
+                    GcValue::Int64List(list) => {
+                        let new_value = match reg!(val) {
+                            GcValue::Int64(v) => v,
+                            _ => return Err(RuntimeError::Panic("Int64List IndexSet expects Int64 value".into())),
+                        };
+                        let actual_idx = list.offset + idx_val;
+                        if idx_val >= list.len() {
+                            return Err(RuntimeError::Panic(format!("Index {} out of bounds", idx_val)));
+                        }
+                        let new_data = list.data.update(actual_idx, new_value);
+                        set_reg!(coll, GcValue::Int64List(crate::gc::GcInt64List::from_parts(new_data, list.offset)));
+                    }
+                    _ => return Err(RuntimeError::Panic("IndexSet expects array or list".into())),
                 }
             }
 

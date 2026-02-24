@@ -1,0 +1,8 @@
+# expect: [1, 2, 99, 4, 5]
+# Regression test: Index assignment on lists (xs[i] = val)
+# Previously only worked on typed arrays (Array), not on persistent lists.
+main() = {
+  var xs = [1, 2, 3, 4, 5]
+  xs[2] = 99
+  xs
+}
