@@ -58,14 +58,8 @@ run_single_test() {
 
     # Multi-file project support: files in multifile/ directories are compiled
     # as projects (pass the directory to the compiler, not individual files).
-    # Only main.nos triggers the test; helper modules are skipped.
     local run_target="$file"
     if [[ "$file" == *"/multifile/"* ]]; then
-        local basename=$(basename "$file")
-        if [[ "$basename" != "main.nos" ]]; then
-            echo "SKIP|$file|multifile helper module"
-            return
-        fi
         # Run the binary on the directory containing main.nos
         run_target=$(dirname "$file")
         rm -rf "$run_target/.nostos-cache" 2>/dev/null
@@ -76,7 +70,7 @@ run_single_test() {
     local expect_error=$(grep "^# expect_error:" "$file" 2>/dev/null | head -1 | sed 's/^# expect_error: //')
 
     if [ -z "$expect" ] && [ -z "$expect_error" ]; then
-        echo "SKIP|$file|no expect comment"
+        echo "FAIL|$file|missing '# expect:' or '# expect_error:' comment"
         return
     fi
 
@@ -128,8 +122,17 @@ run_single_test() {
 export -f run_single_test
 
 # Find all test files and run in parallel
+# Exclude multifile helper modules (non-main.nos files in multifile/ dirs)
+# and timeout tests (intentionally slow) from the file list entirely.
 RESULTS_FILE=$(mktemp)
 find "$TEST_DIR" -name "*.nos" -print0 | sort -z | \
+    while IFS= read -r -d '' f; do
+        # Skip multifile helper modules (only main.nos is a test entry point)
+        if [[ "$f" == *"/multifile/"* ]] && [[ "$(basename "$f")" != "main.nos" ]]; then
+            continue
+        fi
+        printf '%s\0' "$f"
+    done | \
     xargs -0 -P "$JOBS" -I {} bash -c 'run_single_test "$@"' _ {} > "$RESULTS_FILE"
 
 # Parse results
