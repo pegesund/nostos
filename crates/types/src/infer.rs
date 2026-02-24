@@ -2817,6 +2817,16 @@ impl<'a> InferCtx<'a> {
                         }
                     }
                 }
+                Type::String => {
+                    // String indexing: index must be Int, result is String
+                    let _ = self.unify_types(&self.env.apply_subst(&index_ty), &Type::Int);
+                    let _ = self.unify_types(&self.env.apply_subst(&elem_ty), &Type::String);
+                }
+                Type::Array(arr_elem_ty) => {
+                    // Typed array indexing: index must be Int, result is element type
+                    let _ = self.unify_types(&self.env.apply_subst(&index_ty), &Type::Int);
+                    let _ = self.unify_types(&self.env.apply_subst(&elem_ty), &arr_elem_ty);
+                }
                 Type::Named { .. } => {
                     // Custom type indexing: index must be Int
                     let _ = self.unify_types(&self.env.apply_subst(&index_ty), &Type::Int);
@@ -6786,8 +6796,28 @@ impl<'a> InferCtx<'a> {
                         }
                         Ok(elem_ty)
                     }
+                    Type::String => {
+                        // String indexing: s[i] returns String (single character)
+                        self.unify(index_ty, Type::Int);
+                        self.constraints.push(Constraint::Equal(
+                            elem_ty.clone(),
+                            Type::String,
+                            Some(*span),
+                        ));
+                        Ok(elem_ty)
+                    }
+                    Type::Array(arr_elem_ty) => {
+                        // Typed array indexing: arr[i] returns element type
+                        self.unify(index_ty, Type::Int);
+                        self.constraints.push(Constraint::Equal(
+                            elem_ty.clone(),
+                            (**arr_elem_ty).clone(),
+                            Some(*span),
+                        ));
+                        Ok(elem_ty)
+                    }
                     _ => {
-                        // Container is List, Array, or String
+                        // Container is List (default assumption)
                         let list_ty = Type::List(Box::new(elem_ty.clone()));
 
                         self.unify(index_ty, Type::Int);

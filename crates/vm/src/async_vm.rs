@@ -4751,7 +4751,15 @@ impl AsyncProcess {
                         // Return as Float64 for consistency with the language's Float type
                         GcValue::Float64(val as f64)
                     }
-                    _ => return Err(RuntimeError::Panic("Index expects list, tuple, or array".into())),
+                    GcValue::String(ptr) => {
+                        let s = self.heap.get_string(*ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid string reference".into()))?;
+                        let chars: Vec<char> = s.data.chars().collect();
+                        let ch = chars.get(idx_val)
+                            .ok_or_else(|| RuntimeError::Panic(format!("Index {} out of bounds for string of length {}", idx_val, chars.len())))?;
+                        GcValue::String(self.heap.alloc_string(ch.to_string()))
+                    }
+                    _ => return Err(RuntimeError::Panic("Index expects list, tuple, array, or string".into())),
                 };
                 set_reg!(dst, value);
             }

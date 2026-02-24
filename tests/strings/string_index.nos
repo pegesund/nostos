@@ -1,0 +1,6 @@
+# expect: ["H", "e", "o"]
+# Regression test: String indexing with s[i] returns single character as String
+main() = {
+  s = "Hello"
+  [s[0], s[1], s[4]]
+}
