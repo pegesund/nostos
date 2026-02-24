@@ -2377,8 +2377,8 @@ impl<'a> InferCtx<'a> {
             match &resolved {
                 Type::Var(_) | Type::TypeParam(_) => {} // Still unresolved or polymorphic, skip
                 // Named types with single lowercase letter and no args are type params
-                // from annotations (e.g., `f(t: BTree[a])` where `a` is Named("a")).
-                // Treat them as polymorphic - don't reject, just skip.
+                // leaked through apply_subst (which doesn't call resolve_type_params_with_depth).
+                // Treat them as polymorphic — don't reject, just skip.
                 Type::Named { name, args } if args.is_empty() && name.len() == 1
                     && name.starts_with(|c: char| c.is_ascii_lowercase()) => {}
                 Type::Function(_) => {
@@ -2548,7 +2548,7 @@ impl<'a> InferCtx<'a> {
             let resolved = self.env.apply_subst(ty);
             match &resolved {
                 Type::Var(_) | Type::TypeParam(_) => {} // Still unresolved or polymorphic, skip
-                // Named type params from annotations (e.g., Named("a")) - skip
+                // Named type params leaked through apply_subst — skip
                 Type::Named { name, args } if args.is_empty() && name.len() == 1
                     && name.starts_with(|c: char| c.is_ascii_lowercase()) => {}
                 Type::Function(_) => {
@@ -2749,7 +2749,7 @@ impl<'a> InferCtx<'a> {
             let resolved = self.env.apply_subst(ty);
             match &resolved {
                 Type::Var(_) | Type::TypeParam(_) => {} // Still unresolved or polymorphic, skip
-                // Named type params from annotations (e.g., Named("a")) - skip
+                // Named type params leaked through apply_subst — skip
                 Type::Named { name, args } if args.is_empty() && name.len() == 1
                     && name.starts_with(|c: char| c.is_ascii_lowercase()) => {}
                 Type::Function(_) => {
@@ -3986,11 +3986,12 @@ impl<'a> InferCtx<'a> {
                                 // Check if element type is definitely non-numeric.
                                 // Numeric types: Int*, UInt*, Float*, BigInt, Decimal
                                 // Type variables (Var/TypeParam) might be numeric, so allow them.
-                                // Single-lowercase Named types are leaked type params — also allow.
                                 let is_non_numeric = match &resolved_elem {
                                     Type::String | Type::Bool | Type::Char | Type::Unit | Type::Never |
                                     Type::Tuple(_) | Type::List(_) | Type::Map(_, _) | Type::Set(_) |
                                     Type::Array(_) | Type::Record(_) | Type::Function(_) => true,
+                                    // Named types are non-numeric unless they're leaked type params
+                                    // (single lowercase letter via apply_subst path)
                                     Type::Named { name, args } => {
                                         !(args.is_empty() && name.len() == 1
                                           && name.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false))
@@ -4015,15 +4016,14 @@ impl<'a> InferCtx<'a> {
                                 let resolved_elem = self.env.apply_subst(elem);
                                 // Types that don't implement Ord: tuples, lists, maps, sets,
                                 // records, functions, Bool, user-defined types.
-                                // Exclude TypeParam and single-lowercase Named (leaked type params)
-                                // which represent generic parameters — their Ord bound is checked
-                                // at call sites, not at the definition.
+                                // TypeParam is generic — Ord bound checked at call sites, not definition.
+                                // Named types are non-orderable unless they're leaked type params
+                                // (single lowercase letter via apply_subst path).
                                 let is_non_orderable = match &resolved_elem {
                                     Type::Bool | Type::Unit | Type::Never |
                                     Type::Tuple(_) | Type::List(_) | Type::Map(_, _) | Type::Set(_) |
                                     Type::Array(_) | Type::Record(_) | Type::Function(_) => true,
                                     Type::Named { name, args } => {
-                                        // Single lowercase letter with no args = leaked type param
                                         !(args.is_empty() && name.len() == 1
                                           && name.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false))
                                     }
@@ -5207,7 +5207,18 @@ impl<'a> InferCtx<'a> {
             Type::Var(id) => {
                 // Apply substitution to resolve type variables
                 if let Some(resolved) = self.env.substitution.get(id) {
-                    self.resolve_type_params_with_depth(resolved, depth + 1)
+                    let result = self.resolve_type_params_with_depth(resolved, depth + 1);
+                    // Fix: Batch inference can contaminate shared Var IDs through
+                    // type_param_mappings, causing Var(1) to resolve to Named("a")
+                    // instead of TypeParam("a"). Convert these back at the source.
+                    if let Type::Named { ref name, ref args } = result {
+                        if args.is_empty() && name.len() == 1
+                           && name.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false)
+                           && !self.type_param_mappings.contains_key(name.as_str()) {
+                            return Type::TypeParam(name.clone());
+                        }
+                    }
+                    result
                 } else {
                     ty.clone()
                 }
