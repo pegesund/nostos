@@ -5342,6 +5342,12 @@ impl Compiler {
         self.type_name_to_type(&self.type_expr_to_string(ty))
     }
 
+    /// Convert a TypeExpr to a Type with current_type_bindings substituted.
+    fn type_expr_to_type_substituted(&self, ty: &nostos_syntax::TypeExpr) -> nostos_types::Type {
+        let base = self.type_expr_to_type(ty);
+        self.substitute_type_params_in_type(&base)
+    }
+
     /// Check if an expression is float-typed (for type-directed operator selection).
     /// This is a simple heuristic: true if the expression is a float literal or
     /// a binary operation on floats.
@@ -7504,51 +7510,6 @@ impl Compiler {
             TypeExpr::Record(fields) => {
                 let fields_str: Vec<String> = fields.iter()
                     .map(|(name, ty)| format!("{}: {}", name.node, self.type_expr_to_string(ty)))
-                    .collect();
-                format!("{{{}}}", fields_str.join(", "))
-            }
-            TypeExpr::Unit => "()".to_string(),
-        }
-    }
-
-    /// Convert a type expression to a string, substituting type parameters from current_type_bindings.
-    fn type_expr_to_string_with_bindings(&self, ty: &TypeExpr) -> String {
-        match ty {
-            TypeExpr::Name(name) => {
-                // Check if this is a type parameter that should be substituted
-                if let Some(concrete) = self.current_type_bindings.get(&name.node) {
-                    concrete.display()
-                } else {
-                    name.node.clone()
-                }
-            }
-            TypeExpr::Generic(name, params) => {
-                // First check if the generic name itself is a type parameter
-                let base_name = if let Some(concrete) = self.current_type_bindings.get(&name.node) {
-                    concrete.display()
-                } else {
-                    name.node.clone()
-                };
-                let params_str: Vec<String> = params.iter()
-                    .map(|p| self.type_expr_to_string_with_bindings(p))
-                    .collect();
-                format!("{}[{}]", base_name, params_str.join(", "))
-            }
-            TypeExpr::Tuple(elems) => {
-                let elems_str: Vec<String> = elems.iter()
-                    .map(|e| self.type_expr_to_string_with_bindings(e))
-                    .collect();
-                format!("({})", elems_str.join(", "))
-            }
-            TypeExpr::Function(params, ret) => {
-                let params_str: Vec<String> = params.iter()
-                    .map(|p| self.type_expr_to_string_with_bindings(p))
-                    .collect();
-                format!("({}) -> {}", params_str.join(", "), self.type_expr_to_string_with_bindings(ret))
-            }
-            TypeExpr::Record(fields) => {
-                let fields_str: Vec<String> = fields.iter()
-                    .map(|(name, ty)| format!("{}: {}", name.node, self.type_expr_to_string_with_bindings(ty)))
                     .collect();
                 format!("{{{}}}", fields_str.join(", "))
             }
@@ -12931,9 +12892,9 @@ impl Compiler {
                                         let resolved_from_decl: Vec<Option<String>> = fn_def.clauses[0].params.iter()
                                             .map(|p| {
                                                 if let Some(ty_expr) = &p.ty {
-                                                    let type_str = self.type_expr_to_string_with_bindings(ty_expr);
-                                                    if self.is_type_concrete(&type_str) {
-                                                        return Some(type_str);
+                                                    let ty = self.type_expr_to_type_substituted(ty_expr);
+                                                    if self.is_type_structurally_resolved(&ty) {
+                                                        return Some(ty.display());
                                                     }
                                                 }
                                                 None
@@ -16431,7 +16392,7 @@ impl Compiler {
                     } else {
                         // Convert explicit type args to type names
                         let explicit_type_names: Vec<String> = type_args.iter()
-                            .map(|t| self.type_expr_to_string_with_bindings(t))
+                            .map(|t| self.type_expr_to_type_substituted(t).display())
                             .collect();
 
                         // Check all explicit types are concrete
@@ -16543,9 +16504,9 @@ impl Compiler {
                         let resolved_from_decl: Vec<Option<String>> = fn_def.clauses[0].params.iter()
                             .map(|p| {
                                 if let Some(ty_expr) = &p.ty {
-                                    let type_str = self.type_expr_to_string_with_bindings(ty_expr);
-                                    if self.is_type_concrete(&type_str) {
-                                        return Some(type_str);
+                                    let ty = self.type_expr_to_type_substituted(ty_expr);
+                                    if self.is_type_structurally_resolved(&ty) {
+                                        return Some(ty.display());
                                     }
                                 }
                                 None
@@ -16617,9 +16578,9 @@ impl Compiler {
                                 let resolved_types: Vec<Option<String>> = fn_def.clauses[0].params.iter()
                                     .map(|p| {
                                         if let Some(ty_expr) = &p.ty {
-                                            let type_str = self.type_expr_to_string_with_bindings(ty_expr);
-                                            if self.is_type_concrete(&type_str) {
-                                                return Some(type_str);
+                                            let ty = self.type_expr_to_type_substituted(ty_expr);
+                                            if self.is_type_structurally_resolved(&ty) {
+                                                return Some(ty.display());
                                             }
                                         }
                                         // Try type param names directly from fn type params
@@ -18574,9 +18535,9 @@ impl Compiler {
                     if matches {
                         // Return the return type of this clause
                         if let Some(ref ret_type) = clause.return_type {
-                            // Use type_expr_to_string_with_bindings to substitute type parameters
-                            // from current_type_bindings (e.g., T -> Num during monomorphization)
-                            let ret_type_name = self.type_expr_to_string_with_bindings(ret_type);
+                            // Substitute type parameters from current_type_bindings
+                            // (e.g., T -> Num during monomorphization)
+                            let ret_type_name = self.type_expr_to_type_substituted(ret_type).display();
 
                             // Build a local type param map by matching param types against arg types
                             // This handles cases like map[T, U](list: List[T], f: (T) -> U) -> List[U]
@@ -18622,7 +18583,7 @@ impl Compiler {
                                 // Find which parameter has this type parameter and get the actual type
                                 for (i, param) in clause.params.iter().enumerate() {
                                     if let Some(ref param_ty) = param.ty {
-                                        let param_type_name = self.type_expr_to_string_with_bindings(param_ty);
+                                        let param_type_name = self.type_expr_to_type_substituted(param_ty).display();
                                         if param_type_name == final_ret_type && i < arg_types.len() {
                                             if let Some(ref arg_type) = arg_types[i] {
                                                 return Some(arg_type.clone());
