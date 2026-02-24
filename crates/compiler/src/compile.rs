@@ -8,7 +8,7 @@
 //! - Type-directed code generation
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::sync::atomic::AtomicU32;
 
 use nostos_syntax::ast::*;
@@ -25,125 +25,153 @@ mod modules;
 /// Builtin UFCS method dispatch table.
 /// Maps (base_type, method_name) → qualified_function_name.
 /// Used by compile_expr for MethodCall dispatch on builtin types.
-static BUILTIN_METHODS: &[(&str, &str, &str)] = &[
-    // Map methods
-    ("Map", "get", "Map.get"),
-    ("Map", "lookup", "Map.lookup"),
-    ("Map", "getOrThrow", "Map.getOrThrow"),
-    ("Map", "insert", "Map.insert"),
-    ("Map", "remove", "Map.remove"),
-    ("Map", "contains", "Map.contains"),
-    ("Map", "keys", "Map.keys"),
-    ("Map", "values", "Map.values"),
-    ("Map", "size", "Map.size"),
-    ("Map", "isEmpty", "Map.isEmpty"),
-    ("Map", "union", "Map.union"),
-    ("Map", "intersection", "Map.intersection"),
-    ("Map", "difference", "Map.difference"),
-    ("Map", "toList", "Map.toList"),
-    // Set methods
-    ("Set", "contains", "Set.contains"),
-    ("Set", "insert", "Set.insert"),
-    ("Set", "remove", "Set.remove"),
-    ("Set", "size", "Set.size"),
-    ("Set", "isEmpty", "Set.isEmpty"),
-    ("Set", "union", "Set.union"),
-    ("Set", "intersection", "Set.intersection"),
-    ("Set", "difference", "Set.difference"),
-    ("Set", "symmetricDifference", "Set.symmetricDifference"),
-    ("Set", "isSubset", "Set.isSubset"),
-    ("Set", "isProperSubset", "Set.isProperSubset"),
-    ("Set", "toList", "Set.toList"),
-    // String methods
-    ("String", "length", "String.length"),
-    ("String", "chars", "String.chars"),
-    ("String", "toInt", "String.toInt"),
-    ("String", "toFloat", "String.toFloat"),
-    ("String", "trim", "String.trim"),
-    ("String", "trimStart", "String.trimStart"),
-    ("String", "trimEnd", "String.trimEnd"),
-    ("String", "toUpper", "String.toUpper"),
-    ("String", "toLower", "String.toLower"),
-    ("String", "contains", "String.contains"),
-    ("String", "startsWith", "String.startsWith"),
-    ("String", "endsWith", "String.endsWith"),
-    ("String", "replace", "String.replace"),
-    ("String", "replaceAll", "String.replaceAll"),
-    ("String", "indexOf", "String.indexOf"),
-    ("String", "lastIndexOf", "String.lastIndexOf"),
-    ("String", "substring", "String.substring"),
-    ("String", "repeat", "String.repeat"),
-    ("String", "padStart", "String.padStart"),
-    ("String", "padEnd", "String.padEnd"),
-    ("String", "reverse", "String.reverse"),
-    ("String", "lines", "String.lines"),
-    ("String", "words", "String.words"),
-    ("String", "isEmpty", "String.isEmpty"),
-    ("String", "split", "String.split"),
-    ("String", "drop", "String.drop"),
-    ("String", "take", "String.take"),
-    // List methods (join dispatches to String.join)
-    ("List", "join", "String.join"),
-    // Float64Array methods
-    ("Float64Array", "length", "Float64Array.length"),
-    ("Float64Array", "get", "Float64Array.get"),
-    ("Float64Array", "set", "Float64Array.set"),
-    ("Float64Array", "toList", "Float64Array.toList"),
-    // Int64Array methods
-    ("Int64Array", "length", "Int64Array.length"),
-    ("Int64Array", "get", "Int64Array.get"),
-    ("Int64Array", "set", "Int64Array.set"),
-    ("Int64Array", "toList", "Int64Array.toList"),
-    // Float32Array methods
-    ("Float32Array", "length", "Float32Array.length"),
-    ("Float32Array", "get", "Float32Array.get"),
-    ("Float32Array", "set", "Float32Array.set"),
-    ("Float32Array", "toList", "Float32Array.toList"),
-];
+static BUILTIN_METHODS: LazyLock<HashMap<(&str, &str), &str>> = LazyLock::new(|| {
+    let entries: &[(&str, &str, &str)] = &[
+        // Map methods
+        ("Map", "get", "Map.get"),
+        ("Map", "lookup", "Map.lookup"),
+        ("Map", "getOrThrow", "Map.getOrThrow"),
+        ("Map", "insert", "Map.insert"),
+        ("Map", "remove", "Map.remove"),
+        ("Map", "contains", "Map.contains"),
+        ("Map", "keys", "Map.keys"),
+        ("Map", "values", "Map.values"),
+        ("Map", "size", "Map.size"),
+        ("Map", "isEmpty", "Map.isEmpty"),
+        ("Map", "union", "Map.union"),
+        ("Map", "intersection", "Map.intersection"),
+        ("Map", "difference", "Map.difference"),
+        ("Map", "toList", "Map.toList"),
+        // Set methods
+        ("Set", "contains", "Set.contains"),
+        ("Set", "insert", "Set.insert"),
+        ("Set", "remove", "Set.remove"),
+        ("Set", "size", "Set.size"),
+        ("Set", "isEmpty", "Set.isEmpty"),
+        ("Set", "union", "Set.union"),
+        ("Set", "intersection", "Set.intersection"),
+        ("Set", "difference", "Set.difference"),
+        ("Set", "symmetricDifference", "Set.symmetricDifference"),
+        ("Set", "isSubset", "Set.isSubset"),
+        ("Set", "isProperSubset", "Set.isProperSubset"),
+        ("Set", "toList", "Set.toList"),
+        // String methods
+        ("String", "length", "String.length"),
+        ("String", "chars", "String.chars"),
+        ("String", "toInt", "String.toInt"),
+        ("String", "toFloat", "String.toFloat"),
+        ("String", "trim", "String.trim"),
+        ("String", "trimStart", "String.trimStart"),
+        ("String", "trimEnd", "String.trimEnd"),
+        ("String", "toUpper", "String.toUpper"),
+        ("String", "toLower", "String.toLower"),
+        ("String", "contains", "String.contains"),
+        ("String", "startsWith", "String.startsWith"),
+        ("String", "endsWith", "String.endsWith"),
+        ("String", "replace", "String.replace"),
+        ("String", "replaceAll", "String.replaceAll"),
+        ("String", "indexOf", "String.indexOf"),
+        ("String", "lastIndexOf", "String.lastIndexOf"),
+        ("String", "substring", "String.substring"),
+        ("String", "repeat", "String.repeat"),
+        ("String", "padStart", "String.padStart"),
+        ("String", "padEnd", "String.padEnd"),
+        ("String", "reverse", "String.reverse"),
+        ("String", "lines", "String.lines"),
+        ("String", "words", "String.words"),
+        ("String", "isEmpty", "String.isEmpty"),
+        ("String", "split", "String.split"),
+        ("String", "drop", "String.drop"),
+        ("String", "take", "String.take"),
+        // List methods (join dispatches to String.join)
+        ("List", "join", "String.join"),
+        // Float64Array methods
+        ("Float64Array", "length", "Float64Array.length"),
+        ("Float64Array", "get", "Float64Array.get"),
+        ("Float64Array", "set", "Float64Array.set"),
+        ("Float64Array", "toList", "Float64Array.toList"),
+        // Int64Array methods
+        ("Int64Array", "length", "Int64Array.length"),
+        ("Int64Array", "get", "Int64Array.get"),
+        ("Int64Array", "set", "Int64Array.set"),
+        ("Int64Array", "toList", "Int64Array.toList"),
+        // Float32Array methods
+        ("Float32Array", "length", "Float32Array.length"),
+        ("Float32Array", "get", "Float32Array.get"),
+        ("Float32Array", "set", "Float32Array.set"),
+        ("Float32Array", "toList", "Float32Array.toList"),
+    ];
+    entries.iter().map(|&(ty, meth, func)| ((ty, meth), func)).collect()
+});
 
 /// Option method aliasing table.
 /// Maps method_name → stdlib function name (e.g., opt.map(f) → optMap(opt, f))
-static OPTION_METHODS: &[(&str, &str)] = &[
-    ("map", "optMap"),
-    ("flatMap", "optFlatMap"),
-    ("unwrap", "optUnwrap"),
-    ("unwrapOr", "optUnwrapOr"),
-    ("isSome", "optIsSome"),
-    ("isNone", "optIsNone"),
-];
+static OPTION_METHODS: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
+    HashMap::from([
+        ("map", "optMap"),
+        ("flatMap", "optFlatMap"),
+        ("unwrap", "optUnwrap"),
+        ("unwrapOr", "optUnwrapOr"),
+        ("isSome", "optIsSome"),
+        ("isNone", "optIsNone"),
+    ])
+});
 
 /// Result method aliasing table.
 /// Maps method_name → stdlib function name (e.g., res.map(f) → resMap(res, f))
-static RESULT_METHODS: &[(&str, &str)] = &[
-    ("map", "resMap"),
-    ("mapErr", "resMapErr"),
-    ("flatMap", "resFlatMap"),
-    ("unwrap", "resUnwrap"),
-    ("unwrapOr", "resUnwrapOr"),
-    ("isOk", "resIsOk"),
-    ("isErr", "resIsErr"),
-    ("toOption", "resToOption"),
-];
+static RESULT_METHODS: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
+    HashMap::from([
+        ("map", "resMap"),
+        ("mapErr", "resMapErr"),
+        ("flatMap", "resFlatMap"),
+        ("unwrap", "resUnwrap"),
+        ("unwrapOr", "resUnwrapOr"),
+        ("isOk", "resIsOk"),
+        ("isErr", "resIsErr"),
+        ("toOption", "resToOption"),
+    ])
+});
 
 /// Look up a builtin UFCS method by base type and method name.
 fn resolve_builtin_method(base_type: &str, method_name: &str) -> Option<&'static str> {
-    BUILTIN_METHODS.iter()
-        .find(|(ty, meth, _)| *ty == base_type && *meth == method_name)
-        .map(|(_, _, func)| *func)
+    BUILTIN_METHODS.get(&(base_type, method_name)).copied()
 }
 
 /// Look up an Option method alias.
 fn resolve_option_method(method_name: &str) -> Option<&'static str> {
-    OPTION_METHODS.iter()
-        .find(|(meth, _)| *meth == method_name)
-        .map(|(_, func)| *func)
+    OPTION_METHODS.get(method_name).copied()
 }
 
 /// Look up a Result method alias.
 fn resolve_result_method(method_name: &str) -> Option<&'static str> {
-    RESULT_METHODS.iter()
-        .find(|(meth, _)| *meth == method_name)
-        .map(|(_, func)| *func)
+    RESULT_METHODS.get(method_name).copied()
+}
+
+/// Clean type variable names in error messages for user display.
+/// Replaces `?47`, `?123` etc. with sequential letters `a`, `b`, `c`.
+fn clean_type_vars(s: &str) -> String {
+    let mut var_map: Vec<(String, char)> = Vec::new();
+    let mut next = b'a';
+    let mut i = 0;
+    let bytes = s.as_bytes();
+    while i < bytes.len() {
+        if bytes[i] == b'?' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && bytes[i].is_ascii_digit() { i += 1; }
+            let var = s[start..i].to_string();
+            if !var_map.iter().any(|(v, _)| v == &var) {
+                var_map.push((var, next as char));
+                next = std::cmp::min(next + 1, b'z');
+            }
+        } else { i += 1; }
+    }
+    if var_map.is_empty() { return s.to_string(); }
+    let mut result = s.to_string();
+    for (var, letter) in &var_map {
+        result = result.replace(var, &letter.to_string());
+    }
+    result
 }
 
 /// Unified type information for an expression.
@@ -911,7 +939,7 @@ pub enum CompileError {
     UnknownFunction { name: String, suggestions: Vec<String>, span: Span },
 
     #[error("unknown type `{name}`")]
-    UnknownType { name: String, span: Span },
+    UnknownType { name: String, span: Span, suggestion: Option<String> },
 
     #[error("`{name}` is defined multiple times")]
     DuplicateDefinition { name: String, span: Span },
@@ -941,7 +969,7 @@ pub enum CompileError {
     TraitNotImplemented { ty: String, trait_name: String, span: Span },
 
     #[error("function `{name}` expects {expected} argument(s), but {found} were provided")]
-    ArityMismatch { name: String, expected: usize, found: usize, span: Span },
+    ArityMismatch { name: String, expected: usize, found: usize, span: Span, signature: Option<String> },
 
     #[error("cannot resolve trait method `{method}` without type information")]
     UnresolvedTraitMethod { method: String, span: Span },
@@ -1139,8 +1167,9 @@ impl CompileError {
 
     /// Improve type error messages by parsing the generic message and creating
     /// contextual, user-friendly errors.
-    fn improve_type_error(message: &str, span: Span) -> nostos_syntax::SourceError {
+    fn improve_type_error(raw_message: &str, span: Span) -> nostos_syntax::SourceError {
         use nostos_syntax::SourceError;
+        let message = &clean_type_vars(raw_message);
 
         // Parse "Type annotation required:" pattern (from HM inference)
         // This occurs when function parameters that must share a type are used with incompatible types
@@ -1171,6 +1200,16 @@ impl CompileError {
                 let ty = rest[..pos].trim();
                 let trait_name = rest[pos + " does not implement ".len()..].trim();
 
+                // Add operation context based on trait name
+                let operation_hint = match trait_name {
+                    "Num" => Some("required by arithmetic operators (`+`, `-`, `*`, `/`)"),
+                    "Ord" => Some("required by comparison operators (`<`, `>`, `<=`, `>=`) or `sort()`"),
+                    "Eq" => Some("required by equality operators (`==`, `!=`)"),
+                    "Concat" => Some("required by `++` operator"),
+                    "Hash" => Some("required for use as Map key or Set element"),
+                    _ => None,
+                };
+
                 // Add helpful hints for common cases
                 if trait_name == "Num" && (ty == "String" || ty == "Bool") {
                     return SourceError::compile(message.to_string(), span)
@@ -1178,9 +1217,13 @@ impl CompileError {
                         .with_note("to concatenate strings, use `++`: show(42) ++ \" items\"");
                 }
 
-                // Generic trait error
-                return SourceError::compile(message.to_string(), span)
+                // Generic trait error with operation context
+                let mut err = SourceError::compile(message.to_string(), span)
                     .with_hint(format!("type `{}` must implement trait `{}`", ty, trait_name));
+                if let Some(op_hint) = operation_hint {
+                    err = err.with_note(format!("trait `{}` is {}", trait_name, op_hint));
+                }
+                return err;
             }
         }
 
@@ -1293,6 +1336,12 @@ impl CompileError {
             }
         }
 
+        // Parse "Wrong number of arguments: expected N, found M" pattern (from HM inference)
+        if message.starts_with("Wrong number of arguments:") {
+            return SourceError::compile(message.to_string(), span)
+                .with_hint("check the function definition for the correct number of parameters");
+        }
+
         // Fallback: return the original message with improved formatting
         SourceError::compile(message.to_string(), span)
             .with_hint("ensure all expressions have compatible types")
@@ -1318,8 +1367,12 @@ impl CompileError {
                     SourceError::unknown_variable_with_suggestions(name, suggestions, span)
                 }
             }
-            CompileError::UnknownType { name, .. } => {
-                SourceError::unknown_type(name, span)
+            CompileError::UnknownType { name, suggestion, .. } => {
+                let mut err = SourceError::unknown_type(name, span);
+                if let Some(hint) = suggestion {
+                    err = err.with_hint(hint.clone());
+                }
+                err
             }
             CompileError::DuplicateDefinition { name, .. } => {
                 SourceError::duplicate_definition(name, span, None)
@@ -1352,19 +1405,37 @@ impl CompileError {
                 ).with_hint("the method signature must match the trait definition")
             }
             CompileError::TraitNotImplemented { ty, trait_name, .. } => {
+                let ty = clean_type_vars(ty);
+                let trait_name_clean = clean_type_vars(trait_name);
                 let mut err = SourceError::compile(
-                    format!("type `{}` does not implement trait `{}`", ty, trait_name),
+                    format!("type `{}` does not implement trait `{}`", ty, trait_name_clean),
                     span,
                 );
                 // Add hint for common case of String/Bool with Num trait (arithmetic operators)
                 if trait_name == "Num" && (ty == "String" || ty == "Bool") {
                     err = err.with_hint(format!("`{}` cannot be used with arithmetic operators like `+`, `-`, `*`, `/`", ty))
                             .with_note("to concatenate strings, use `++`: show(42) ++ \" items\"");
+                } else {
+                    let operation_hint = match trait_name.as_str() {
+                        "Num" => Some("required by arithmetic operators (`+`, `-`, `*`, `/`)"),
+                        "Ord" => Some("required by comparison operators (`<`, `>`, `<=`, `>=`) or `sort()`"),
+                        "Eq" => Some("required by equality operators (`==`, `!=`)"),
+                        "Concat" => Some("required by `++` operator"),
+                        "Hash" => Some("required for use as Map key or Set element"),
+                        _ => None,
+                    };
+                    if let Some(op_hint) = operation_hint {
+                        err = err.with_note(format!("trait `{}` is {}", trait_name_clean, op_hint));
+                    }
                 }
                 err
             }
-            CompileError::ArityMismatch { name, expected, found, .. } => {
-                SourceError::arity_mismatch(name, *expected, *found, span)
+            CompileError::ArityMismatch { name, expected, found, signature, .. } => {
+                let mut err = SourceError::arity_mismatch(name, *expected, *found, span);
+                if let Some(sig) = signature {
+                    err = err.with_note(format!("function signature: {}", clean_type_vars(sig)));
+                }
+                err
             }
             CompileError::UnresolvedTraitMethod { method, .. } => {
                 SourceError::compile(
@@ -1373,14 +1444,28 @@ impl CompileError {
                 )
             }
             CompileError::TraitBoundNotSatisfied { type_name, trait_name, .. } => {
+                let type_name = clean_type_vars(type_name);
+                let trait_name_clean = clean_type_vars(trait_name);
                 let mut err = SourceError::compile(
-                    format!("{} does not implement {}", type_name, trait_name),
+                    format!("{} does not implement {}", type_name, trait_name_clean),
                     span,
                 );
                 // Add hint for common case of String/Bool with Num trait (arithmetic operators)
                 if trait_name == "Num" && (type_name == "String" || type_name == "Bool") {
                     err = err.with_hint(format!("`{}` cannot be used with arithmetic operators like `+`, `-`, `*`, `/`", type_name))
                             .with_note("to concatenate strings, use `++`: show(42) ++ \" items\"");
+                } else {
+                    let operation_hint = match trait_name.as_str() {
+                        "Num" => Some("required by arithmetic operators (`+`, `-`, `*`, `/`)"),
+                        "Ord" => Some("required by comparison operators (`<`, `>`, `<=`, `>=`) or `sort()`"),
+                        "Eq" => Some("required by equality operators (`==`, `!=`)"),
+                        "Concat" => Some("required by `++` operator"),
+                        "Hash" => Some("required for use as Map key or Set element"),
+                        _ => None,
+                    };
+                    if let Some(op_hint) = operation_hint {
+                        err = err.with_note(format!("trait `{}` is {}", trait_name_clean, op_hint));
+                    }
                 }
                 err
             }
@@ -1390,6 +1475,8 @@ impl CompileError {
             CompileError::ArgumentTypeMismatch {
                 arg_index, expected, found, definition_span, function_name, ..
             } => {
+                let expected = clean_type_vars(expected);
+                let found = clean_type_vars(found);
                 let mut err = SourceError::compile(
                     format!("type mismatch in argument {}: expected `{}`, found `{}`", arg_index, expected, found),
                     span,
@@ -6668,10 +6755,11 @@ impl Compiler {
                     }
                 }
 
-                // Type not found - report error
+                // Type not found - report error with import suggestion
                 Some(CompileError::UnknownType {
                     name: name.clone(),
                     span: ident.span.clone(),
+                    suggestion: self.suggest_import_for_type(name),
                 })
             }
             TypeExpr::Generic(base, params) => {
@@ -8352,6 +8440,47 @@ impl Compiler {
         } else {
             Some(arities)
         }
+    }
+
+    /// Look up a human-readable function signature for error messages.
+    /// Tries fn_asts first (has parameter names), then falls back to compiled function signature.
+    fn lookup_function_signature(&self, base_name: &str) -> Option<String> {
+        let prefix = format!("{}/", base_name);
+        // Try fn_asts first — has parameter names from source
+        for (key, def) in &self.fn_asts {
+            if key.starts_with(&prefix) || key == base_name {
+                let short_name = base_name.rsplit('.').next().unwrap_or(base_name);
+                if let Some(clause) = def.clauses.first() {
+                    let params: Vec<String> = clause.params.iter().map(|p| {
+                        let name = match &p.pattern {
+                            Pattern::Var(ident) => ident.node.clone(),
+                            _ => "_".to_string(),
+                        };
+                        if let Some(ty) = &p.ty {
+                            format!("{}: {}", name, self.type_expr_to_string(ty))
+                        } else {
+                            name
+                        }
+                    }).collect();
+                    let ret = clause.return_type.as_ref()
+                        .map(|ty| format!(" -> {}", self.type_expr_to_string(ty)))
+                        .unwrap_or_default();
+                    return Some(format!("{}({}){}", short_name, params.join(", "), ret));
+                }
+            }
+        }
+        // Fall back to compiled function signature string
+        if let Some(keys) = self.functions_by_base.get(base_name) {
+            if let Some(key) = keys.iter().next() {
+                if let Some(fv) = self.functions.get(key) {
+                    if let Some(sig) = &fv.signature {
+                        let short_name = base_name.rsplit('.').next().unwrap_or(base_name);
+                        return Some(format!("{}: {}", short_name, sig));
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Count how many distinct overloads of a function exist with the given arity.
@@ -13268,11 +13397,13 @@ impl Compiler {
                                 // Function exists but not with this arity - report arity mismatch
                                 // Use min arity for better error message (shows minimum required args)
                                 let expected_arity = arities.iter().min().copied().unwrap_or(0);
+                                let signature = self.lookup_function_signature(&resolved_name);
                                 return Err(CompileError::ArityMismatch {
                                     name: qualified_name.clone(),
                                     expected: expected_arity,
                                     found: call_arity,
                                     span: method.span,
+                                    signature,
                                 });
                             }
                         }
@@ -16300,11 +16431,13 @@ impl Compiler {
                         // Function exists but not with this arity - report arity mismatch
                         // Use min arity for better error message (shows minimum required args)
                         let expected_arity = arities.iter().min().copied().unwrap_or(0);
+                        let signature = self.lookup_function_signature(&resolved_name);
                         return Err(CompileError::ArityMismatch {
                             name: resolved_name.clone(),
                             expected: expected_arity,
                             found: call_arity,
                             span: func.span(),
+                            signature,
                         });
                     }
                     // Function exists with matching arity but types don't match
@@ -20317,6 +20450,17 @@ impl Compiler {
 
         /// Check if a type can be accessed from the current module.
     /// Returns Ok(()) if access is allowed, Err with PrivateTypeAccess otherwise.
+    /// Suggest an import statement for an unknown type by searching type_visibility.
+    fn suggest_import_for_type(&self, short_name: &str) -> Option<String> {
+        for qualified_name in self.type_visibility.keys() {
+            let type_short = qualified_name.rsplit('.').next().unwrap_or(qualified_name);
+            if type_short == short_name {
+                return Some(format!("did you mean `use {}`?", qualified_name));
+            }
+        }
+        None
+    }
+
     fn check_type_visibility(&self, qualified_name: &str, span: Span) -> Result<(), CompileError> {
         // REPL mode bypasses all visibility checks for interactive exploration
         if self.repl_mode {
@@ -22073,6 +22217,7 @@ impl Compiler {
             return Err(CompileError::UnknownType {
                 name: type_name.to_string(),
                 span: Span::default(),
+                suggestion: self.suggest_import_for_type(type_name),
             });
         }
 
@@ -22230,6 +22375,7 @@ impl Compiler {
             return Err(CompileError::UnknownType {
                 name: type_name.to_string(),
                 span: Span::default(),
+                suggestion: self.suggest_import_for_type(type_name),
             });
         }
 

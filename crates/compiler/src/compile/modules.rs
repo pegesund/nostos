@@ -1989,29 +1989,7 @@ impl Compiler {
             for (fn_name, type_err) in std::mem::take(&mut self.hm_inference_errors) {
                 let base_name = fn_name.split('/').next().unwrap_or(&fn_name).to_string();
                 if !reported_fns.insert(base_name.clone()) { continue; }
-                fn clean_type_vars(s: &str) -> String {
-                    let mut var_map: Vec<(String, char)> = Vec::new();
-                    let mut next = b'a';
-                    let mut i = 0;
-                    let bytes = s.as_bytes();
-                    while i < bytes.len() {
-                        if bytes[i] == b'?' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
-                            let start = i;
-                            i += 1;
-                            while i < bytes.len() && bytes[i].is_ascii_digit() { i += 1; }
-                            let var = s[start..i].to_string();
-                            if !var_map.iter().any(|(v, _)| v == &var) {
-                                var_map.push((var, next as char));
-                                next = std::cmp::min(next + 1, b'z');
-                            }
-                        } else { i += 1; }
-                    }
-                    let mut result = s.to_string();
-                    for (var, letter) in &var_map {
-                        result = result.replace(var, &letter.to_string());
-                    }
-                    result
-                }
+                use super::clean_type_vars;
                 let error_message = match &type_err {
                     nostos_types::TypeError::StructuralMismatch(a, b) =>
                         format!("type mismatch: expected `{}`, found `{}`",

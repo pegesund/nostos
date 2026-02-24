@@ -15,71 +15,74 @@ use nostos_syntax::ast::{
     RecordPatternField, Span, Stmt, TypeExpr, UnaryOp, VariantPatternFields,
 };
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
 /// List methods that uniquely identify the receiver as a List type.
 /// Excludes methods shared with String (reverse, take, drop) and
 /// methods shared with Option/Result (map, flatMap).
-const EXCLUSIVE_LIST_METHODS: &[&str] = &[
-    "filter", "fold", "any", "all", "find",
-    "sort", "sortBy", "head", "tail", "init", "last",
-    "sum", "product", "zip", "unzip",
-    "unique", "flatten", "position", "indexOf",
-    "push", "pop", "nth", "slice",
-    "scanl", "foldl", "foldr", "enumerate", "intersperse",
-    "spanList", "groupBy", "transpose", "pairwise", "isSorted",
-    "isSortedBy", "maximum", "minimum", "takeWhile", "dropWhile",
-    "partition", "zipWith",
-];
+static EXCLUSIVE_LIST_METHODS: LazyLock<HashSet<&str>> = LazyLock::new(|| {
+    HashSet::from([
+        "filter", "fold", "any", "all", "find",
+        "sort", "sortBy", "head", "tail", "init", "last",
+        "sum", "product", "zip", "unzip",
+        "unique", "flatten", "position", "indexOf",
+        "push", "pop", "nth", "slice",
+        "scanl", "foldl", "foldr", "enumerate", "intersperse",
+        "spanList", "groupBy", "transpose", "pairwise", "isSorted",
+        "isSortedBy", "maximum", "minimum", "takeWhile", "dropWhile",
+        "partition", "zipWith",
+    ])
+});
 
 /// Map methods that uniquely identify the receiver as a Map type.
 /// Note: "insert" is Map-exclusive only when called with 3 args (receiver + key + value);
 /// with 2 args it's a Set method.
-const EXCLUSIVE_MAP_METHODS: &[&str] = &[
-    "lookup", "keys", "values", "getOrThrow", "toList",
-];
+static EXCLUSIVE_MAP_METHODS: LazyLock<HashSet<&str>> = LazyLock::new(|| {
+    HashSet::from(["lookup", "keys", "values", "getOrThrow", "toList"])
+});
 
 /// Option method aliasing: short method name → stdlib function name.
 /// Supports both shorthand (.map) and direct (.optMap) names.
-const OPTION_METHOD_ALIASES: &[(&str, &str)] = &[
-    ("map", "optMap"), ("optMap", "optMap"),
-    ("flatMap", "optFlatMap"), ("optFlatMap", "optFlatMap"),
-    ("unwrap", "optUnwrap"), ("optUnwrap", "optUnwrap"),
-    ("unwrapOr", "optUnwrapOr"), ("optUnwrapOr", "optUnwrapOr"),
-    ("isSome", "optIsSome"), ("optIsSome", "optIsSome"),
-    ("isNone", "optIsNone"), ("optIsNone", "optIsNone"),
-];
+static OPTION_METHOD_ALIASES: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
+    HashMap::from([
+        ("map", "optMap"), ("optMap", "optMap"),
+        ("flatMap", "optFlatMap"), ("optFlatMap", "optFlatMap"),
+        ("unwrap", "optUnwrap"), ("optUnwrap", "optUnwrap"),
+        ("unwrapOr", "optUnwrapOr"), ("optUnwrapOr", "optUnwrapOr"),
+        ("isSome", "optIsSome"), ("optIsSome", "optIsSome"),
+        ("isNone", "optIsNone"), ("optIsNone", "optIsNone"),
+    ])
+});
 
 /// Result method aliasing: short method name → stdlib function name.
 /// Supports both shorthand (.map) and direct (.resMap) names.
-const RESULT_METHOD_ALIASES: &[(&str, &str)] = &[
-    ("map", "resMap"), ("resMap", "resMap"),
-    ("mapErr", "resMapErr"), ("resMapErr", "resMapErr"),
-    ("flatMap", "resFlatMap"), ("resFlatMap", "resFlatMap"),
-    ("unwrap", "resUnwrap"), ("resUnwrap", "resUnwrap"),
-    ("unwrapOr", "resUnwrapOr"), ("resUnwrapOr", "resUnwrapOr"),
-    ("isOk", "resIsOk"), ("resIsOk", "resIsOk"),
-    ("isErr", "resIsErr"), ("resIsErr", "resIsErr"),
-    ("toOption", "resToOption"), ("resToOption", "resToOption"),
-];
+static RESULT_METHOD_ALIASES: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
+    HashMap::from([
+        ("map", "resMap"), ("resMap", "resMap"),
+        ("mapErr", "resMapErr"), ("resMapErr", "resMapErr"),
+        ("flatMap", "resFlatMap"), ("resFlatMap", "resFlatMap"),
+        ("unwrap", "resUnwrap"), ("resUnwrap", "resUnwrap"),
+        ("unwrapOr", "resUnwrapOr"), ("resUnwrapOr", "resUnwrapOr"),
+        ("isOk", "resIsOk"), ("resIsOk", "resIsOk"),
+        ("isErr", "resIsErr"), ("resIsErr", "resIsErr"),
+        ("toOption", "resToOption"), ("resToOption", "resToOption"),
+    ])
+});
 
 fn is_exclusive_list_method(name: &str) -> bool {
-    EXCLUSIVE_LIST_METHODS.contains(&name)
+    EXCLUSIVE_LIST_METHODS.contains(name)
 }
 
 fn is_exclusive_map_method(name: &str) -> bool {
-    EXCLUSIVE_MAP_METHODS.contains(&name)
+    EXCLUSIVE_MAP_METHODS.contains(name)
 }
 
 fn resolve_option_method_alias(name: &str) -> Option<&'static str> {
-    OPTION_METHOD_ALIASES.iter()
-        .find(|(m, _)| *m == name)
-        .map(|(_, alias)| *alias)
+    OPTION_METHOD_ALIASES.get(name).copied()
 }
 
 fn resolve_result_method_alias(name: &str) -> Option<&'static str> {
-    RESULT_METHOD_ALIASES.iter()
-        .find(|(m, _)| *m == name)
-        .map(|(_, alias)| *alias)
+    RESULT_METHOD_ALIASES.get(name).copied()
 }
 
 /// A type constraint generated during inference.
