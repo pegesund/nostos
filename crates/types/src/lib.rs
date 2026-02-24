@@ -409,6 +409,7 @@ impl TypeError {
                 if is_bare_var(expected) || is_bare_var(found) {
                     return true;
                 }
+
                 // Identical types: spurious unification noise
                 if expected == found {
                     return true;
@@ -1261,10 +1262,40 @@ impl TypeEnv {
                 ret: Box::new(self.apply_subst(&f.ret)),
                 var_bounds: vec![],
             }),
-            Type::Named { name, args } => Type::Named {
-                name: name.clone(),
-                args: args.iter().map(|t| self.apply_subst(t)).collect(),
-            },
+            Type::Named { name, args } => {
+                let resolved_args: Vec<Type> = args.iter().map(|t| self.apply_subst(t)).collect();
+                // Normalize Named types for built-in primitives back to their proper Type variants.
+                // UFCS method resolution and cross-module signatures can produce Named("String")
+                // instead of Type::String, which causes trait implementation checks to fail
+                // (e.g., "String does not implement Concat" when it should).
+                if resolved_args.is_empty() {
+                    match name.as_str() {
+                        "String" => return Type::String,
+                        "Int" | "Int64" => return Type::Int,
+                        "Float" | "Float64" => return Type::Float,
+                        "Bool" => return Type::Bool,
+                        "Char" => return Type::Char,
+                        "Int8" => return Type::Int8,
+                        "Int16" => return Type::Int16,
+                        "Int32" => return Type::Int32,
+                        "UInt8" => return Type::UInt8,
+                        "UInt16" => return Type::UInt16,
+                        "UInt32" => return Type::UInt32,
+                        "UInt64" => return Type::UInt64,
+                        "Float32" => return Type::Float32,
+                        "BigInt" => return Type::BigInt,
+                        "Decimal" => return Type::Decimal,
+                        "Pid" => return Type::Pid,
+                        "Ref" => return Type::Ref,
+                        "()" | "Unit" => return Type::Unit,
+                        _ => {}
+                    }
+                }
+                Type::Named {
+                    name: name.clone(),
+                    args: resolved_args,
+                }
+            }
             Type::IO(inner) => Type::IO(Box::new(self.apply_subst(inner))),
             _ => ty.clone(),
         }
@@ -1291,9 +1322,11 @@ impl Type {
     }
 
     /// Check if this type contains any type variable (resolved or not).
+    /// Also returns true for TypeParam, since TypeParams are unresolved
+    /// type parameters that haven't been substituted yet.
     pub fn has_any_type_var(&self) -> bool {
         match self {
-            Type::Var(_) => true,
+            Type::Var(_) | Type::TypeParam(_) => true,
             Type::Tuple(elems) => elems.iter().any(|t| t.has_any_type_var()),
             Type::List(elem) | Type::Array(elem) | Type::Set(elem) | Type::IO(elem) => {
                 elem.has_any_type_var()

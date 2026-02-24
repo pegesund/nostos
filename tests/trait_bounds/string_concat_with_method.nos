@@ -1,0 +1,10 @@
+# expect: "msg: 42"
+# Regression test: String ++ on param whose type is inferred from .toInt() method call
+# Previously failed with "String does not implement Concat" because UFCS method resolution
+# produced Named("String") instead of Type::String, and Named types fell through
+# the trait implementation check.
+f(s) = {
+  n = s.toInt()
+  "msg: " ++ s
+}
+main() = f("42")

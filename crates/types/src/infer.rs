@@ -2203,6 +2203,7 @@ impl<'a> InferCtx<'a> {
                                 deferred_count = 0;
                             } else {
                                 // Fully concrete type that doesn't implement the trait
+
                                 return Err(TypeError::MissingTraitImpl {
                                     ty: resolved.display(),
                                     trait_name,
@@ -2405,6 +2406,7 @@ impl<'a> InferCtx<'a> {
                             // Fall through to report the definitive error
                         }
                         // Type is fully concrete (or definitely doesn't implement).
+
                         self.last_error_span = None;
                         let display_ty = if let Type::Named { name, args, .. } = &resolved {
                             if args.iter().any(|a| a.has_any_type_var()) {
@@ -2564,6 +2566,7 @@ impl<'a> InferCtx<'a> {
                             && !self.env.definitely_not_implements(&resolved, trait_name) {
                             continue;
                         }
+
                         self.last_error_span = None;
                         let display_ty = if let Type::Named { name, args, .. } = &resolved {
                             if args.iter().any(|a| a.has_any_type_var()) {
@@ -3003,6 +3006,7 @@ impl<'a> InferCtx<'a> {
                     Type::String | Type::List(_) | Type::Var(_)
                 );
                 if !is_valid {
+
                     return Err(TypeError::MissingTraitImpl {
                         ty: resolved.display(),
                         trait_name: "Concat".to_string(),
@@ -4094,6 +4098,7 @@ impl<'a> InferCtx<'a> {
                                 let resolved_elem = self.env.apply_subst(elem);
                                 if !matches!(&resolved_elem, Type::Tuple(_) | Type::Var(_) | Type::TypeParam(_)) {
                                     self.last_error_span = call.span;
+                                    eprintln!("[DEBUG MISMATCH #0] check_pending_method_calls line 4101");
                                     return Err(TypeError::Mismatch {
                                         expected: "List of tuples".to_string(),
                                         found: format!("List[{}]", resolved_elem.display()),
@@ -4267,6 +4272,7 @@ impl<'a> InferCtx<'a> {
                                                     Type::Map(_, _) | Type::Tuple(_));
                                                 if ret_is_simple && expected_is_wrapper {
                                                     self.last_error_span = call.span;
+                                                    eprintln!("[DEBUG MISMATCH #1] check_pending_method_calls line 4274");
                                                     return Err(TypeError::Mismatch {
                                                         expected: resolved_expected_ret.display(),
                                                         found: resolved_ret.display(),
@@ -4284,6 +4290,7 @@ impl<'a> InferCtx<'a> {
                                                     Type::Unit);
                                                 if ret_is_wrapper && expected_is_simple {
                                                     self.last_error_span = call.span;
+                                                    eprintln!("[DEBUG MISMATCH #2] check_pending_method_calls line 4291");
                                                     return Err(TypeError::Mismatch {
                                                         expected: resolved_expected_ret.display(),
                                                         found: resolved_ret.display(),
@@ -4292,6 +4299,7 @@ impl<'a> InferCtx<'a> {
                                                 // Both-concrete case: use resolved Type values instead of error strings
                                                 if !resolved_ret.has_any_type_var() && !resolved_expected_ret.has_any_type_var() {
                                                     self.last_error_span = call.span;
+                                                    eprintln!("[DEBUG MISMATCH #3] check_pending_method_calls line 4299");
                                                     return Err(TypeError::Mismatch {
                                                         expected: resolved_expected_ret.display(),
                                                         found: resolved_ret.display(),
@@ -4324,6 +4332,7 @@ impl<'a> InferCtx<'a> {
                                                         let fresh_param = self.env.apply_subst(lambda_param);
                                                         if !fresh_elem.has_any_type_var() && !fresh_param.has_any_type_var() {
                                                             self.last_error_span = call.span;
+                                                            eprintln!("[DEBUG MISMATCH #4] check_pending_method_calls line 4331");
                                                             return Err(TypeError::Mismatch {
                                                                 expected: fresh_param.display(),
                                                                 found: fresh_elem.display(),
@@ -4351,6 +4360,7 @@ impl<'a> InferCtx<'a> {
                                                         Type::Map(_, _) | Type::Tuple(_));
                                                     if ret_is_simple && expected_is_wrapper {
                                                         self.last_error_span = call.span;
+                                                        eprintln!("[DEBUG MISMATCH #5] check_pending_method_calls line 4358");
                                                         return Err(TypeError::Mismatch {
                                                             expected: resolved_expected_ret.display(),
                                                             found: resolved_ret.display(),
@@ -4359,6 +4369,7 @@ impl<'a> InferCtx<'a> {
                                                     // Also check both-concrete case using resolved Type values
                                                     if !resolved_ret.has_any_type_var() && !resolved_expected_ret.has_any_type_var() {
                                                         self.last_error_span = call.span;
+                                                        eprintln!("[DEBUG MISMATCH #6] check_pending_method_calls line 4366");
                                                         return Err(TypeError::Mismatch {
                                                             expected: resolved_expected_ret.display(),
                                                             found: resolved_ret.display(),
@@ -4395,6 +4406,7 @@ impl<'a> InferCtx<'a> {
                                         && !matches!(&resolved_arg, Type::Function(_) | Type::Var(_) | Type::TypeParam(_))
                                     {
                                         self.last_error_span = call.span;
+                                        eprintln!("[DEBUG MISMATCH #7] check_pending_method_calls line 4402");
                                         return Err(TypeError::Mismatch {
                                             expected: "function".to_string(),
                                             found: resolved_arg.display(),
@@ -4412,6 +4424,7 @@ impl<'a> InferCtx<'a> {
                                         // Non-list where List expected
                                         if param_is_list && !arg_is_list {
                                             self.last_error_span = call.span;
+                                            eprintln!("[DEBUG MISMATCH #8] check_pending_method_calls line 4419");
                                             return Err(TypeError::Mismatch {
                                                 expected: "List".to_string(),
                                                 found: resolved_arg.display(),
@@ -4420,6 +4433,7 @@ impl<'a> InferCtx<'a> {
                                         // Non-map where Map expected
                                         if param_is_map && !arg_is_map {
                                             self.last_error_span = call.span;
+                                            eprintln!("[DEBUG MISMATCH #9] check_pending_method_calls line 4427");
                                             return Err(TypeError::Mismatch {
                                                 expected: "Map".to_string(),
                                                 found: resolved_arg.display(),
@@ -4436,6 +4450,7 @@ impl<'a> InferCtx<'a> {
                                             if !arg_p.has_any_type_var() && !param_p.has_any_type_var()
                                                 && self.unify_types(arg_p, param_p).is_err() {
                                                 self.last_error_span = call.span;
+                                                eprintln!("[DEBUG MISMATCH #10] check_pending_method_calls line 4443");
                                                 return Err(TypeError::Mismatch {
                                                     expected: param_p.display(),
                                                     found: arg_p.display(),
@@ -4460,6 +4475,7 @@ impl<'a> InferCtx<'a> {
                                             Type::Map(_, _) | Type::Tuple(_));
                                         if arg_is_concrete_simple && param_is_wrapper {
                                             self.last_error_span = call.span;
+                                            eprintln!("[DEBUG MISMATCH #11] check_pending_method_calls line 4467");
                                             return Err(TypeError::Mismatch {
                                                 expected: param_ret.display(),
                                                 found: arg_ret.display(),
@@ -4477,6 +4493,7 @@ impl<'a> InferCtx<'a> {
                                             Type::Unit);
                                         if arg_is_wrapper && param_is_simple {
                                             self.last_error_span = call.span;
+                                            eprintln!("[DEBUG MISMATCH #12] check_pending_method_calls line 4484");
                                             return Err(TypeError::Mismatch {
                                                 expected: param_ret.display(),
                                                 found: arg_ret.display(),
@@ -4489,6 +4506,7 @@ impl<'a> InferCtx<'a> {
                                     let fresh_param = self.env.apply_subst(param_ty);
                                     if !fresh_arg.has_any_type_var() && !fresh_param.has_any_type_var() {
                                         self.last_error_span = call.span;
+                                        eprintln!("[DEBUG MISMATCH #13] check_pending_method_calls line 4496");
                                         return Err(TypeError::Mismatch {
                                             expected: fresh_param.display(),
                                             found: fresh_arg.display(),
@@ -4499,6 +4517,7 @@ impl<'a> InferCtx<'a> {
                                     // [1,2,3].flatten() where flatten expects List[List[a]]).
                                     if is_structural_mismatch(&fresh_arg, &fresh_param) {
                                         self.last_error_span = call.span;
+                                        eprintln!("[DEBUG MISMATCH #14] check_pending_method_calls line 4506");
                                         return Err(TypeError::Mismatch {
                                             expected: fresh_param.display(),
                                             found: fresh_arg.display(),
@@ -4523,6 +4542,7 @@ impl<'a> InferCtx<'a> {
                                 // Report error if both types are fully resolved
                                 if !resolved_ret.has_any_type_var() && !resolved_ft_ret.has_any_type_var() {
                                     self.last_error_span = call.span;
+                                    eprintln!("[DEBUG MISMATCH #15] check_pending_method_calls line 4530");
                                     return Err(TypeError::Mismatch {
                                         expected: b.display(),
                                         found: a.display(),
@@ -4553,6 +4573,7 @@ impl<'a> InferCtx<'a> {
                                 if (ret_is_simple && expected_is_wrapper) ||
                                    (ret_is_wrapper && expected_is_simple) {
                                     self.last_error_span = call.span;
+                                    eprintln!("[DEBUG MISMATCH #16] check_pending_method_calls line 4560");
                                     return Err(TypeError::Mismatch {
                                         expected: resolved_ft_ret.display(),
                                         found: resolved_ret.display(),
@@ -4573,6 +4594,7 @@ impl<'a> InferCtx<'a> {
                                 );
                                 if is_container_mismatch {
                                     self.last_error_span = call.span;
+                                    eprintln!("[DEBUG MISMATCH #17] check_pending_method_calls line 4580");
                                     return Err(TypeError::Mismatch {
                                         expected: resolved_ft_ret.display(),
                                         found: resolved_ret.display(),
@@ -4746,6 +4768,7 @@ impl<'a> InferCtx<'a> {
                                     );
                                     if is_container_mismatch {
                                         self.last_error_span = call.span;
+                                        eprintln!("[DEBUG MISMATCH #18] check_pending_method_calls line 4753");
                                         return Err(TypeError::Mismatch {
                                             expected: resolved_expected.display(),
                                             found: resolved_ret.display(),
