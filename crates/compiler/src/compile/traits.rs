@@ -1006,12 +1006,12 @@ impl Compiler {
                         if name == "self" || is_self_typed {
                             // For generic types, use parameterized form (e.g., "Box[a]")
                             // to preserve type name for field/trait dispatch.
-                            let param_type = if let Some(ref gen_ty) = generic_self_type {
+                            let param_type_str = if let Some(ref gen_ty) = generic_self_type {
                                 gen_ty.clone()
                             } else {
                                 qualified_type_name.clone()
                             };
-                            self.param_types.insert(name, param_type);
+                            self.param_types.insert(name, self.type_name_to_type(&param_type_str));
                         }
                     }
                 }
@@ -1235,7 +1235,7 @@ impl Compiler {
                         for param in &trait_method.params {
                             if let Some(name) = self.pattern_binding_name(&param.pattern) {
                                 if name == "self" {
-                                    self.param_types.insert(name, qualified_type_name.clone());
+                                    self.param_types.insert(name, self.type_name_to_type(&qualified_type_name));
                                 }
                             }
                         }

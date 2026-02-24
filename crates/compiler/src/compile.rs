@@ -1244,8 +1244,8 @@ pub struct Compiler {
     /// Local variable type tracking: variable name -> type name
     local_types: HashMap<String, String>,
     /// Parameter types for specialized function variants (for monomorphization)
-    /// When compiling a specialized variant, parameter name -> concrete type name
-    param_types: HashMap<String, String>,
+    /// When compiling a specialized variant, parameter name -> concrete Type
+    param_types: HashMap<String, nostos_types::Type>,
     /// Function ASTs for monomorphization: function name -> FnDef
     /// Used to recompile functions with different type contexts
     fn_asts: HashMap<String, FnDef>,
@@ -5322,6 +5322,16 @@ impl Compiler {
         false
     }
 
+    /// Get parameter type as display string (bridge for gradual migration from String to Type).
+    fn get_param_type_str(&self, name: &str) -> Option<String> {
+        self.param_types.get(name).map(|ty| ty.display())
+    }
+
+    /// Convert a TypeExpr AST node to a Type value.
+    fn type_expr_to_type(&self, ty: &nostos_syntax::TypeExpr) -> nostos_types::Type {
+        self.type_name_to_type(&self.type_expr_to_string(ty))
+    }
+
     /// Check if an expression is float-typed (for type-directed operator selection).
     /// This is a simple heuristic: true if the expression is a float literal or
     /// a binary operation on floats.
@@ -5672,7 +5682,7 @@ impl Compiler {
                     return ty == "String";
                 }
                 // Check param_types for function parameters
-                if let Some(ty) = self.param_types.get(&ident.node) {
+                if let Some(ref ty) = self.get_param_type_str(&ident.node) {
                     return ty == "String";
                 }
                 false
@@ -5729,7 +5739,7 @@ impl Compiler {
                     return Self::is_float_type_name(ty);
                 }
                 // Check param_types for function parameters
-                if let Some(ty) = self.param_types.get(&ident.node) {
+                if let Some(ref ty) = self.get_param_type_str(&ident.node) {
                     return Self::is_float_type_name(ty);
                 }
                 false
@@ -5809,7 +5819,7 @@ impl Compiler {
                 if let Some(ty) = self.local_types.get(&ident.node) {
                     return ty == "Int64List" || ty == "[Int]" || ty == "[Int64]";
                 }
-                if let Some(ty) = self.param_types.get(&ident.node) {
+                if let Some(ref ty) = self.get_param_type_str(&ident.node) {
                     return ty == "Int64List" || ty == "[Int]" || ty == "[Int64]";
                 }
                 false
@@ -5841,7 +5851,7 @@ impl Compiler {
                 if let Some(ty) = self.local_types.get(&ident.node) {
                     return ty == "Int" || ty == "Int64";
                 }
-                if let Some(ty) = self.param_types.get(&ident.node) {
+                if let Some(ref ty) = self.get_param_type_str(&ident.node) {
                     return ty == "Int" || ty == "Int64";
                 }
                 false
@@ -5898,7 +5908,7 @@ impl Compiler {
                     return Self::is_int_type_name(ty);
                 }
                 // Check param_types for function parameters
-                if let Some(ty) = self.param_types.get(&ident.node) {
+                if let Some(ref ty) = self.get_param_type_str(&ident.node) {
                     return Self::is_int_type_name(ty);
                 }
                 // If type is unknown, we can't safely assume it's an int
@@ -5977,7 +5987,7 @@ impl Compiler {
                     return Self::is_bigint_type_name(ty);
                 }
                 // Check param_types
-                if let Some(ty) = self.param_types.get(&ident.node) {
+                if let Some(ref ty) = self.get_param_type_str(&ident.node) {
                     return Self::is_bigint_type_name(ty);
                 }
                 false
@@ -6030,7 +6040,7 @@ impl Compiler {
                 if let Some(ty) = self.local_types.get(&ident.node) {
                     return Self::is_small_int_type_name(ty);
                 }
-                if let Some(ty) = self.param_types.get(&ident.node) {
+                if let Some(ref ty) = self.get_param_type_str(&ident.node) {
                     return Self::is_small_int_type_name(ty);
                 }
                 false
@@ -6070,7 +6080,7 @@ impl Compiler {
                 if let Some(ty) = self.local_types.get(&ident.node) {
                     return Self::sized_int_type_name(ty);
                 }
-                if let Some(ty) = self.param_types.get(&ident.node) {
+                if let Some(ref ty) = self.get_param_type_str(&ident.node) {
                     return Self::sized_int_type_name(ty);
                 }
                 None
@@ -9330,9 +9340,9 @@ impl Compiler {
         for param in def.clauses[0].params.iter() {
             if let Some(param_name) = self.pattern_binding_name(&param.pattern) {
                 if let Some(ty) = &param.ty {
-                    let type_name = self.type_expr_to_string(ty);
+                    let type_val = self.type_expr_to_type(ty);
                     // Only insert if not already set (preserve trait impl's self -> TypeName)
-                    self.param_types.entry(param_name).or_insert(type_name);
+                    self.param_types.entry(param_name).or_insert(type_val);
                 }
             }
         }
@@ -16974,8 +16984,9 @@ impl Compiler {
         if let Expr::Var(ident) = expr {
             // DEBUG: Trace variable type lookups
             if let Some(ty) = self.param_types.get(&ident.node) {
-                // Substitute type parameters from current_type_bindings
-                return Some(self.substitute_type_params_in_string(ty));
+                // Substitute type parameters using proper Type substitution
+                let substituted = self.substitute_type_params_in_type(ty);
+                return Some(substituted.display());
             }
             // Also check local_types for variables bound in let-expressions
             if let Some(ty) = self.local_types.get(&ident.node) {
@@ -17309,9 +17320,9 @@ impl Compiler {
 
                     // Check if this is a call to a function-typed variable (like f() where f: () -> U)
                     // Look up the variable's type and extract the return type from the function type
-                    let var_type = self.local_types.get(&ident.node)
-                        .or_else(|| self.param_types.get(&ident.node));
-                    if let Some(func_type) = var_type {
+                    let var_type_str = self.local_types.get(&ident.node).cloned()
+                        .or_else(|| self.get_param_type_str(&ident.node));
+                    if let Some(func_type) = var_type_str {
                         // Parse the function type to extract the return type
                         // Function types look like: "() -> U" or "Int -> String" or "(Int, String) -> Bool"
                         if let Some(arrow_pos) = func_type.rfind(" -> ") {
@@ -17536,8 +17547,9 @@ impl Compiler {
             Expr::Var(ident) => {
                 // Check param_types first (for monomorphized function variants)
                 if let Some(ty) = self.param_types.get(&ident.node) {
-                    // Substitute type parameters from current_type_bindings
-                    return Some(self.substitute_type_params_in_string(ty));
+                    // Substitute type parameters using proper Type substitution
+                    let substituted = self.substitute_type_params_in_type(ty);
+                    return Some(substituted.display());
                 }
                 // Then check local_types
                 if let Some(ty) = self.local_types.get(&ident.node) {
@@ -18097,7 +18109,7 @@ impl Compiler {
         // Set param_types for this specialization (skip "_" unknown types)
         for (i, param_name) in param_names.iter().enumerate() {
             if i < arg_type_names.len() && arg_type_names[i] != "_" {
-                self.param_types.insert(param_name.clone(), arg_type_names[i].clone());
+                self.param_types.insert(param_name.clone(), self.type_name_to_type(&arg_type_names[i]));
             }
         }
 
@@ -19371,7 +19383,7 @@ impl Compiler {
             }
             // Also check outer param_types for function parameters captured by closure
             if let Some(ty) = saved_param_types.get(name) {
-                self.local_types.insert(name.clone(), ty.clone());
+                self.local_types.insert(name.clone(), ty.display());
             }
         }
 
@@ -19716,7 +19728,8 @@ impl Compiler {
                 if let Expr::Var(ident) = expr {
                     if let Some(param_type) = self.param_types.get(&ident.node) {
                         if let Some(inferred_base) = self.get_type_base_name_from_type(ty) {
-                            let param_base = param_type.split('[').next().unwrap_or(param_type);
+                            let param_str = param_type.display();
+                            let param_base = param_str.split('[').next().unwrap_or(&param_str);
                             if inferred_base != param_base {
                                 return None; // Stale inferred type, discard
                             }
@@ -19899,6 +19912,18 @@ impl Compiler {
             }
             _ => type_expr.clone(),
         }
+    }
+
+    /// Substitute type parameters in a Type value using current_type_bindings.
+    /// Uses the proper recursive Type substitution from the inference engine.
+    fn substitute_type_params_in_type(&self, ty: &nostos_types::Type) -> nostos_types::Type {
+        if self.current_type_bindings.is_empty() {
+            return ty.clone();
+        }
+        let subst: HashMap<String, nostos_types::Type> = self.current_type_bindings.iter()
+            .map(|(k, v)| (k.clone(), self.type_name_to_type(v)))
+            .collect();
+        nostos_types::infer::InferCtx::substitute_type_params(ty, &subst)
     }
 
     /// Substitute type parameters in a type string using current_type_bindings.
@@ -21944,7 +21969,7 @@ impl Compiler {
             }
             // Also check outer param_types for function parameters captured by closure
             if let Some(ty) = saved_param_types.get(name) {
-                self.local_types.insert(name.clone(), ty.clone());
+                self.local_types.insert(name.clone(), ty.display());
             }
         }
 
