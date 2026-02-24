@@ -1,0 +1,4 @@
+# expect: "42"
+# Test: user-defined function should shadow stdlib function with same name
+stringify(x) = show(x)
+main() = stringify(42)
