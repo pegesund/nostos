@@ -1789,6 +1789,49 @@ impl Compiler {
             }
         }
 
+        // General retry pass: some UnresolvedTraitMethod errors are caused by compilation
+        // order, not by actual bugs. For example, when main.nos imports ops.nos and calls
+        // ops.myMapper(words, w => w.reverse()), the lambda parameter type can't be resolved
+        // if ops.myMapper hasn't been compiled yet (its signature is still None). Now that all
+        // functions have been compiled and have their HM-inferred signatures, retry to see if
+        // the error resolves. This is more general than the poly-fn-specific retry above.
+        {
+            let retry_fn_names: Vec<String> = errors.iter()
+                .filter(|(_, e, _, _)| matches!(e, CompileError::UnresolvedTraitMethod { .. }))
+                .map(|(name, _, _, _)| name.clone())
+                .collect();
+            for fn_name in &retry_fn_names {
+                for (fn_def, module_path, imports, line_starts, source, source_name) in &fn_compile_info {
+                    let compiled_name = if module_path.is_empty() {
+                        fn_def.name.node.clone()
+                    } else {
+                        format!("{}.{}", module_path.join("."), fn_def.name.node)
+                    };
+                    if &compiled_name != fn_name {
+                        continue;
+                    }
+
+                    let saved_path = std::mem::replace(&mut self.module_path, module_path.clone());
+                    let saved_imports = self.imports.clone();
+                    self.imports.extend(imports.clone());
+                    let saved_line_starts = std::mem::replace(&mut self.line_starts, line_starts.clone());
+                    let saved_source = std::mem::replace(&mut self.current_source, Some(source.clone()));
+                    let saved_source_name = std::mem::replace(&mut self.current_source_name, Some(source_name.clone()));
+
+                    if self.compile_fn_def(fn_def).is_ok() {
+                        errors.retain(|(name, _, _, _)| name != fn_name);
+                    }
+
+                    self.module_path = saved_path;
+                    self.imports = saved_imports;
+                    self.line_starts = saved_line_starts;
+                    self.current_source = saved_source;
+                    self.current_source_name = saved_source_name;
+                    break;
+                }
+            }
+        }
+
         // Clear pending_functions now that we've processed them
         // Note: pending_fn_signatures is kept until after the third pass type-check
         self.pending_functions.clear();

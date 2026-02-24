@@ -1,0 +1,17 @@
+# expect: 42
+# Test: cross-module generic function with ambiguous methods in lambdas
+# .reverse(), .take(), .drop() work on both List and String, so
+# the compiler must resolve the type through the cross-module call chain.
+use ops.*
+
+main() = {
+    words = ["ab", "cde", "f"]
+    reversed = myMapper(words, w => w.reverse())
+    lens = myMapper(reversed, w => w.length())
+    total = myFolder(lens, 0, (a, b) => a + b)
+
+    nums = [10, 20, 6]
+    numSum = myFolder(nums, 0, (a, b) => a + b)
+
+    total + numSum
+}

@@ -19403,33 +19403,33 @@ impl Compiler {
             }
         }
 
-        // Fallback for lambdas: if expected_type is None but HM inference resolved the
-        // lambda's type, extract parameter types from the HM-inferred function type.
-        // This handles cases where the calling function's AST is not available (e.g.,
-        // stdlib functions loaded from bytecode cache) but HM inference still resolved
-        // the lambda's parameter types through constraint solving.
+        // Fallback for lambdas: if HM inference resolved the lambda's type, extract parameter
+        // types from the HM-inferred function type. This handles cases where:
+        // 1. The calling function's AST is not available (e.g., stdlib from bytecode cache)
+        // 2. The function signature uses type parameters that couldn't be resolved from
+        //    annotations alone (e.g., cross-module generic function `myMapper(xs, f) = xs.map(f)`
+        //    where the annotation path sees type param `a` but can't resolve it to `String`)
+        // In both cases, HM inference has already resolved the lambda's concrete types.
         if let Expr::Lambda(params, body, _) = arg {
-            if expected_type.is_none() {
-                if let Some(hm_type) = self.inferred_expr_types.get(&arg.span()) {
-                    if let nostos_types::Type::Function(hm_fn_type) = hm_type {
-                        let hm_params = &hm_fn_type.params;
-                        let typed_params: Vec<(String, String)> = params.iter()
-                            .zip(hm_params.iter())
-                            .filter_map(|(p, ty)| {
-                                if let Some(name) = self.pattern_binding_name(p) {
-                                    let type_str = ty.display();
-                                    // Only use the type if it's at least partially resolved
-                                    // (has a base type like Map, Set, List, not just ?X)
-                                    if !type_str.starts_with('?') {
-                                        return Some((name, type_str));
-                                    }
+            if let Some(hm_type) = self.inferred_expr_types.get(&arg.span()) {
+                if let nostos_types::Type::Function(hm_fn_type) = hm_type {
+                    let hm_params = &hm_fn_type.params;
+                    let typed_params: Vec<(String, String)> = params.iter()
+                        .zip(hm_params.iter())
+                        .filter_map(|(p, ty)| {
+                            if let Some(name) = self.pattern_binding_name(p) {
+                                let type_str = ty.display();
+                                // Only use the type if it's at least partially resolved
+                                // (has a base type like Map, Set, List, not just ?X)
+                                if !type_str.starts_with('?') {
+                                    return Some((name, type_str));
                                 }
-                                None
-                            })
-                            .collect();
-                        if typed_params.len() == params.len() {
-                            return self.compile_lambda_with_types(params, body, &typed_params);
-                        }
+                            }
+                            None
+                        })
+                        .collect();
+                    if typed_params.len() == params.len() {
+                        return self.compile_lambda_with_types(params, body, &typed_params);
                     }
                 }
             }

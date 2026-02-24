@@ -56,6 +56,21 @@ run_single_test() {
         return
     fi
 
+    # Multi-file project support: files in multifile/ directories are compiled
+    # as projects (pass the directory to the compiler, not individual files).
+    # Only main.nos triggers the test; helper modules are skipped.
+    local run_target="$file"
+    if [[ "$file" == *"/multifile/"* ]]; then
+        local basename=$(basename "$file")
+        if [[ "$basename" != "main.nos" ]]; then
+            echo "SKIP|$file|multifile helper module"
+            return
+        fi
+        # Run the binary on the directory containing main.nos
+        run_target=$(dirname "$file")
+        rm -rf "$run_target/.nostos-cache" 2>/dev/null
+    fi
+
     # Read expected value or error
     local expect=$(grep "^# expect:" "$file" 2>/dev/null | head -1 | sed 's/^# expect: //')
     local expect_error=$(grep "^# expect_error:" "$file" 2>/dev/null | head -1 | sed 's/^# expect_error: //')
@@ -66,7 +81,7 @@ run_single_test() {
     fi
 
     # Run the test with timeout (15 seconds to account for compilation time)
-    local output=$(timeout 15 "$BINARY" "$file" 2>&1) || true
+    local output=$(timeout 15 "$BINARY" "$run_target" 2>&1) || true
 
     if [ -n "$expect_error" ]; then
         # Test expects an error - check if error message contains expected string
