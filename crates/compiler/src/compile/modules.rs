@@ -299,9 +299,8 @@ impl Compiler {
             // Bind REPL local variables in the TypeEnv for HM inference
             // This allows expressions like `v * 2.0` to know that `v: testvec.Vec`
             // and dispatch correctly to scalar operations
-            for (var_name, type_name) in &self.local_types {
-                let ty = self.type_name_to_type(type_name);
-                env.bind(var_name.clone(), ty, false);
+            for (var_name, ty) in &self.local_types {
+                env.bind(var_name.clone(), ty.clone(), false);
             }
 
             // Update next_var to avoid collisions with type variables in registered functions
@@ -508,9 +507,8 @@ impl Compiler {
             // Bind REPL local variables in the TypeEnv for HM inference
             // This allows expressions like `v * 2.0` to know that `v: testvec.Vec`
             // and dispatch correctly to scalar operations
-            for (var_name, type_name) in &self.local_types {
-                let ty = self.type_name_to_type(type_name);
-                env.bind(var_name.clone(), ty, false);
+            for (var_name, ty) in &self.local_types {
+                env.bind(var_name.clone(), ty.clone(), false);
             }
 
             // Bind module-level mutable variables (mvars) in the TypeEnv

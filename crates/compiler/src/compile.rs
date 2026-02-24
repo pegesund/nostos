@@ -1241,8 +1241,8 @@ pub struct Compiler {
     pending_trait_completeness: HashMap<(String, String), (HashSet<String>, Span)>,
     /// Types to their implemented traits: type_name -> [trait_name, ...]
     type_traits: HashMap<String, Vec<String>>,
-    /// Local variable type tracking: variable name -> type name
-    local_types: HashMap<String, String>,
+    /// Local variable type tracking: variable name -> concrete Type
+    local_types: HashMap<String, nostos_types::Type>,
     /// Parameter types for specialized function variants (for monomorphization)
     /// When compiling a specialized variant, parameter name -> concrete Type
     param_types: HashMap<String, nostos_types::Type>,
@@ -5327,6 +5327,11 @@ impl Compiler {
         self.param_types.get(name).map(|ty| ty.display())
     }
 
+    /// Get local variable type as display string (bridge for gradual migration).
+    fn get_local_type_str(&self, name: &str) -> Option<String> {
+        self.local_types.get(name).map(|ty| ty.display())
+    }
+
     /// Convert a TypeExpr AST node to a Type value.
     fn type_expr_to_type(&self, ty: &nostos_syntax::TypeExpr) -> nostos_types::Type {
         self.type_name_to_type(&self.type_expr_to_string(ty))
@@ -5678,7 +5683,7 @@ impl Compiler {
             Expr::String(_, _) => true,
             Expr::Var(ident) => {
                 // Check local_types for String type
-                if let Some(ty) = self.local_types.get(&ident.node) {
+                if let Some(ref ty) = self.get_local_type_str(&ident.node) {
                     return ty == "String";
                 }
                 // Check param_types for function parameters
@@ -5735,7 +5740,7 @@ impl Compiler {
                     return true;
                 }
                 // Check local_types for float types
-                if let Some(ty) = self.local_types.get(&ident.node) {
+                if let Some(ref ty) = self.get_local_type_str(&ident.node) {
                     return Self::is_float_type_name(ty);
                 }
                 // Check param_types for function parameters
@@ -5816,7 +5821,7 @@ impl Compiler {
             }
             // Variable - check type
             Expr::Var(ident) => {
-                if let Some(ty) = self.local_types.get(&ident.node) {
+                if let Some(ref ty) = self.get_local_type_str(&ident.node) {
                     return ty == "Int64List" || ty == "[Int]" || ty == "[Int64]";
                 }
                 if let Some(ref ty) = self.get_param_type_str(&ident.node) {
@@ -5848,7 +5853,7 @@ impl Compiler {
             Expr::Float(_, _) | Expr::Float32(_, _) | Expr::Decimal(_, _) => false,
             // Check if variable is known to be Int64
             Expr::Var(ident) => {
-                if let Some(ty) = self.local_types.get(&ident.node) {
+                if let Some(ref ty) = self.get_local_type_str(&ident.node) {
                     return ty == "Int" || ty == "Int64";
                 }
                 if let Some(ref ty) = self.get_param_type_str(&ident.node) {
@@ -5904,7 +5909,7 @@ impl Compiler {
                     return false;
                 }
                 // Check local_types for int types
-                if let Some(ty) = self.local_types.get(&ident.node) {
+                if let Some(ref ty) = self.get_local_type_str(&ident.node) {
                     return Self::is_int_type_name(ty);
                 }
                 // Check param_types for function parameters
@@ -5983,7 +5988,7 @@ impl Compiler {
             // Check if variable is known to be BigInt
             Expr::Var(ident) => {
                 // Check local_types
-                if let Some(ty) = self.local_types.get(&ident.node) {
+                if let Some(ref ty) = self.get_local_type_str(&ident.node) {
                     return Self::is_bigint_type_name(ty);
                 }
                 // Check param_types
@@ -6037,7 +6042,7 @@ impl Compiler {
             | Expr::UInt8(_, _) | Expr::UInt16(_, _) | Expr::UInt32(_, _) | Expr::UInt64(_, _) => true,
             Expr::BigInt(_, _) | Expr::Float(_, _) | Expr::Float32(_, _) | Expr::Decimal(_, _) => false,
             Expr::Var(ident) => {
-                if let Some(ty) = self.local_types.get(&ident.node) {
+                if let Some(ref ty) = self.get_local_type_str(&ident.node) {
                     return Self::is_small_int_type_name(ty);
                 }
                 if let Some(ref ty) = self.get_param_type_str(&ident.node) {
@@ -6077,7 +6082,7 @@ impl Compiler {
             // Plain Int is Int64 - not a "sized" type for coercion purposes
             Expr::Int(_, _) => None,
             Expr::Var(ident) => {
-                if let Some(ty) = self.local_types.get(&ident.node) {
+                if let Some(ref ty) = self.get_local_type_str(&ident.node) {
                     return Self::sized_int_type_name(ty);
                 }
                 if let Some(ref ty) = self.get_param_type_str(&ident.node) {
@@ -13410,7 +13415,7 @@ impl Compiler {
                         // than the function declares. Try resolution with both the caller's
                         // arg count and the function's full param count.
                         let has_named = args.iter().any(|a| matches!(a, CallArg::Named(_, _)));
-                        let mut call_name = if let Some(resolved) = self.resolve_function_call(&qualified_method, &arg_types) {
+                        let call_name = if let Some(resolved) = self.resolve_function_call(&qualified_method, &arg_types) {
                             resolved
                         } else {
                             // resolve_function_call couldn't match types exactly.
@@ -16990,7 +16995,8 @@ impl Compiler {
             }
             // Also check local_types for variables bound in let-expressions
             if let Some(ty) = self.local_types.get(&ident.node) {
-                return Some(self.substitute_type_params_in_string(ty));
+                let substituted = self.substitute_type_params_in_type(ty);
+                return Some(substituted.display());
             }
             // Check mvars - module-level mutable variables have known types
             // This is important for UFC resolution in template-generated code
@@ -17320,7 +17326,7 @@ impl Compiler {
 
                     // Check if this is a call to a function-typed variable (like f() where f: () -> U)
                     // Look up the variable's type and extract the return type from the function type
-                    let var_type_str = self.local_types.get(&ident.node).cloned()
+                    let var_type_str = self.get_local_type_str(&ident.node)
                         .or_else(|| self.get_param_type_str(&ident.node));
                     if let Some(func_type) = var_type_str {
                         // Parse the function type to extract the return type
@@ -17553,8 +17559,8 @@ impl Compiler {
                 }
                 // Then check local_types
                 if let Some(ty) = self.local_types.get(&ident.node) {
-                    // Substitute type parameters from current_type_bindings
-                    return Some(self.substitute_type_params_in_string(ty));
+                    let substituted = self.substitute_type_params_in_type(ty);
+                    return Some(substituted.display());
                 }
                 None
             }
@@ -19350,7 +19356,7 @@ impl Compiler {
                 self.locals.insert(name.clone(), LocalInfo { reg: arg_reg, is_float: false, mutable: false, is_cell: false });
                 // Add type from param_types if available
                 if let Some((_, ty)) = param_types.iter().find(|(n, _)| n == &name) {
-                    self.local_types.insert(name.clone(), ty.clone());
+                    self.local_types.insert(name.clone(), self.type_name_to_type(ty));
                 }
                 param_names.push(name);
             } else {
@@ -19383,7 +19389,7 @@ impl Compiler {
             }
             // Also check outer param_types for function parameters captured by closure
             if let Some(ty) = saved_param_types.get(name) {
-                self.local_types.insert(name.clone(), ty.display());
+                self.local_types.insert(name.clone(), ty.clone());
             }
         }
 
@@ -20605,7 +20611,7 @@ impl Compiler {
                     self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float, mutable: true, is_cell: false });
                     // Record explicit type if provided
                     if let Some(ty) = explicit_type {
-                        self.local_types.insert(ident.node.clone(), ty);
+                        self.local_types.insert(ident.node.clone(), self.type_name_to_type(&ty));
                     }
                 } else if existing_info.mutable {
                     // Existing is mutable, new is immutable: allow reassignment
@@ -20671,15 +20677,16 @@ impl Compiler {
                     let final_type = if let Some(existing) = existing_type {
                         // Prefer existing type unless it's a type parameter (single lowercase letter)
                         // and we have a better inferred type
-                        if existing.len() == 1 && existing.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false) {
+                        let existing_str = existing.display();
+                        if existing_str.len() == 1 && existing_str.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false) {
                             // Existing is a type parameter - prefer inferred if it's better
-                            value_type.or(Some(existing))
+                            value_type.map(|v| self.type_name_to_type(&v)).or(Some(existing))
                         } else {
                             // Existing type looks good, keep it
                             Some(existing)
                         }
                     } else {
-                        value_type
+                        value_type.map(|v| self.type_name_to_type(&v))
                     };
                     if let Some(ty) = final_type {
                         self.local_types.insert(ident.node.clone(), ty);
@@ -21969,7 +21976,7 @@ impl Compiler {
             }
             // Also check outer param_types for function parameters captured by closure
             if let Some(ty) = saved_param_types.get(name) {
-                self.local_types.insert(name.clone(), ty.display());
+                self.local_types.insert(name.clone(), ty.clone());
             }
         }
 
@@ -22320,7 +22327,8 @@ impl Compiler {
             // Variable: check if we know its type
             Expr::Var(ident) => {
                 self.local_types.get(&ident.node).and_then(|t| {
-                    match t.as_str() {
+                    let s = t.display();
+                    match s.as_str() {
                         "Int" => Some(InferredType::Int),
                         "Float" => Some(InferredType::Float),
                         _ => None,
@@ -23562,12 +23570,14 @@ impl Compiler {
     /// Set local variable types for REPL method dispatch.
     /// This allows the compiler to know variable types from previous REPL evaluations.
     pub fn set_local_types(&mut self, types: HashMap<String, String>) {
-        self.local_types = types;
+        self.local_types = types.into_iter()
+            .map(|(k, v)| (k, self.type_name_to_type(&v)))
+            .collect();
     }
 
     /// Add a single local variable type.
     pub fn set_local_type(&mut self, name: String, type_name: String) {
-        self.local_types.insert(name, type_name);
+        self.local_types.insert(name, self.type_name_to_type(&type_name));
     }
 
     /// Get all trait names in the compiler.
@@ -25101,9 +25111,8 @@ impl Compiler {
         // Bind REPL local variables in the TypeEnv for HM inference
         // This allows expressions like `v * 2.0` to know that `v: testvec.Vec`
         // and dispatch correctly to scalar operations
-        for (var_name, type_name) in &self.local_types {
-            let ty = self.type_name_to_type(type_name);
-            env.bind(var_name.clone(), ty, false);
+        for (var_name, ty) in &self.local_types {
+            env.bind(var_name.clone(), ty.clone(), false);
         }
 
         // Copy function imports from compiler to TypeEnv for cross-module resolution
@@ -26361,9 +26370,8 @@ impl Compiler {
         // Bind REPL local variables in the TypeEnv for HM inference
         // This allows expressions like `v * 2.0` to know that `v: testvec.Vec`
         // and dispatch correctly to scalar operations
-        for (var_name, type_name) in &self.local_types {
-            let ty = self.type_name_to_type(type_name);
-            env.bind(var_name.clone(), ty, false);
+        for (var_name, ty) in &self.local_types {
+            env.bind(var_name.clone(), ty.clone(), false);
         }
 
         // Copy function imports from compiler to TypeEnv for cross-module resolution

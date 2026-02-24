@@ -63,7 +63,7 @@ impl Compiler {
                 }
             }
             for (var_name, var_type) in binding_types {
-                self.local_types.insert(var_name, var_type);
+                self.local_types.insert(var_name, self.type_name_to_type(&var_type));
             }
 
             // Compile guard if present
