@@ -1,0 +1,11 @@
+# expect: [10, 20, 1, 2]
+# Regression test: cell-boxed var + function call + nested lambda
+foo(n) = n + 1
+main() = {
+  var groups = [10, 20]
+  [1, 2].each(x => {
+    foo(x)
+    groups = groups ++ [x]
+  })
+  groups
+}

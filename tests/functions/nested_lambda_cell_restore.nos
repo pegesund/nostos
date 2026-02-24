@@ -1,0 +1,12 @@
+# expect: [10, 20, 1, 2]
+# Regression test: compiling a nested lambda inside a closure must restore
+# capture_cells state so that cell-boxed mutable variables are still read
+# correctly via CellGet after the inner lambda is compiled.
+main() = {
+  var groups = [10, 20]
+  [1, 2].each(x => {
+    f = () => 42
+    groups = groups ++ [x]
+  })
+  groups
+}

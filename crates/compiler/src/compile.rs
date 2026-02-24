@@ -19603,6 +19603,7 @@ impl Compiler {
         self.locals = saved_locals;
         self.next_reg = saved_next_reg;
         self.capture_indices = saved_capture_indices;
+        self.capture_cells = saved_capture_cells;
         self.local_types = saved_local_types;
         self.current_function_name = saved_current_function_name;
 
@@ -22159,6 +22160,7 @@ impl Compiler {
         self.locals = saved_locals;
         self.next_reg = saved_next_reg;
         self.capture_indices = saved_capture_indices;
+        self.capture_cells = saved_capture_cells;
         self.local_types = saved_local_types;
         self.current_function_name = saved_current_function_name;
 
