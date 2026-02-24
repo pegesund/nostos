@@ -16,6 +16,72 @@ use nostos_syntax::ast::{
 };
 use std::collections::{HashMap, HashSet};
 
+/// List methods that uniquely identify the receiver as a List type.
+/// Excludes methods shared with String (reverse, take, drop) and
+/// methods shared with Option/Result (map, flatMap).
+const EXCLUSIVE_LIST_METHODS: &[&str] = &[
+    "filter", "fold", "any", "all", "find",
+    "sort", "sortBy", "head", "tail", "init", "last",
+    "sum", "product", "zip", "unzip",
+    "unique", "flatten", "position", "indexOf",
+    "push", "pop", "nth", "slice",
+    "scanl", "foldl", "foldr", "enumerate", "intersperse",
+    "spanList", "groupBy", "transpose", "pairwise", "isSorted",
+    "isSortedBy", "maximum", "minimum", "takeWhile", "dropWhile",
+    "partition", "zipWith",
+];
+
+/// Map methods that uniquely identify the receiver as a Map type.
+/// Note: "insert" is Map-exclusive only when called with 3 args (receiver + key + value);
+/// with 2 args it's a Set method.
+const EXCLUSIVE_MAP_METHODS: &[&str] = &[
+    "lookup", "keys", "values", "getOrThrow", "toList",
+];
+
+/// Option method aliasing: short method name → stdlib function name.
+/// Supports both shorthand (.map) and direct (.optMap) names.
+const OPTION_METHOD_ALIASES: &[(&str, &str)] = &[
+    ("map", "optMap"), ("optMap", "optMap"),
+    ("flatMap", "optFlatMap"), ("optFlatMap", "optFlatMap"),
+    ("unwrap", "optUnwrap"), ("optUnwrap", "optUnwrap"),
+    ("unwrapOr", "optUnwrapOr"), ("optUnwrapOr", "optUnwrapOr"),
+    ("isSome", "optIsSome"), ("optIsSome", "optIsSome"),
+    ("isNone", "optIsNone"), ("optIsNone", "optIsNone"),
+];
+
+/// Result method aliasing: short method name → stdlib function name.
+/// Supports both shorthand (.map) and direct (.resMap) names.
+const RESULT_METHOD_ALIASES: &[(&str, &str)] = &[
+    ("map", "resMap"), ("resMap", "resMap"),
+    ("mapErr", "resMapErr"), ("resMapErr", "resMapErr"),
+    ("flatMap", "resFlatMap"), ("resFlatMap", "resFlatMap"),
+    ("unwrap", "resUnwrap"), ("resUnwrap", "resUnwrap"),
+    ("unwrapOr", "resUnwrapOr"), ("resUnwrapOr", "resUnwrapOr"),
+    ("isOk", "resIsOk"), ("resIsOk", "resIsOk"),
+    ("isErr", "resIsErr"), ("resIsErr", "resIsErr"),
+    ("toOption", "resToOption"), ("resToOption", "resToOption"),
+];
+
+fn is_exclusive_list_method(name: &str) -> bool {
+    EXCLUSIVE_LIST_METHODS.contains(&name)
+}
+
+fn is_exclusive_map_method(name: &str) -> bool {
+    EXCLUSIVE_MAP_METHODS.contains(&name)
+}
+
+fn resolve_option_method_alias(name: &str) -> Option<&'static str> {
+    OPTION_METHOD_ALIASES.iter()
+        .find(|(m, _)| *m == name)
+        .map(|(_, alias)| *alias)
+}
+
+fn resolve_result_method_alias(name: &str) -> Option<&'static str> {
+    RESULT_METHOD_ALIASES.iter()
+        .find(|(m, _)| *m == name)
+        .map(|(_, alias)| *alias)
+}
+
 /// A type constraint generated during inference.
 #[derive(Debug, Clone)]
 pub enum Constraint {
@@ -3645,19 +3711,8 @@ impl<'a> InferCtx<'a> {
                     && iteration < max_iterations - 1
                 {
                     // Methods that uniquely identify the receiver type.
-                    // List-only methods (excludes methods shared with String/Map/Set):
                     // NOTE: "reverse", "take", "drop" are NOT exclusive - String also has them
-                    let is_exclusive_list_method = matches!(call.method_name.as_str(),
-                        "filter" | "fold" | "any" | "all" | "find" |
-                        "sort" | "sortBy" | "head" | "tail" | "init" | "last" |
-                        "sum" | "product" | "zip" | "unzip" |
-                        "unique" | "flatten" | "position" | "indexOf" |
-                        "push" | "pop" | "nth" | "slice" |
-                        "scanl" | "foldl" | "foldr" | "enumerate" | "intersperse" |
-                        "spanList" | "groupBy" | "transpose" | "pairwise" | "isSorted" |
-                        "isSortedBy" | "maximum" | "minimum" | "takeWhile" | "dropWhile" |
-                        "partition" | "zipWith"
-                    );
+                    let is_list = is_exclusive_list_method(&call.method_name);
                     // "map" and "flatMap" are shared between List, Option, and Result.
                     // Only assume List if the return type has already been resolved to List
                     // by other constraints. Otherwise defer to allow more iterations.
@@ -3668,12 +3723,11 @@ impl<'a> InferCtx<'a> {
                     } else {
                         false
                     };
-                    let is_list_method = is_exclusive_list_method || assume_list_for_shared;
+                    let is_list_method = is_list || assume_list_for_shared;
                     // Map-only methods (not on Set/List/String):
-                    let is_map_method = matches!(call.method_name.as_str(),
-                        "lookup" | "keys" | "values" | "getOrThrow" | "toList"
-                    ) || (call.method_name == "insert" && call.arg_types.len() == 3);
                     // insert with 3 arg_types (receiver + key + value) → Map; 2 arg_types (receiver + elem) → Set
+                    let is_map_method = is_exclusive_map_method(&call.method_name)
+                        || (call.method_name == "insert" && call.arg_types.len() == 3);
                     let can_infer_from_method = is_list_method || is_map_method;
                     if !can_infer_from_method {
                         // Before deferring, try to constrain the return type from known
@@ -3694,17 +3748,7 @@ impl<'a> InferCtx<'a> {
                     // Last-resort inference: if receiver is still Var after all iterations,
                     // assume List for methods that uniquely identify list operations.
                     // NOTE: "reverse", "take", "drop" are NOT exclusive - String also has them
-                    let is_exclusive_list_method = matches!(call.method_name.as_str(),
-                        "filter" | "fold" | "any" | "all" | "find" |
-                        "sort" | "sortBy" | "head" | "tail" | "init" | "last" |
-                        "sum" | "product" | "zip" | "unzip" |
-                        "unique" | "flatten" | "position" | "indexOf" |
-                        "push" | "pop" | "nth" | "slice" |
-                        "scanl" | "foldl" | "foldr" | "enumerate" | "intersperse" |
-                        "spanList" | "groupBy" | "transpose" | "pairwise" | "isSorted" |
-                        "isSortedBy" | "maximum" | "minimum" | "takeWhile" | "dropWhile" |
-                        "partition" | "zipWith"
-                    );
+                    let is_list = is_exclusive_list_method(&call.method_name);
                     // "map" and "flatMap" are shared between List, Option, and Result.
                     // Only assume List if the return type has already been resolved to List
                     // by other constraints (e.g., from fold/filter/sort in the same chain).
@@ -3718,10 +3762,9 @@ impl<'a> InferCtx<'a> {
                     } else {
                         false
                     };
-                    let is_list_method = is_exclusive_list_method || assume_list_for_shared;
-                    let is_map_method = matches!(call.method_name.as_str(),
-                        "lookup" | "keys" | "values" | "getOrThrow" | "toList"
-                    ) || (call.method_name == "insert" && call.arg_types.len() == 3);
+                    let is_list_method = is_list || assume_list_for_shared;
+                    let is_map_method = is_exclusive_map_method(&call.method_name)
+                        || (call.method_name == "insert" && call.arg_types.len() == 3);
                     if is_list_method {
                         // Unify receiver with List[?X] so type info flows properly
                         let elem = self.fresh();
@@ -3806,33 +3849,13 @@ impl<'a> InferCtx<'a> {
                         }
                         "Option" => {
                             // Option methods are registered as optXxx in stdlib
-                            // Support both shorthand (.map) and direct (.optMap) names
-                            let opt_name = match call.method_name.as_str() {
-                                "map" | "optMap" => Some("optMap"),
-                                "flatMap" | "optFlatMap" => Some("optFlatMap"),
-                                "unwrap" | "optUnwrap" => Some("optUnwrap"),
-                                "unwrapOr" | "optUnwrapOr" => Some("optUnwrapOr"),
-                                "isSome" | "optIsSome" => Some("optIsSome"),
-                                "isNone" | "optIsNone" => Some("optIsNone"),
-                                _ => None,
-                            };
-                            opt_name.and_then(|name| self.env.functions.get(name).cloned())
+                            resolve_option_method_alias(&call.method_name)
+                                .and_then(|name| self.env.functions.get(name).cloned())
                         }
                         "Result" => {
                             // Result methods are registered as resXxx in stdlib
-                            // Support both shorthand (.map) and direct (.resMap) names
-                            let res_name = match call.method_name.as_str() {
-                                "map" | "resMap" => Some("resMap"),
-                                "mapErr" | "resMapErr" => Some("resMapErr"),
-                                "flatMap" | "resFlatMap" => Some("resFlatMap"),
-                                "unwrap" | "resUnwrap" => Some("resUnwrap"),
-                                "unwrapOr" | "resUnwrapOr" => Some("resUnwrapOr"),
-                                "isOk" | "resIsOk" => Some("resIsOk"),
-                                "isErr" | "resIsErr" => Some("resIsErr"),
-                                "toOption" | "resToOption" => Some("resToOption"),
-                                _ => None,
-                            };
-                            res_name.and_then(|name| self.env.functions.get(name).cloned())
+                            resolve_result_method_alias(&call.method_name)
+                                .and_then(|name| self.env.functions.get(name).cloned())
                         }
                         _ => None,
                     }
