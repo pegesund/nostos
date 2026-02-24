@@ -10217,10 +10217,10 @@ impl Compiler {
                                     let param_types: Vec<Option<String>> = fn_def.clauses[0].params.iter()
                                         .map(|p| {
                                             if let Some(ty_expr) = &p.ty {
-                                                let type_str = self.type_expr_to_string_with_bindings(ty_expr);
-                                                let substituted = self.substitute_type_params_in_string(&type_str);
-                                                if self.is_type_concrete(&substituted) {
-                                                    return Some(substituted);
+                                                let ty = self.type_expr_to_type(ty_expr);
+                                                let substituted = self.substitute_type_params_in_type(&ty);
+                                                if self.is_type_structurally_resolved(&substituted) {
+                                                    return Some(substituted.display());
                                                 }
                                             }
                                             None
@@ -12878,19 +12878,19 @@ impl Compiler {
                                     .enumerate()
                                     .map(|(i, a)| {
                                         // First check if we already have a concrete type
-                                        if let Some(ty) = mod_arg_types.get(i).and_then(|t| t.as_ref()) {
-                                            let substituted = self.substitute_type_params_in_string(ty);
-                                            if self.is_type_concrete(&substituted) {
-                                                return Some(substituted);
+                                        if let Some(ty_str) = mod_arg_types.get(i).and_then(|t| t.as_ref()) {
+                                            let ty = self.type_name_to_type(ty_str);
+                                            let substituted = self.substitute_type_params_in_type(&ty);
+                                            if self.is_type_structurally_resolved(&substituted) {
+                                                return Some(substituted.display());
                                             }
                                         }
                                         // Try HM-inferred type with substitution
                                         let arg_expr = Self::call_arg_expr(a);
                                         if let Some(ty) = self.inferred_expr_types.get(&arg_expr.span()) {
-                                            let type_str = ty.display();
-                                            let substituted = self.substitute_type_params_in_string(&type_str);
-                                            if self.is_type_concrete(&substituted) {
-                                                return Some(substituted);
+                                            let substituted = self.substitute_type_params_in_type(ty);
+                                            if self.is_type_structurally_resolved(&substituted) {
+                                                return Some(substituted.display());
                                             }
                                         }
                                         None
@@ -16490,19 +16490,19 @@ impl Compiler {
                     .enumerate()
                     .map(|(i, a)| {
                         // First check if we already have a concrete type
-                        if let Some(ty) = arg_types.get(i).and_then(|t| t.as_ref()) {
-                            let substituted = self.substitute_type_params_in_string(ty);
-                            if self.is_type_concrete(&substituted) {
-                                return Some(substituted);
+                        if let Some(ty_str) = arg_types.get(i).and_then(|t| t.as_ref()) {
+                            let ty = self.type_name_to_type(ty_str);
+                            let substituted = self.substitute_type_params_in_type(&ty);
+                            if self.is_type_structurally_resolved(&substituted) {
+                                return Some(substituted.display());
                             }
                         }
                         // Try HM-inferred type with substitution
                         let arg_expr = Self::call_arg_expr(a);
                         if let Some(ty) = self.inferred_expr_types.get(&arg_expr.span()) {
-                            let type_str = ty.display();
-                            let substituted = self.substitute_type_params_in_string(&type_str);
-                            if self.is_type_concrete(&substituted) {
-                                return Some(substituted);
+                            let substituted = self.substitute_type_params_in_type(ty);
+                            if self.is_type_structurally_resolved(&substituted) {
+                                return Some(substituted.display());
                             }
                         }
                         None
@@ -18663,7 +18663,8 @@ impl Compiler {
                 for (i, param_sig) in param_parts.iter().enumerate() {
                     if i < arg_types.len() {
                         if let Some(ref arg_type) = arg_types[i] {
-                            let substituted_arg = self.substitute_type_params_in_string(arg_type);
+                            let arg_ty = self.type_name_to_type(arg_type);
+                            let substituted_arg = self.substitute_type_params_in_type(&arg_ty).display();
                             let param_type_expr = Self::parse_signature_type(param_sig);
                             Self::extract_type_bindings(&param_type_expr, &substituted_arg, &mut type_map);
                         }
@@ -19932,51 +19933,6 @@ impl Compiler {
             return ty.clone();
         }
         nostos_types::infer::InferCtx::substitute_type_params(ty, &self.current_type_bindings)
-    }
-
-    /// Substitute type parameters in a type string using current_type_bindings.
-    /// For example, "List[T]" with bindings {T: "Int"} becomes "List[Int]".
-    fn substitute_type_params_in_string(&self, type_str: &str) -> String {
-        if self.current_type_bindings.is_empty() {
-            return type_str.to_string();
-        }
-
-        let mut result = type_str.to_string();
-        for (param, concrete_ty) in &self.current_type_bindings {
-            let concrete = &concrete_ty.display();
-            // Replace type parameter at word boundaries
-            // This handles cases like "List[T]" -> "List[Int]", "(T, T)" -> "(Val, Val)", etc.
-            let patterns = [
-                // Simple bracketed types: [T], [T, U], etc.
-                (format!("[{}]", param), format!("[{}]", concrete)),
-                (format!("[{},", param), format!("[{},", concrete)),
-                (format!("[{} ", param), format!("[{} ", concrete)),
-                (format!(", {}]", param), format!(", {}]", concrete)),
-                (format!(" {}]", param), format!(" {}]", concrete)),
-                (format!(", {}, ", param), format!(", {}, ", concrete)),
-                // Tuple types: (T), (T, T), etc.
-                (format!("({})", param), format!("({})", concrete)),
-                (format!("({},", param), format!("({},", concrete)),
-                (format!("({} ", param), format!("({} ", concrete)),
-                (format!(", {})", param), format!(", {})", concrete)),
-                (format!(" {})", param), format!(" {})", concrete)),
-                // Nested: [(T, T)], etc.
-                (format!("[({})", param), format!("[({})", concrete)),
-                (format!("[({}]", param), format!("[({}]", concrete)),
-                (format!("[({},", param), format!("[({},", concrete)),
-            ];
-
-            for (pattern, replacement) in &patterns {
-                result = result.replace(pattern, replacement);
-            }
-
-            // Also handle standalone type parameter (whole string is just "T")
-            if result == *param {
-                result = concrete.clone();
-            }
-        }
-
-        result
     }
 
     /// Substitute a single type parameter in a type string.
