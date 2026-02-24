@@ -1131,7 +1131,7 @@ impl TypeEnv {
     /// types may be partially resolved.
     pub fn definitely_not_implements(&self, ty: &Type, trait_name: &str) -> bool {
         match ty {
-            Type::Var(_) => false, // Unknown - might implement
+            Type::Var(_) | Type::TypeParam(_) => false, // Unknown - might implement
             Type::Function(_) => true, // Functions never implement any trait
             Type::List(elem) | Type::Array(elem) | Type::Set(elem) => {
                 match trait_name {

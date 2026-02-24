@@ -3986,11 +3986,17 @@ impl<'a> InferCtx<'a> {
                                 // Check if element type is definitely non-numeric.
                                 // Numeric types: Int*, UInt*, Float*, BigInt, Decimal
                                 // Type variables (Var/TypeParam) might be numeric, so allow them.
-                                let is_non_numeric = matches!(&resolved_elem,
+                                // Single-lowercase Named types are leaked type params — also allow.
+                                let is_non_numeric = match &resolved_elem {
                                     Type::String | Type::Bool | Type::Char | Type::Unit | Type::Never |
                                     Type::Tuple(_) | Type::List(_) | Type::Map(_, _) | Type::Set(_) |
-                                    Type::Array(_) | Type::Record(_) | Type::Function(_) |
-                                    Type::Named { .. });
+                                    Type::Array(_) | Type::Record(_) | Type::Function(_) => true,
+                                    Type::Named { name, args } => {
+                                        !(args.is_empty() && name.len() == 1
+                                          && name.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false))
+                                    }
+                                    _ => false,
+                                };
                                 if is_non_numeric {
                                     self.last_error_span = call.span;
                                     return Err(TypeError::MissingTraitImpl {
@@ -4008,12 +4014,21 @@ impl<'a> InferCtx<'a> {
                             if let Type::List(elem) = &resolved_recv {
                                 let resolved_elem = self.env.apply_subst(elem);
                                 // Types that don't implement Ord: tuples, lists, maps, sets,
-                                // records, functions, Bool, user-defined types
-                                let is_non_orderable = matches!(&resolved_elem,
+                                // records, functions, Bool, user-defined types.
+                                // Exclude TypeParam and single-lowercase Named (leaked type params)
+                                // which represent generic parameters — their Ord bound is checked
+                                // at call sites, not at the definition.
+                                let is_non_orderable = match &resolved_elem {
                                     Type::Bool | Type::Unit | Type::Never |
                                     Type::Tuple(_) | Type::List(_) | Type::Map(_, _) | Type::Set(_) |
-                                    Type::Array(_) | Type::Record(_) | Type::Function(_) |
-                                    Type::Named { .. });
+                                    Type::Array(_) | Type::Record(_) | Type::Function(_) => true,
+                                    Type::Named { name, args } => {
+                                        // Single lowercase letter with no args = leaked type param
+                                        !(args.is_empty() && name.len() == 1
+                                          && name.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false))
+                                    }
+                                    _ => false,
+                                };
                                 if is_non_orderable {
                                     self.last_error_span = call.span;
                                     return Err(TypeError::MissingTraitImpl {

@@ -1,0 +1,4 @@
+pub mySort(xs: [a]) = xs.sort()
+pub mySum(xs: [a]) = xs.sum()
+pub myMap(xs: [a], f: a -> b) = xs.map(f)
+pub myFilter(xs: [a], f: a -> Bool) = xs.filter(f)

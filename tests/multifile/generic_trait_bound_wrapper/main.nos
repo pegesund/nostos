@@ -1,0 +1,14 @@
+# expect: ([1, 3, 4], 8, [6, 2, 8], [4])
+# Test: cross-module generic wrapper functions with implicit trait bounds.
+# mySort calls .sort() (requires Ord), mySum calls .sum() (requires Num).
+# The trait bounds should be propagated through the wrapper, not rejected
+# at the definition site.
+use lib.*
+main() = {
+  nums = [3, 1, 4]
+  sorted = mySort(nums)
+  total = mySum(nums)
+  doubled = myMap(nums, x => x * 2)
+  evens = myFilter(nums, x => x % 2 == 0)
+  (sorted, total, doubled, evens)
+}
