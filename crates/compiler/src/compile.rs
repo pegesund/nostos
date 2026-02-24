@@ -146,6 +146,171 @@ fn resolve_result_method(method_name: &str) -> Option<&'static str> {
         .map(|(_, func)| *func)
 }
 
+/// Unified type information for an expression.
+/// Tries structural Type first (from HM inference), falls back to string name.
+/// Concentrates all string-based type pattern matching in one place.
+enum ExprTypeInfo {
+    /// Fully resolved structural type from HM inference
+    Resolved(nostos_types::Type),
+    /// Only string name available (pattern-based fallback from expr_type_name)
+    NameOnly(String),
+    /// No type information available
+    Unknown,
+}
+
+impl ExprTypeInfo {
+    /// Get the base type name (e.g., "Map", "List", "String", "Option", "MyRecord").
+    /// Works for both Resolved (structural match) and NameOnly (string parsing).
+    fn base_name(&self) -> Option<&str> {
+        match self {
+            ExprTypeInfo::Resolved(ty) => {
+                use nostos_types::Type;
+                match ty {
+                    Type::Int | Type::Int64 => Some("Int"),
+                    Type::Int8 => Some("Int8"),
+                    Type::Int16 => Some("Int16"),
+                    Type::Int32 => Some("Int32"),
+                    Type::UInt8 => Some("UInt8"),
+                    Type::UInt16 => Some("UInt16"),
+                    Type::UInt32 => Some("UInt32"),
+                    Type::UInt64 => Some("UInt64"),
+                    Type::Float | Type::Float64 => Some("Float"),
+                    Type::Float32 => Some("Float32"),
+                    Type::BigInt => Some("BigInt"),
+                    Type::Decimal => Some("Decimal"),
+                    Type::String => Some("String"),
+                    Type::Bool => Some("Bool"),
+                    Type::Char => Some("Char"),
+                    Type::Unit => Some("()"),
+                    Type::List(_) => Some("List"),
+                    Type::Array(_) => Some("Array"),
+                    Type::Map(_, _) => Some("Map"),
+                    Type::Set(_) => Some("Set"),
+                    Type::Tuple(_) => Some("Tuple"),
+                    Type::Named { name, .. } => Some(name.as_str()),
+                    Type::Record(rec) => rec.name.as_deref(),
+                    Type::Variant(var) => Some(var.name.as_str()),
+                    Type::Function(_) => Some("Fn"),
+                    Type::IO(inner) => {
+                        // Recurse for IO-wrapped types
+                        let inner_info = ExprTypeInfo::Resolved(inner.as_ref().clone());
+                        // Can't return reference to temporary, so handle common cases
+                        match inner.as_ref() {
+                            Type::String => Some("String"),
+                            Type::List(_) => Some("List"),
+                            Type::Map(_, _) => Some("Map"),
+                            _ => None,
+                        }
+                    }
+                    Type::Pid => Some("Pid"),
+                    Type::Ref => Some("Ref"),
+                    Type::Var(_) | Type::TypeParam(_) | Type::Never => None,
+                }
+            }
+            ExprTypeInfo::NameOnly(name) => {
+                // Extract base name from parameterized type strings
+                if let Some(bracket) = name.find('[') {
+                    Some(&name[..bracket])
+                } else if let Some(space) = name.find(' ') {
+                    // Handle "Map k v" style (from builtins)
+                    Some(&name[..space])
+                } else {
+                    Some(name.as_str())
+                }
+            }
+            ExprTypeInfo::Unknown => None,
+        }
+    }
+
+    /// Get the structural Type if available.
+    fn as_type(&self) -> Option<&nostos_types::Type> {
+        match self {
+            ExprTypeInfo::Resolved(ty) => Some(ty),
+            _ => None,
+        }
+    }
+
+    /// Get the display string for the type.
+    fn display_name(&self) -> Option<String> {
+        match self {
+            ExprTypeInfo::Resolved(ty) => Some(ty.display()),
+            ExprTypeInfo::NameOnly(name) => Some(name.clone()),
+            ExprTypeInfo::Unknown => None,
+        }
+    }
+
+    fn is_map(&self) -> bool {
+        match self {
+            ExprTypeInfo::Resolved(ty) => matches!(ty, nostos_types::Type::Map(_, _)),
+            ExprTypeInfo::NameOnly(name) => {
+                name.starts_with("Map[") || name == "Map"
+                    || name.starts_with("Map ")
+                    || name.starts_with("stdlib.map.Map")
+            }
+            ExprTypeInfo::Unknown => false,
+        }
+    }
+
+    fn is_list(&self) -> bool {
+        match self {
+            ExprTypeInfo::Resolved(ty) => matches!(ty, nostos_types::Type::List(_)),
+            ExprTypeInfo::NameOnly(name) => {
+                name.starts_with("List[") || name == "List"
+                    || (name.starts_with('[') && name.ends_with(']'))
+            }
+            ExprTypeInfo::Unknown => false,
+        }
+    }
+
+    fn is_set(&self) -> bool {
+        match self {
+            ExprTypeInfo::Resolved(ty) => matches!(ty, nostos_types::Type::Set(_)),
+            ExprTypeInfo::NameOnly(name) => {
+                name.starts_with("Set[") || name == "Set"
+                    || name.starts_with("Set ")
+                    || name.starts_with("stdlib.set.Set")
+            }
+            ExprTypeInfo::Unknown => false,
+        }
+    }
+
+    fn is_string(&self) -> bool {
+        match self {
+            ExprTypeInfo::Resolved(ty) => matches!(ty, nostos_types::Type::String),
+            ExprTypeInfo::NameOnly(name) => name == "String",
+            ExprTypeInfo::Unknown => false,
+        }
+    }
+
+    fn is_option(&self) -> bool {
+        match self {
+            ExprTypeInfo::Resolved(ty) => matches!(ty,
+                nostos_types::Type::Named { name, .. }
+                    if name == "Option" || name == "stdlib.list.Option"
+            ),
+            ExprTypeInfo::NameOnly(name) => {
+                name.starts_with("Option[") || name == "Option"
+                    || name.starts_with("stdlib.list.Option")
+            }
+            ExprTypeInfo::Unknown => false,
+        }
+    }
+
+    fn is_result(&self) -> bool {
+        match self {
+            ExprTypeInfo::Resolved(ty) => matches!(ty,
+                nostos_types::Type::Named { name, .. }
+                    if name == "Result" || name == "stdlib.list.Result"
+            ),
+            ExprTypeInfo::NameOnly(name) => {
+                name.starts_with("Result[") || name == "Result"
+                    || name.starts_with("stdlib.list.Result")
+            }
+            ExprTypeInfo::Unknown => false,
+        }
+    }
+}
+
 /// Metadata for a built-in function.
 pub struct BuiltinInfo {
     pub name: &'static str,
@@ -1409,6 +1574,9 @@ pub struct Compiler {
     pending_functions: Vec<(FnDef, Vec<String>, HashMap<String, String>, Vec<usize>, Arc<String>, String)>,
     /// Pre-built signatures for pending functions (for type checking)
     pending_fn_signatures: HashMap<String, nostos_types::FunctionType>,
+    /// Cached parsed BUILTINS signatures to avoid re-parsing 399 entries per function.
+    /// Each entry is (name, signature_str, parsed_FunctionType).
+    cached_builtin_signatures: Vec<(&'static str, &'static str, nostos_types::FunctionType)>,
 
     // Current source context
     current_source: Option<Arc<String>>,
@@ -1749,6 +1917,7 @@ impl Compiler {
             line_starts: vec![0],
             pending_functions: Vec::new(),
             pending_fn_signatures: HashMap::new(),
+            cached_builtin_signatures: Vec::new(),
             current_source: None,
             current_source_name: None,
             type_defs: HashMap::new(),
@@ -1795,6 +1964,9 @@ impl Compiler {
 
         // Register builtin types for autocomplete
         this.register_builtin_types();
+
+        // Pre-parse all BUILTINS signatures (avoids re-parsing per function)
+        this.ensure_builtin_cache();
 
         this
     }
@@ -2318,7 +2490,7 @@ impl Compiler {
             "Selenium", "Tcp",
         ].iter().map(|s| s.to_string()).collect();
 
-        Self {
+        let mut this = Self {
             chunk: Chunk::new(),
             locals: HashMap::new(),
             next_reg: 0,
@@ -2358,6 +2530,7 @@ impl Compiler {
             line_starts,
             pending_functions: Vec::new(),
             pending_fn_signatures: HashMap::new(),
+            cached_builtin_signatures: Vec::new(),
             current_source: Some(Arc::new(source.to_string())),
             current_source_name: Some("unknown".to_string()),
             type_defs: HashMap::new(),
@@ -2400,7 +2573,12 @@ impl Compiler {
             trait_method_ufcs_signatures: HashMap::new(),
             generated_items: Vec::new(),
             gensym_counter: std::cell::Cell::new(0),
-        }
+        };
+
+        // Pre-parse all BUILTINS signatures (avoids re-parsing per function)
+        this.ensure_builtin_cache();
+
+        this
     }
 
     /// Look up the inferred type for an expression by its span.
@@ -19650,29 +19828,21 @@ impl Compiler {
     }
 
     /// Check if a Type is a List type.
-    /// Part of type system improvements - will be used when refactoring string patterns.
-    #[allow(dead_code)]
     fn is_list_type(&self, ty: &nostos_types::Type) -> bool {
         matches!(ty, nostos_types::Type::List(_))
     }
 
     /// Check if a Type is a Map type.
-    /// Part of type system improvements - will be used when refactoring string patterns.
-    #[allow(dead_code)]
     fn is_map_type(&self, ty: &nostos_types::Type) -> bool {
         matches!(ty, nostos_types::Type::Map(_, _))
     }
 
     /// Check if a Type is a Set type.
-    /// Part of type system improvements - will be used when refactoring string patterns.
-    #[allow(dead_code)]
     fn is_set_type(&self, ty: &nostos_types::Type) -> bool {
         matches!(ty, nostos_types::Type::Set(_))
     }
 
     /// Check if a Type is a function type.
-    /// Part of type system improvements - will be used when refactoring string patterns.
-    #[allow(dead_code)]
     fn is_function_type(&self, ty: &nostos_types::Type) -> bool {
         matches!(ty, nostos_types::Type::Function(_))
     }
@@ -19702,6 +19872,35 @@ impl Compiler {
             }
         }
         None
+    }
+
+    /// Get unified type info for an expression: tries structural Type first, falls back to string.
+    /// This is the preferred way to query expression types when you need to dispatch on the
+    /// type category (Map, List, Set, Option, Result, etc.).
+    fn expr_type_info(&self, expr: &Expr) -> ExprTypeInfo {
+        // Try structural type first (most reliable)
+        if let Some(ty) = self.expr_type(expr) {
+            return ExprTypeInfo::Resolved(ty.clone());
+        }
+        // Fall back to string-based type name
+        if let Some(name) = self.expr_type_name(expr) {
+            return ExprTypeInfo::NameOnly(name);
+        }
+        ExprTypeInfo::Unknown
+    }
+
+    /// Ensure the BUILTINS signature cache is populated.
+    /// Parses all 399 BUILTINS signatures once and caches the results.
+    fn ensure_builtin_cache(&mut self) {
+        if !self.cached_builtin_signatures.is_empty() {
+            return;
+        }
+        self.cached_builtin_signatures = BUILTINS.iter()
+            .filter_map(|b| {
+                self.parse_signature_string(b.signature)
+                    .map(|ft| (b.name, b.signature, ft))
+            })
+            .collect();
     }
 
     /// Convert a TypeExpr to a concrete type name, or None if it's a type parameter.
@@ -24394,18 +24593,14 @@ impl Compiler {
         // Create a fresh type environment for inference
         let mut env = nostos_types::standard_env();
 
-        // Register ALL builtins from BUILTINS array
+        // Register ALL builtins from cached parsed signatures
         // Don't override functions that are already in standard_env (like println, print, show)
         // because those have manually crafted type params
-        for builtin in BUILTINS {
-            // Skip if already registered in standard_env
-            if env.functions.contains_key(builtin.name) {
+        for &(name, _sig, ref func_type) in &self.cached_builtin_signatures {
+            if env.functions.contains_key(name) {
                 continue;
             }
-            // Parse the builtin's signature (which may include trait constraints)
-            if let Some(func_type) = self.parse_signature_string(builtin.signature) {
-                env.insert_function(builtin.name.to_string(), func_type);
-            }
+            env.insert_function(name.to_string(), func_type.clone());
         }
 
         // Register known types from the compiler context
@@ -24655,39 +24850,37 @@ impl Compiler {
             }
         }
 
-        // Register built-in functions from BUILTINS for type inference
+        // Register built-in functions from cached parsed signatures for type inference
         // This allows functions calling Panel.*, String.*, etc. to have proper return types
-        for builtin in BUILTINS {
-            if let Some(fn_type) = self.parse_signature_string(builtin.signature) {
-                // Create a typed suffix for overload resolution (e.g., "length/String" or "length/List")
-                let type_suffix = fn_type.params.iter()
-                    .map(|p| self.format_type_for_suffix(p))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let qualified_name = format!("{}/{}", builtin.name, type_suffix);
+        for &(name, sig, ref fn_type) in &self.cached_builtin_signatures {
+            // Create a typed suffix for overload resolution (e.g., "length/String" or "length/List")
+            let type_suffix = fn_type.params.iter()
+                .map(|p| self.format_type_for_suffix(p))
+                .collect::<Vec<_>>()
+                .join(",");
+            let qualified_name = format!("{}/{}", name, type_suffix);
 
-                // Always register with type suffix (allows multiple overloads)
-                env.insert_function(qualified_name, fn_type.clone());
+            // Always register with type suffix (allows multiple overloads)
+            env.insert_function(qualified_name, fn_type.clone());
 
-                // Also register under bare name if not already present
-                if !env.functions.contains_key(builtin.name) {
-                    env.insert_function(builtin.name.to_string(), fn_type.clone());
-                }
+            // Also register under bare name if not already present
+            if !env.functions.contains_key(name) {
+                env.insert_function(name.to_string(), fn_type.clone());
+            }
 
-                // Register list methods with "List." prefix for UFCS type inference.
-                // Without this, phase2 of check_pending_method_calls only finds
-                // String.take (registered as a named BUILTIN) but not List.take,
-                // causing it to incorrectly unify generic receivers with String.
-                if builtin.signature.starts_with("[a]") && !builtin.name.contains('.') {
-                    let has_single_type_param = !builtin.signature.contains(" b")
-                        && !builtin.signature.contains("(b");
-                    let is_numeric_only = matches!(builtin.name, "sum" | "product");
-                    let has_callback_param = builtin.signature.contains("(a ->");
-                    if has_single_type_param && !is_numeric_only && !has_callback_param {
-                        let list_qualified = format!("List.{}", builtin.name);
-                        if !env.functions.contains_key(&list_qualified) {
-                            env.insert_function(list_qualified, fn_type);
-                        }
+            // Register list methods with "List." prefix for UFCS type inference.
+            // Without this, phase2 of check_pending_method_calls only finds
+            // String.take (registered as a named BUILTIN) but not List.take,
+            // causing it to incorrectly unify generic receivers with String.
+            if sig.starts_with("[a]") && !name.contains('.') {
+                let has_single_type_param = !sig.contains(" b")
+                    && !sig.contains("(b");
+                let is_numeric_only = matches!(name, "sum" | "product");
+                let has_callback_param = sig.contains("(a ->");
+                if has_single_type_param && !is_numeric_only && !has_callback_param {
+                    let list_qualified = format!("List.{}", name);
+                    if !env.functions.contains_key(&list_qualified) {
+                        env.insert_function(list_qualified, fn_type.clone());
                     }
                 }
             }
@@ -25575,18 +25768,14 @@ impl Compiler {
         // Create a fresh type environment for inference
         let mut env = nostos_types::standard_env();
 
-        // Register ALL builtins from BUILTINS array
+        // Register ALL builtins from cached parsed signatures
         // Don't override functions that are already in standard_env (like println, print, show)
         // because those have manually crafted type params
-        for builtin in BUILTINS {
-            // Skip if already registered in standard_env
-            if env.functions.contains_key(builtin.name) {
+        for &(name, _sig, ref func_type) in &self.cached_builtin_signatures {
+            if env.functions.contains_key(name) {
                 continue;
             }
-            // Parse the builtin's signature (which may include trait constraints)
-            if let Some(func_type) = self.parse_signature_string(builtin.signature) {
-                env.insert_function(builtin.name.to_string(), func_type);
-            }
+            env.insert_function(name.to_string(), func_type.clone());
         }
 
         // Register known types from the compiler context
@@ -25737,49 +25926,47 @@ impl Compiler {
             }
         }
 
-        // Register built-in functions from BUILTINS for type inference
+        // Register built-in functions from cached parsed signatures for type inference
         // This enables UFCS type checking (e.g., String.contains expects String -> Bool)
-        for builtin in BUILTINS {
-            if let Some(fn_type) = self.parse_signature_string(builtin.signature) {
-                // Create a typed suffix for overload resolution (e.g., "length/String" or "length/List")
-                let type_suffix = fn_type.params.iter()
-                    .map(|p| self.format_type_for_suffix(p))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let qualified_name = format!("{}/{}", builtin.name, type_suffix);
+        for &(name, sig, ref fn_type) in &self.cached_builtin_signatures {
+            // Create a typed suffix for overload resolution (e.g., "length/String" or "length/List")
+            let type_suffix = fn_type.params.iter()
+                .map(|p| self.format_type_for_suffix(p))
+                .collect::<Vec<_>>()
+                .join(",");
+            let qualified_name = format!("{}/{}", name, type_suffix);
 
-                // Always register with type suffix (allows multiple overloads)
-                env.insert_function(qualified_name, fn_type.clone());
+            // Always register with type suffix (allows multiple overloads)
+            env.insert_function(qualified_name, fn_type.clone());
 
-                // Also register under bare name if not already present
-                if !env.functions.contains_key(builtin.name) {
-                    env.insert_function(builtin.name.to_string(), fn_type.clone());
-                }
+            // Also register under bare name if not already present
+            if !env.functions.contains_key(name) {
+                env.insert_function(name.to_string(), fn_type.clone());
+            }
 
-                // Also register single-param list methods with "List." prefix for UFCS type inference
-                // This allows `list.get(0)` to properly propagate element types
-                // Note: Multi-param methods (map, fold, etc.) use deferred resolution in check_pending_method_calls
-                // because eager registration breaks constraint solving order for higher-order functions
-                if builtin.signature.starts_with("[a]") && !builtin.name.contains('.') {
-                    // Only register methods with pattern "[a] -> ... -> a" (returns element type)
-                    // Skip methods like map "[a] -> (a -> b) -> [b]" which have multiple type params
-                    let has_single_type_param = !builtin.signature.contains(" b")
-                        && !builtin.signature.contains("(b");
-                    // Exclude sum/product: their BUILTINS signatures are [a] -> a (too generic),
-                    // but the real stdlib types are List[Int] -> Int. Registering the generic type
-                    // here would bypass the Num check in check_pending_method_calls.
-                    let is_numeric_only = matches!(builtin.name, "sum" | "product");
-                    // Exclude methods with callback parameters (e.g., filter, any, all, find).
-                    // These need deferred resolution in check_pending_method_calls because
-                    // eager registration creates ArityMismatch when lambdas use tuple
-                    // destructuring: `pairs.filter((a, b) => ...)` creates a 2-param lambda
-                    // but filter expects `(a) -> Bool` with 1 tuple param.
-                    let has_callback_param = builtin.signature.contains("(a ->");
-                    if has_single_type_param && !is_numeric_only && !has_callback_param {
-                        let qualified_name = format!("List.{}", builtin.name);
-                        if !env.functions.contains_key(&qualified_name) {
-                            env.insert_function(qualified_name, fn_type);
-                        }
+            // Also register single-param list methods with "List." prefix for UFCS type inference
+            // This allows `list.get(0)` to properly propagate element types
+            // Note: Multi-param methods (map, fold, etc.) use deferred resolution in check_pending_method_calls
+            // because eager registration breaks constraint solving order for higher-order functions
+            if sig.starts_with("[a]") && !name.contains('.') {
+                // Only register methods with pattern "[a] -> ... -> a" (returns element type)
+                // Skip methods like map "[a] -> (a -> b) -> [b]" which have multiple type params
+                let has_single_type_param = !sig.contains(" b")
+                    && !sig.contains("(b");
+                // Exclude sum/product: their BUILTINS signatures are [a] -> a (too generic),
+                // but the real stdlib types are List[Int] -> Int. Registering the generic type
+                // here would bypass the Num check in check_pending_method_calls.
+                let is_numeric_only = matches!(name, "sum" | "product");
+                // Exclude methods with callback parameters (e.g., filter, any, all, find).
+                // These need deferred resolution in check_pending_method_calls because
+                // eager registration creates ArityMismatch when lambdas use tuple
+                // destructuring: `pairs.filter((a, b) => ...)` creates a 2-param lambda
+                // but filter expects `(a) -> Bool` with 1 tuple param.
+                let has_callback_param = sig.contains("(a ->");
+                if has_single_type_param && !is_numeric_only && !has_callback_param {
+                    let qualified_name = format!("List.{}", name);
+                    if !env.functions.contains_key(&qualified_name) {
+                        env.insert_function(qualified_name, fn_type.clone());
                     }
                 }
             }

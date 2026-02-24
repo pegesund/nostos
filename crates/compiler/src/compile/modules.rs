@@ -273,23 +273,21 @@ impl Compiler {
                 }
             }
 
-            // Register builtins
-            for builtin in BUILTINS {
-                if !env.functions.contains_key(builtin.name) {
-                    if let Some(fn_type) = self.parse_signature_string(builtin.signature) {
-                        env.insert_function(builtin.name.to_string(), fn_type.clone());
+            // Register builtins from cached parsed signatures
+            for &(name, sig, ref fn_type) in &self.cached_builtin_signatures {
+                if !env.functions.contains_key(name) {
+                    env.insert_function(name.to_string(), fn_type.clone());
 
-                        // Register list methods with "List." prefix for UFCS type inference
-                        if builtin.signature.starts_with("[a]") && !builtin.name.contains('.') {
-                            let has_single_type_param = !builtin.signature.contains(" b")
-                                && !builtin.signature.contains("(b");
-                            let is_numeric_only = matches!(builtin.name, "sum" | "product");
-                            let has_callback_param = builtin.signature.contains("(a ->");
-                            if has_single_type_param && !is_numeric_only && !has_callback_param {
-                                let list_qualified = format!("List.{}", builtin.name);
-                                if !env.functions.contains_key(&list_qualified) {
-                                    env.insert_function(list_qualified, fn_type);
-                                }
+                    // Register list methods with "List." prefix for UFCS type inference
+                    if sig.starts_with("[a]") && !name.contains('.') {
+                        let has_single_type_param = !sig.contains(" b")
+                            && !sig.contains("(b");
+                        let is_numeric_only = matches!(name, "sum" | "product");
+                        let has_callback_param = sig.contains("(a ->");
+                        if has_single_type_param && !is_numeric_only && !has_callback_param {
+                            let list_qualified = format!("List.{}", name);
+                            if !env.functions.contains_key(&list_qualified) {
+                                env.insert_function(list_qualified, fn_type.clone());
                             }
                         }
                     }
@@ -467,26 +465,24 @@ impl Compiler {
                 env.insert_function(fn_name.clone(), fn_type.clone());
             }
 
-            // Register builtins
-            for builtin in BUILTINS {
-                if !env.functions.contains_key(builtin.name) {
-                    if let Some(fn_type) = self.parse_signature_string(builtin.signature) {
-                        env.insert_function(builtin.name.to_string(), fn_type.clone());
+            // Register builtins from cached parsed signatures
+            for &(name, sig, ref fn_type) in &self.cached_builtin_signatures {
+                if !env.functions.contains_key(name) {
+                    env.insert_function(name.to_string(), fn_type.clone());
 
-                        // Register list methods with "List." prefix for UFCS type inference.
-                        // Without this, check_pending_method_calls phase2 only finds
-                        // String.take (a named BUILTIN) but not List.take, causing batch
-                        // inference to incorrectly resolve generic receivers to String.
-                        if builtin.signature.starts_with("[a]") && !builtin.name.contains('.') {
-                            let has_single_type_param = !builtin.signature.contains(" b")
-                                && !builtin.signature.contains("(b");
-                            let is_numeric_only = matches!(builtin.name, "sum" | "product");
-                            let has_callback_param = builtin.signature.contains("(a ->");
-                            if has_single_type_param && !is_numeric_only && !has_callback_param {
-                                let list_qualified = format!("List.{}", builtin.name);
-                                if !env.functions.contains_key(&list_qualified) {
-                                    env.insert_function(list_qualified, fn_type);
-                                }
+                    // Register list methods with "List." prefix for UFCS type inference.
+                    // Without this, check_pending_method_calls phase2 only finds
+                    // String.take (a named BUILTIN) but not List.take, causing batch
+                    // inference to incorrectly resolve generic receivers to String.
+                    if sig.starts_with("[a]") && !name.contains('.') {
+                        let has_single_type_param = !sig.contains(" b")
+                            && !sig.contains("(b");
+                        let is_numeric_only = matches!(name, "sum" | "product");
+                        let has_callback_param = sig.contains("(a ->");
+                        if has_single_type_param && !is_numeric_only && !has_callback_param {
+                            let list_qualified = format!("List.{}", name);
+                            if !env.functions.contains_key(&list_qualified) {
+                                env.insert_function(list_qualified, fn_type.clone());
                             }
                         }
                     }
