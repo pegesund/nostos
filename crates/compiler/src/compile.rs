@@ -6364,7 +6364,7 @@ impl Compiler {
                 false
             }
             Expr::FieldAccess(obj, field, _) => {
-                if let Some(obj_type) = self.expr_type_name(obj) {
+                if let Some(obj_type) = self.expr_type_info(obj).display_name() {
                     if let Some(type_info) = self.types.get(&obj_type) {
                         if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
                             for (fname, ftype) in fields {
@@ -6404,7 +6404,7 @@ impl Compiler {
                 None
             }
             Expr::FieldAccess(obj, field, _) => {
-                if let Some(obj_type) = self.expr_type_name(obj) {
+                if let Some(obj_type) = self.expr_type_info(obj).display_name() {
                     if let Some(type_info) = self.types.get(&obj_type) {
                         if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
                             for (fname, ftype) in fields {
@@ -14603,10 +14603,7 @@ impl Compiler {
         // If the left operand has a known custom type that implements the relevant trait,
         // dispatch to the trait method instead of using primitive VM instructions
         if let Some((trait_name, method_name)) = Self::operator_to_trait_method(op) {
-            // Try structural type first, fall back to expr_type_name
-            let left_type = self.expr_type(left)
-                .and_then(|ty| self.get_type_base_name_from_type(ty))
-                .or_else(|| self.expr_type_name(left));
+            let left_type = self.expr_type_info(left).display_name();
             if let Some(left_type) = left_type {
                 // Check if left_type is a type parameter with the appropriate trait bound.
                 // If so, trigger monomorphization - the function will be specialized
@@ -14635,7 +14632,7 @@ impl Compiler {
                         let qualified_method = format!("{}.{}.{}", left_type, actual_trait_name, method_name);
 
                         // Find the actual function with signature
-                        let method_arg_types = vec![Some(left_type.clone()), self.expr_type_name(right)];
+                        let method_arg_types = vec![Some(left_type.clone()), self.expr_type_info(right).display_name()];
                         if let Some(resolved_method) = self.resolve_function_call(&qualified_method, &method_arg_types) {
                             if self.functions.contains_key(&resolved_method) {
                                 // Compile as a function call to the trait method
@@ -14661,13 +14658,11 @@ impl Compiler {
         // Scalar method fallback: if left is a custom type and right is a numeric type,
         // try to dispatch to a scalar function (e.g., vecMulScalar for Vec * Float)
         if let Some(scalar_method) = Self::operator_to_scalar_method(op) {
-            let left_type = self.expr_type(left)
-                .and_then(|ty| self.get_type_base_name_from_type(ty))
-                .or_else(|| self.expr_type_name(left));
+            let left_type = self.expr_type_info(left).display_name();
             if let Some(left_type) = left_type {
                 if !Self::is_primitive_type(&left_type) && self.types.contains_key(&left_type) {
                     // Check if right operand is a numeric type
-                    let right_type = self.expr_type_name(right);
+                    let right_type = self.expr_type_info(right).display_name();
                     let right_is_numeric = right_type.as_ref().map_or(false, |t| {
                         t == "Float" || t == "Int" || t == "Float64" || t == "Int64"
                     }) || self.is_float_expr(right) || self.is_int_expr(right);
@@ -14731,8 +14726,8 @@ impl Compiler {
 
         // Check if either operand is a type parameter or polymorphic (unknown concrete type at compile time)
         let is_type_param = {
-            let lt = self.expr_type_name(left);
-            let rt = self.expr_type_name(right);
+            let lt = self.expr_type_info(left).display_name();
+            let rt = self.expr_type_info(right).display_name();
             let is_polymorphic = |t: &str| t.ends_with("(polymorphic)") || t.ends_with("(type parameter)");
             // If we can't determine the type (None), and the op is a comparison,
             // treat as polymorphic to avoid emitting Int-specific ops that fail on String/Float
