@@ -1,0 +1,11 @@
+# expect: (100, "world")
+# Test: 3-module generic function chain where polymorphic wrapper
+# calls another polymorphic function from a different module.
+# Regression test for batch inference contaminating type variables
+# with Named types (Var(1) → Named("a")) through clause_param_types.
+use mid.*
+main() = {
+  a = wrappedPickFirst(100, 200)
+  b = wrappedPickSecond("hello", "world")
+  (a, b)
+}

@@ -1201,6 +1201,15 @@ impl Compiler {
                                     resolved_ret = ctx.apply_local_subst(clause_ret, &local_subst);
                                 }
                             }
+
+                            // Re-normalize after local resolution: clause_param_types / clause_ret_types
+                            // may contain leaked Named("a") from batch inference, re-contaminating the
+                            // params/ret that were just normalized above. Clean them up again so Phase 3
+                            // sees proper Var types and can convert them to TypeParams.
+                            for p in resolved_params.iter_mut() {
+                                *p = normalize_leaked_type_params(p, &self.types);
+                            }
+                            resolved_ret = normalize_leaked_type_params(&resolved_ret, &self.types);
                         }
                     }
 

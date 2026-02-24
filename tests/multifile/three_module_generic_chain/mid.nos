@@ -1,0 +1,3 @@
+use core.*
+pub wrappedPickFirst(x: a, y: b) = pickFirst(x, y)
+pub wrappedPickSecond(x: a, y: b) = pickSecond(x, y)

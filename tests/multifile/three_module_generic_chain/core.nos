@@ -1,0 +1,2 @@
+pub pickFirst(x: a, y: b) = x
+pub pickSecond(x: a, y: b) = y
