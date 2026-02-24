@@ -6016,7 +6016,7 @@ impl Compiler {
             }
             Expr::FieldAccess(obj, field, _) => {
                 // Check field type from record/tuple definitions
-                if let Some(obj_type) = self.expr_type_name(obj) {
+                if let Some(obj_type) = self.expr_type_info(obj).display_name() {
                     if let Some(type_info) = self.types.get(&obj_type) {
                         if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
                             for (fname, ftype) in fields {
@@ -6064,7 +6064,7 @@ impl Compiler {
             }
             // Field access: look up the field's type from the record definition
             Expr::FieldAccess(obj, field, _) => {
-                if let Some(obj_type) = self.expr_type_name(obj) {
+                if let Some(obj_type) = self.expr_type_info(obj).display_name() {
                     if let Some(type_info) = self.types.get(&obj_type) {
                         if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
                             for (fname, ftype) in fields {
@@ -6235,7 +6235,7 @@ impl Compiler {
             }
             // Field access: look up the field's type from the record definition
             Expr::FieldAccess(obj, field, _) => {
-                if let Some(obj_type) = self.expr_type_name(obj) {
+                if let Some(obj_type) = self.expr_type_info(obj).display_name() {
                     if let Some(type_info) = self.types.get(&obj_type) {
                         if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
                             for (fname, ftype) in fields {
@@ -6312,7 +6312,7 @@ impl Compiler {
             }
             // Field access: look up the field's type
             Expr::FieldAccess(obj, field, _) => {
-                if let Some(obj_type) = self.expr_type_name(obj) {
+                if let Some(obj_type) = self.expr_type_info(obj).display_name() {
                     if let Some(type_info) = self.types.get(&obj_type) {
                         if let TypeInfoKind::Record { fields, .. } = &type_info.kind {
                             for (fname, ftype) in fields {
