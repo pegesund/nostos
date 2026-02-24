@@ -1,0 +1,30 @@
+# expect: [1, 1, 1]
+# Regression test: mutable variable mutation inside a block expression
+# within a closure must persist through the cell.
+# Previously, find_mutations_inside_lambda didn't recurse into the value
+# expression of let bindings, so mutations inside block expressions like
+# r = { count = count + 1; -1 } were not detected, and count was not
+# properly cell-boxed.
+main() = {
+  var count1 = 0
+  var count2 = 0
+  var count3 = 0
+
+  # Direct mutation (always worked)
+  [0].each(_ => { count1 = count1 + 1 })
+
+  # Block expression mutation (was broken)
+  [0].each(_ => {
+    r = {
+      count2 = count2 + 1
+      -1
+    }
+  })
+
+  # Try/catch mutation (was also broken)
+  [0].each(_ => {
+    r = try { 1 / 0 } catch { _ -> { count3 = count3 + 1; -1 } }
+  })
+
+  [count1, count2, count3]
+}

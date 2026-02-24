@@ -28718,8 +28718,9 @@ fn find_mutations_inside_lambda(
                                 mutated.insert(name);
                             }
                         }
-                        // Recurse into the value expression for nested lambdas
-                        find_lambda_mutations_in_expr(&binding.value, mutable_vars, mutated);
+                        // Recurse into the value expression for mutations inside
+                        // nested block expressions (e.g., r = { count = count + 1; -1 })
+                        find_mutations_inside_lambda(&binding.value, mutable_vars, mutated);
                     }
                     Stmt::Assign(AssignTarget::Var(ident), val, _) => {
                         if mutable_vars.contains(&ident.node) {
