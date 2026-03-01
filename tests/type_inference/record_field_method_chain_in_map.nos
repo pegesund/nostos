@@ -1,0 +1,10 @@
+# expect: [1.5, 2.5, 3.5]
+# Regression test for issue #15: record field method chain in map lambda
+# The deferred method resolver incorrectly inferred String as receiver type
+# for toFloat when a generic builtin (toFloat: a -> Float) also existed.
+type Cell = { value: Int }
+
+main() = {
+  cells = [Cell(value: 1), Cell(value: 2), Cell(value: 3)]
+  cells.map(c => c.value.toFloat() + 0.5)
+}

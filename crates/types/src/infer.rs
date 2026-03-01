@@ -4884,6 +4884,18 @@ impl<'a> InferCtx<'a> {
                             }
                         }
                     }
+                    // Before committing to the unique candidate, check if there's a
+                    // generic (unqualified) version of this method. Generic builtins
+                    // like `toFloat: a -> Float` work on ANY type, so the existence
+                    // of `String.toFloat` doesn't mean the receiver must be String.
+                    if !multiple && candidate_type.is_some() {
+                        if let Some(generic_fn) = self.env.functions.get(&call.method_name) {
+                            if generic_fn.params.first().is_some_and(|p| matches!(p, Type::Var(_) | Type::TypeParam(_))) {
+                                // Generic version exists — don't infer receiver type
+                                candidate_type = None;
+                            }
+                        }
+                    }
                     // Before committing to the unique candidate, check if any
                     // user-defined record type has a function-typed field with the
                     // same name as the method. If so, the method call could be a
