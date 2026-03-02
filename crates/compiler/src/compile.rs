@@ -9842,7 +9842,26 @@ impl Compiler {
                 }
                 // Compile cons case body
                 let cons_body_line = self.span_line(def.clauses[1].body.span());
-                let cons_result = self.compile_expr_tail(&def.clauses[1].body, true)?;
+                let cons_result = match self.compile_expr_tail(&def.clauses[1].body, true) {
+                    Ok(reg) => reg,
+                    Err(CompileError::UnresolvedTraitMethod { method, span }) => {
+                        if !self.current_fn_type_params.is_empty() || has_generic_hm_signature {
+                            self.polymorphic_fns.insert(name.clone());
+                            self.chunk = saved_chunk;
+                            self.locals = saved_locals;
+                            self.local_types = saved_local_types;
+                            self.next_reg = saved_next_reg;
+                            self.current_function_name = saved_function_name;
+                            self.param_types = saved_param_types;
+                            self.current_fn_type_params = saved_fn_type_params;
+                            self.current_fn_generic_hm = saved_fn_generic_hm;
+                            return Ok(());
+                        } else {
+                            return Err(CompileError::UnresolvedTraitMethod { method, span });
+                        }
+                    }
+                    Err(e) => return Err(e),
+                };
                 for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
                     self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
                 }
@@ -9861,7 +9880,26 @@ impl Compiler {
                 }
                 // Compile empty case body
                 let empty_body_line = self.span_line(def.clauses[0].body.span());
-                let empty_result = self.compile_expr_tail(&def.clauses[0].body, true)?;
+                let empty_result = match self.compile_expr_tail(&def.clauses[0].body, true) {
+                    Ok(reg) => reg,
+                    Err(CompileError::UnresolvedTraitMethod { method, span }) => {
+                        if !self.current_fn_type_params.is_empty() || has_generic_hm_signature {
+                            self.polymorphic_fns.insert(name.clone());
+                            self.chunk = saved_chunk;
+                            self.locals = saved_locals;
+                            self.local_types = saved_local_types;
+                            self.next_reg = saved_next_reg;
+                            self.current_function_name = saved_function_name;
+                            self.param_types = saved_param_types;
+                            self.current_fn_type_params = saved_fn_type_params;
+                            self.current_fn_generic_hm = saved_fn_generic_hm;
+                            return Ok(());
+                        } else {
+                            return Err(CompileError::UnresolvedTraitMethod { method, span });
+                        }
+                    }
+                    Err(e) => return Err(e),
+                };
                 for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
                     self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
                 }
@@ -13795,13 +13833,14 @@ impl Compiler {
                         }
                     } else if (type_name.starts_with('?') || self.is_current_type_param(&type_name)
                                || type_name.contains("(polymorphic)") || type_name.contains("(type parameter)"))
-                               && (self.is_known_trait_method(&method.node) || Self::is_ambiguous_builtin_method(&method.node))
+                               && self.is_known_trait_method(&method.node)
+                               && !Self::is_ambiguous_builtin_method(&method.node)
                                && !Self::is_generic_builtin_method(&method.node) {
                         // Type is a type variable (from HM inference), a type parameter,
                         // or an unresolved polymorphic/type-parameter type from expr_type_name.
-                        // The method is a trait method or an ambiguous builtin (exists on
-                        // multiple types like get/contains/isEmpty). This needs monomorphization
-                        // to dispatch to the correct type-specific implementation.
+                        // The method is a trait method that needs monomorphization.
+                        // Ambiguous builtins (contains, get, etc.) fall through to UFCS
+                        // where they can be resolved via stdlib.
                         return Err(CompileError::UnresolvedTraitMethod {
                             method: method.node.clone(),
                             span: method.span,
@@ -13878,10 +13917,11 @@ impl Compiler {
                         return Ok(dst);
                     }
 
-                    // Type unknown - check if this is a trait method or ambiguous builtin
-                    // that needs monomorphization. Exclude generic builtins (show, hash, copy)
-                    // that work on any type.
-                    if (self.is_known_trait_method(&method.node) || Self::is_ambiguous_builtin_method(&method.node))
+                    // Type unknown - check if this is a trait method that needs
+                    // monomorphization. Ambiguous builtins (contains, get, etc.) fall through
+                    // to UFCS where they can be resolved via stdlib.
+                    if self.is_known_trait_method(&method.node)
+                        && !Self::is_ambiguous_builtin_method(&method.node)
                         && !Self::is_generic_builtin_method(&method.node) {
                         return Err(CompileError::UnresolvedTraitMethod {
                             method: method.node.clone(),
@@ -14072,7 +14112,15 @@ impl Compiler {
                                     .map(|tn| tn.contains("(polymorphic)") || tn.contains("(type parameter)"))
                                     .unwrap_or(true) // truly unknown type
                             };
-                            if receiver_unresolved {
+                            // Don't defer if receiver is a captured variable in a lambda —
+                            // captured variables have concrete types from the enclosing scope,
+                            // HM inference just didn't propagate the type into the lambda.
+                            let is_captured_var = if let Expr::Var(ident) = obj.as_ref() {
+                                self.capture_indices.contains_key(&ident.node)
+                            } else {
+                                false
+                            };
+                            if receiver_unresolved && !is_captured_var {
                                 return Err(CompileError::UnresolvedTraitMethod {
                                     method: method.node.clone(),
                                     span: method.span,

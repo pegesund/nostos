@@ -1,0 +1,5 @@
+# expect: true
+# Regression test: .contains() called directly on a parameter in a list-pattern-matched function
+check([], _) = false
+check([_ | _], names) = names.contains("a")
+main() = check([1], ["a", "b"])

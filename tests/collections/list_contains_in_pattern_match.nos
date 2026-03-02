@@ -1,0 +1,8 @@
+# expect: ["b", "c"]
+# Regression test: .contains() inside a lambda in a function with list pattern matching
+filter_out([], _, acc) = acc
+filter_out([r | rest], names, acc) = {
+    filtered = r.filter(x => !names.contains(x))
+    filter_out(rest, names, acc ++ filtered)
+}
+main() = filter_out([["a", "b"], ["c"]], ["a"], [])
