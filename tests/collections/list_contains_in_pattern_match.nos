@@ -1,0 +1,9 @@
+# expect: ["b", "c"]
+# Regression test: .contains() inside a lambda in a function with list pattern matching
+# Previously failed with "cannot resolve trait method `contains` without type information"
+filter_out([], _, acc) = acc
+filter_out([r | rest], names, acc) = {
+    filtered = r.filter(x => !names.contains(x))
+    filter_out(rest, names, acc ++ filtered)
+}
+main() = filter_out([["a", "b"], ["c"]], ["a"], [])

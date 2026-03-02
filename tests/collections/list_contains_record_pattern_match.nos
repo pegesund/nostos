@@ -1,0 +1,15 @@
+# expect: ["Bob"]
+# Regression test: .contains() in a lambda inside a list-pattern-matched function
+# with record types (closer to real-world usage)
+type Item = { opponents: List[String] }
+
+calc_opp_acc([], _, acc) = acc
+calc_opp_acc([r | rest], own_names, acc) = {
+    opps = r.opponents.filter(opp => !own_names.contains(opp))
+    calc_opp_acc(rest, own_names, acc ++ opps)
+}
+
+main() = {
+    items = [Item(["Alice", "Bob"])]
+    calc_opp_acc(items, ["Alice"], [])
+}
