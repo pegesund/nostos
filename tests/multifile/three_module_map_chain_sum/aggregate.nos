@@ -1,0 +1,2 @@
+use transform.doubled
+pub doubledSum(vals) = doubled(vals).map(v => v.n).sum()

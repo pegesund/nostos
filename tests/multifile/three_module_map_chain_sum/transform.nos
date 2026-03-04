@@ -1,0 +1,2 @@
+use types.Val
+pub doubled(vals) = vals.map(v => Val(n: v.n * 2))

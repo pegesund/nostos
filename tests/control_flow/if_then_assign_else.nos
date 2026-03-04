@@ -1,0 +1,8 @@
+# expect: 3
+# Regression: `if cond then x = expr else ()` failed to parse
+# The parser split it as `(if cond then x) = expr` leaving `else ()` unconsumed
+main() = {
+  var cnt = 0
+  [1, 2, 3].each(n => { if n > 1 then cnt = cnt + 1 else () })
+  cnt + 1
+}

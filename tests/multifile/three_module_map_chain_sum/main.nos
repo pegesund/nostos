@@ -1,0 +1,7 @@
+# expect: 30
+# Regression: 3-module chain with .map().sum() on generic wrapper result
+# caused double List wrapping (List[List[Val]] instead of List[Val])
+# due to HasMethod PendingMethodCall forcing receiver to List via heuristic
+use types.Val
+use aggregate.doubledSum
+main() = doubledSum([Val(n: 5), Val(n: 10)])

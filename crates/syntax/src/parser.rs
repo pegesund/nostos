@@ -817,10 +817,24 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         // Then if followed by `=`, try to convert to pattern for let binding
         // or to an assignment target (for arr[i] = x, record.field = x)
         let expr_or_binding = expr.clone()
-            .then(just(Token::Eq).ignore_then(expr.clone()).or_not())
-            .map_with_span(|(lhs, maybe_rhs), span| {
-                match maybe_rhs {
-                    Some(rhs) => {
+            .then(
+                just(Token::Eq)
+                    .ignore_then(expr.clone())
+                    .then(
+                        // Optionally consume `else expr` after assignment.
+                        // This handles `if cond then VAR = expr else body` where
+                        // the parser split it as `(if cond then VAR) = expr else body`.
+                        skip_newlines()
+                            .ignore_then(just(Token::Else))
+                            .ignore_then(skip_newlines())
+                            .ignore_then(expr.clone())
+                            .or_not()
+                    )
+                    .or_not()
+            )
+            .map_with_span(|(lhs, maybe_rhs_else), span| {
+                match maybe_rhs_else {
+                    Some((rhs, maybe_else)) => {
                         // Have `=`, first try to convert lhs to pattern (for let binding)
                         if let Some(pat) = expr_to_pattern(lhs.clone()) {
                             Stmt::Let(Binding {
@@ -882,9 +896,13 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                                         if let Some(stmt) = assign_stmt {
                                             let block_span = Span::new(get_span(then_branch.as_ref()).start, get_span(&rhs).end);
                                             let new_then = Expr::Block(vec![stmt], block_span);
-                                            // The else branch was () (from no-else desugaring),
-                                            // which is correct: if cond then (assign) else ()
-                                            Stmt::Expr(Expr::If(cond, Box::new(new_then), else_branch, if_span))
+                                            // Use explicit else branch if consumed, otherwise use
+                                            // the original (default () from no-else desugaring).
+                                            let final_else = match maybe_else {
+                                                Some(e) => Box::new(e),
+                                                None => else_branch,
+                                            };
+                                            Stmt::Expr(Expr::If(cond, Box::new(new_then), final_else, if_span))
                                         } else {
                                             // then-branch is not an assignable expression
                                             Stmt::Expr(Expr::If(cond, then_branch, else_branch, if_span))
