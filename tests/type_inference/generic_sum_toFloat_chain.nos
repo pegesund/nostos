@@ -1,0 +1,12 @@
+# expect: [10, 20, 30, 40]
+# Tests that .sum().toFloat() works in generic functions
+# where .sum() returns a type parameter `a` (Num bounded)
+normalize(xs) = {
+    total = xs.sum().toFloat()
+    xs.map(x => x.toFloat() / total)
+}
+main() = {
+    data = [10, 20, 30, 40]
+    normalized = normalize(data)
+    normalized.map(x => (x * 100.0).toInt())
+}

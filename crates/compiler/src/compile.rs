@@ -14203,6 +14203,12 @@ impl Compiler {
                         // Also check current_type_bindings keys (type params being substituted)
                         let is_type_param = is_type_param || (!is_polymorphic && self.current_type_bindings.contains_key(&receiver_type));
 
+                        // Also detect HM-inferred type parameters (single lowercase letters like "a", "b")
+                        // from generic functions where the type params aren't explicitly declared
+                        let is_type_param = is_type_param || (!is_polymorphic
+                            && receiver_type.len() == 1
+                            && receiver_type.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false));
+
                         // If receiver type is "unknown", we can't determine whether the method
                         // exists or not. Treat as unresolved trait method and defer to
                         // monomorphization where concrete types are available.
@@ -14218,13 +14224,35 @@ impl Compiler {
                         if is_polymorphic || is_type_param || is_unknown_in_generic {
                             if let Some(native_name) = Self::find_unique_builtin_method(&method.node) {
                                 // For methods with both String-specific and generic numeric
-                                // versions: in polymorphic/generic contexts, skip String
-                                // dispatch and fall through to monomorphization.
+                                // versions: in generic contexts where the receiver could be
+                                // ANY type, skip String dispatch and fall through to
+                                // monomorphization. But only when the calling function is
+                                // itself generic — if the caller is concrete (like main()),
+                                // the polymorphic call will be monomorphized at this level,
+                                // and we can dispatch to the native builtin directly.
+                                let caller_is_generic = self.current_fn_generic_hm
+                                    || !self.current_fn_type_params.is_empty();
                                 if Self::has_generic_builtin_version(&method.node) {
-                                    return Err(CompileError::UnresolvedTraitMethod {
-                                        method: name.clone(),
-                                        span,
-                                    });
+                                    if caller_is_generic {
+                                        // In generic functions, defer to monomorphization
+                                        // so the correct type-specific dispatch happens.
+                                        return Err(CompileError::UnresolvedTraitMethod {
+                                            method: name.clone(),
+                                            span,
+                                        });
+                                    }
+                                    // In non-generic callers, dispatch to the generic
+                                    // version (e.g., "toInt" not "String.toInt") which
+                                    // handles Int, Float, AND String at runtime.
+                                    let obj_reg = self.compile_expr_tail(obj, false)?;
+                                    let mut arg_regs = vec![obj_reg];
+                                    for arg in args {
+                                        let reg = self.compile_expr_tail(Self::call_arg_expr(arg), false)?;
+                                        arg_regs.push(reg);
+                                    }
+                                    let dst = self.alloc_reg();
+                                    self.emit_call_native(dst, &method.node, arg_regs.into(), line);
+                                    return Ok(dst);
                                 }
                                 let obj_reg = self.compile_expr_tail(obj, false)?;
                                 let mut arg_regs = vec![obj_reg];
@@ -15587,7 +15615,9 @@ impl Compiler {
                             // Type variables (?N) might resolve to numeric types, so allow them.
                             // Type parameters (single lowercase letters like "a", "b") from generic
                             // functions also might be numeric at monomorphization time.
+                            // Polymorphic return types ("l (polymorphic)") also might be numeric.
                             let is_type_variable = arg_type.starts_with('?')
+                                || arg_type.contains("(polymorphic)")
                                 || (arg_type.len() == 1 && arg_type.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false));
                             let is_numeric = matches!(arg_type.as_str(),
                                 "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
