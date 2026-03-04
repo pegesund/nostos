@@ -14096,7 +14096,31 @@ impl Compiler {
                 let mut all_args: Vec<CallArg> = vec![CallArg::Positional(obj.as_ref().clone())];
                 all_args.extend(args.iter().cloned());
 
-                let func_expr = Expr::Var(method.clone());
+                // For ambiguous methods (reverse, take, drop, etc.), use HM-inferred
+                // receiver type to qualify the method name, preventing wrong dispatch.
+                // Without this, UFCS resolves e.g. `w.reverse()` to `stdlib.list.reverse`
+                // instead of `stdlib.string.reverse` because alphabetical tiebreak.
+                let func_expr = if Self::is_ambiguous_builtin_method(&method.node) {
+                    if let Some(hm_ty) = self.inferred_expr_types.get(&obj.span()) {
+                        let hm_type_name = match hm_ty {
+                            nostos_types::Type::String => Some("String"),
+                            nostos_types::Type::List(_) => Some("List"),
+                            nostos_types::Type::Map(_, _) => Some("Map"),
+                            nostos_types::Type::Set(_) => Some("Set"),
+                            _ => None,
+                        };
+                        if let Some(type_name) = hm_type_name {
+                            let qualified = format!("{}.{}", type_name, method.node);
+                            Expr::Var(Ident { node: qualified, span: method.span })
+                        } else {
+                            Expr::Var(method.clone())
+                        }
+                    } else {
+                        Expr::Var(method.clone())
+                    }
+                } else {
+                    Expr::Var(method.clone())
+                };
                 match self.compile_call(&func_expr, &[], &all_args, is_tail) {
                     Ok(r) => {
                         // For shared methods (map/flatMap) that exist on List, Option, and Result:
@@ -29819,6 +29843,20 @@ impl Compiler {
                         .unwrap_or(&qualified_const)
                         .to_string();
                     self.add_import_checked(local_name, qualified_const, &module_path, use_stmt.span)?;
+                }
+
+                // Also import public top-level bindings from the module
+                let public_bindings: Vec<String> = self.top_level_bindings.iter()
+                    .filter(|(name, (binding, _, _))| {
+                        name.starts_with(&prefix) && binding.visibility == Visibility::Public
+                    })
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                for qualified_binding in public_bindings {
+                    let local_name = qualified_binding.strip_prefix(&prefix)
+                        .unwrap_or(&qualified_binding)
+                        .to_string();
+                    self.add_import_checked(local_name, qualified_binding, &module_path, use_stmt.span)?;
                 }
             }
             UseImports::Named(items) => {

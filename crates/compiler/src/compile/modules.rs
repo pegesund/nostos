@@ -2681,6 +2681,23 @@ impl Compiler {
             })
             .collect();
 
+        // Pre-register top-level pub bindings so that `use module.*` in other modules
+        // can find them. Only register the binding name and metadata; the full compilation
+        // (type checking, inline code gen) happens later in compile_items.
+        for item in &module.items {
+            if let Item::Binding(binding) = item {
+                if let Pattern::Var(ident) = &binding.pattern {
+                    let qualified_name = self.qualify_name(&ident.node);
+                    if !self.top_level_bindings.contains_key(&qualified_name) {
+                        self.top_level_bindings.insert(
+                            qualified_name,
+                            (binding.clone(), self.module_path.clone(), self.imports.clone()),
+                        );
+                    }
+                }
+            }
+        }
+
         // Process use statements (needed for import resolution in trait impls)
         let mut deferred_use_stmts: Vec<&nostos_syntax::ast::UseStmt> = Vec::new();
         for item in &module.items {
