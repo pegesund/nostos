@@ -1,0 +1,2 @@
+use types.Score
+pub total(scores) = scores.map(s => s.points.toFloat()).sum()

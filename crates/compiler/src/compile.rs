@@ -9023,6 +9023,15 @@ impl Compiler {
         }
     }
 
+    /// Check if a method name also exists as a generic builtin (with type variable
+    /// first param). Methods like toFloat/toInt have both a String-specific version
+    /// AND a generic numeric version — when receiver type is unknown, we should NOT
+    /// assume String dispatch because the generic version may be correct.
+    fn has_generic_builtin_version(method_name: &str) -> bool {
+        // These methods exist as generic builtins: toFloat: a -> Float, toInt: a -> Int
+        matches!(method_name, "toFloat" | "toInt")
+    }
+
     /// Check if a method name is a builtin method that exists on multiple types
     /// with TYPE-SPECIFIC signatures, making it ambiguous when the receiver type
     /// is unknown (type variable). When the receiver is a type variable, these
@@ -13905,16 +13914,36 @@ impl Compiler {
                     // When receiver type is unknown (e.g., lambda param), try to find the method
                     // as a builtin on known types (String, Map, Set). If exactly one type has
                     // this method as a builtin, dispatch to it speculatively.
+                    // BUT: skip if HM inference resolved the receiver to a non-String type —
+                    // methods like toFloat/toInt have both String-specific and generic numeric
+                    // versions, so assuming String dispatch would be wrong for numeric receivers.
                     if let Some(native_name) = Self::find_unique_builtin_method(&method.node) {
-                        let obj_reg = self.compile_expr_tail(obj, false)?;
-                        let mut arg_regs = vec![obj_reg];
-                        for arg in args {
-                            let reg = self.compile_expr_tail(Self::call_arg_expr(arg), false)?;
-                            arg_regs.push(reg);
+                        // For methods with both String-specific and generic numeric versions
+                        // (toFloat, toInt): skip the String shortcut in generic functions
+                        // that may be monomorphized. The receiver could be a non-String type
+                        // (e.g., Int from a record field), and the correct dispatch depends
+                        // on the concrete type at the call site.
+                        let skip_for_generic = Self::has_generic_builtin_version(&method.node)
+                            && (self.current_fn_generic_hm || !self.current_fn_type_params.is_empty());
+                        if skip_for_generic {
+                            // In generic context, toFloat/toInt can't be resolved without
+                            // knowing the receiver type. Trigger monomorphization.
+                            return Err(CompileError::UnresolvedTraitMethod {
+                                method: method.node.clone(),
+                                span: method.span,
+                            });
                         }
-                        let dst = self.alloc_reg();
-                        self.emit_call_native(dst, native_name, arg_regs.into(), line);
-                        return Ok(dst);
+                        if true {
+                            let obj_reg = self.compile_expr_tail(obj, false)?;
+                            let mut arg_regs = vec![obj_reg];
+                            for arg in args {
+                                let reg = self.compile_expr_tail(Self::call_arg_expr(arg), false)?;
+                                arg_regs.push(reg);
+                            }
+                            let dst = self.alloc_reg();
+                            self.emit_call_native(dst, native_name, arg_regs.into(), line);
+                            return Ok(dst);
+                        }
                     }
 
                     // Type unknown - check if this is a trait method that needs
@@ -14162,7 +14191,15 @@ impl Compiler {
                         // monomorphization, which may fail if the caller isn't itself polymorphic.
                         if is_polymorphic || is_type_param || is_unknown_in_generic {
                             if let Some(native_name) = Self::find_unique_builtin_method(&method.node) {
-                                // Dispatch directly to the unique builtin
+                                // For methods with both String-specific and generic numeric
+                                // versions: in polymorphic/generic contexts, skip String
+                                // dispatch and fall through to monomorphization.
+                                if Self::has_generic_builtin_version(&method.node) {
+                                    return Err(CompileError::UnresolvedTraitMethod {
+                                        method: name.clone(),
+                                        span,
+                                    });
+                                }
                                 let obj_reg = self.compile_expr_tail(obj, false)?;
                                 let mut arg_regs = vec![obj_reg];
                                 for arg in args {
