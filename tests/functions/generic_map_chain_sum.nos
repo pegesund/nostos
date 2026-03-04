@@ -1,0 +1,8 @@
+# expect: 30
+# Tests generic function chain: map producing records, then map+sum
+# Previously caused "expected Val, found List[Val]" due to double List wrapping
+# in HM inference when HasMethod callback args cross-polluted expression tree vars.
+type Val = { n: Int }
+doubled(vals) = vals.map(v => Val(n: v.n * 2))
+doubledSum(vals) = doubled(vals).map(v => v.n).sum()
+main() = doubledSum([Val(n: 5), Val(n: 10)])

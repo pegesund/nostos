@@ -1028,6 +1028,7 @@ impl<'a> InferCtx<'a> {
                     // Arg types enable checking that callers provide compatible types.
                     // e.g., hasString(xs) = xs.contains("hello") → HasMethod(contains|String) a
                     if let Some(inner) = constraint.strip_prefix("HasMethod(").and_then(|s| s.strip_suffix(')')) {
+
                         // Split on comma for return param (comma is AFTER any |args)
                         let (method_and_args, result_param_opt) = if let Some(comma_pos) = inner.find(',') {
                             (&inner[..comma_pos], Some(inner[comma_pos + 1..].trim()))
@@ -1159,6 +1160,15 @@ impl<'a> InferCtx<'a> {
                 if let Some(orig_id) = original_var_id {
                     if let Some(var_subst_var) = var_subst.get(&orig_id) {
                         if let Type::Var(var_subst_id) = var_subst_var {
+                            // Skip if param_subst already points to the same var as var_subst.
+                            // This means the main type_params loop (above) already processed
+                            // constraints for this var — creating duplicate HasMethod/HasField
+                            // PendingMethodCalls would cause double type wrapping (e.g., List[List[Val]]
+                            // instead of List[Val]) because both get processed independently in
+                            // check_pending_method_calls.
+                            if param_var_id == var_subst_id {
+                                continue;
+                            }
                             for bound in &bounds {
                                 if let Some(inner) = bound.strip_prefix("HasMethod(").and_then(|s| s.strip_suffix(')')) {
                                     // Parse same format as main section: name|arg1|arg2,retparam
@@ -1464,8 +1474,13 @@ impl<'a> InferCtx<'a> {
         if let Some(stripped) = s.strip_prefix('?') {
             if let Ok(id) = stripped.parse::<u32>() {
                 return qvar_map.entry(id).or_insert_with(|| {
+                    // Use post-increment to match fresh_var() convention:
+                    // return current value, then increment. Pre-increment caused
+                    // Var ID collisions where parse_simple_type and fresh_var()
+                    // would return the same ID (e.g., both return Var(29)).
+                    let v = *next_var;
                     *next_var += 1;
-                    Type::Var(*next_var)
+                    Type::Var(v)
                 }).clone();
             }
         }
@@ -3686,7 +3701,6 @@ impl<'a> InferCtx<'a> {
     fn check_pending_method_calls(&mut self) -> Result<(), TypeError> {
         // Take ownership of pending calls to avoid borrow issues
         let pending = std::mem::take(&mut self.pending_method_calls);
-
         // Stable-partition: process calls with already-resolved receiver types first,
         // then unresolved ones. This ensures chained calls (a.zip().map()) process
         // in order, while lambda inner calls (w.reverse() inside map) are deferred.
@@ -3949,11 +3963,25 @@ impl<'a> InferCtx<'a> {
                                     let _ = self.unify_types(&call.arg_types[0], &ft.params[0]);
                                 }
                             }
-                            // Unify non-receiver args to propagate trait bounds.
-                            // ft.params[0] is the method's receiver param.
+                            // Unify non-receiver args to propagate callback types.
+                            // This enables cross-module dispatch: myMapper(xs, f) = xs.map(f)
+                            // where the callback type f must flow through to link element types.
+                            // BUT: skip unification when the resolved arg is a Function type
+                            // whose params contain collection types (List/Set/Map). This avoids
+                            // cross-pollution when HasMethod callback args share vars with the
+                            // expression tree and those vars were wrapped by last-resort List
+                            // inference, causing double-wrapping (e.g., List[List[Val]]).
                             if call.arg_types.len() > 1 && ft.params.len() > 1 {
                                 for (call_arg, method_param) in call.arg_types[1..].iter().zip(ft.params[1..].iter()) {
-                                    let _ = self.unify_types(call_arg, method_param);
+                                    let resolved_arg = self.apply_full_subst(call_arg);
+                                    let has_collection_in_fn_params = if let Type::Function(ref ft_inner) = resolved_arg {
+                                        ft_inner.params.iter().any(|p| matches!(p, Type::List(_) | Type::Set(_) | Type::Map(_, _)))
+                                    } else {
+                                        false
+                                    };
+                                    if !has_collection_in_fn_params {
+                                        let _ = self.unify_types(call_arg, method_param);
+                                    }
                                 }
                             }
                             // Also unify return type to flow result type info
