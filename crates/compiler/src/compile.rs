@@ -14100,11 +14100,13 @@ impl Compiler {
                 // receiver type to qualify the method name, preventing wrong dispatch.
                 // Without this, UFCS resolves e.g. `w.reverse()` to `stdlib.list.reverse`
                 // instead of `stdlib.string.reverse` because alphabetical tiebreak.
+                // Only qualify for types with NATIVE builtins (String, Map, Set) — NOT List,
+                // because List methods are stdlib functions (stdlib.list.X) resolved via UFCS,
+                // not native builtins registered as "List.X".
                 let func_expr = if Self::is_ambiguous_builtin_method(&method.node) {
                     if let Some(hm_ty) = self.inferred_expr_types.get(&obj.span()) {
                         let hm_type_name = match hm_ty {
                             nostos_types::Type::String => Some("String"),
-                            nostos_types::Type::List(_) => Some("List"),
                             nostos_types::Type::Map(_, _) => Some("Map"),
                             nostos_types::Type::Set(_) => Some("Set"),
                             _ => None,
@@ -15582,8 +15584,11 @@ impl Compiler {
                             .unwrap_or(false);
                     if !has_user_defined {
                         if let Some(arg_type) = self.expr_type_info(arg_exprs[0]).display_name() {
-                            // Type variables (?N) might resolve to numeric types, so allow them
-                            let is_type_variable = arg_type.starts_with('?');
+                            // Type variables (?N) might resolve to numeric types, so allow them.
+                            // Type parameters (single lowercase letters like "a", "b") from generic
+                            // functions also might be numeric at monomorphization time.
+                            let is_type_variable = arg_type.starts_with('?')
+                                || (arg_type.len() == 1 && arg_type.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false));
                             let is_numeric = matches!(arg_type.as_str(),
                                 "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
                                 "UInt8" | "UInt16" | "UInt32" | "UInt64" |

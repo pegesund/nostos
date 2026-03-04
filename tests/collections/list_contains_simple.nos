@@ -1,0 +1,5 @@
+# expect: (true, false)
+# Tests basic .contains() on List - previously failed with
+# "no method List.contains/_,_" when HM disambiguation wrongly
+# created "List.contains" instead of letting UFCS resolve to stdlib.
+main() = ([1, 2, 3].contains(2), [1, 2, 3].contains(5))
