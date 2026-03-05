@@ -5005,6 +5005,18 @@ impl<'a> InferCtx<'a> {
                 break;
             }
 
+            // Pick up any newly added pending method calls from instantiate_function.
+            // When processing a user-defined UFCS call (e.g., .double()), instantiate_function
+            // may create new PendingMethodCall entries from the function's HasMethod constraints.
+            // These were pushed to self.pending_method_calls (which was taken at the start).
+            // We must include them in the next iteration so their return types get resolved,
+            // enabling chained UFCS calls (e.g., [1,2,3].double().myReverse()).
+            let newly_added = std::mem::take(&mut self.pending_method_calls);
+            if !newly_added.is_empty() {
+                made_progress = true;
+                deferred.extend(newly_added);
+            }
+
             // Continue iterating with deferred calls
             pending = deferred;
         } // end iteration loop
