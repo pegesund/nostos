@@ -1,0 +1,10 @@
+# expect: [2, 4, 6]
+# Test: xs.map() works on variable bound from Ok(xs) match arm
+# on a generic Result parameter (without explicit type annotation)
+# This tests the fix for strip_unresolved_params_for_mono returning bare base
+# type instead of full parameterized type, which caused xs to lose its List type.
+process(r) = match r {
+  Ok(xs) -> xs.map(x => x * 2)
+  Err(_) -> []
+}
+main() = process(Ok([1, 2, 3]))
