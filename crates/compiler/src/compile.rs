@@ -10156,7 +10156,9 @@ impl Compiler {
                         return Err(CompileError::UnresolvedTraitMethod { method, span });
                     }
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    return Err(e);
+                }
             };
             // Emit MvarUnlock for all held locks (reverse order for proper LIFO unlocking)
             for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
@@ -16579,9 +16581,12 @@ impl Compiler {
                     let arg_expr = Self::call_arg_expr(arg);
                     let ty = self.expr_type_info(arg_expr).display_name();
                     // If expr_type_name returned a polymorphic/non-concrete type for a Call expr,
-                    // check if the called function has a monomorphized variant with a known return type
+                    // check if the called function has a monomorphized variant with a known return type.
+                    // This also covers types with unresolved type variables like "List[Option[?26]]"
+                    // which arise from HM inference not fully resolving nested generic return types.
                     if let Some(ref ty_str) = ty {
-                        if ty_str.contains("(polymorphic)") || ty_str.contains("(type parameter)") {
+                        if ty_str.contains("(polymorphic)") || ty_str.contains("(type parameter)")
+                            || ty_str.contains('?') {
                             if let Expr::Call(inner_func, _, _, _) = arg_expr {
                                 if let Expr::Var(inner_ident) = inner_func.as_ref() {
                                     let inner_base = inner_ident.node.split('/').next().unwrap_or(&inner_ident.node);

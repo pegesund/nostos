@@ -1,0 +1,9 @@
+# expect: [1, 2, 3]
+# Test: chaining two polymorphic functions where HM can't fully resolve
+# the inner function's return type (e.g., List[Option[?N]])
+wrapAll(xs) = xs.map(x => Some(x))
+getValues(xs) = xs.map(x => match x {
+  Some(v) -> v
+  None -> 0
+})
+main() = getValues(wrapAll([1, 2, 3]))

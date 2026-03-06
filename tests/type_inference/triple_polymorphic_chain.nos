@@ -1,0 +1,9 @@
+# expect: [2, 4, 6]
+# Test: three chained polymorphic functions
+wrapAll(xs) = xs.map(x => Some(x))
+getValues(xs) = xs.map(x => match x {
+  Some(v) -> v
+  None -> 0
+})
+doubleAll(xs) = xs.map(x => x * 2)
+main() = doubleAll(getValues(wrapAll([1, 2, 3])))
