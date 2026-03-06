@@ -13728,7 +13728,17 @@ impl Compiler {
                     if let Some(qualified_method) = self.find_trait_method(&type_name, &method.node) {
                         // If type is not concrete (e.g., type parameter T), trigger
                         // monomorphization instead of emitting call to placeholder.
-                        if !self.is_type_concrete(&type_name) {
+                        // For parameterized types like Either2[String, ?X], check only
+                        // the base type name (Either2) — unresolved type args from
+                        // partial constructor application (e.g., Left2 only constrains
+                        // first param) shouldn't block trait dispatch since UFCS
+                        // signatures use generalized fresh type vars.
+                        let base_type = if let Some(bracket_pos) = type_name.find('[') {
+                            &type_name[..bracket_pos]
+                        } else {
+                            &type_name
+                        };
+                        if !self.is_type_concrete(base_type) {
                             return Err(CompileError::UnresolvedTraitMethod {
                                 method: method.node.clone(),
                                 span: method.span,

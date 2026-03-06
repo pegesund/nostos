@@ -1,0 +1,22 @@
+# expect: "left:hello"
+# Test: trait method dispatch on generic type with partially constrained type args
+# Left2("hello") creates Either2[String, ?X] where ?X is unresolved.
+# The trait impl for Either2[String, Int] should still be callable because
+# the base type (Either2) is concrete and UFCS signatures are generalized.
+type Either2[a, b] = Left2(a) | Right2(b)
+
+trait Describable2
+  desc(self) -> String
+end
+
+Either2[String, Int]: Describable2
+  desc(self) = match self {
+    Left2(s) -> "left:" ++ s
+    Right2(n) -> "right:" ++ n.show()
+  }
+end
+
+main() = {
+  e = Left2("hello")
+  e.desc()
+}
