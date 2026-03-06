@@ -1,0 +1,26 @@
+# expect: 0
+# Tests that local function definitions inside blocks work correctly
+# f(a, b) = body inside a block is desugared to f = (a, b) => body
+
+main() = {
+  # Basic single-param local function
+  inc(n) = n + 1
+  assert_eq(5, inc(4))
+
+  # Two-param local function
+  add(a, b) = a + b
+  assert_eq(15, add(7, 8))
+
+  # Local function capturing outer variable
+  factor = 3
+  scale(x) = x * factor
+  assert_eq(12, scale(4))
+
+  # Multiple local functions
+  double(x) = x * 2
+  isEven(x) = x % 2 == 0
+  assert_eq(12, [1, 2, 3, 4, 5].filter(isEven).map(double).sum())
+
+  # Local function in non-main block
+  0
+}
