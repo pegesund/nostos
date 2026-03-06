@@ -1,0 +1,10 @@
+# expect_error: shadows built-in function 'isEmpty'
+# Test that defining isEmpty in a multi-file module properly errors (builtin shadowing)
+use defs.MyList
+
+pub isEmpty[a](xs: MyList[a]) = match xs {
+  MyEmpty -> true
+  MyCons(h, t) -> false
+}
+
+main() = 0

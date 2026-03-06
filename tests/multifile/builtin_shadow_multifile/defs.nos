@@ -1,0 +1,1 @@
+pub type MyList[a] = MyEmpty | MyCons(a, MyList[a])

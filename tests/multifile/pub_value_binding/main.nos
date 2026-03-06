@@ -1,0 +1,13 @@
+# expect: 0
+use values.pi
+use values.maxCount
+use values.greeting
+use values.doubler
+
+main() = {
+  assert_eq(3.14159, pi)
+  assert_eq(100, maxCount)
+  assert_eq("hello", greeting)
+  assert_eq(10, doubler(5))
+  0
+}

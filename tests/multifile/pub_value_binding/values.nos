@@ -1,0 +1,4 @@
+pub pi = 3.14159
+pub maxCount = 100
+pub greeting = "hello"
+pub doubler = x => x * 2
