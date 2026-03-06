@@ -907,6 +907,40 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                                             // then-branch is not an assignable expression
                                             Stmt::Expr(Expr::If(cond, then_branch, else_branch, if_span))
                                         }
+                                    } else if let Expr::Call(func_expr, type_args, call_args, call_span) = lhs.clone() {
+                                        // Check if this is a local function definition: f(a, b) = body
+                                        // Desugar to: f = (a, b) => body
+                                        if type_args.is_empty() {
+                                            if let Expr::Var(fn_name) = *func_expr {
+                                                // All args must be positional Var patterns (simple param names)
+                                                let params: Option<Vec<Pattern>> = call_args.into_iter().map(|arg| {
+                                                    match arg {
+                                                        CallArg::Positional(Expr::Var(v)) => Some(Pattern::Var(v)),
+                                                        _ => None,
+                                                    }
+                                                }).collect();
+                                                if let Some(param_patterns) = params {
+                                                    let lambda = Expr::Lambda(param_patterns, Box::new(rhs), call_span);
+                                                    Stmt::Let(Binding {
+                                                        visibility: Visibility::Private,
+                                                        mutable: false,
+                                                        pattern: Pattern::Var(fn_name),
+                                                        ty: None,
+                                                        value: lambda,
+                                                        span: Span::default(),
+                                                    })
+                                                } else {
+                                                    Stmt::Expr(lhs)
+                                                }
+                                            } else {
+                                                // LHS can't be a pattern or assignment target - syntax error
+                                                // For now, just treat as expression (will fail later)
+                                                Stmt::Expr(lhs)
+                                            }
+                                        } else {
+                                            // Has type args - not a simple local function
+                                            Stmt::Expr(lhs)
+                                        }
                                     } else {
                                         // LHS can't be a pattern or assignment target - syntax error
                                         // For now, just treat as expression (will fail later)
