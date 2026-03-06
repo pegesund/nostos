@@ -1,5 +1,5 @@
 # Fibonacci with Float64
-# expect: 55
+# expect: 55.0
 
 fib(0.0) = 0.0
 fib(1.0) = 1.0

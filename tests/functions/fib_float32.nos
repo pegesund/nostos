@@ -1,5 +1,5 @@
 # Fibonacci with Float32
-# expect: 55f32
+# expect: 55.0f32
 
 fib(0.0f32) = 0.0f32
 fib(1.0f32) = 1.0f32
