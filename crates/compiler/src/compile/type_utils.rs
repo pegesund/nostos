@@ -227,6 +227,10 @@ impl Compiler {
             "()" | "Unit" => nostos_types::Type::Unit,
             "?" | "_" => nostos_types::Type::Var(u32::MAX), // Unknown/untyped param
             _ => {
+                // "Self" is always a type parameter (from trait definitions)
+                if ty == "Self" {
+                    return nostos_types::Type::TypeParam("Self".to_string());
+                }
                 // Check if this is a type variable (single lowercase letter)
                 // Type variables like 'a', 'b', 'c' are used in polymorphic signatures
                 if ty.len() == 1 && ty.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false) {

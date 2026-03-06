@@ -2292,7 +2292,6 @@ impl<'a> InferCtx<'a> {
                                 deferred_count = 0;
                             } else {
                                 // Fully concrete type that doesn't implement the trait
-
                                 return Err(TypeError::MissingTraitImpl {
                                     ty: resolved.display(),
                                     trait_name,
@@ -2655,7 +2654,6 @@ impl<'a> InferCtx<'a> {
                             && !self.env.definitely_not_implements(&resolved, trait_name) {
                             continue;
                         }
-
                         self.last_error_span = None;
                         let display_ty = if let Type::Named { name, args, .. } = &resolved {
                             if args.iter().any(|a| a.has_any_type_var()) {

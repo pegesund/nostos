@@ -1,0 +1,7 @@
+# expect: 3
+# Test: generic polymorphic function with arithmetic shouldn't produce
+# "Self does not implement Num" error. The "Self" type from trait
+# definitions must be TypeParam, not Named, so it doesn't leak into
+# constraint solving as a concrete type that fails trait checks.
+add(a, b) = a + b
+main() = add(1, 2)
