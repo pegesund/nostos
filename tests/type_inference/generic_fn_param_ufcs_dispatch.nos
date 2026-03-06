@@ -1,0 +1,6 @@
+# expect: Ok([42])
+# Generic function parameter UFCS dispatch:
+# When f is a generic function param, f(x).map() should dispatch
+# based on the return type (Result.map, not List.map)
+wrap(f, x) = f(x).map(v => [v])
+main() = wrap(x => Ok(x), 42)

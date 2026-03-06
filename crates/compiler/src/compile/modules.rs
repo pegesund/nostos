@@ -2066,6 +2066,13 @@ impl Compiler {
                 continue;
             }
 
+            // Skip monomorphized variants (contain $) - they're derived from
+            // already-validated generic functions; HM inference can produce false
+            // positives on specialized function types.
+            if fn_name.contains('$') {
+                continue;
+            }
+
             // Set module_path from function name for correct type resolution
             let fn_base = fn_name.split('/').next().unwrap_or(fn_name);
             let module_path: Vec<String> = fn_base.split('.')
@@ -2115,6 +2122,24 @@ impl Compiler {
         {
             let mut reported_fns: HashSet<String> = HashSet::new();
             for (fn_name, type_err) in std::mem::take(&mut self.hm_inference_errors) {
+                // Skip errors where top-level types are unresolved (noise from batch inference).
+                // But keep errors where top-level constructors differ (e.g., List vs Function)
+                // even if inner types have unresolved vars.
+                let suppress = match &type_err {
+                    nostos_types::TypeError::StructuralMismatch(t1, t2) |
+                    nostos_types::TypeError::UnificationFailed(t1, t2) => {
+                        fn is_top_level_unresolved(ty: &nostos_types::Type) -> bool {
+                            match ty {
+                                nostos_types::Type::Var(_) | nostos_types::Type::TypeParam(_) => true,
+                                nostos_types::Type::Named { name, .. } => name.starts_with('?'),
+                                _ => false,
+                            }
+                        }
+                        is_top_level_unresolved(t1) || is_top_level_unresolved(t2)
+                    }
+                    _ => type_err.should_suppress(),
+                };
+                if suppress { continue; }
                 let base_name = fn_name.split('/').next().unwrap_or(&fn_name).to_string();
                 if !reported_fns.insert(base_name.clone()) { continue; }
                 use super::clean_type_vars;

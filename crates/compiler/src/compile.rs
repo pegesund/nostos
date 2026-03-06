@@ -14146,19 +14146,39 @@ impl Compiler {
                         // UFCS resolved to stdlib.list.X, but if HM inference left the receiver
                         // as an unresolved Var, the receiver might be Option/Result, not List.
                         // In that case, defer to monomorphization where concrete types are known.
+                        // Also check monomorphized functions ($) since they may still have
+                        // unresolved types from incomplete type propagation.
+                        let is_monomorphized_fn = self.current_function_name.as_ref()
+                            .map(|n| n.contains('$')).unwrap_or(false);
                         if matches!(method.node.as_str(), "map" | "flatMap")
-                            && (self.current_fn_generic_hm || !self.current_fn_type_params.is_empty())
+                            && (self.current_fn_generic_hm || !self.current_fn_type_params.is_empty() || is_monomorphized_fn)
                         {
-                            // Check if receiver is a simple variable reference (Expr::Var)
-                            // with unresolved HM type. This means the variable is likely a
-                            // function parameter that could be List, Option, or Result at runtime,
-                            // so UFCS resolution to stdlib.list.X may be wrong.
-                            // Don't trigger for call expressions (like range(0,len)) where
-                            // HM just didn't resolve the return type of a builtin.
-                            let is_param_var = matches!(obj.as_ref(), Expr::Var(_));
-                            if is_param_var {
+                            // Only check when receiver is a parameter variable or a call on
+                            // a parameter function. Don't check for calls on known functions
+                            // (like range().map()) where UFCS dispatch is correct.
+                            let should_check = match obj.as_ref() {
+                                Expr::Var(_) => true,
+                                Expr::Call(func, _, _, _) => {
+                                    // f(x).map(...) where f is a function parameter or capture.
+                                    // Check param_types (monomorphized), capture_indices (closures),
+                                    // or locals (untyped params in generic functions).
+                                    matches!(func.as_ref(), Expr::Var(ident)
+                                        if self.param_types.contains_key(&ident.node)
+                                           || self.capture_indices.contains_key(&ident.node)
+                                           || self.locals.contains_key(&ident.node))
+                                },
+                                _ => false,
+                            };
+                            if should_check {
                                 if let Some(hm_ty) = self.inferred_expr_types.get(&obj.span()) {
-                                    if matches!(hm_ty, nostos_types::Type::Var(_)) {
+                                    let is_unresolved = match hm_ty {
+                                        nostos_types::Type::Var(_) => true,
+                                        // Named types with '?' names are stringified type variables
+                                        // from monomorphized function signatures
+                                        nostos_types::Type::Named { name, .. } => name.starts_with('?'),
+                                        _ => false,
+                                    };
+                                    if is_unresolved {
                                         return Err(CompileError::UnresolvedTraitMethod {
                                             method: method.node.clone(),
                                             span: method.span,
@@ -17444,6 +17464,21 @@ impl Compiler {
             // (e.g., dispatching .keys() to Map.keys, .insert() to Map.insert).
             if matches!(ty, nostos_types::Type::Map(..) | nostos_types::Type::Set(..) | nostos_types::Type::List(..)) {
                 return Some(ty.display());
+            }
+            // For Function types with a known return type base name (e.g., (Int) -> Result[Int, ?E]),
+            // the partial type is sufficient for monomorphization type propagation.
+            // This ensures that function parameter types preserve the return type info,
+            // enabling correct UFCS dispatch (e.g., .map() on Result vs List) in monomorphized variants.
+            if let nostos_types::Type::Function(ref ft) = ty {
+                let ret_has_known_base = match ft.ret.as_ref() {
+                    nostos_types::Type::Named { name, .. } => !name.starts_with('?'),
+                    nostos_types::Type::List(_) | nostos_types::Type::Map(..)
+                        | nostos_types::Type::Set(..) => true,
+                    t => self.is_type_structurally_resolved(t),
+                };
+                if ret_has_known_base {
+                    return Some(ty.display());
+                }
             }
             // For unresolved type variables, store as fallback but try pattern-based first.
             // Pattern-based matching can determine trait method return types from trait defs,
@@ -26903,7 +26938,21 @@ impl Compiler {
             }
             // Suppress errors that are likely HM inference noise using proper Type-based
             // logic instead of string matching on error messages.
-            let suppress = if e.should_suppress() {
+            // Exception: StructuralMismatch where top-level constructors clearly differ
+            // (e.g., Int vs List) should NOT be suppressed even if inner types are unresolved.
+            // should_suppress() uses deep checking (any nested Var) which is needed for
+            // try_hm_inference but too aggressive here in type_check_fn.
+            let suppress = if let nostos_types::TypeError::StructuralMismatch(t1, t2) = &e {
+                // Only suppress if at least one top-level type is unresolved
+                fn is_top_level_unresolved(ty: &nostos_types::Type) -> bool {
+                    match ty {
+                        nostos_types::Type::Var(_) | nostos_types::Type::TypeParam(_) => true,
+                        nostos_types::Type::Named { name, .. } => name.starts_with('?'),
+                        _ => false,
+                    }
+                }
+                is_top_level_unresolved(t1) || is_top_level_unresolved(t2)
+            } else if e.should_suppress() {
                 true
             } else if let nostos_types::TypeError::NoSuchField { ref ty, ref field, ref resolved_type } = e {
                 // NoSuchField needs compiler context (type_defs) for full validation
@@ -26918,7 +26967,10 @@ impl Compiler {
         }
 
         // Even if solve succeeded, check for structural mismatches that
-        // the unification engine accepted (e.g., due to type variable resolution)
+        // the unification engine accepted (e.g., due to type variable resolution).
+        // Apply should_suppress() to all check results — these functions may produce
+        // false positives involving unresolved type variables (e.g., `? vs Int` when
+        // a generic function's return type couldn't be determined by isolated HM inference).
         if let Some(mismatch_err) = ctx.check_fn_call_mismatches() {
             let error_span = ctx.last_error_span().unwrap_or(span);
             return Err(self.convert_type_error(mismatch_err, error_span));

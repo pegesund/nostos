@@ -357,7 +357,11 @@ impl TypeError {
                         Type::IO(inner) | Type::Array(inner) => has_unresolved(inner),
                         Type::Map(k, v) => has_unresolved(k) || has_unresolved(v),
                         Type::Tuple(elems) => elems.iter().any(has_unresolved),
-                        Type::Named { args, .. } => args.iter().any(has_unresolved),
+                        Type::Named { name, args } => {
+                            // A Named type with a name starting with '?' is a stringified
+                            // unresolved type variable (e.g., from monomorphized function signatures)
+                            name.starts_with('?') || args.iter().any(has_unresolved)
+                        },
                         Type::Function(ft) => ft.params.iter().any(has_unresolved) || has_unresolved(&ft.ret),
                         _ => false,
                     }
