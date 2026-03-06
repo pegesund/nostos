@@ -85,6 +85,25 @@ fn resolve_result_method_alias(name: &str) -> Option<&'static str> {
     RESULT_METHOD_ALIASES.get(name).copied()
 }
 
+/// Check if a type contains any unresolved type variables (Var or TypeParam).
+/// Used to avoid false positive structural mismatch errors when HM inference
+/// has only partially resolved types (e.g., higher-order function parameters).
+fn has_unresolved_vars(ty: &Type) -> bool {
+    match ty {
+        Type::Var(_) | Type::TypeParam(_) => true,
+        Type::List(inner) | Type::Set(inner) | Type::IO(inner) | Type::Array(inner) => {
+            has_unresolved_vars(inner)
+        }
+        Type::Map(k, v) => has_unresolved_vars(k) || has_unresolved_vars(v),
+        Type::Tuple(elems) => elems.iter().any(|e| has_unresolved_vars(e)),
+        Type::Named { args, .. } => args.iter().any(|a| has_unresolved_vars(a)),
+        Type::Function(ft) => {
+            ft.params.iter().any(|p| has_unresolved_vars(p)) || has_unresolved_vars(&ft.ret)
+        }
+        _ => false,
+    }
+}
+
 /// A type constraint generated during inference.
 #[derive(Debug, Clone)]
 pub enum Constraint {
@@ -1662,8 +1681,11 @@ impl<'a> InferCtx<'a> {
                 continue;
             }
 
-            // Skip if arg is still a type variable (not yet resolved)
-            if matches!(&resolved_arg, Type::Var(_) | Type::TypeParam(_)) {
+            // Skip if arg is still a type variable or CONTAINS unresolved type variables.
+            // When HM inference fails (e.g., for higher-order functions like zipWith),
+            // types may be partially resolved with TypeParams/Vars inside Function types.
+            // We can't make structural mismatch claims about incompletely resolved types.
+            if has_unresolved_vars(&resolved_arg) {
                 continue;
             }
 

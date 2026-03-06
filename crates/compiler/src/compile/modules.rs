@@ -869,15 +869,12 @@ impl Compiler {
                 } else if let TypeError::Mismatch { ref expected, ref found } = e {
                     // Mismatch errors from pre-checks (e.g., unzip on non-tuple list)
                     // are definitive - always report them.
-                    // BUT: if either side is a BARE type variable (?NNN), this is likely
-                    // a false positive from batch inference where type constraints
-                    // weren't fully resolved. The per-function type_check_fn pass will
-                    // catch real errors with fully-resolved types.
-                    let is_bare_type_var = |s: &str| {
-                        s.starts_with('?') && s[1..].chars().all(|c| c.is_ascii_digit())
-                    };
-                    let has_bare_type_var = is_bare_type_var(expected) || is_bare_type_var(found);
-                    if !has_bare_type_var {
+                    // BUT: if either side contains unresolved type variables (?NNN),
+                    // this is likely a false positive from batch inference where type
+                    // constraints weren't fully resolved. The per-function type_check_fn
+                    // pass will catch real errors with fully-resolved types.
+                    let has_type_var = |s: &str| s.contains('?');
+                    if !has_type_var(expected) && !has_type_var(found) {
                         let error_span = ctx.last_error_span().unwrap_or_else(|| Span::new(0, 0));
                         let compile_error = self.convert_type_error(e.clone(), error_span);
                         let (source_name, source) = user_fns.first()

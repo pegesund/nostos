@@ -1,0 +1,6 @@
+# expect: [11, 22, 33]
+# Test: higher-order function with function parameter + list params
+# Previously caused false positive: "expected List, found (a, a24) -> c"
+# from batch inference cross-pollinating function and list parameter types.
+myZipWith(f, xs, ys) = xs.zip(ys).map(p => match p { (a, b) -> f(a, b) })
+main() = myZipWith((a, b) => a + b, [1,2,3], [10,20,30])

@@ -344,8 +344,26 @@ impl TypeError {
     /// instead of string pattern matching on error messages.
     pub fn should_suppress(&self) -> bool {
         match self {
-            // Structural mismatches (different type constructors) are always real
-            TypeError::StructuralMismatch(_, _) => false,
+            // Structural mismatches (different type constructors) are real when
+            // both types are fully concrete. When either type contains unresolved
+            // type variables or params, it could be a false positive from batch
+            // HM inference cross-pollinating unrelated function parameter types
+            // (e.g., zipWith(f, xs, ys) where f's Function type gets unified with xs's List type).
+            TypeError::StructuralMismatch(t1, t2) => {
+                fn has_unresolved(ty: &Type) -> bool {
+                    match ty {
+                        Type::Var(_) | Type::TypeParam(_) => true,
+                        Type::List(inner) | Type::Set(inner) |
+                        Type::IO(inner) | Type::Array(inner) => has_unresolved(inner),
+                        Type::Map(k, v) => has_unresolved(k) || has_unresolved(v),
+                        Type::Tuple(elems) => elems.iter().any(has_unresolved),
+                        Type::Named { args, .. } => args.iter().any(has_unresolved),
+                        Type::Function(ft) => ft.params.iter().any(has_unresolved) || has_unresolved(&ft.ret),
+                        _ => false,
+                    }
+                }
+                has_unresolved(t1) || has_unresolved(t2)
+            },
 
             // Unification failures: check if it's a real error or HM noise
             TypeError::UnificationFailed(t1, t2) => {
