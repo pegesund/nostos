@@ -1,0 +1,5 @@
+# expect: 6
+# Tests that toFloat/toInt work inside lambdas and generic contexts
+# Bug: first_arg_is_numeric didn't recognize type parameters, so toFloat/toInt
+# fell through to native function dispatch which doesn't exist
+main() = [1, 2, 3].map(x => x.toFloat()).sum().toInt()

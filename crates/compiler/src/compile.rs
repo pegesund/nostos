@@ -15718,11 +15718,16 @@ impl Compiler {
                 let first_arg_is_numeric = if arg_regs.len() == 1 {
                     arg_exprs.first()
                         .and_then(|e| self.expr_type_info(e).display_name())
-                        .map(|t| t.starts_with('?') || matches!(t.as_str(),
-                            "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
-                            "UInt8" | "UInt16" | "UInt32" | "UInt64" |
-                            "Float" | "Float32" | "Float64" | "BigInt"
-                        ))
+                        .map(|t| {
+                            t.starts_with('?')
+                            || t.contains("(polymorphic)")
+                            || (t.len() == 1 && t.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false))
+                            || matches!(t.as_str(),
+                                "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
+                                "UInt8" | "UInt16" | "UInt32" | "UInt64" |
+                                "Float" | "Float32" | "Float64" | "BigInt"
+                            )
+                        })
                         .unwrap_or(true) // Unknown type → assume numeric (safe fallback)
                 } else {
                     false

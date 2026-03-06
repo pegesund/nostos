@@ -1,0 +1,6 @@
+# expect: [6, 4, 2]
+# Tests that sort() works between user-defined generic functions
+# Bug: bare "List" from monomorphization suffix created Named("List") instead of Type::List
+myDouble(xs) = xs.map(x => x * 2)
+myReverse(xs) = xs.reverse()
+main() = [1, 2, 3].myDouble().sort().myReverse()

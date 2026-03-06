@@ -324,6 +324,12 @@ pub fn is_structural_mismatch(t1: &Type, t2: &Type) -> bool {
             Type::Function(_) => 5,
             Type::Record(_) => 6,
             Type::Variant(_) => 7,
+            // Named types that correspond to builtin containers should have the same kind
+            // as those containers. This prevents false StructuralMismatch errors when
+            // monomorphized functions use bare "List" (Named) vs Type::List from UFCS resolution.
+            Type::Named { name, .. } if name == "List" || name.ends_with(".List") => 1,
+            Type::Named { name, .. } if name == "Map" || name.ends_with(".Map") => 2,
+            Type::Named { name, .. } if name == "Set" || name.ends_with(".Set") => 3,
             Type::Named { .. } => 8,
             Type::IO(_) => 9,
             Type::Var(_) | Type::TypeParam(_) => 10,
