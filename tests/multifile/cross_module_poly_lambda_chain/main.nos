@@ -1,0 +1,6 @@
+# expect: [84, 20]
+# Test: cross-module polymorphic function chain called from lambda in map()
+# The lambda `s => doubleFromStr(s)` is compiled as a closure constant,
+# and the recompilation pass must detect poly calls inside closures.
+use math.*
+main() = ["42", "10"].map(s => doubleFromStr(s))

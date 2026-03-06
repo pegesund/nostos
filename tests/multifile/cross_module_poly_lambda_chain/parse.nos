@@ -1,0 +1,5 @@
+# Helper module: polymorphic parsing
+pub parseNum(s) = match s.toInt() {
+  Some(n) -> n
+  None -> 0
+}

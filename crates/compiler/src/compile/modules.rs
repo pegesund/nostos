@@ -1763,34 +1763,50 @@ impl Compiler {
             // polymorphic functions are marked, monomorphization chains will propagate fully.
             // Re-check against the FULL current poly set (including Phase 1 additions from this iter).
             let all_poly_bases: Vec<String> = self.polymorphic_fns.difference(&poly_fns_before).map(|n| n.split('/').next().unwrap_or(n).to_string()).collect();
-            for (fn_def, module_path, _imports, line_starts, source, source_name) in &fn_compile_info {
-                let (fn_name, fn_key, fn_key_wildcard) = compute_fn_keys(fn_def, module_path, self);
+
+            // First pass: identify which fn_compile_info indices need recompilation.
+            // We check both direct calls AND embedded lambda/closure constants recursively,
+            // since lambdas like `s => doubleFromStr(s)` are compiled as FunctionValue
+            // constants inside the parent function's chunk.
+            let mut recompile_indices: Vec<usize> = Vec::new();
+            for (idx, (fn_def, module_path, _imports, _line_starts, _source, source_name)) in fn_compile_info.iter().enumerate() {
+                let (_fn_name, fn_key, fn_key_wildcard) = compute_fn_keys(fn_def, module_path, self);
                 let is_fn_stdlib = source_name.contains("stdlib/") || source_name.starts_with("stdlib");
 
                 if is_fn_stdlib || self.polymorphic_fns.contains(&fn_key) || self.polymorphic_fns.contains(&fn_key_wildcard) {
                     continue;
                 }
 
-                // Check if this function calls ANY poly function (not just newly-added)
+                // Check if this function (including embedded lambda constants) calls any poly function
                 let calls_poly = if let Some(func_val) = self.functions.get(&fn_key).or_else(|| self.functions.get(&fn_key_wildcard)) {
-                    let code = &func_val.code;
-                    code.code.iter().any(|instr| {
-                        let func_idx = match instr {
-                            Instruction::CallDirect(_, idx, _) => Some(*idx),
-                            Instruction::TailCallDirect(idx, _) => Some(*idx),
-                            _ => None,
-                        };
-                        if let Some(idx) = func_idx {
-                            if let Some(called_name) = self.function_list.get(idx as usize) {
-                                let called_base = called_name.split('/').next().unwrap_or(called_name);
-                                all_poly_bases.iter().any(|b| called_base == b)
-                            } else {
-                                false
+                    let mut chunks_to_check: Vec<&Chunk> = vec![&func_val.code];
+                    let mut found = false;
+                    while let Some(chunk) = chunks_to_check.pop() {
+                        for instr in &chunk.code {
+                            let func_idx = match instr {
+                                Instruction::CallDirect(_, idx, _) => Some(*idx),
+                                Instruction::TailCallDirect(idx, _) => Some(*idx),
+                                _ => None,
+                            };
+                            if let Some(fidx) = func_idx {
+                                if let Some(called_name) = self.function_list.get(fidx as usize) {
+                                    let called_base = called_name.split('/').next().unwrap_or(called_name);
+                                    if all_poly_bases.iter().any(|b| called_base == b) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
                             }
-                        } else {
-                            false
                         }
-                    })
+                        if found { break; }
+                        // Also check embedded lambda/closure functions in constants
+                        for constant in &chunk.constants {
+                            if let Value::Function(fv) = constant {
+                                chunks_to_check.push(&fv.code);
+                            }
+                        }
+                    }
+                    found
                 } else {
                     false
                 };
@@ -1798,6 +1814,13 @@ impl Compiler {
                 if !calls_poly {
                     continue;
                 }
+                recompile_indices.push(idx);
+            }
+
+            // Second pass: recompile identified functions
+            for idx in recompile_indices {
+                let (fn_def, module_path, _imports, line_starts, source, source_name) = &fn_compile_info[idx];
+                let (fn_name, _fn_key, _fn_key_wildcard) = compute_fn_keys(fn_def, module_path, self);
 
                 let saved_path = std::mem::replace(&mut self.module_path, module_path.clone());
                 let saved_imports = self.imports.clone();

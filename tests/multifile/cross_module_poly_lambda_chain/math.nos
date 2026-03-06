@@ -1,0 +1,3 @@
+# Wraps polymorphic parseNum in another function
+use parse.*
+pub doubleFromStr(s) = parseNum(s) * 2
