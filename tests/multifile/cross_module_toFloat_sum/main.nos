@@ -1,4 +1,4 @@
-# expect: 30
+# expect: 30.0
 # Regression test: .toFloat() on record field + .sum() in cross-module generic function
 # Previously dispatched .toFloat() to String.toFloat in monomorphized variants
 use types.Score

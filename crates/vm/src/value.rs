@@ -389,7 +389,13 @@ impl fmt::Display for AstValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
             AstKind::Int(n) => write!(f, "{}", n),
-            AstKind::Float(n) => write!(f, "{}", n),
+            AstKind::Float(n) => {
+                if n.fract() == 0.0 && n.is_finite() {
+                    write!(f, "{:.1}", n)
+                } else {
+                    write!(f, "{}", n)
+                }
+            }
             AstKind::String(s) => write!(f, "\"{}\"", s),
             AstKind::Bool(b) => write!(f, "{}", b),
             AstKind::Char(c) => write!(f, "'{}'", c),
@@ -2424,9 +2430,22 @@ impl fmt::Display for Value {
             Value::UInt16(i) => write!(f, "{}", i),
             Value::UInt32(i) => write!(f, "{}", i),
             Value::UInt64(i) => write!(f, "{}", i),
-            // Floats
-            Value::Float32(fl) => write!(f, "{}", fl),
-            Value::Float64(fl) => write!(f, "{}", fl),
+            // Floats - always show decimal point for whole numbers (e.g., 2.0 not 2)
+            Value::Float32(fl) => {
+                let f64 = *fl as f64;
+                if f64.fract() == 0.0 && f64.is_finite() {
+                    write!(f, "{:.1}", fl)
+                } else {
+                    write!(f, "{}", fl)
+                }
+            }
+            Value::Float64(fl) => {
+                if fl.fract() == 0.0 && fl.is_finite() {
+                    write!(f, "{:.1}", fl)
+                } else {
+                    write!(f, "{}", fl)
+                }
+            }
             // BigInt
             Value::BigInt(n) => write!(f, "{}", n),
             // Decimal

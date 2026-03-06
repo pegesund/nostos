@@ -2273,9 +2273,22 @@ impl Heap {
             GcValue::UInt16(i) => format!("{}", i),
             GcValue::UInt32(i) => format!("{}", i),
             GcValue::UInt64(i) => format!("{}", i),
-            // Floats
-            GcValue::Float32(f) => format!("{}", f),
-            GcValue::Float64(f) => format!("{}", f),
+            // Floats - always show decimal point for whole numbers (e.g., 2.0 not 2)
+            GcValue::Float32(f) => {
+                let f64 = *f as f64;
+                if f64.fract() == 0.0 && f64.is_finite() {
+                    format!("{:.1}", f)
+                } else {
+                    format!("{}", f)
+                }
+            }
+            GcValue::Float64(f) => {
+                if f.fract() == 0.0 && f.is_finite() {
+                    format!("{:.1}", f)
+                } else {
+                    format!("{}", f)
+                }
+            }
             // Decimal
             GcValue::Decimal(d) => format!("{}", d),
             // BigInt

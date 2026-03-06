@@ -859,8 +859,21 @@ impl SendableValue {
             SendableValue::UInt16(i) => format!("{}u16", i),
             SendableValue::UInt32(i) => format!("{}u32", i),
             SendableValue::UInt64(i) => format!("{}u64", i),
-            SendableValue::Float32(f) => format!("{}f32", f),
-            SendableValue::Float64(f) => f.to_string(),
+            SendableValue::Float32(f) => {
+                let f64 = *f as f64;
+                if f64.fract() == 0.0 && f64.is_finite() {
+                    format!("{:.1}f32", f)
+                } else {
+                    format!("{}f32", f)
+                }
+            }
+            SendableValue::Float64(f) => {
+                if f.fract() == 0.0 && f.is_finite() {
+                    format!("{:.1}", f)
+                } else {
+                    f.to_string()
+                }
+            }
             SendableValue::BigInt(bi) => bi.to_string(),
             SendableValue::Decimal(d) => d.to_string(),
             SendableValue::Pid(p) => format!("<pid:{}>", p),
@@ -1114,7 +1127,13 @@ impl SharedMapValue {
             SharedMapValue::Unit => "()".to_string(),
             SharedMapValue::Bool(b) => b.to_string(),
             SharedMapValue::Int64(i) => i.to_string(),
-            SharedMapValue::Float64(f) => f.to_string(),
+            SharedMapValue::Float64(f) => {
+                if f.fract() == 0.0 && f.is_finite() {
+                    format!("{:.1}", f)
+                } else {
+                    f.to_string()
+                }
+            }
             SharedMapValue::Pid(p) => format!("<pid:{}>", p),
             SharedMapValue::String(s) => format!("\"{}\"", s),
             SharedMapValue::Char(c) => format!("'{}'", c),

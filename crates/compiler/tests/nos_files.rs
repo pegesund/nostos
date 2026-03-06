@@ -175,9 +175,22 @@ fn value_to_string(value: &Value) -> String {
         Value::UInt16(n) => format!("{}u16", n),
         Value::UInt32(n) => format!("{}u32", n),
         Value::UInt64(n) => format!("{}u64", n),
-        // Floats
-        Value::Float32(f) => format!("{}f32", f),
-        Value::Float64(f) => f.to_string(),
+        // Floats - always show decimal point for whole numbers (e.g., 2.0 not 2)
+        Value::Float32(f) => {
+            let f64 = *f as f64;
+            if f64.fract() == 0.0 && f64.is_finite() {
+                format!("{:.1}f32", f)
+            } else {
+                format!("{}f32", f)
+            }
+        }
+        Value::Float64(f) => {
+            if f.fract() == 0.0 && f.is_finite() {
+                format!("{:.1}", f)
+            } else {
+                f.to_string()
+            }
+        }
         // BigInt and Decimal
         Value::BigInt(n) => format!("{}n", n),
         Value::Decimal(d) => format!("{}d", d),
