@@ -408,6 +408,14 @@ impl TypeError {
                                 }
                                 return true;
                             }
+                            Type::Function(_) => {
+                                // Function types NEVER implement Eq/Ord/Num/Concat,
+                                // regardless of their param/return type vars.
+                                if ["Eq", "Ord", "Num", "Concat"].contains(&trait_name.as_str()) {
+                                    return false;
+                                }
+                                return true;
+                            }
                             _ => return true,
                         }
                     }

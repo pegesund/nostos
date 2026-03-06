@@ -25102,7 +25102,13 @@ impl Compiler {
             if !env.functions.contains_key(name) {
                 env.insert_function(name.to_string(), fn_type.clone());
             }
-            if sig.starts_with("[a]") && !name.contains('.') {
+            // Also strip constraint prefix (e.g., "Ord a => [a] -> [a]" -> "[a] -> [a]")
+            let sig_after_constraint = if let Some(pos) = sig.find("=> ") {
+                &sig[pos + 3..]
+            } else {
+                sig
+            };
+            if sig_after_constraint.starts_with("[a]") && !name.contains('.') {
                 let has_single_type_param = !sig.contains(" b")
                     && !sig.contains("(b");
                 let is_numeric_only = matches!(name, "sum" | "product");
@@ -26194,7 +26200,13 @@ impl Compiler {
             // This allows `list.get(0)` to properly propagate element types
             // Note: Multi-param methods (map, fold, etc.) use deferred resolution in check_pending_method_calls
             // because eager registration breaks constraint solving order for higher-order functions
-            if sig.starts_with("[a]") && !name.contains('.') {
+            // Also strip constraint prefix (e.g., "Ord a => [a] -> [a]" -> "[a] -> [a]")
+            let sig_after_constraint2 = if let Some(pos) = sig.find("=> ") {
+                &sig[pos + 3..]
+            } else {
+                sig
+            };
+            if sig_after_constraint2.starts_with("[a]") && !name.contains('.') {
                 // Only register methods with pattern "[a] -> ... -> a" (returns element type)
                 // Skip methods like map "[a] -> (a -> b) -> [b]" which have multiple type params
                 let has_single_type_param = !sig.contains(" b")

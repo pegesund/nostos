@@ -4070,6 +4070,11 @@ impl<'a> InferCtx<'a> {
                                         resolved_type: Some(resolved_elem.clone()),
                                     });
                                 }
+                                // Add Num trait bound on type variables so it propagates
+                                // through wrapper functions (e.g., mySum(xs) = xs.sum())
+                                if let Type::Var(var_id) = &resolved_elem {
+                                    self.add_trait_bound(*var_id, "Num".to_string());
+                                }
                             }
                         }
 
@@ -4101,6 +4106,11 @@ impl<'a> InferCtx<'a> {
                                         resolved_type: Some(resolved_elem.clone()),
                                     });
                                 }
+                                // Add Ord trait bound on type variables so it propagates
+                                // through wrapper functions (e.g., mySort(xs) = xs.sort())
+                                if let Type::Var(var_id) = &resolved_elem {
+                                    self.add_trait_bound(*var_id, "Ord".to_string());
+                                }
                             }
                         }
 
@@ -4116,6 +4126,11 @@ impl<'a> InferCtx<'a> {
                                         trait_name: "Eq".to_string(),
                                         resolved_type: Some(resolved_elem.clone()),
                                     });
+                                }
+                                // Add Eq trait bound on type variables so it propagates
+                                // through wrapper functions (e.g., myUnique(xs) = xs.unique())
+                                if let Type::Var(var_id) = &resolved_elem {
+                                    self.add_trait_bound(*var_id, "Eq".to_string());
                                 }
                             }
                         }
