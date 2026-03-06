@@ -1,0 +1,2 @@
+use yak.{doubleAndSort}
+pub pipeline(xs) = doubleAndSort(xs).reverse()

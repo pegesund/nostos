@@ -1,0 +1,3 @@
+# expect: [6, 4, 2]
+use xen.{pipeline}
+main() = pipeline([3, 1, 2])

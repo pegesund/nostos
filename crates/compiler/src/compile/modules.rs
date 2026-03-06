@@ -1654,28 +1654,25 @@ impl Compiler {
                 .map(|n| n.split('/').next().unwrap_or(n).to_string())
                 .collect();
 
-            // Only recompile functions that might call a newly-polymorphic function.
-            // Check if the function's code contains a CallDirect to any of the new poly functions.
-            for (fn_def, module_path, imports, line_starts, source, source_name) in &fn_compile_info {
+            // Helper: compute fn_key and fn_key_wildcard for a function in fn_compile_info
+            let compute_fn_keys = |fn_def: &FnDef, module_path: &[String], compiler: &Self| -> (String, String, String) {
                 let fn_name = if module_path.is_empty() {
                     fn_def.name.node.clone()
                 } else {
                     format!("{}.{}", module_path.join("."), fn_def.name.node)
                 };
-                let is_fn_stdlib = source_name.contains("stdlib/") || source_name.starts_with("stdlib");
                 let arity = fn_def.clauses[0].params.len();
                 let fn_key_wildcard = if arity == 0 {
                     format!("{}/", fn_name)
                 } else {
                     format!("{}/{}", fn_name, vec!["_"; arity].join(","))
                 };
-                // Build the actual fn_key with concrete param types (matching compile_fn_def behavior)
                 let fn_key = {
                     let mut param_types: Vec<String> = vec!["_".to_string(); arity];
                     for clause in &fn_def.clauses {
                         for (i, param) in clause.params.iter().enumerate() {
                             if let Some(ty) = &param.ty {
-                                let ty_str = self.type_expr_to_string(ty);
+                                let ty_str = compiler.type_expr_to_string(ty);
                                 if param_types[i] == "_" {
                                     param_types[i] = ty_str;
                                 }
@@ -1689,25 +1686,21 @@ impl Compiler {
                     };
                     format!("{}/{}", base_name, param_types.join(","))
                 };
-                // Skip stdlib functions and already-polymorphic functions
-                if is_fn_stdlib || self.polymorphic_fns.contains(&fn_key) || self.polymorphic_fns.contains(&fn_key_wildcard) {
-                    continue;
-                }
+                (fn_name, fn_key, fn_key_wildcard)
+            };
 
-                // Check if this function's compiled code calls any of the new polymorphic functions
-                // Try the concrete fn_key first, then fall back to wildcard
-                let calls_poly_fn = if let Some(func_val) = self.functions.get(&fn_key).or_else(|| self.functions.get(&fn_key_wildcard)) {
+            // Helper: check if a function's code calls any of the new poly functions
+            let calls_any_poly = |fn_key: &str, fn_key_wildcard: &str, compiler: &Self| -> bool {
+                if let Some(func_val) = compiler.functions.get(fn_key).or_else(|| compiler.functions.get(fn_key_wildcard)) {
                     let code = &func_val.code;
                     code.code.iter().any(|instr| {
-                        // Check both CallDirect and TailCallDirect - tail calls also
-                        // need recompilation when the callee becomes polymorphic
                         let func_idx = match instr {
                             Instruction::CallDirect(_, idx, _) => Some(*idx),
                             Instruction::TailCallDirect(idx, _) => Some(*idx),
                             _ => None,
                         };
                         if let Some(idx) = func_idx {
-                            if let Some(called_name) = self.function_list.get(idx as usize) {
+                            if let Some(called_name) = compiler.function_list.get(idx as usize) {
                                 let called_base = called_name.split('/').next().unwrap_or(called_name);
                                 new_poly_bases.iter().any(|b| called_base == b)
                             } else {
@@ -1719,25 +1712,33 @@ impl Compiler {
                     })
                 } else {
                     false
-                };
+                }
+            };
 
-                if !calls_poly_fn {
+            // PHASE 1: Mark all transitive polymorphic functions FIRST.
+            // This must happen before recompilation so that when concrete callers
+            // are recompiled and trigger monomorphization, the entire transitive
+            // chain of polymorphic functions is already known.
+            for (fn_def, module_path, imports, _line_starts, _source, source_name) in &fn_compile_info {
+                let (fn_name, fn_key, fn_key_wildcard) = compute_fn_keys(fn_def, module_path, self);
+                let is_fn_stdlib = source_name.contains("stdlib/") || source_name.starts_with("stdlib");
+
+                if is_fn_stdlib || self.polymorphic_fns.contains(&fn_key) || self.polymorphic_fns.contains(&fn_key_wildcard) {
                     continue;
                 }
 
-                // If this function has untyped params and calls a polymorphic function,
-                // mark it as polymorphic too. This propagates polymorphism transitively:
-                // when alpha.run(xs) calls beta.doubleAll(xs) and beta.doubleAll is polymorphic,
-                // alpha.run also needs monomorphization so that concrete types from its callers
-                // (e.g., main calling run([1,2,3])) flow through to beta.doubleAll.
+                if !calls_any_poly(&fn_key, &fn_key_wildcard, self) {
+                    continue;
+                }
+
                 let has_untyped_params = fn_def.clauses.first()
                     .map(|c| c.params.iter().any(|p| p.ty.is_none()))
                     .unwrap_or(false);
+
                 if has_untyped_params {
                     self.polymorphic_fns.insert(fn_key.clone());
                     self.polymorphic_fns.insert(fn_key_wildcard.clone());
-                    // Also compute HM-inferred signature for the now-polymorphic function
-                    // so monomorphized variants can use type parameter relationships.
+                    // Compute HM-inferred signature for the now-polymorphic function
                     let saved_path2 = std::mem::replace(&mut self.module_path, module_path.clone());
                     let saved_imports2 = self.imports.clone();
                     self.imports.extend(imports.clone());
@@ -1750,22 +1751,59 @@ impl Compiler {
                     }
                     self.module_path = saved_path2;
                     self.imports = saved_imports2;
+                }
+            }
+
+            // PHASE 2: Recompile concrete callers (functions with all typed params
+            // that call a newly-polymorphic function). Now that all transitive
+            // polymorphic functions are marked, monomorphization chains will propagate fully.
+            // Re-check against the FULL current poly set (including Phase 1 additions from this iter).
+            let all_poly_bases: Vec<String> = self.polymorphic_fns.difference(&poly_fns_before).map(|n| n.split('/').next().unwrap_or(n).to_string()).collect();
+            for (fn_def, module_path, _imports, line_starts, source, source_name) in &fn_compile_info {
+                let (fn_name, fn_key, fn_key_wildcard) = compute_fn_keys(fn_def, module_path, self);
+                let is_fn_stdlib = source_name.contains("stdlib/") || source_name.starts_with("stdlib");
+
+                if is_fn_stdlib || self.polymorphic_fns.contains(&fn_key) || self.polymorphic_fns.contains(&fn_key_wildcard) {
+                    continue;
+                }
+
+                // Check if this function calls ANY poly function (not just newly-added)
+                let calls_poly = if let Some(func_val) = self.functions.get(&fn_key).or_else(|| self.functions.get(&fn_key_wildcard)) {
+                    let code = &func_val.code;
+                    code.code.iter().any(|instr| {
+                        let func_idx = match instr {
+                            Instruction::CallDirect(_, idx, _) => Some(*idx),
+                            Instruction::TailCallDirect(idx, _) => Some(*idx),
+                            _ => None,
+                        };
+                        if let Some(idx) = func_idx {
+                            if let Some(called_name) = self.function_list.get(idx as usize) {
+                                let called_base = called_name.split('/').next().unwrap_or(called_name);
+                                all_poly_bases.iter().any(|b| called_base == b)
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    })
+                } else {
+                    false
+                };
+
+                if !calls_poly {
                     continue;
                 }
 
                 let saved_path = std::mem::replace(&mut self.module_path, module_path.clone());
                 let saved_imports = self.imports.clone();
-                self.imports.extend(imports.clone());
+                self.imports.extend(_imports.clone());
                 let saved_line_starts = std::mem::replace(&mut self.line_starts, line_starts.clone());
                 let saved_source = std::mem::replace(&mut self.current_source, Some(source.clone()));
                 let saved_source_name = std::mem::replace(&mut self.current_source_name, Some(source_name.clone()));
 
                 // Recompile to replace CallDirect/TailCallDirect with monomorphized variant calls.
-                // If monomorphization reveals a real error (e.g., method not found on concrete type),
-                // collect it so it's reported to the user instead of silently calling the empty stub.
                 if let Err(e) = self.compile_fn_def(fn_def) {
-                    // Only collect TypeError and similar errors that indicate real bugs.
-                    // UnresolvedTraitMethod is expected when a function itself is polymorphic.
                     if matches!(e, CompileError::TypeError { .. }
                         | CompileError::TraitBoundNotSatisfied { .. }) {
                         errors.push((fn_name.clone(), e, source_name.clone(), source.clone()));
