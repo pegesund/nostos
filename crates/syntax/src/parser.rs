@@ -1004,17 +1004,29 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
 
         // Match arm: pattern -> expr or pattern when guard -> expr
         // Allows optional trailing comma after each arm for single-line style
+        // The body is parsed as a stmt (not just expr) so that assignments like
+        // `Some(x) -> total = total + x` work without requiring braces.
         let match_arm = nl.clone()
             .ignore_then(pattern())
             .then(just(Token::When).ignore_then(expr.clone()).or_not())
             .then_ignore(just(Token::RightArrow))
-            .then(expr.clone())
+            .then(stmt.clone())
             .then_ignore(just(Token::Comma).or_not())  // Allow comma separator
-            .map_with_span(|((pat, guard), body), span| MatchArm {
-                pattern: pat,
-                guard,
-                body,
-                span: to_span(span),
+            .map_with_span(|((pat, guard), body_stmt), span| {
+                let body = match body_stmt {
+                    Stmt::Expr(e) => e,
+                    other => {
+                        // Wrap Let/Assign in a Block so match arm body stays Expr
+                        let s = to_span(span.clone());
+                        Expr::Block(vec![other], s)
+                    }
+                };
+                MatchArm {
+                    pattern: pat,
+                    guard,
+                    body,
+                    span: to_span(span),
+                }
             });
 
         // Match expression: match expr { pattern -> body, ... }

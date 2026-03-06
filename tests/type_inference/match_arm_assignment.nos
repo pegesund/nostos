@@ -1,0 +1,13 @@
+# expect: 6
+# Test: assignment (mutation) in match arm body without requiring braces
+main() = {
+  var total = 0
+  items = [Some(1), None, Some(2), Some(3), None]
+  items.each(elem => {
+    match elem {
+      Some(x) -> total = total + x
+      None -> ()
+    }
+  })
+  total
+}

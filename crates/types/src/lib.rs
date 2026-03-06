@@ -385,7 +385,31 @@ impl TypeError {
                         return true;
                     }
                     if rty.has_any_type_var() {
-                        return true;
+                        // Type still has unresolved vars. For most cases, suppress to
+                        // avoid false positives from batch HM inference. BUT: if the
+                        // outer type constructor definitely doesn't implement the trait
+                        // regardless of its type args (e.g., Result never implements Ord),
+                        // then this is a real error - don't suppress.
+                        match rty {
+                            Type::Named { .. } => {
+                                // Named types (Result, Option, etc.) never implement Num/Ord.
+                                // These traits are not auto-derived for user-defined types,
+                                // so unresolved type args don't change the outcome.
+                                if matches!(trait_name.as_str(), "Num" | "Ord") {
+                                    return false;
+                                }
+                                return true;
+                            }
+                            Type::List(_) | Type::Array(_) | Type::Set(_) |
+                            Type::Map(_, _) | Type::Tuple(_) => {
+                                // Container types never implement Num/Ord.
+                                if matches!(trait_name.as_str(), "Num" | "Ord") {
+                                    return false;
+                                }
+                                return true;
+                            }
+                            _ => return true,
+                        }
                     }
                 } else {
                     // Fallback string checks when resolved_type not available
