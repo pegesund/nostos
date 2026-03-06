@@ -1,0 +1,61 @@
+# expect: 42
+# Probe 25: Complex chained option/result operations with generics
+
+safeDiv(x, y) = if y == 0 then None else Some(x / y)
+
+# Chain multiple option operations
+computeChain(a, b, c) =
+    safeDiv(a, b).flatMap(q => safeDiv(q * c, b)).map(r => r + 1)
+
+# Use option with fold
+sumOptions(opts) = opts.fold(0, (acc, opt) => match opt {
+    None -> acc
+    Some(n) -> acc + n
+})
+
+# Higher-order: apply fn only when option is Some
+whenSome(opt, f) = match opt {
+    None -> None
+    Some(x) -> Some(f(x))
+}
+
+# Zip two options
+zipOptions(a, b) = match a {
+    None -> None
+    Some(x) -> match b {
+        None -> None
+        Some(y) -> Some((x, y))
+    }
+}
+
+main() = {
+    # Test safe division chain
+    # 100/5=20, 20*3=60, 60/5=12, +1=13
+    r1 = computeChain(100, 5, 3)
+    v1 = r1.optUnwrapOr(-1)
+
+    # Test sumOptions: [Some(5), None, Some(3)] -> 8
+    opts = [safeDiv(10, 2), safeDiv(6, 0), safeDiv(9, 3)]
+    v2 = sumOptions(opts)
+
+    # Test whenSome: 7*3=21
+    v3 = whenSome(Some(7), x => x * 3).optUnwrapOr(0)
+
+    # Test zipOptions: Some(10) zip Some(20)
+    z = zipOptions(Some(10), Some(20))
+    v4 = match z {
+        Some(p) -> p.0 + p.1
+        None -> 0
+    }
+
+    # Test zipOptions with None
+    z2 = zipOptions(Some(5), None)
+    v5 = match z2 {
+        Some(_) -> 1
+        None -> 0
+    }
+
+    # v1=13, v2=8, v3=21, v4=30, v5=0
+    # 13 + 8 + 21 + 30 - 30 = 42
+    v1 + v2 + v3 + v4 - 30
+}
