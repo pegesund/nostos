@@ -29995,6 +29995,75 @@ impl Compiler {
                         .map(|a| a.node.clone())
                         .unwrap_or_else(|| item.name.node.clone());
                     let qualified_name = format!("{}.{}", module_path, item.name.node);
+
+                    // Check visibility: if the item exists in a visibility map, it must be public.
+                    // Items not in any visibility map (e.g., constructors of public types) are allowed.
+                    // Skip visibility checks for stdlib modules — stdlib functions without `pub`
+                    // are implicitly public (many stdlib files predate the visibility system).
+                    let is_stdlib_module = module_path.starts_with("stdlib.");
+                    // For functions, check all overload keys with this base name prefix.
+                    let fn_prefix = format!("{}/", qualified_name);
+                    let is_private_function = !is_stdlib_module && self.function_visibility.iter().any(|(name, vis)| {
+                        (name == &qualified_name || name.starts_with(&fn_prefix)) && *vis != Visibility::Public
+                    });
+                    let is_public_function = !is_stdlib_module && self.function_visibility.iter().any(|(name, vis)| {
+                        (name == &qualified_name || name.starts_with(&fn_prefix)) && *vis == Visibility::Public
+                    });
+                    if is_private_function && !is_public_function {
+                        return Err(CompileError::TypeError {
+                            message: format!("`{}` is private in module `{}`", item.name.node, module_path),
+                            span: use_stmt.span,
+                        });
+                    }
+
+                    // Check type visibility (skip stdlib — implicitly public)
+                    if !is_stdlib_module {
+                        if let Some(vis) = self.type_visibility.get(&qualified_name) {
+                            if *vis != Visibility::Public {
+                                return Err(CompileError::TypeError {
+                                    message: format!("`{}` is private in module `{}`", item.name.node, module_path),
+                                    span: use_stmt.span,
+                                });
+                            }
+                        }
+                    }
+
+                    // Check trait visibility (skip stdlib)
+                    if !is_stdlib_module {
+                        if let Some(info) = self.trait_defs.get(&qualified_name) {
+                            if info.visibility != Visibility::Public {
+                                return Err(CompileError::TypeError {
+                                    message: format!("`{}` is private in module `{}`", item.name.node, module_path),
+                                    span: use_stmt.span,
+                                });
+                            }
+                        }
+                    }
+
+                    // Check constant visibility (skip stdlib)
+                    if !is_stdlib_module {
+                        if let Some(info) = self.constants.get(&qualified_name) {
+                            if info.visibility != Visibility::Public {
+                                return Err(CompileError::TypeError {
+                                    message: format!("`{}` is private in module `{}`", item.name.node, module_path),
+                                    span: use_stmt.span,
+                                });
+                            }
+                        }
+                    }
+
+                    // Check top-level binding visibility (skip stdlib)
+                    if !is_stdlib_module {
+                        if let Some((binding, _, _)) = self.top_level_bindings.get(&qualified_name) {
+                            if binding.visibility != Visibility::Public {
+                                return Err(CompileError::TypeError {
+                                    message: format!("`{}` is private in module `{}`", item.name.node, module_path),
+                                    span: use_stmt.span,
+                                });
+                            }
+                        }
+                    }
+
                     self.add_import_checked(local_name, qualified_name, &module_path, use_stmt.span)?;
                 }
             }

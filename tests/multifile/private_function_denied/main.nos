@@ -1,0 +1,4 @@
+# expect_error: private
+# Importing a non-pub function by name should be rejected.
+use secret.{hidden}
+main() = hidden(5)
