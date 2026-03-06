@@ -30117,6 +30117,27 @@ impl Compiler {
                         }
                     }
 
+                    // Check that the item actually exists in the module (skip stdlib - implicitly public)
+                    if !is_stdlib_module {
+                        let fn_prefix = format!("{}/", qualified_name);
+                        let exists_as_function = self.function_visibility.keys().any(|k| {
+                            k == &qualified_name || k.starts_with(&fn_prefix)
+                        });
+                        let exists_as_type = self.type_visibility.contains_key(&qualified_name);
+                        let exists_as_trait = self.trait_defs.contains_key(&qualified_name);
+                        let exists_as_constant = self.constants.contains_key(&qualified_name);
+                        let exists_as_binding = self.top_level_bindings.contains_key(&qualified_name);
+                        let exists_as_constructor = self.known_constructors.contains(&qualified_name);
+                        if !exists_as_function && !exists_as_type && !exists_as_trait
+                            && !exists_as_constant && !exists_as_binding && !exists_as_constructor
+                        {
+                            return Err(CompileError::TypeError {
+                                message: format!("`{}` is not defined in module `{}`", item.name.node, module_path),
+                                span: use_stmt.span,
+                            });
+                        }
+                    }
+
                     self.add_import_checked(local_name, qualified_name, &module_path, use_stmt.span)?;
                 }
             }
