@@ -30128,8 +30128,12 @@ impl Compiler {
                         let exists_as_constant = self.constants.contains_key(&qualified_name);
                         let exists_as_binding = self.top_level_bindings.contains_key(&qualified_name);
                         let exists_as_constructor = self.known_constructors.contains(&qualified_name);
+                        // Also check if this is a known sub-module (e.g., `use stdlib.server` parses as
+                        // a named import of "server" from "stdlib", but "server" is a sub-module)
+                        let exists_as_module = self.known_modules.contains(&qualified_name);
                         if !exists_as_function && !exists_as_type && !exists_as_trait
                             && !exists_as_constant && !exists_as_binding && !exists_as_constructor
+                            && !exists_as_module
                         {
                             return Err(CompileError::TypeError {
                                 message: format!("`{}` is not defined in module `{}`", item.name.node, module_path),

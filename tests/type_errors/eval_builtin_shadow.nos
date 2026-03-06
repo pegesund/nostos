@@ -1,0 +1,9 @@
+# expect_error: shadows built-in function
+# Test: user function named 'eval' with recursive type should report
+# shadow error, not confusing type inference error
+type Expr = Lit(Int) | Add(Expr, Expr)
+eval(e) = match e {
+  Lit(n) -> n
+  Add(a, b) -> eval(a) + eval(b)
+}
+main() = eval(Lit(2))

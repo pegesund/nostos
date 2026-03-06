@@ -11,12 +11,19 @@ impl Compiler {
     /// Returns (error, source_filename, source_code) on failure.
     pub fn compile_all(&mut self) -> Result<(), (CompileError, String, Arc<String>)> {
         let errors = self.compile_all_collecting_errors();
-        if let Some((fn_name, error, source_name, source)) = errors.into_iter().next() {
-            let _ = fn_name; // We include source_name instead of fn_name now
-            Err((error, source_name, source))
-        } else {
-            Ok(())
+        if errors.is_empty() {
+            return Ok(());
         }
+        // Prioritize DefinitionErrors (e.g., builtin shadowing) over TypeErrors,
+        // since DefinitionErrors cause cascading type errors that are confusing.
+        let best_error = errors.into_iter()
+            .min_by_key(|(_, e, _, _)| match e {
+                CompileError::DefinitionError { .. } => 0,
+                _ => 1,
+            })
+            .unwrap();
+        let (_fn_name, error, source_name, source) = best_error;
+        Err((error, source_name, source))
     }
 
     /// Compile all pending functions, collecting all errors.
