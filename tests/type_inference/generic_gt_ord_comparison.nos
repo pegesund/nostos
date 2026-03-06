@@ -1,0 +1,22 @@
+# expect: 9
+# Test that > comparison works correctly for generic Ord type parameters
+myMax[A: Ord](x: A, y: A) -> A = if x > y then x else y
+
+myMaxList[A: Ord](xs: [A]) -> Option[A] =
+    match xs {
+        [] -> None
+        [x] -> Some(x)
+        [x | rest] ->
+            match myMaxList(rest) {
+                None -> Some(x)
+                Some(m) -> Some(myMax(x, m))
+            }
+    }
+
+main() = {
+    result = myMaxList([3, 1, 9, 2, 7])
+    match result {
+        None -> -1
+        Some(v) -> v
+    }
+}

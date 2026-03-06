@@ -14123,6 +14123,23 @@ impl Compiler {
                 } else {
                     Expr::Var(method.clone())
                 };
+                // If the method name shadows a local variable (e.g., parameter named
+                // "take" when calling xs.take(2)), resolve to the qualified function
+                // name so compile_call doesn't short-circuit to the local binding.
+                let func_expr = if let Expr::Var(ref ident) = func_expr {
+                    if !ident.node.contains('.') && self.locals.contains_key(&ident.node) {
+                        let resolved = self.resolve_name(&ident.node);
+                        if resolved != ident.node {
+                            Expr::Var(Ident { node: resolved, span: ident.span })
+                        } else {
+                            func_expr
+                        }
+                    } else {
+                        func_expr
+                    }
+                } else {
+                    func_expr
+                };
                 match self.compile_call(&func_expr, &[], &all_args, is_tail) {
                     Ok(r) => {
                         // For shared methods (map/flatMap) that exist on List, Option, and Result:
@@ -15006,9 +15023,18 @@ impl Compiler {
             // treat as polymorphic to avoid emitting Int-specific ops that fail on String/Float
             let lt_unknown = lt.is_none() && !is_float && !is_string;
             let rt_unknown = rt.is_none() && !is_float && !is_string;
+            // Also check HM-inferred types: if either side is TypeParam or an unresolved Var,
+            // treat as polymorphic. This handles generic Ord comparisons like `x > m` where
+            // both have HM type TypeParam("A") but expr_type_info can't see it.
+            let lt_hm_is_generic = self.inferred_expr_types.get(&left.span())
+                .map_or(false, |ty| matches!(ty, nostos_types::Type::TypeParam(_) | nostos_types::Type::Var(_)));
+            let rt_hm_is_generic = self.inferred_expr_types.get(&right.span())
+                .map_or(false, |ty| matches!(ty, nostos_types::Type::TypeParam(_) | nostos_types::Type::Var(_)));
             (lt.as_ref().map_or(false, |t| self.is_current_type_param(t) || is_polymorphic(t)))
                 || (rt.as_ref().map_or(false, |t| self.is_current_type_param(t) || is_polymorphic(t)))
                 || (lt_unknown && rt_unknown)
+                || lt_hm_is_generic
+                || rt_hm_is_generic
         };
 
         // Compile-time coercion: if one side is float and the other is an int literal,
