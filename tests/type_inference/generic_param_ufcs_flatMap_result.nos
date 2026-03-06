@@ -1,0 +1,4 @@
+# expect: Ok(20)
+wrap(f, x) = f(x).flatMap(v => Ok(v * 2))
+safeDivide(x) = if x != 0 then Ok(x) else Err("zero")
+main() = wrap(safeDivide, 10)

@@ -1,0 +1,6 @@
+# expect: [1, 2, 3]
+# .map() on list of Option values - extract inner values
+main() = {
+  opts = [Some(1), Some(2), Some(3)]
+  opts.map(o => o.unwrapOr(0))
+}

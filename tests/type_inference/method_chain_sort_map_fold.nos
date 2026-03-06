@@ -1,0 +1,3 @@
+# expect: "123"
+formatList(xs) = xs.sort().map(x => show(x)).fold("", (a, b) => a ++ b)
+main() = formatList([3, 1, 2])

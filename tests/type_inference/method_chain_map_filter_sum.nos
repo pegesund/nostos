@@ -1,0 +1,3 @@
+# expect: 24
+compute(xs) = xs.map(x => x * 2).filter(x => x > 5).sum()
+main() = compute([1, 2, 3, 4, 5])

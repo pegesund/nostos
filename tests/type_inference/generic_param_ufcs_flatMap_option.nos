@@ -1,0 +1,4 @@
+# expect: Some(6)
+apply(f, x) = f(x).flatMap(v => Some(v + 1))
+safeParse(s) = if s == "5" then Some(5) else None
+main() = apply(safeParse, "5")

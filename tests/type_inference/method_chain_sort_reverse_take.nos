@@ -1,0 +1,3 @@
+# expect: [5, 4, 3]
+pipeline(xs) = xs.sort().reverse().take(3)
+main() = pipeline([3, 1, 4, 1, 5, 2])

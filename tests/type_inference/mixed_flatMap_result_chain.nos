@@ -1,0 +1,5 @@
+# expect: Ok(6)
+# .flatMap() on Result chain
+main() = {
+  Ok(2).flatMap(x => Ok(x + 1)).flatMap(x => Ok(x * 2))
+}

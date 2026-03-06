@@ -1,0 +1,4 @@
+# expect: Some("42")
+process(f, x) = f(x).map(v => show(v))
+lookup(k) = if k == "a" then Some(42) else None
+main() = process(lookup, "a")

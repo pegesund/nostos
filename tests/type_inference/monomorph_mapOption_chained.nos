@@ -1,0 +1,7 @@
+# expect: Some(7)
+mapOption(f, opt) =
+  match opt {
+    Some(x) -> Some(f(x))
+    None -> None
+  }
+main() = mapOption(x => x + 1, mapOption(x => x * 2, Some(3)))

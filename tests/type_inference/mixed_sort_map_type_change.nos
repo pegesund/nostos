@@ -1,0 +1,5 @@
+# expect: ["1", "2", "3"]
+# .sort() after .map() that changes element type
+main() = {
+  [3, 1, 2].sort().map(x => show(x))
+}

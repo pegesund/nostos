@@ -1,0 +1,11 @@
+# expect: 42
+getOrDefault(opt, def) =
+  match opt {
+    Some(x) -> x
+    None -> def
+  }
+main() = {
+  a = getOrDefault(Some(42), 0)
+  b = getOrDefault(None, "hello")
+  a
+}

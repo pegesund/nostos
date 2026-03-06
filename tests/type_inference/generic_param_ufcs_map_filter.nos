@@ -1,0 +1,4 @@
+# expect: [2, 4, 6]
+transform(f, xs) = xs.map(f).filter(x => x > 0)
+double(x) = x * 2
+main() = transform(double, [1, 2, 3])

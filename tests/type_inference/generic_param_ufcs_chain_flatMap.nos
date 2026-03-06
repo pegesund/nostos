@@ -1,0 +1,5 @@
+# expect: Some(10)
+chain(f, g, x) = f(x).flatMap(g)
+half(x) = if x % 2 == 0 then Some(x / 2) else None
+addFive(x) = Some(x + 5)
+main() = chain(half, addFive, 10)

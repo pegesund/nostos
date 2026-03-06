@@ -1,0 +1,4 @@
+# expect: [2, 4]
+# .filter() on result of generic function
+doubleAll(xs) = xs.map(x => x * 2)
+main() = doubleAll([1, 2, 3]).filter(x => x < 5)

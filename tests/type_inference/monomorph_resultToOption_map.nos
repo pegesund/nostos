@@ -1,0 +1,7 @@
+# expect: Some(11)
+resultToOption(r) =
+  match r {
+    Ok(x) -> Some(x)
+    Err(_) -> None
+  }
+main() = resultToOption(Ok(10)).map(x => x + 1)

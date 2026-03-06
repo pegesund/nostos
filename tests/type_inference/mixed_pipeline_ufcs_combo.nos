@@ -1,0 +1,5 @@
+# expect: 6
+# Pipeline combining UFCS and function-form calls
+addOne(x) = x + 1
+double(x) = x * 2
+main() = 1 |> addOne |> double |> addOne |> addOne

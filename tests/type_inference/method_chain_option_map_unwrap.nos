@@ -1,0 +1,4 @@
+# expect: 6
+safeDiv(a, b) = if b == 0 then None else Some(a / b)
+processOpt(x) = safeDiv(x, 2).map(n => n + 1).unwrapOr(0)
+main() = processOpt(10)
