@@ -20046,6 +20046,11 @@ impl Compiler {
                         return false; // It's a leaked type parameter
                     }
                 }
+                // Check if unresolved type variables are baked into the name string
+                // (e.g., "Option[?26]" instead of Named { name: "Option", args: [Var(26)] })
+                if name.contains('?') {
+                    return false;
+                }
                 args.iter().all(|a| self.is_type_structurally_resolved(a))
             }
             Type::IO(inner) => self.is_type_structurally_resolved(inner),
@@ -20989,7 +20994,8 @@ impl Compiler {
         // E.g., `intermediate = step1(Ok(31))` - after compiling step1(Ok(31)),
         // step1$Result exists with a known return type in its signature.
         let value_type = if let Some(ref ty_str) = value_type {
-            if ty_str.contains("(polymorphic)") || ty_str.contains("(type parameter)") {
+            if ty_str.contains("(polymorphic)") || ty_str.contains("(type parameter)")
+                || ty_str.contains('?') {
                 // Try to get a better type after compilation
                 if let Expr::Call(inner_func, _, _, _) = &binding.value {
                     if let Expr::Var(inner_ident) = inner_func.as_ref() {

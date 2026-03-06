@@ -1,0 +1,13 @@
+# expect: [2, 4, 6]
+# Test: let-bound chained polymorphic functions (intermediate variables)
+wrapAll(xs) = xs.map(x => Some(x))
+unwrapAll(xs) = xs.map(x => match x {
+  Some(v) -> v
+  None -> 0
+})
+doubleAll(xs) = xs.map(x => x * 2)
+main() = {
+  wrapped = wrapAll([1, 2, 3])
+  values = unwrapAll(wrapped)
+  doubleAll(values)
+}
