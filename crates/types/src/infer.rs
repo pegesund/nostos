@@ -1489,6 +1489,63 @@ impl<'a> InferCtx<'a> {
             return Type::List(Box::new(Self::parse_simple_type(inner, param_subst, var_subst, next_var, qvar_map)));
         }
 
+        // Map[K, V]
+        if s.starts_with("Map[") && s.ends_with(']') {
+            let inner = &s[4..s.len() - 1];
+            // Split on comma at depth 0
+            let mut depth = 0i32;
+            let mut split_pos = None;
+            for (i, ch) in inner.char_indices() {
+                match ch {
+                    '[' | '(' => depth += 1,
+                    ']' | ')' => depth -= 1,
+                    ',' if depth == 0 => { split_pos = Some(i); break; }
+                    _ => {}
+                }
+            }
+            if let Some(pos) = split_pos {
+                let k = Self::parse_simple_type(inner[..pos].trim(), param_subst, var_subst, next_var, qvar_map);
+                let v = Self::parse_simple_type(inner[pos+1..].trim(), param_subst, var_subst, next_var, qvar_map);
+                return Type::Map(Box::new(k), Box::new(v));
+            }
+        }
+
+        // Set[X]
+        if s.starts_with("Set[") && s.ends_with(']') {
+            let inner = &s[4..s.len() - 1];
+            return Type::Set(Box::new(Self::parse_simple_type(inner, param_subst, var_subst, next_var, qvar_map)));
+        }
+
+        // Generic named types: Name[Args] (e.g., Option[Int], Result[Int, String])
+        // Must come after List/Map/Set to avoid shadowing built-in types
+        if let Some(bracket_pos) = s.find('[') {
+            if s.ends_with(']') {
+                let name = &s[..bracket_pos];
+                let args_str = &s[bracket_pos + 1..s.len() - 1];
+                // Parse comma-separated args at depth 0
+                let mut args = Vec::new();
+                let mut current = String::new();
+                let mut depth = 0i32;
+                for ch in args_str.chars() {
+                    match ch {
+                        '[' | '(' => { depth += 1; current.push(ch); }
+                        ']' | ')' => { depth -= 1; current.push(ch); }
+                        ',' if depth == 0 => {
+                            if !current.trim().is_empty() {
+                                args.push(Self::parse_simple_type(current.trim(), param_subst, var_subst, next_var, qvar_map));
+                            }
+                            current.clear();
+                        }
+                        _ => current.push(ch),
+                    }
+                }
+                if !current.trim().is_empty() {
+                    args.push(Self::parse_simple_type(current.trim(), param_subst, var_subst, next_var, qvar_map));
+                }
+                return Type::Named { name: name.to_string(), args };
+            }
+        }
+
         // Handle ?N type variable references (from first-pass inference embedded in HasMethod args)
         if let Some(stripped) = s.strip_prefix('?') {
             if let Ok(id) = stripped.parse::<u32>() {

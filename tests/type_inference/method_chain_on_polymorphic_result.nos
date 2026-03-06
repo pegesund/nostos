@@ -1,0 +1,12 @@
+# expect: [2, 4, 6]
+# Test: method chain on result of polymorphic function with nested generic type
+wrapAll(xs) = xs.map(x => Some(x))
+unwrap(opt) = match opt {
+  Some(v) -> v * 2
+  None -> 0
+}
+main() = {
+  wrapped = wrapAll([1, 2, 3])
+  result = wrapped.map(x => unwrap(x))
+  result
+}

@@ -6889,9 +6889,15 @@ impl Compiler {
         match ty {
             nostos_syntax::TypeExpr::Name(ident) => {
                 let name = &ident.node;
-                // Skip built-in types and single-letter type params (both lowercase like 'a' and uppercase like 'T')
-                if self.is_builtin_type_name(name) ||
-                   (name.len() == 1 && name.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false)) {
+                // Skip built-in types and type params.
+                // Type params include:
+                //   - Single-letter params (both lowercase 'a' and uppercase 'T')
+                //   - Multi-char all-lowercase params (like 'ok', 'err', 'value', 'elem')
+                //     User-defined types in Nostos always start with an uppercase letter,
+                //     so any all-lowercase identifier is a type parameter, not a type name.
+                let is_type_param = name.len() == 1 && name.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false)
+                    || name.chars().all(|c| c.is_ascii_lowercase() || c == '_') && !name.is_empty();
+                if self.is_builtin_type_name(name) || is_type_param {
                     return name.clone();
                 }
                 // Check if this is a user-defined type that needs qualification
@@ -19999,21 +20005,14 @@ impl Compiler {
     }
 
     /// Strip unresolved type parameters from a type string for monomorphization key matching.
-    /// E.g., "Option[?X]" → "Option", "Result[Int, ?E]" → "Result[Int, ?E]" (kept as-is since
-    /// some params are concrete), "Map[String, ?V]" → "Map[String, ?V]".
-    /// Only strips ALL params if none are concrete. Otherwise keeps the full type.
+    /// E.g., "Option[?X]" → "Option[?X]" (kept as-is), "Result[List[Int], ?E]" → "Result[List[Int], ?E]".
+    /// For partially-resolved types (some params concrete, some unresolved), we keep the full
+    /// type string so that monomorphization can propagate the known inner types (e.g., List[Int])
+    /// into pattern bindings. Stripping to just the bare base type loses crucial information.
     fn strip_unresolved_params_for_mono(&self, t: &str) -> String {
-        if self.is_type_concrete(t) {
-            return t.to_string();
-        }
-        if let Some(bracket_start) = t.find('[') {
-            if t.ends_with(']') {
-                let base = &t[..bracket_start];
-                if self.is_type_concrete(base) {
-                    return base.to_string();
-                }
-            }
-        }
+        // Return the type as-is. The monomorphized function gets the full type annotation
+        // (e.g., r: Result[List[Int], ?2]) so that pattern matching can propagate
+        // the known inner types (xs: List[Int]) into the function body.
         t.to_string()
     }
 
