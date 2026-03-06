@@ -1875,27 +1875,22 @@ impl<'a> InferCtx<'a> {
                 continue;
             }
 
-            // Check parameterized types: generic Named types (Box[Int], Option[String])
-            // and builtin container types (Set[Int], Map[K,V], List[T]).
-            // Normal unification handles these but its errors may get dropped as
-            // UnificationFailed. This deferred check surfaces mismatches that slip through.
-            let is_parameterized = matches!(&resolved_ann,
-                Type::Named { args, .. } if !args.is_empty())
-                || matches!(&resolved_ann, Type::Set(_) | Type::Map(_, _) | Type::List(_));
-            if !is_parameterized {
-                continue;
-            }
-
-            // Compare display strings to avoid false positives from internal Type representation
-            // differences (e.g., two Option[Val] with different internal ids but same semantics)
-            let val_str = resolved_value.display();
-            let ann_str = resolved_ann.display();
-            if val_str != ann_str {
-                self.last_error_span = Some(*span);
-                return Some(TypeError::Mismatch {
-                    expected: ann_str,
-                    found: val_str,
-                });
+            // Check if types are compatible (accounting for aliases like Float/Float64, Int/Int64)
+            let types_compatible = resolved_value == resolved_ann
+                || matches!((&resolved_value, &resolved_ann),
+                    (Type::Float, Type::Float64) | (Type::Float64, Type::Float) |
+                    (Type::Int, Type::Int64) | (Type::Int64, Type::Int));
+            if !types_compatible {
+                // For Named types, also resolve aliases (e.g., module.Type vs Type)
+                let val_str = resolved_value.display();
+                let ann_str = resolved_ann.display();
+                if val_str != ann_str {
+                    self.last_error_span = Some(*span);
+                    return Some(TypeError::Mismatch {
+                        expected: ann_str,
+                        found: val_str,
+                    });
+                }
             }
         }
         None

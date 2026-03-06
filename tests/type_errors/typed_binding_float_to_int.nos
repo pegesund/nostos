@@ -1,0 +1,7 @@
+# expect_error: expected Int, found Float
+# Test: typed binding y: Int = float_value should report correct expected/found direction
+main() = {
+  x = 3.14
+  y: Int = x
+  y
+}
