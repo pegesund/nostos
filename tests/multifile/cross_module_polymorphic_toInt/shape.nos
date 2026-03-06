@@ -1,0 +1,6 @@
+# Helper module for cross-module polymorphic toInt test
+pub type Shape = CircleS(Float) | SquareS(Float)
+pub computeArea(s) = match s {
+  CircleS(r) -> 3.14159 * r * r
+  SquareS(side) -> side * side
+}

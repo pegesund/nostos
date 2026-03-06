@@ -1,0 +1,9 @@
+# expect: 7
+# Tests that .toInt() works on return value of cross-module polymorphic function
+use shape.*
+use ops.*
+main() = {
+  shapes = [CircleS(1.0), SquareS(2.0)]
+  total = totalArea(shapes)
+  total.toInt()
+}

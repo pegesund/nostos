@@ -12156,6 +12156,50 @@ impl AsyncVM {
             }),
         }));
 
+        // Generic toInt - converts any numeric type to Int (used when type is polymorphic at compile time)
+        self.register_native("toInt", Arc::new(GcNativeFn {
+            name: "toInt".to_string(),
+            arity: 1,
+            func: Box::new(|args, _heap| {
+                match &args[0] {
+                    GcValue::Int64(i) => Ok(GcValue::Int64(*i)),
+                    GcValue::Float64(f) => Ok(GcValue::Int64(*f as i64)),
+                    GcValue::Int8(i) => Ok(GcValue::Int64(*i as i64)),
+                    GcValue::Int16(i) => Ok(GcValue::Int64(*i as i64)),
+                    GcValue::Int32(i) => Ok(GcValue::Int64(*i as i64)),
+                    GcValue::UInt8(i) => Ok(GcValue::Int64(*i as i64)),
+                    GcValue::UInt16(i) => Ok(GcValue::Int64(*i as i64)),
+                    GcValue::UInt32(i) => Ok(GcValue::Int64(*i as i64)),
+                    _ => Err(RuntimeError::TypeError {
+                        expected: "numeric type".to_string(),
+                        found: "other".to_string(),
+                    }),
+                }
+            }),
+        }));
+
+        // Generic toFloat - converts any numeric type to Float (used when type is polymorphic at compile time)
+        self.register_native("toFloat", Arc::new(GcNativeFn {
+            name: "toFloat".to_string(),
+            arity: 1,
+            func: Box::new(|args, _heap| {
+                match &args[0] {
+                    GcValue::Int64(i) => Ok(GcValue::Float64(*i as f64)),
+                    GcValue::Float64(f) => Ok(GcValue::Float64(*f)),
+                    GcValue::Int8(i) => Ok(GcValue::Float64(*i as f64)),
+                    GcValue::Int16(i) => Ok(GcValue::Float64(*i as f64)),
+                    GcValue::Int32(i) => Ok(GcValue::Float64(*i as f64)),
+                    GcValue::UInt8(i) => Ok(GcValue::Float64(*i as f64)),
+                    GcValue::UInt16(i) => Ok(GcValue::Float64(*i as f64)),
+                    GcValue::UInt32(i) => Ok(GcValue::Float64(*i as f64)),
+                    _ => Err(RuntimeError::TypeError {
+                        expected: "numeric type".to_string(),
+                        found: "other".to_string(),
+                    }),
+                }
+            }),
+        }));
+
         // String.trim
         self.register_native("String.trim", Arc::new(GcNativeFn {
             name: "String.trim".to_string(),
