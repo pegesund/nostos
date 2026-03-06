@@ -1,0 +1,5 @@
+# expect: ["1", "2", "3"]
+# Tests that `show` can be used as a first-class function reference
+# passed to higher-order functions like map
+stringify2(xs) = xs.map(show)
+main() = stringify2([1, 2, 3])

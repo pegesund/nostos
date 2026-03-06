@@ -10772,6 +10772,59 @@ impl Compiler {
                         return result;
                     }
 
+                    // Check if this is a generic builtin (show, hash, copy, toInt, toFloat)
+                    // being used as a first-class function reference (e.g., xs.map(show)).
+                    // These builtins work on any type via native dispatch, so we can
+                    // create a small wrapper function on the fly.
+                    if matches!(name.as_str(), "show" | "hash" | "copy") {
+                        // In a generic context, defer to monomorphization
+                        if self.current_fn_generic_hm
+                            || !self.current_fn_type_params.is_empty()
+                            || !self.current_type_bindings.is_empty()
+                        {
+                            return Err(CompileError::UnresolvedTraitMethod {
+                                method: name.clone(),
+                                span: ident.span,
+                            });
+                        }
+                        // In a concrete context, create a wrapper function that calls the native
+                        let native_name = name.clone();
+                        let mut wrapper_chunk = Chunk::new();
+                        wrapper_chunk.register_count = 2;
+                        // The wrapper takes 1 arg (reg 0) and calls the native, returning result in reg 1
+                        let dst_reg: Reg = 1;
+                        let arg_reg: Reg = 0;
+                        if let Some(&idx) = self.native_indices.get(native_name.as_str()) {
+                            wrapper_chunk.emit(Instruction::CallNativeIdx(dst_reg, idx, vec![arg_reg].into()), 0);
+                        } else {
+                            let name_idx = wrapper_chunk.add_constant(Value::String(Arc::new(native_name.clone())));
+                            wrapper_chunk.emit(Instruction::CallNative(dst_reg, name_idx, vec![arg_reg].into()), 0);
+                        }
+                        wrapper_chunk.emit(Instruction::Return(dst_reg), 0);
+                        let wrapper_fn = FunctionValue {
+                            name: format!("<{}_wrapper>", native_name),
+                            arity: 1,
+                            param_names: vec!["x".to_string()],
+                            code: Arc::new(wrapper_chunk),
+                            module: if self.module_path.is_empty() { None } else { Some(self.module_path.join(".")) },
+                            source_span: None,
+                            jit_code: None,
+                            call_count: std::sync::atomic::AtomicU32::new(0),
+                            debug_symbols: vec![],
+                            source_code: None,
+                            source_file: None,
+                            doc: None,
+                            signature: None,
+                            param_types: vec![],
+                            return_type: None,
+                            required_params: None,
+                        };
+                        let dst = self.alloc_reg();
+                        let idx = self.chunk.add_constant(Value::Function(Arc::new(wrapper_fn)));
+                        self.chunk.emit(Instruction::LoadConst(dst, idx), line);
+                        return Ok(dst);
+                    }
+
                     // Check if this is a trait method being used as a first-class
                     // function reference (e.g., items.map(score) where score is a trait method).
                     // Use HM-inferred type to find the concrete trait impl.
