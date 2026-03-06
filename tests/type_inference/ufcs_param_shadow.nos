@@ -1,0 +1,6 @@
+# expect: [1, 2, 3]
+# Test: UFCS method call when parameter name shadows method name
+# Previously caused runtime error: "expected Function or Closure, got Bool(true)"
+# because xs.take(2) resolved "take" to the Bool parameter instead of stdlib.list.take.
+takeOrDrop(take, n, xs) = if take then xs.take(n) else xs.drop(n)
+main() = takeOrDrop(true, 3, [1, 2, 3, 4, 5])
