@@ -1,0 +1,14 @@
+# expect: 42
+# Tests that multi-char lowercase type parameters (ok, err) in cross-module
+# generic types are correctly treated as TypeParam, not as Named types.
+# Bug: "ops.ok does not implement Num" was raised because 'ok' was
+# being resolved as a module-qualified Named type instead of TypeParam.
+use ops.*
+
+main() = {
+  r = addWins(Win(20), Win(22))
+  match r {
+    Win(v) -> v
+    Lose(_) -> -1
+  }
+}

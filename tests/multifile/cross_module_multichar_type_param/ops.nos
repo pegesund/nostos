@@ -1,0 +1,10 @@
+# Generic type with multi-char lowercase type parameters (like 'ok', 'err')
+# Tests that these are treated as TypeParam not as Named types when
+# used across module boundaries
+pub type Outcome[ok, err] = Win(ok) | Lose(err)
+
+pub addWins(a: Outcome[Int, String], b: Outcome[Int, String]) = match (a, b) {
+  (Win(x), Win(y)) -> Win(x + y)
+  (Lose(e), _) -> Lose(e)
+  (_, Lose(e)) -> Lose(e)
+}
