@@ -2512,6 +2512,31 @@ impl Compiler {
 
     /// Pre-register type names and visibility from a module.
     /// Called BEFORE pre_register_module_metadata so that `use module.*` statements
+    /// Pre-register top-level value bindings (e.g., `pub pi = 3.14159`) from a module
+    /// so that `use module.pi` in other modules can find them regardless of compilation order.
+    /// This must be called for ALL modules before any use-statement processing (Pass 1.5b).
+    pub fn pre_register_module_bindings(&mut self, module: &Module, module_path: Vec<String>) {
+        use nostos_syntax::ast::{Item, Pattern};
+
+        let old_module_path = std::mem::replace(&mut self.module_path, module_path);
+
+        for item in &module.items {
+            if let Item::Binding(binding) = item {
+                if let Pattern::Var(ident) = &binding.pattern {
+                    let qualified_name = self.qualify_name(&ident.node);
+                    if !self.top_level_bindings.contains_key(&qualified_name) {
+                        self.top_level_bindings.insert(
+                            qualified_name,
+                            (binding.clone(), self.module_path.clone(), self.imports.clone()),
+                        );
+                    }
+                }
+            }
+        }
+
+        self.module_path = old_module_path;
+    }
+
     /// in other modules can find types from this module via type_visibility.
     /// This is critical for cross-module type references: when canvas.nos has
     /// `use types.*` and `type DrawCmd = Draw(Shape, Color)`, the Color type from

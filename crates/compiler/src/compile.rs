@@ -9431,13 +9431,13 @@ impl Compiler {
         // Check if function name shadows a built-in function
         // Only check for user-defined functions (not stdlib)
         // Also skip trait method implementations (contain '.') - they're called via method syntax
-        // In multi-file projects, skip the check: functions are module-qualified (e.g., types.eval)
-        // and accessed via imports, so they don't truly shadow builtins.
+        // Note: we DO check multi-file modules - when a function like `isEmpty` is defined in
+        // module `tree` and imported via `use tree.isEmpty`, it WILL shadow the builtin isEmpty
+        // and should be flagged (the builtin takes precedence, so user's function won't be called).
         let is_stdlib = self.module_path.first().map_or(false, |m| m == "stdlib")
             || self.current_source_name.as_ref().map(|s| s.contains("stdlib/") || s.starts_with("stdlib")).unwrap_or(false);
         let is_trait_impl = def.name.node.contains('.');
-        let is_multifile_module = !self.module_path.is_empty();
-        if !is_stdlib && !is_trait_impl && !is_multifile_module {
+        if !is_stdlib && !is_trait_impl {
             // Check for builtin shadowing
             if let Some((builtin_name, builtin_doc)) = check_builtin_shadowing(&def.name.node) {
                 return Err(CompileError::DefinitionError {
@@ -14282,7 +14282,7 @@ impl Compiler {
                             .unwrap_or_else(|| "unknown".to_string());
 
                         // Check if this is a polymorphic type (type variable)
-                        let is_polymorphic = receiver_type.contains("(polymorphic)");
+                        let is_polymorphic = receiver_type.contains("polymorphic");
 
                         // Check if receiver is a type parameter (e.g., "T" from current function
                         // or enclosing function's type params). This happens when a trait method
@@ -15716,7 +15716,7 @@ impl Compiler {
                             // functions also might be numeric at monomorphization time.
                             // Polymorphic return types ("l (polymorphic)") also might be numeric.
                             let is_type_variable = arg_type.starts_with('?')
-                                || arg_type.contains("(polymorphic)")
+                                || arg_type.contains("polymorphic")
                                 || (arg_type.len() == 1 && arg_type.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false));
                             let is_numeric = matches!(arg_type.as_str(),
                                 "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
@@ -15819,7 +15819,7 @@ impl Compiler {
                         .and_then(|e| self.expr_type_info(e).display_name())
                         .map(|t| {
                             t.starts_with('?')
-                            || t.contains("(polymorphic)")
+                            || t.contains("polymorphic")
                             || (t.len() == 1 && t.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false))
                             || matches!(t.as_str(),
                                 "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
@@ -24200,6 +24200,7 @@ impl Compiler {
             let prefix = format!("{}/", name);
             let mut ret: Option<String> = None;
             let mut found_any = false;
+            let mut sig_ret: Option<String> = None;
             for (key, func) in &self.functions {
                 if key == name || key.starts_with(&prefix) {
                     if let Some(rt) = &func.return_type {
@@ -24209,14 +24210,55 @@ impl Compiler {
                             Some(prev) if prev != rt => return None,
                             _ => {}
                         }
+                    } else if sig_ret.is_none() {
+                        // No explicit return_type, but check HM-inferred signature
+                        // for functions like `sumToFloat(xs: [Int]) = xs.sum().toFloat()`
+                        // where the return type is inferred by HM but not annotated.
+                        if let Some(ref sig) = func.signature {
+                            let sig_core = if let Some(idx) = sig.find(" => ") {
+                                &sig[idx + 4..]
+                            } else {
+                                sig.as_str()
+                            };
+                            if let Some(arrow_pos) = sig_core.rfind(" -> ") {
+                                let rt = sig_core[arrow_pos + 4..].trim();
+                                if !rt.is_empty() && !rt.starts_with('?')
+                                    && !rt.contains("polymorphic")
+                                    && self.is_type_concrete(rt)
+                                {
+                                    sig_ret = Some(rt.to_string());
+                                }
+                            }
+                        }
                     }
                 }
             }
             if found_any {
                 return ret;
             }
+            if sig_ret.is_some() {
+                return sig_ret;
+            }
         } else if let Some(ret_type) = self.find_function(name).and_then(|f| f.return_type.clone()) {
             return Some(ret_type);
+        } else if let Some(func) = self.find_function(name) {
+            // No explicit return_type annotation, but check HM-inferred signature
+            if let Some(ref sig) = func.signature {
+                let sig_core = if let Some(idx) = sig.find(" => ") {
+                    &sig[idx + 4..]
+                } else {
+                    sig.as_str()
+                };
+                if let Some(arrow_pos) = sig_core.rfind(" -> ") {
+                    let rt = sig_core[arrow_pos + 4..].trim();
+                    if !rt.is_empty() && !rt.starts_with('?')
+                        && !rt.contains("polymorphic")
+                        && self.is_type_concrete(rt)
+                    {
+                        return Some(rt.to_string());
+                    }
+                }
+            }
         }
 
         // Check extension function signatures

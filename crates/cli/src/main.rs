@@ -3358,6 +3358,15 @@ fn main() -> ExitCode {
             compiler.pre_register_module_type_names(&parsed.module, parsed.module_path.clone());
         }
 
+        // Pass 1.5a3: Pre-register top-level pub value bindings from ALL modules.
+        // This must happen before Pass 1.5b so that `use module.pi` statements
+        // can find value bindings from any module regardless of alphabetical ordering.
+        // Without this pass, modules like `main.nos` (alphabetically first) would fail
+        // to import value bindings from modules like `vals.nos` (alphabetically later).
+        for parsed in &parsed_modules {
+            compiler.pre_register_module_bindings(&parsed.module, parsed.module_path.clone());
+        }
+
         // Pass 1.5a2: Compile ALL type definitions from ALL modules.
         // This must happen before Pass 1.5b so that trait impl registration can
         // determine if a type is generic (has type parameters). Without this,
