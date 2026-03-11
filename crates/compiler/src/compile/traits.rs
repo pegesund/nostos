@@ -1026,21 +1026,15 @@ impl Compiler {
                 }
             }
 
-            // For cross-module trait impls, temporarily clear module_path so
-            // compile_fn_def's qualify_name doesn't add the wrong module prefix.
-            // The modified_def.name already contains the fully qualified name.
-            let saved_module_path_for_cross = if is_cross_module {
-                Some(std::mem::take(&mut self.module_path))
-            } else {
-                None
-            };
-
-            self.compile_fn_def(&modified_def)?;
-
-            // Restore module_path if it was saved for cross-module
-            if let Some(saved_path) = saved_module_path_for_cross {
-                self.module_path = saved_path;
+            // For cross-module trait impls, the modified_def.name already contains
+            // the fully qualified name (e.g., "defs.Widget.defs.Formatter.formatWidget").
+            // Set a flag so compile_fn_def skips qualify_name on the function name,
+            // but keeps module_path intact so the method body can resolve same-module
+            // function calls correctly (e.g., calling helper functions in the impl module).
+            if is_cross_module {
+                self.fn_name_already_qualified = true;
             }
+            self.compile_fn_def(&modified_def)?;
 
             // Restore param_types
             self.param_types = saved_param_types;

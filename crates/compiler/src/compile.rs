@@ -1643,6 +1643,9 @@ pub struct Compiler {
     polymorphic_fns: HashSet<String>,
     /// Current function name being compiled (for self-recursion optimization)
     current_function_name: Option<String>,
+    /// When true, compile_fn_def skips qualify_name on the function name.
+    /// Used for cross-module trait impls where the name is already fully qualified.
+    fn_name_already_qualified: bool,
     /// Current function's type parameters (for checking nested trait bounds)
     current_fn_type_params: Vec<TypeParam>,
     /// Whether the current function has a generic HM-inferred signature (unresolved type vars).
@@ -2002,6 +2005,7 @@ impl Compiler {
             fn_type_params: HashMap::new(),
             polymorphic_fns: HashSet::new(),
             current_function_name: None,
+            fn_name_already_qualified: false,
             current_fn_type_params: Vec::new(),
             current_fn_generic_hm: false,
             current_type_bindings: HashMap::new(),
@@ -2616,6 +2620,7 @@ impl Compiler {
             fn_type_params: HashMap::new(),
             polymorphic_fns: HashSet::new(),
             current_function_name: None,
+            fn_name_already_qualified: false,
             current_fn_type_params: Vec::new(),
             current_fn_generic_hm: false,
             current_type_bindings: HashMap::new(),
@@ -9626,7 +9631,13 @@ impl Compiler {
         //   factorial(0) = 1           # no type
         //   factorial(n: Int) = ...    # has type
         // Both should resolve to factorial/Int
-        let base_name = self.qualify_name(&def.name.node);
+        let base_name = if self.fn_name_already_qualified {
+            // Cross-module trait impl: name is already fully qualified, don't re-qualify.
+            self.fn_name_already_qualified = false;
+            def.name.node.clone()
+        } else {
+            self.qualify_name(&def.name.node)
+        };
         let arity = def.clauses[0].params.len();
         let mut param_types: Vec<String> = vec!["_".to_string(); arity];
 

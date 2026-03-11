@@ -1,0 +1,4 @@
+pub type Widget = { name: String }
+pub trait Formatter
+  formatWidget(self) -> String
+end

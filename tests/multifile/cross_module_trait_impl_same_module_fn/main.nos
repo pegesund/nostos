@@ -1,0 +1,8 @@
+# expect: >>> gizmo
+# Test: cross-module trait impl can call functions defined in the same module
+use defs.{Widget, Formatter}
+use impl_mod.*
+main() = {
+  w = Widget(name: "gizmo")
+  w.formatWidget()
+}

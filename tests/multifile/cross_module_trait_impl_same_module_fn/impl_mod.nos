@@ -1,0 +1,6 @@
+use defs.{Widget, Formatter}
+# Helper function in the same module as the trait impl
+pub myPrefix() = ">>>"
+Widget: Formatter
+  formatWidget(self) = myPrefix() ++ " " ++ self.name
+end
