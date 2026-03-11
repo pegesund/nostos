@@ -20995,7 +20995,40 @@ impl Compiler {
             None
         };
 
+        // Pre-register local binding for recursive lambdas.
+        // When RHS is a Lambda and pattern is a simple Var, we check if the
+        // lambda body references the binding name. If so, we use a mutable cell
+        // so the closure captures by reference (not by value snapshot).
+        // E.g.: go(acc, n) = if n <= 0 then acc else go(acc + n, n - 1)
+        let pre_registered_local = if let Pattern::Var(ref ident) = binding.pattern {
+            if matches!(binding.value, Expr::Lambda(..)) && !self.locals.contains_key(&ident.node)
+                && self.expr_references_name(&binding.value, &ident.node)
+            {
+                // Create a cell initialized to Unit - the closure will capture this cell
+                let unit_reg = self.alloc_reg();
+                self.chunk.emit(Instruction::LoadUnit(unit_reg), 0);
+                let cell_reg = self.alloc_reg();
+                self.chunk.emit(Instruction::MakeCell(cell_reg, unit_reg), 0);
+                self.locals.insert(ident.node.clone(), LocalInfo {
+                    reg: cell_reg,
+                    is_float: false,
+                    mutable: true,  // Must be mutable for cell capture
+                    is_cell: true,
+                });
+                // Mark as closure-mutated so lambda compilation captures the cell
+                self.closure_mutated_vars.insert(ident.node.clone());
+                Some((ident.node.clone(), cell_reg))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let value_reg = self.compile_expr_tail(&binding.value, false)?;
+
+        // Note: for pre-registered recursive lambdas, the CellSet happens in the
+        // existing mutable binding path below (existing_info.is_cell branch).
 
         // After compilation, re-check the type if it was polymorphic.
         // Compilation may have triggered monomorphization of inner polymorphic calls,
@@ -21174,6 +21207,45 @@ impl Compiler {
         let dst = self.alloc_reg();
         self.chunk.emit(Instruction::LoadUnit(dst), 0);
         Ok(dst)
+    }
+
+    /// Check if an expression references a given variable name (shallow check for recursive lambda detection)
+    fn expr_references_name(&self, expr: &Expr, name: &str) -> bool {
+        match expr {
+            Expr::Var(ident) => ident.node == name,
+            Expr::Lambda(_, body, _) => self.expr_references_name(body, name),
+            Expr::Call(func, _, args, _) => {
+                self.expr_references_name(func, name)
+                    || args.iter().any(|a| match a {
+                        CallArg::Positional(e) | CallArg::Named(_, e) => self.expr_references_name(e, name),
+                    })
+            }
+            Expr::If(cond, then_br, else_br, _) => {
+                self.expr_references_name(cond, name)
+                    || self.expr_references_name(then_br, name)
+                    || self.expr_references_name(else_br, name)
+            }
+            Expr::Block(stmts, _) => stmts.iter().any(|s| match s {
+                Stmt::Expr(e) => self.expr_references_name(e, name),
+                Stmt::Let(b) => self.expr_references_name(&b.value, name),
+                _ => false,
+            }),
+            Expr::BinOp(l, _, r, _) => {
+                self.expr_references_name(l, name) || self.expr_references_name(r, name)
+            }
+            Expr::UnaryOp(_, e, _) => self.expr_references_name(e, name),
+            Expr::Tuple(es, _) => es.iter().any(|e| self.expr_references_name(e, name)),
+            Expr::List(es, _, _) => es.iter().any(|e| self.expr_references_name(e, name)),
+            Expr::Match(scrut, arms, _) => {
+                self.expr_references_name(scrut, name)
+                    || arms.iter().any(|arm| self.expr_references_name(&arm.body, name))
+            }
+            Expr::FieldAccess(e, _, _) => self.expr_references_name(e, name),
+            Expr::Index(e, idx, _) => {
+                self.expr_references_name(e, name) || self.expr_references_name(idx, name)
+            }
+            _ => false,
+        }
     }
 
     /// Check if a type name represents a float type
