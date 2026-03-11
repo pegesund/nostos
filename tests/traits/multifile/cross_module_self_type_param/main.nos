@@ -1,0 +1,9 @@
+# expect: hello world
+use traits.{Combinable, Printable, Txt}
+use impls.*
+main() = {
+  t1 = Txt(content: "hello ")
+  t2 = Txt(content: "world")
+  combined = t1.combine(t2)
+  combined.toText()
+}

@@ -1,0 +1,9 @@
+pub trait Combinable
+  combine(self, other: self) -> self
+end
+
+pub trait Printable
+  toText(self) -> String
+end
+
+pub type Txt = { content: String }

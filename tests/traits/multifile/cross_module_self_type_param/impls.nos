@@ -1,0 +1,7 @@
+use traits.{Combinable, Printable, Txt}
+Txt: Combinable
+  combine(a, b) = Txt(content: a.content ++ b.content)
+end
+Txt: Printable
+  toText(t) = t.content
+end
