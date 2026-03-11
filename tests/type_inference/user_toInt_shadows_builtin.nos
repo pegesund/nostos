@@ -1,0 +1,20 @@
+# expect: 7
+# Test that user-defined functions named toInt/toFloat can shadow
+# the builtin numeric conversion functions in multi-file projects.
+# Bug: builtin toInt(a -> Int) was rejecting non-numeric args even when
+# user defined their own toInt function accepting custom types.
+
+type Nat = Zero | Succ(Nat)
+
+toInt(n) = match n {
+  Zero -> 0
+  Succ(m) -> 1 + toInt(m)
+}
+
+fromInt(n) = if n <= 0 then Zero else Succ(fromInt(n - 1))
+
+main() = {
+  three = fromInt(3)
+  four = fromInt(4)
+  toInt(three) + toInt(four)
+}

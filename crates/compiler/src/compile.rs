@@ -15723,7 +15723,13 @@ impl Compiler {
                     // Skip this check if user has defined their own function with this name
                     // (user-defined overloads should shadow builtin numeric conversions)
                     // Check fn_asts_by_base (populated early) and imports for cross-module
+                    let module_qualified = if self.module_path.is_empty() {
+                        qname.clone()
+                    } else {
+                        format!("{}.{}", self.module_path.join("."), qname)
+                    };
                     let has_user_defined = self.fn_asts_by_base.contains_key(qname.as_str())
+                        || self.fn_asts_by_base.contains_key(module_qualified.as_str())
                         || self.imports.get(qname.as_str())
                             .map(|qualified| self.fn_asts_by_base.contains_key(qualified.as_str()))
                             .unwrap_or(false);
@@ -25551,8 +25557,11 @@ impl Compiler {
                         // Also with wildcard suffix
                         let short_wildcard = format!("{}{}", short_name, wildcard_suffix);
                         env.insert_function(short_wildcard, func_type.clone());
-                        // Also insert bare name for simple lookups (first wins)
-                        if !env.functions.contains_key(short_name) {
+                        // Also insert bare name for simple lookups
+                        // User module functions (not stdlib) should override builtins
+                        // e.g., user's `nat.toInt` should shadow builtin `toInt: a -> Int`
+                        let is_user_module = !base_name.starts_with("stdlib.");
+                        if is_user_module || !env.functions.contains_key(short_name) {
                             env.insert_function(short_name.to_string(), func_type);
                         }
                     }
