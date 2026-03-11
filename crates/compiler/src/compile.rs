@@ -10830,11 +10830,15 @@ impl Compiler {
                         return result;
                     }
 
-                    // Check if this is a generic builtin (show, hash, copy, toInt, toFloat)
+                    // Check if this is a generic builtin (show, hash, copy, toInt, toFloat, etc.)
                     // being used as a first-class function reference (e.g., xs.map(show)).
                     // These builtins work on any type via native dispatch, so we can
                     // create a small wrapper function on the fly.
-                    if matches!(name.as_str(), "show" | "hash" | "copy") {
+                    if matches!(name.as_str(), "show" | "hash" | "copy"
+                        | "toFloat" | "toFloat32" | "toFloat64"
+                        | "toInt" | "toInt8" | "toInt16" | "toInt32" | "toInt64"
+                        | "toUInt8" | "toUInt16" | "toUInt32" | "toUInt64"
+                        | "toBigInt") {
                         // In a generic context, defer to monomorphization
                         if self.current_fn_generic_hm
                             || !self.current_fn_type_params.is_empty()
@@ -10852,7 +10856,25 @@ impl Compiler {
                         // The wrapper takes 1 arg (reg 0) and calls the native, returning result in reg 1
                         let dst_reg: Reg = 1;
                         let arg_reg: Reg = 0;
-                        if let Some(&idx) = self.native_indices.get(native_name.as_str()) {
+                        // For numeric conversion builtins, emit the direct conversion instruction
+                        // instead of CallNative, since these are handled as instructions not natives
+                        let conversion_instr: Option<Instruction> = match native_name.as_str() {
+                            "toFloat" | "toFloat64" => Some(Instruction::IntToFloat(dst_reg, arg_reg)),
+                            "toFloat32" => Some(Instruction::ToFloat32(dst_reg, arg_reg)),
+                            "toInt" | "toInt64" => Some(Instruction::FloatToInt(dst_reg, arg_reg)),
+                            "toInt8" => Some(Instruction::ToInt8(dst_reg, arg_reg)),
+                            "toInt16" => Some(Instruction::ToInt16(dst_reg, arg_reg)),
+                            "toInt32" => Some(Instruction::ToInt32(dst_reg, arg_reg)),
+                            "toUInt8" => Some(Instruction::ToUInt8(dst_reg, arg_reg)),
+                            "toUInt16" => Some(Instruction::ToUInt16(dst_reg, arg_reg)),
+                            "toUInt32" => Some(Instruction::ToUInt32(dst_reg, arg_reg)),
+                            "toUInt64" => Some(Instruction::ToUInt64(dst_reg, arg_reg)),
+                            "toBigInt" => Some(Instruction::ToBigInt(dst_reg, arg_reg)),
+                            _ => None,
+                        };
+                        if let Some(instr) = conversion_instr {
+                            wrapper_chunk.emit(instr, 0);
+                        } else if let Some(&idx) = self.native_indices.get(native_name.as_str()) {
                             wrapper_chunk.emit(Instruction::CallNativeIdx(dst_reg, idx, vec![arg_reg].into()), 0);
                         } else {
                             let name_idx = wrapper_chunk.add_constant(Value::String(Arc::new(native_name.clone())));
