@@ -1,0 +1,13 @@
+# expect: [3, 5, 7]
+# Test: generic function with chained .map() on let-bound intermediate
+# AND a recursive local function definition.
+# Bug: the post-hoc map/flatMap ambiguity check used stale HM types
+# for local variables, not just parameters.
+process(xs) = {
+  step1 = xs.map((x) => x * 2)
+  step2 = step1.map((x) => x + 1)
+  go = (n) => if n <= 0 then 0 else go(n - 1)
+  _ = go(3)
+  step2
+}
+main() = process([1, 2, 3])
