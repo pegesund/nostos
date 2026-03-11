@@ -112,7 +112,12 @@ impl Compiler {
                         let pname = self.pattern_binding_name(&p.pattern)
                             .unwrap_or_else(|| "_".to_string());
                         let ptype = p.ty.as_ref()
-                            .map(|ty| self.type_expr_to_string(ty))
+                            .map(|ty| {
+                                let s = self.type_expr_to_string(ty);
+                                // Normalize lowercase "self" to "Self" so downstream
+                                // .replace("Self", impl_type) works for params like `other: self`
+                                if s == "self" { "Self".to_string() } else { s }
+                            })
                             .unwrap_or_else(|| "_".to_string());
                         (pname, ptype)
                     })
