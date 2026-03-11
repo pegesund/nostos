@@ -1,0 +1,11 @@
+pub trait Configurable
+    configure(self, verbose: Bool = false, level: Int = 1) -> String
+end
+
+pub type App = App { name: String }
+
+App: Configurable
+    configure(self, verbose: Bool = false, level: Int = 1) = {
+        self.name ++ " L" ++ show(level)
+    }
+end

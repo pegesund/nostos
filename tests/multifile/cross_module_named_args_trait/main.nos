@@ -1,0 +1,20 @@
+# expect: ok
+# Test: cross-module trait method UFCS with named args skipping default params
+use lib.{App, Configurable}
+main() = {
+    app = App(name: "Test")
+
+    # Named arg skipping earlier default param (cross-module)
+    r1 = app.configure(level: 3)
+    assert_eq("Test L3", r1)
+
+    # All defaults (cross-module)
+    r2 = app.configure()
+    assert_eq("Test L1", r2)
+
+    # Positional args (cross-module)
+    r3 = app.configure(true, 5)
+    assert_eq("Test L5", r3)
+
+    "ok"
+}

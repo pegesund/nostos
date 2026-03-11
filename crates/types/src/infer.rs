@@ -4297,9 +4297,15 @@ impl<'a> InferCtx<'a> {
                                     // Try any key ending with ".{method}" - handles trait-qualified
                                     // keys like "App.Configurable.configure" when we look for
                                     // "App.configure" or just "configure".
+                                    // For cross-module types, the key may be
+                                    // "lib.App.lib.Configurable.configure" where type_name is "App"
+                                    // (short name from get_type_name), so also check
+                                    // contains(".{type_name}.").
+                                    let method_suffix = format!(".{}", call.method_name);
+                                    let type_dot = format!(".{}.", type_name);
                                     self.env.function_param_names.iter()
-                                        .find(|(k, _)| k.ends_with(&format!(".{}", call.method_name))
-                                            && k.starts_with(&type_name))
+                                        .find(|(k, _)| k.ends_with(&method_suffix)
+                                            && (k.starts_with(&type_name) || k.contains(&type_dot)))
                                         .map(|(_, v)| v)
                                 });
                             if let Some(param_names) = param_names_opt {

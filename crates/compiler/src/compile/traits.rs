@@ -217,9 +217,18 @@ impl Compiler {
             let qualified_ufcs_key = format!("{}.{}", bare_qualified, method_name);
             let qualified_ufcs_fn_name = format!("{}{}", qualified_ufcs_key, ufcs_arity_suffix);
             self.trait_method_ufcs_signatures.insert(
-                qualified_ufcs_fn_name,
+                qualified_ufcs_fn_name.clone(),
                 fn_type,
             );
+
+            // Also register fn_asts under qualified key for cross-module named arg resolution.
+            // Without this, `app.configure(level: 3)` from another module fails because
+            // get_function_param_names can't find param names under the qualified key.
+            if let Some(def) = method_def {
+                if !self.fn_asts.contains_key(&qualified_ufcs_fn_name) {
+                    self.fn_asts.insert(qualified_ufcs_fn_name, def.clone());
+                }
+            }
         }
     }
 
