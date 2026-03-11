@@ -14241,19 +14241,29 @@ impl Compiler {
                                 _ => false,
                             };
                             if should_check {
-                                if let Some(hm_ty) = self.inferred_expr_types.get(&obj.span()) {
-                                    let is_unresolved = match hm_ty {
-                                        nostos_types::Type::Var(_) => true,
-                                        // Named types with '?' names are stringified type variables
-                                        // from monomorphized function signatures
-                                        nostos_types::Type::Named { name, .. } => name.starts_with('?'),
-                                        _ => false,
-                                    };
-                                    if is_unresolved {
-                                        return Err(CompileError::UnresolvedTraitMethod {
-                                            method: method.node.clone(),
-                                            span: method.span,
-                                        });
+                                // If the receiver has a concrete type from param_types
+                                // (set during monomorphization), trust that type over
+                                // stale HM inferred_expr_types from the generic version.
+                                let has_concrete_param_type = if let Expr::Var(ident) = obj.as_ref() {
+                                    self.param_types.contains_key(&ident.node)
+                                } else {
+                                    false
+                                };
+                                if !has_concrete_param_type {
+                                    if let Some(hm_ty) = self.inferred_expr_types.get(&obj.span()) {
+                                        let is_unresolved = match hm_ty {
+                                            nostos_types::Type::Var(_) => true,
+                                            // Named types with '?' names are stringified type variables
+                                            // from monomorphized function signatures
+                                            nostos_types::Type::Named { name, .. } => name.starts_with('?'),
+                                            _ => false,
+                                        };
+                                        if is_unresolved {
+                                            return Err(CompileError::UnresolvedTraitMethod {
+                                                method: method.node.clone(),
+                                                span: method.span,
+                                            });
+                                        }
                                     }
                                 }
                             }

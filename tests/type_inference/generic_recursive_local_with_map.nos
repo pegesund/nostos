@@ -1,0 +1,13 @@
+# expect: ["a", "b"]
+# Test: generic function with both .map() on a polymorphic parameter
+# AND a recursive local function definition should compile correctly.
+# Bug: the post-hoc map/flatMap ambiguity check used stale HM inferred
+# types from the generic version, ignoring concrete param_types set
+# during monomorphization.
+processPairs(pairs) = {
+  parts = pairs.map((p) => p.0)
+  go = (n) => if n <= 0 then 0 else go(n - 1)
+  _ = go(5)
+  parts
+}
+main() = processPairs([("a", 1), ("b", 2)])
