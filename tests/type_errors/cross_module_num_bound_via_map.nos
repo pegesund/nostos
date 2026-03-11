@@ -1,0 +1,7 @@
+# expect_error: does not implement Num
+# Bug: cross-module generic function with Num constraint from body (x + x)
+# gave runtime error instead of compile error when called with String args.
+# Root cause: HM signature didn't expose Num bound on element type var
+# because it was internal to HasMethod arg types, not in param/ret types.
+doubleAll(xs) = xs.map(x => x + x)
+main() = doubleAll(["a", "b"])

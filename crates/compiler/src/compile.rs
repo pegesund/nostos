@@ -10150,6 +10150,22 @@ impl Compiler {
                         // type parameter relationships for return type inference, e.g.,
                         // storeSet(s, k, v) = s.insert(k, v) → Map[a, b] -> a -> b -> Map[a, b]
                         let sig = self.infer_signature(def);
+                        // Populate fn_type_params from HM-inferred trait bounds
+                        if sig.contains("=>") && !self.fn_type_params.contains_key(&name) {
+                            if let Some(fn_type) = self.parse_signature_string(&sig) {
+                                if !fn_type.type_params.is_empty() {
+                                    let type_params: Vec<TypeParam> = fn_type.type_params.iter()
+                                        .map(|tp| TypeParam {
+                                            name: Spanned { node: tp.name.clone(), span: Span::default() },
+                                            constraints: tp.constraints.iter()
+                                                .map(|c| Spanned { node: c.clone(), span: Span::default() })
+                                                .collect(),
+                                        })
+                                        .collect();
+                                    self.fn_type_params.insert(name.clone(), type_params);
+                                }
+                            }
+                        }
                         if let Some(fn_val) = self.functions.get(&name) {
                             let mut new_fn_val = (**fn_val).clone();
                             new_fn_val.signature = Some(sig);
@@ -10279,6 +10295,29 @@ impl Compiler {
             }
             prefix.push_str(part);
             self.function_prefixes.insert(format!("{}.", prefix));
+        }
+
+        // If the function's HM-inferred signature has trait bounds (e.g., "Num a => [a] -> [a]"),
+        // populate fn_type_params so cross-module callers can check trait bounds.
+        // This handles functions like `doubleAll(xs) = xs.map(x => x + x)` where the Num
+        // constraint is inferred from the body, not declared in AST type_params.
+        if let Some(ref sig) = func.signature {
+            if sig.contains("=>") && !self.fn_type_params.contains_key(&name) {
+                if let Some(fn_type) = self.parse_signature_string(sig) {
+                    if !fn_type.type_params.is_empty() {
+                        // Convert nostos_types::TypeParam to parser TypeParam
+                        let type_params: Vec<TypeParam> = fn_type.type_params.iter()
+                            .map(|tp| TypeParam {
+                                name: Spanned { node: tp.name.clone(), span: Span::default() },
+                                constraints: tp.constraints.iter()
+                                    .map(|c| Spanned { node: c.clone(), span: Span::default() })
+                                    .collect(),
+                            })
+                            .collect();
+                        self.fn_type_params.insert(name.clone(), type_params);
+                    }
+                }
+            }
         }
 
         self.functions.insert(name, Arc::new(func));
@@ -25941,6 +25980,62 @@ impl Compiler {
             .map(|ty| self.format_type_normalized_both(ty, &combined_map.0, &combined_map.1))
             .collect();
         let mut ret_type = self.format_type_normalized_both(&resolved_ret, &combined_map.0, &combined_map.1);
+
+        // Before collecting trait bounds, discover additional type variables from
+        // deferred method constraints (HasMethod) that have meaningful trait bounds.
+        // The var_map currently only contains vars from the function's parameter/return
+        // types. But method calls like `xs.map(x => x + x)` have internal vars (element
+        // type) with trait bounds (Num from +) that must be exposed in the signature.
+        // Only add vars that have NON-structural bounds (skip HasField/HasMethod) to
+        // avoid changing the signature encoding for vars without relevant constraints.
+        {
+            let deferred_methods_pre = ctx.get_deferred_method_on_var().to_vec();
+            for (_ty, _method_name, arg_types, ret_ty, _span) in &deferred_methods_pre {
+                for arg_ty in arg_types {
+                    let resolved_arg = ctx.env.apply_subst(arg_ty);
+                    let mut inner_vars = Vec::new();
+                    self.collect_type_vars(&resolved_arg, &mut inner_vars);
+                    for var_id in inner_vars {
+                        if var_map.contains_key(&var_id) { continue; }
+                        // Only add if this var has relevant trait bounds (Num, Ord, Eq, etc.)
+                        let bounds = ctx.get_trait_bounds(var_id);
+                        let has_relevant_bound = bounds.iter().any(|b|
+                            !b.starts_with("HasField(") && !b.starts_with("HasMethod(")
+                        );
+                        if has_relevant_bound {
+                            loop {
+                                let letter = (b'a' + (next_var_letter as u8 % 26)) as char;
+                                next_var_letter += 1;
+                                if !named_type_param_letters.contains(&letter) {
+                                    var_map.insert(var_id, letter);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                let resolved_ret_m = ctx.env.apply_subst(ret_ty);
+                let mut ret_vars = Vec::new();
+                self.collect_type_vars(&resolved_ret_m, &mut ret_vars);
+                for var_id in ret_vars {
+                    if var_map.contains_key(&var_id) { continue; }
+                    let bounds = ctx.get_trait_bounds(var_id);
+                    let has_relevant_bound = bounds.iter().any(|b|
+                        !b.starts_with("HasField(") && !b.starts_with("HasMethod(")
+                    );
+                    if has_relevant_bound {
+                        loop {
+                            let letter = (b'a' + (next_var_letter as u8 % 26)) as char;
+                            next_var_letter += 1;
+                            if !named_type_param_letters.contains(&letter) {
+                                var_map.insert(var_id, letter);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // Collect trait bounds for type variables that appear in the signature.
         // SKIP HasField and HasMethod constraints here - they're handled by dedicated

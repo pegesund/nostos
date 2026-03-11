@@ -1747,7 +1747,23 @@ impl Compiler {
                     let saved_imports2 = self.imports.clone();
                     self.imports.extend(imports.clone());
                     let sig = self.infer_signature(fn_def);
+                    // Populate fn_type_params from HM-inferred trait bounds
                     let lookup_key = if self.functions.contains_key(&fn_key) { &fn_key } else { &fn_key_wildcard };
+                    if sig.contains("=>") && !self.fn_type_params.contains_key(lookup_key) {
+                        if let Some(fn_type) = self.parse_signature_string(&sig) {
+                            if !fn_type.type_params.is_empty() {
+                                let type_params: Vec<TypeParam> = fn_type.type_params.iter()
+                                    .map(|tp| TypeParam {
+                                        name: Spanned { node: tp.name.clone(), span: Span::default() },
+                                        constraints: tp.constraints.iter()
+                                            .map(|c| Spanned { node: c.clone(), span: Span::default() })
+                                            .collect(),
+                                    })
+                                    .collect();
+                                self.fn_type_params.insert(lookup_key.clone(), type_params);
+                            }
+                        }
+                    }
                     if let Some(fn_val) = self.functions.get(lookup_key) {
                         let mut new_fn_val = (**fn_val).clone();
                         new_fn_val.signature = Some(sig);

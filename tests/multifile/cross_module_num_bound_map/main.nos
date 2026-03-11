@@ -1,0 +1,5 @@
+# expect_error: does not implement Num
+# Cross-module: Num constraint on element type (from x + x in body)
+# must be exposed in HM signature and caught at call site
+use utils.{doubleAll}
+main() = doubleAll(["a", "b"])
