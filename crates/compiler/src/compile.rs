@@ -25466,9 +25466,14 @@ impl Compiler {
         // Used below to avoid registering concrete trait method impls under bare method names
         // (e.g., "display" should not be registered as "(Button) -> String" just because Button
         // implements Showable - it should stay generic so both display(widget) and display(button) work).
-        let trait_method_names: std::collections::HashSet<String> = self.trait_defs.values()
+        let mut trait_method_names: std::collections::HashSet<String> = self.trait_defs.values()
             .flat_map(|td| td.methods.iter().map(|m| m.name.clone()))
             .collect();
+        // Also include builtin trait methods (Show, Eq, etc.) which are not in self.trait_defs
+        // but whose concrete impls should NOT overwrite the generic builtins.
+        for builtin_method in &["show", "eq", "hash", "compare"] {
+            trait_method_names.insert(builtin_method.to_string());
+        }
 
         // Register known functions in environment for recursive calls
         // Don't overwrite functions from standard_env (like println) that have trait constraints
