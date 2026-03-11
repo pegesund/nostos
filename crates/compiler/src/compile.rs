@@ -26695,9 +26695,14 @@ impl Compiler {
         };
 
         // Build trait method names set for type_check_fn (same as try_hm_inference)
-        let trait_method_names_tc: std::collections::HashSet<String> = self.trait_defs.values()
+        let mut trait_method_names_tc: std::collections::HashSet<String> = self.trait_defs.values()
             .flat_map(|td| td.methods.iter().map(|m| m.name.clone()))
             .collect();
+        // Also include builtin trait methods (Show, Eq, etc.) which are not in self.trait_defs
+        // but whose concrete impls should NOT overwrite the generic builtins.
+        for builtin_method in &["show", "eq", "hash", "compare"] {
+            trait_method_names_tc.insert(builtin_method.to_string());
+        }
 
         // First pass: register local names for functions NOT in the current module
         // (only if not already present)
