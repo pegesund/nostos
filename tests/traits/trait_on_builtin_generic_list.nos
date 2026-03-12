@@ -1,0 +1,17 @@
+# expect: 10
+# Regression test: trait impl on built-in generic type (List)
+# Bug: UFCS registered self as bare List instead of List[a],
+# causing "type mismatch: expected List, found List[Int]"
+
+trait Summable167
+  totalSum167(self) -> Int
+end
+
+List: Summable167
+  totalSum167(self) = self.foldl(0, (acc, x) => acc + x)
+end
+
+main() = {
+  xs = [1, 2, 3, 4]
+  xs.totalSum167()
+}
