@@ -1739,6 +1739,8 @@ Covered:
 | 158     | ~15 (10613-10627) | (none - clean run: ALL ~15 probes pass. **Single-file (15):** match on multiple variant types+Option, trait on Box[Int]/Box[String], nested monomorphization applyTwice+identity, recursive fold with curried lambda, lambda returning lambda, match on tuple with fn call element, generic fn with default lambda param, user trait impl on Option[Int], polymorphic showVal at 3 types in list, chained .map with polymorphic lambdas, nested match with variant construction, early return+UFCS, two trait impls on Int in same expr, polymorphic HOF arg, deeply nested Option[Option[Option[Int]]].) | N/A | ~10627 |
 | 158b    | ~4 (10628-10631) | Cross-module HasMethod trait bound: generic wrapper `applySum(val) = val.sumUp()` fails cross-module — `find_implemented_trait` didn't handle `HasMethod(...)` structural constraints | Yes (39d55ba) | ~10631 |
 | 158b+   | ~6 (10632-10637) | (none - clean run: remaining 6 multi-file probes pass after HasMethod fix. Circular-ish deps, type alias chain, module re-exports, same-name different-sig functions, 5-module chain, module with both type def and trait impl.) | N/A | ~10637 |
+| 159     | ~10 (10638-10647) | Top-level closure binding with generic function: `myFn = (x) => show(x); myFn(42)` false type error — temp InferCtx var counter not advanced, causing Var ID collision | Yes (896b967) | ~10647 |
+| 159+    | ~5 (10648-10652) | (none - clean run: remaining probes pass. Trait method chaining, two-arg inferred trait bounds, id(id)(42), deeply nested lambdas, match on tuple of Options.) | N/A | ~10652 |
 
 ### Probe 156b: **BUG FOUND** - compile_fn_def not restoring compiler state on error paths
 
@@ -1777,6 +1779,23 @@ has the pattern `...TypeBase...methodName`, confirming the type has a trait impl
 
 **Test**: `tests/multifile/cross_module_hasmethod_trait_bound/`
 **Commit**: `39d55ba` - Fix cross-module HasMethod trait bound check for generic wrapper functions
+
+### Probe 159: **BUG FOUND** - Top-level closure type inference Var ID collision
+
+**Problem**: Top-level closure bindings with generic function calls produce false type errors:
+`myFn = (x) => show(x); myFn(42)` fails with "expected String, found Int".
+
+**Root cause**: When inferring types for unannotated top-level bindings, a temporary `InferCtx`
+(`tmp_env`) was used. After inference, the resolved type (which may contain unresolved `Var(id)` for
+generic params) was stored in the main env. But `env.next_var` was never advanced past `tmp_env.next_var`.
+When the main `InferCtx` later generated fresh vars for actual function calls, it reused the same Var IDs,
+causing the binding's generic parameter to be unified with an unrelated fresh variable.
+
+**Fix**: After each temp context inference block, advance `env.next_var = tmp_env.next_var` to prevent
+ID collisions. Applied to both `build_hm_base_env` and `type_check_fn` in compile.rs.
+
+**Test**: `tests/traits/top_level_closure_generic.nos`
+**Commit**: `896b967` - Fix top-level closure type inference: advance var counter after tmp context
 
 ### Probe 151: **BUG FOUND** - False positive type mismatch on monomorphized variants with unresolved type vars
 **Problem**: When a polymorphic function (`transposeH` returning generic `List[List[a]]` via empty list branch)
