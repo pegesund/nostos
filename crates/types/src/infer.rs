@@ -304,6 +304,11 @@ pub struct InferCtx<'a> {
     /// freshens these vars, it replicates these constraints with fresh copies
     /// so that `(a, b) => a + b; addUp(1, "hello")` catches the type mismatch.
     polymorphic_body_constraints: Vec<(Type, Type)>,
+    /// Internal pending method calls from let-bound lambda bodies that involve
+    /// only polymorphic (generalizable) vars. When instantiate_local_binding
+    /// freshens these vars, it replicates these method calls with fresh vars
+    /// so that `first = (xs) => xs.head()` can be used at multiple types.
+    polymorphic_body_method_calls: Vec<PendingMethodCall>,
     /// Freshened var pairs from instantiate_local_binding: (original_var_id, fresh_var_id, call_span).
     /// After solve(), if original and fresh both resolve to concrete but different types,
     /// the freshening was incorrect (let-polymorphism was applied to a monomorphic binding).
@@ -351,6 +356,7 @@ impl<'a> InferCtx<'a> {
             clause_param_types: HashMap::new(),
             polymorphic_vars: HashSet::new(),
             polymorphic_body_constraints: Vec::new(),
+            polymorphic_body_method_calls: Vec::new(),
             freshened_binding_vars: Vec::new(),
         }
     }
@@ -1495,6 +1501,31 @@ impl<'a> InferCtx<'a> {
                 if let Type::Var(fresh_id) = fresh_ty {
                     self.freshened_binding_vars.push((*orig_id, *fresh_id, span));
                 }
+            }
+        }
+
+        // Duplicate internal pending method calls with fresh vars.
+        // E.g., if `first = (xs) => xs.head()` had a PMC with receiver ?xs,
+        // generate a new PMC with fresh ?xs so that multiple calls to `first`
+        // at different types each get their own method call validation.
+        let body_pmcs = self.polymorphic_body_method_calls.clone();
+        for pmc in &body_pmcs {
+            let fresh_receiver = self.apply_var_subst(&pmc.receiver_ty, &var_subst);
+            let fresh_args: Vec<Type> = pmc.arg_types.iter()
+                .map(|a| self.apply_var_subst(a, &var_subst))
+                .collect();
+            let fresh_ret = self.apply_var_subst(&pmc.ret_ty, &var_subst);
+            // Only push if something was actually substituted (avoid duplicates)
+            if fresh_receiver != pmc.receiver_ty || fresh_ret != pmc.ret_ty
+                || fresh_args != pmc.arg_types {
+                self.pending_method_calls.push(PendingMethodCall {
+                    receiver_ty: fresh_receiver,
+                    method_name: pmc.method_name.clone(),
+                    arg_types: fresh_args,
+                    named_args: pmc.named_args.clone(),
+                    ret_ty: fresh_ret,
+                    span: pmc.span,
+                });
             }
         }
 
@@ -8596,14 +8627,30 @@ impl<'a> InferCtx<'a> {
                     }
                 }
                 // Also check pending method calls added during lambda inference.
-                // Method calls constrain the receiver to a type that has that method.
-                // These prevent generalization because the pending method call is registered
-                // with the original type variable and cannot be duplicated for fresh vars.
-                for pmc in &self.pending_method_calls[pending_methods_before..] {
+                // If a PMC receiver is purely internal (all vars >= vars_before), we can
+                // generalize it - the PMC will be duplicated with fresh vars in
+                // instantiate_local_binding. If it involves external vars, it constrains
+                // those vars and prevents generalization.
+                let mut internal_pmcs: Vec<usize> = Vec::new(); // indices into pending_method_calls
+                for (pmc_idx, pmc) in self.pending_method_calls[pending_methods_before..].iter().enumerate() {
                     let mut ids = Vec::new();
                     self.collect_var_ids(&pmc.receiver_ty, &mut ids);
-                    for id in ids {
-                        constrained_vars.insert(id);
+                    // Also collect IDs from arg types and return type
+                    for arg in &pmc.arg_types {
+                        self.collect_var_ids(arg, &mut ids);
+                    }
+                    self.collect_var_ids(&pmc.ret_ty, &mut ids);
+                    let is_fully_internal = ids.iter().all(|id| *id >= vars_before);
+                    if is_fully_internal {
+                        // This PMC is fully internal - can be generalized
+                        internal_pmcs.push(pending_methods_before + pmc_idx);
+                    } else {
+                        // External anchor - prevents generalization of involved vars
+                        let mut recv_ids = Vec::new();
+                        self.collect_var_ids(&pmc.receiver_ty, &mut recv_ids);
+                        for id in recv_ids {
+                            constrained_vars.insert(id);
+                        }
                     }
                 }
 
@@ -8664,6 +8711,24 @@ impl<'a> InferCtx<'a> {
                         if all_poly && (!a_ids.is_empty() || !b_ids.is_empty()) {
                             self.polymorphic_body_constraints.push((a.clone(), b.clone()));
                         }
+                    }
+                }
+
+                // Record internal pending method calls as polymorphic_body_method_calls
+                // so that instantiate_local_binding can duplicate them with fresh vars.
+                // This enables `first = (xs) => xs.head()` to be used at multiple types.
+                // Only record PMCs where ALL involved vars are polymorphic.
+                for pmc_idx in &internal_pmcs {
+                    let pmc = &self.pending_method_calls[*pmc_idx];
+                    let mut ids = Vec::new();
+                    self.collect_var_ids(&pmc.receiver_ty, &mut ids);
+                    for arg in &pmc.arg_types {
+                        self.collect_var_ids(arg, &mut ids);
+                    }
+                    self.collect_var_ids(&pmc.ret_ty, &mut ids);
+                    let all_poly = ids.iter().all(|id| self.polymorphic_vars.contains(id));
+                    if all_poly {
+                        self.polymorphic_body_method_calls.push(pmc.clone());
                     }
                 }
             }
