@@ -1,0 +1,11 @@
+# expect: 42
+# Regression test: let-polymorphism for local lambda bindings
+# Bug: local lambda `id = (x) => x` couldn't be used at multiple types
+# because type variables weren't marked as polymorphic at the let-binding site
+
+main() = {
+  id = (x) => x
+  a = id(42)
+  b = id("hello")
+  a
+}
