@@ -8371,7 +8371,70 @@ impl<'a> InferCtx<'a> {
 
     /// Infer types for a binding.
     pub fn infer_binding(&mut self, binding: &Binding) -> Result<Type, TypeError> {
+        // Snapshot constraint counts before inferring value, for let-polymorphism analysis
+        let constraints_before = self.constraints.len();
+        let pending_methods_before = self.pending_method_calls.len();
+
         let value_ty = self.infer_expr(&binding.value)?;
+
+        // Let-polymorphism for local lambdas: when a let binding's value is a lambda,
+        // mark its free type variables as polymorphic so that each use of the binding
+        // gets fresh copies. This enables `id = (x) => x; a = id(42); b = id("hi")`.
+        // Only do this for non-mutable bindings (mutable vars should keep a fixed type).
+        // IMPORTANT: Only generalize vars that are NOT constrained by the lambda body.
+        // Vars that appear in new constraints (e.g., `x => x + "hello"` constrains x
+        // via Num trait) must NOT be generalized, as that would disconnect body constraints
+        // from call-site argument types.
+        if !binding.mutable && matches!(&binding.value, Expr::Lambda(_, _, _)) {
+            if let Type::Function(_) = &value_ty {
+                let mut var_ids = Vec::new();
+                self.collect_var_ids(&value_ty, &mut var_ids);
+
+                // Collect all var IDs that appear in constraints added during lambda inference
+                let mut constrained_vars: HashSet<u32> = HashSet::new();
+                for constraint in &self.constraints[constraints_before..] {
+                    match constraint {
+                        Constraint::Equal(a, b, _) => {
+                            let mut ids = Vec::new();
+                            self.collect_var_ids(a, &mut ids);
+                            self.collect_var_ids(b, &mut ids);
+                            for id in ids {
+                                constrained_vars.insert(id);
+                            }
+                        }
+                        Constraint::HasTrait(ty, _) => {
+                            let mut ids = Vec::new();
+                            self.collect_var_ids(ty, &mut ids);
+                            for id in ids {
+                                constrained_vars.insert(id);
+                            }
+                        }
+                        Constraint::HasField(ty, _, field_ty) => {
+                            let mut ids = Vec::new();
+                            self.collect_var_ids(ty, &mut ids);
+                            self.collect_var_ids(field_ty, &mut ids);
+                            for id in ids {
+                                constrained_vars.insert(id);
+                            }
+                        }
+                    }
+                }
+                // Also check pending method calls added during lambda inference
+                for pmc in &self.pending_method_calls[pending_methods_before..] {
+                    let mut ids = Vec::new();
+                    self.collect_var_ids(&pmc.receiver_ty, &mut ids);
+                    for id in ids {
+                        constrained_vars.insert(id);
+                    }
+                }
+
+                for var_id in var_ids {
+                    if !constrained_vars.contains(&var_id) {
+                        self.polymorphic_vars.insert(var_id);
+                    }
+                }
+            }
+        }
 
         // If there's a type annotation, unify with it
         if let Some(ty_expr) = &binding.ty {
