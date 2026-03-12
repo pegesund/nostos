@@ -13607,6 +13607,21 @@ impl Compiler {
                                     signature,
                                 });
                             }
+                        } else {
+                            // Function doesn't exist at all. If the module_path is a user module
+                            // (has functions registered under that prefix), emit a clear error
+                            // rather than falling through to UFCS which gives a confusing message.
+                            let module_prefix = format!("{}.", module_path);
+                            let is_user_module = self.function_prefixes.contains(&module_prefix)
+                                || self.known_modules.contains(&module_path);
+                            eprintln!("DEBUG: fn not found: qualified_name={}, module_path={}, is_user_module={}, known_modules={:?}", qualified_name, module_path, is_user_module, self.known_modules.iter().take(10).collect::<Vec<_>>());
+                            if is_user_module {
+                                return Err(CompileError::UnknownFunction {
+                                    name: qualified_name.clone(),
+                                    suggestions: vec![],
+                                    span: method.span,
+                                });
+                            }
                         }
                     }
                 }
@@ -14457,6 +14472,7 @@ impl Compiler {
                                 self.emit_call_native(dst, native_name, arg_regs.into(), line);
                                 return Ok(dst);
                             }
+                            eprintln!("DEBUG: UnresolvedTraitMethod from UFCS error handler: name={}, receiver_type={}, is_polymorphic={}, is_type_param={}, is_unknown_in_generic={}", name, receiver_type, is_polymorphic, is_type_param, is_unknown_in_generic);
                             return Err(CompileError::UnresolvedTraitMethod {
                                 method: name.clone(),
                                 span,
