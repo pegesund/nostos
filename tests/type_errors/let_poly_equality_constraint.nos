@@ -1,0 +1,9 @@
+# expect_error: type mismatch
+# Regression test: let-poly body constraints must be replicated on fresh vars
+# Bug: addUp = (a,b) => a+b had Equal(?a,?b) only on original vars,
+# not on fresh vars, so addUp(1, "hello") escaped to runtime
+
+main() = {
+  addUp = (a, b) => a + b
+  addUp(1, "hello")
+}

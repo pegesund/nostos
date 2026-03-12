@@ -299,6 +299,11 @@ pub struct InferCtx<'a> {
     /// because they don't have body constraints in the current inference scope.
     /// Vars from lambda body inference are NOT in this set and should not be freshened.
     polymorphic_vars: HashSet<u32>,
+    /// Internal Equal constraints from let-bound lambda bodies that involve
+    /// only polymorphic (generalizable) vars. When instantiate_local_binding
+    /// freshens these vars, it replicates these constraints with fresh copies
+    /// so that `(a, b) => a + b; addUp(1, "hello")` catches the type mismatch.
+    polymorphic_body_constraints: Vec<(Type, Type)>,
     /// Freshened var pairs from instantiate_local_binding: (original_var_id, fresh_var_id, call_span).
     /// After solve(), if original and fresh both resolve to concrete but different types,
     /// the freshening was incorrect (let-polymorphism was applied to a monomorphic binding).
@@ -345,6 +350,7 @@ impl<'a> InferCtx<'a> {
             clause_ret_types: HashMap::new(),
             clause_param_types: HashMap::new(),
             polymorphic_vars: HashSet::new(),
+            polymorphic_body_constraints: Vec::new(),
             freshened_binding_vars: Vec::new(),
         }
     }
@@ -1335,6 +1341,35 @@ impl<'a> InferCtx<'a> {
         })
     }
 
+    /// Apply a variable substitution map to a type, replacing Var(id) with the
+    /// mapped type if present. Used to replicate body constraints with fresh vars.
+    fn apply_var_subst(&self, ty: &Type, subst: &HashMap<u32, Type>) -> Type {
+        match ty {
+            Type::Var(id) => subst.get(id).cloned().unwrap_or_else(|| ty.clone()),
+            Type::Function(ft) => Type::Function(FunctionType {
+                params: ft.params.iter().map(|p| self.apply_var_subst(p, subst)).collect(),
+                ret: Box::new(self.apply_var_subst(&ft.ret, subst)),
+                type_params: ft.type_params.clone(),
+                var_bounds: ft.var_bounds.clone(),
+                required_params: ft.required_params,
+            }),
+            Type::List(inner) => Type::List(Box::new(self.apply_var_subst(inner, subst))),
+            Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| self.apply_var_subst(e, subst)).collect()),
+            Type::Named { name, args } => Type::Named {
+                name: name.clone(),
+                args: args.iter().map(|a| self.apply_var_subst(a, subst)).collect(),
+            },
+            Type::Map(k, v) => Type::Map(
+                Box::new(self.apply_var_subst(k, subst)),
+                Box::new(self.apply_var_subst(v, subst)),
+            ),
+            Type::Set(inner) => Type::Set(Box::new(self.apply_var_subst(inner, subst))),
+            Type::IO(inner) => Type::IO(Box::new(self.apply_var_subst(inner, subst))),
+            Type::Array(inner) => Type::Array(Box::new(self.apply_var_subst(inner, subst))),
+            _ => ty.clone(),
+        }
+    }
+
     /// Instantiate a local function binding for let-polymorphism.
     /// When a local binding has a function type with unresolved type variables
     /// (e.g., `always42 = constFn(42)` giving `?a -> Int`), each use of that
@@ -1370,11 +1405,23 @@ impl<'a> InferCtx<'a> {
         for var_id in &var_ids {
             if self.polymorphic_vars.contains(var_id) {
                 let fresh = self.fresh();
-                // Copy trait bounds from old var to fresh var
+                // Copy trait bounds from old var to fresh var, and push
+                // HasTrait constraints so the solver will check them
                 if let Type::Var(fresh_id) = fresh {
                     if let Some(bounds) = self.trait_bounds.get(var_id).cloned() {
-                        for bound in bounds {
-                            self.add_trait_bound(fresh_id, bound);
+                        for bound in &bounds {
+                            self.add_trait_bound(fresh_id, bound.clone());
+                        }
+                        // Also push HasTrait constraints for the fresh var so
+                        // deferred_has_trait processing will validate them.
+                        // Without this, trait bounds on let-poly vars are silently
+                        // dropped (e.g., `addUp = (a,b) => a+b; addUp(1,"hi")` gives
+                        // runtime error instead of compile error).
+                        for bound in &bounds {
+                            self.constraints.push(Constraint::HasTrait(
+                                Type::Var(fresh_id),
+                                bound.clone(),
+                            ));
                         }
                     }
                     // Mark the fresh var as polymorphic too, so chained
@@ -1387,6 +1434,18 @@ impl<'a> InferCtx<'a> {
 
         if var_subst.is_empty() {
             return resolved; // All vars are shared with environment
+        }
+
+        // Replicate internal body constraints from the lambda with fresh var copies.
+        // E.g., if `(a, b) => a + b` had Equal(?a, ?b) from the `+` operator,
+        // generate Equal(?fresh_a, ?fresh_b) so type checking catches `addUp(1, "hello")`.
+        for (a, b) in &self.polymorphic_body_constraints.clone() {
+            let fresh_a = self.apply_var_subst(a, &var_subst);
+            let fresh_b = self.apply_var_subst(b, &var_subst);
+            // Only push if at least one side was actually substituted
+            if fresh_a != *a || fresh_b != *b {
+                self.constraints.push(Constraint::Equal(fresh_a, fresh_b, call_span));
+            }
         }
 
         // Record freshened var pairs for post-solve verification.
@@ -8545,6 +8604,28 @@ impl<'a> InferCtx<'a> {
                 for (var_id, trait_name) in &internal_has_traits {
                     if self.polymorphic_vars.contains(var_id) {
                         self.add_trait_bound(*var_id, trait_name.clone());
+                    }
+                }
+
+                // Record internal Equal constraints that involve ONLY polymorphic vars.
+                // When instantiate_local_binding freshens these vars, it replicates
+                // these constraints with fresh copies. Without this,
+                // `addUp = (a,b) => a + b; addUp(1, "hello")` would not catch
+                // the Int/String mismatch because fresh_a and fresh_b would be
+                // unconstrained relative to each other.
+                // Only record constraints where ALL var IDs in BOTH sides are polymorphic
+                // (to avoid mixing in constraints involving outer scope vars).
+                for constraint in &self.constraints[constraints_before..] {
+                    if let Constraint::Equal(a, b, _) = constraint {
+                        let mut a_ids = Vec::new();
+                        let mut b_ids = Vec::new();
+                        self.collect_var_ids(a, &mut a_ids);
+                        self.collect_var_ids(b, &mut b_ids);
+                        let all_poly = a_ids.iter().chain(b_ids.iter())
+                            .all(|id| self.polymorphic_vars.contains(id));
+                        if all_poly && (!a_ids.is_empty() || !b_ids.is_empty()) {
+                            self.polymorphic_body_constraints.push((a.clone(), b.clone()));
+                        }
                     }
                 }
             }
