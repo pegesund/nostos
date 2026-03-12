@@ -1,0 +1,12 @@
+# expect: 47
+# Regression test: composed let-polymorphic lambdas
+# Bug: g = (y) => f(y) where f is let-poly lost polymorphism because
+# f's fresh vars in body constraints weren't freshened when g was instantiated
+
+main() = {
+  f = (x) => x
+  g = (y) => f(y)
+  a = g(42)
+  b = g("hello")
+  a + b.length()
+}

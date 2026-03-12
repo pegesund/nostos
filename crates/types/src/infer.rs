@@ -1439,12 +1439,50 @@ impl<'a> InferCtx<'a> {
         // Replicate internal body constraints from the lambda with fresh var copies.
         // E.g., if `(a, b) => a + b` had Equal(?a, ?b) from the `+` operator,
         // generate Equal(?fresh_a, ?fresh_b) so type checking catches `addUp(1, "hello")`.
-        for (a, b) in &self.polymorphic_body_constraints.clone() {
-            let fresh_a = self.apply_var_subst(a, &var_subst);
-            let fresh_b = self.apply_var_subst(b, &var_subst);
-            // Only push if at least one side was actually substituted
-            if fresh_a != *a || fresh_b != *b {
-                self.constraints.push(Constraint::Equal(fresh_a, fresh_b, call_span));
+        //
+        // IMPORTANT: Body constraints may reference polymorphic vars that are NOT in the
+        // function type signature. E.g., for `g = (y) => f(y)` where f is let-poly,
+        // the body constraint is Equal(Function(?f_fresh->?f_fresh), Function(?y->?ret)).
+        // ?f_fresh is not in g's type signature but must be freshened on each instantiation
+        // of g, otherwise all calls to g share the same ?f_fresh and conflict.
+        // We extend var_subst with fresh vars for any such "hidden" polymorphic vars.
+        let body_constraints = self.polymorphic_body_constraints.clone();
+        if !body_constraints.is_empty() {
+            // Find all polymorphic vars in body constraints that aren't yet in var_subst
+            let mut extra_var_ids = Vec::new();
+            for (a, b) in &body_constraints {
+                self.collect_var_ids(a, &mut extra_var_ids);
+                self.collect_var_ids(b, &mut extra_var_ids);
+            }
+            for extra_id in extra_var_ids {
+                if !var_subst.contains_key(&extra_id) && self.polymorphic_vars.contains(&extra_id) {
+                    let fresh = self.fresh();
+                    if let Type::Var(fresh_id) = fresh {
+                        // Copy trait bounds
+                        if let Some(bounds) = self.trait_bounds.get(&extra_id).cloned() {
+                            for bound in &bounds {
+                                self.add_trait_bound(fresh_id, bound.clone());
+                            }
+                            for bound in &bounds {
+                                self.constraints.push(Constraint::HasTrait(
+                                    Type::Var(fresh_id),
+                                    bound.clone(),
+                                ));
+                            }
+                        }
+                        self.polymorphic_vars.insert(fresh_id);
+                    }
+                    var_subst.insert(extra_id, fresh);
+                }
+            }
+
+            for (a, b) in &body_constraints {
+                let fresh_a = self.apply_var_subst(a, &var_subst);
+                let fresh_b = self.apply_var_subst(b, &var_subst);
+                // Only push if at least one side was actually substituted
+                if fresh_a != *a || fresh_b != *b {
+                    self.constraints.push(Constraint::Equal(fresh_a, fresh_b, call_span));
+                }
             }
         }
 
