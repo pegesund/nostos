@@ -426,7 +426,7 @@ impl Scheduler {
             name: "show".to_string(),
             arity: 1,
             func: Box::new(|args, heap| {
-                let s = heap.show_value(&args[0]);
+                let s = heap.display_value(&args[0]);
                 Ok(GcValue::String(heap.alloc_string(s)))
             }),
         }));

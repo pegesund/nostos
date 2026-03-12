@@ -2389,7 +2389,7 @@ impl Heap {
                     if i > 0 {
                         result.push_str(", ");
                     }
-                    result.push_str(&self.display_value(item));
+                    result.push_str(&self.show_value(item));
                 }
                 result.push(']');
                 result
@@ -2429,7 +2429,7 @@ impl Heap {
                         if i > 0 {
                             result.push_str(", ");
                         }
-                        result.push_str(&self.display_value(item));
+                        result.push_str(&self.show_value(item));
                     }
                     result.push(')');
                     result
@@ -2462,7 +2462,7 @@ impl Heap {
                         if i > 0 {
                             result.push_str(", ");
                         }
-                        result.push_str(&format!("{}: {}", name, self.display_value(val)));
+                        result.push_str(&format!("{}: {}", name, self.show_value(val)));
                     }
                     result.push('}');
                     result
@@ -2484,7 +2484,7 @@ impl Heap {
                             if i > 0 {
                                 result.push_str(", ");
                             }
-                            result.push_str(&self.display_value(field));
+                            result.push_str(&self.show_value(field));
                         }
                         result.push(')');
                         result
