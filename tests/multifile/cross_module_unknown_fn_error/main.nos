@@ -1,0 +1,7 @@
+# expect_error: unknown function
+use helper.*
+
+main() = {
+    helper.doesNotExist(42)
+    0
+}

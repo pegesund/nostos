@@ -1,0 +1,22 @@
+# expect: 0
+# Trait method dispatch on unit variant of generic-like type
+# (base type known, inner param unresolved)
+
+type Maybe2 = Just2(Int) | Nothing2
+
+trait Displayable2 display2(self) -> String end
+
+Maybe2: Displayable2
+    display2(self) = match self {
+        Just2(v) -> "Just(" ++ show(v) ++ ")",
+        Nothing2 -> "Nothing"
+    }
+end
+
+main() = {
+    a = Just2(42)
+    b = Nothing2
+    assert_eq("Just(42)", a.display2())
+    assert_eq("Nothing", b.display2())
+    0
+}
