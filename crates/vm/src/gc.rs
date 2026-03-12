@@ -2256,6 +2256,83 @@ impl Heap {
         }
     }
 
+    /// Format a GcValue as a show string (used by show() builtin).
+    /// Strings are quoted, nested containers recursively use show_value.
+    pub fn show_value(&self, value: &GcValue) -> String {
+        match value {
+            GcValue::String(ptr) => {
+                if let Some(s) = self.get_string(*ptr) {
+                    format!("\"{}\"", s.data)
+                } else {
+                    "<invalid string>".to_string()
+                }
+            }
+            GcValue::List(list) => {
+                let mut result = "[".to_string();
+                for (i, item) in list.items().iter().enumerate() {
+                    if i > 0 {
+                        result.push_str(", ");
+                    }
+                    result.push_str(&self.show_value(item));
+                }
+                result.push(']');
+                result
+            }
+            GcValue::Tuple(ptr) => {
+                if let Some(tuple) = self.get_tuple(*ptr) {
+                    let mut result = "(".to_string();
+                    for (i, item) in tuple.items.iter().enumerate() {
+                        if i > 0 {
+                            result.push_str(", ");
+                        }
+                        result.push_str(&self.show_value(item));
+                    }
+                    result.push(')');
+                    result
+                } else {
+                    "<invalid tuple>".to_string()
+                }
+            }
+            GcValue::Record(ptr) => {
+                if let Some(rec) = self.get_record(*ptr) {
+                    let mut result = format!("{}{{", rec.type_name);
+                    for (i, (name, val)) in rec.field_names.iter().zip(rec.fields.iter()).enumerate()
+                    {
+                        if i > 0 {
+                            result.push_str(", ");
+                        }
+                        result.push_str(&format!("{}: {}", name, self.show_value(val)));
+                    }
+                    result.push('}');
+                    result
+                } else {
+                    "<invalid record>".to_string()
+                }
+            }
+            GcValue::Variant(ptr) => {
+                if let Some(var) = self.get_variant(*ptr) {
+                    if var.fields.is_empty() {
+                        var.constructor.to_string()
+                    } else {
+                        let mut result = format!("{}(", var.constructor);
+                        for (i, field) in var.fields.iter().enumerate() {
+                            if i > 0 {
+                                result.push_str(", ");
+                            }
+                            result.push_str(&self.show_value(field));
+                        }
+                        result.push(')');
+                        result
+                    }
+                } else {
+                    "<invalid variant>".to_string()
+                }
+            }
+            // For all other types, delegate to display_value (they don't need special quoting)
+            other => self.display_value(other),
+        }
+    }
+
     /// Format a GcValue as a display string.
     /// This is used by native functions that need to print or format values.
     pub fn display_value(&self, value: &GcValue) -> String {
