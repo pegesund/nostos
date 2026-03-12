@@ -1,0 +1,11 @@
+# expect: 47
+# Regression test: let-polymorphism for lambdas with non-trivial bodies
+# Bug: wrap = (x) => [x] was too conservative - internal-only constraints
+# between lambda-local vars prevented generalization
+
+main() = {
+  wrap = (x) => [x]
+  a = wrap(42)
+  b = wrap("hello")
+  a.sum() + b.head().length()
+}

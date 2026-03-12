@@ -104,6 +104,35 @@ fn has_unresolved_vars(ty: &Type) -> bool {
     }
 }
 
+/// Check if a type contains any "external anchor" for let-polymorphism analysis.
+/// An external anchor is a concrete type (Int, String, Named, etc.) or a type variable
+/// with ID less than `vars_before` (i.e., from the outer scope before lambda inference).
+/// This is used to determine whether an Equal constraint pins lambda-internal vars
+/// to external types, preventing generalization.
+fn type_has_external_anchor(ty: &Type, vars_before: u32) -> bool {
+    match ty {
+        Type::Var(id) => *id < vars_before,
+        Type::TypeParam(_) => true, // TypeParams are external
+        Type::Int | Type::Float | Type::String | Type::Bool | Type::Unit
+        | Type::Char => true,
+        Type::Named { args, .. } => {
+            // A named type with no type args is concrete (e.g., Color).
+            // A named type with all-internal type args (e.g., Option[?N]) is not external.
+            args.is_empty() || args.iter().any(|a| type_has_external_anchor(a, vars_before))
+        }
+        Type::List(inner) | Type::Set(inner) | Type::IO(inner) | Type::Array(inner) => {
+            type_has_external_anchor(inner, vars_before)
+        }
+        Type::Map(k, v) => type_has_external_anchor(k, vars_before) || type_has_external_anchor(v, vars_before),
+        Type::Tuple(elems) => elems.iter().any(|e| type_has_external_anchor(e, vars_before)),
+        Type::Function(ft) => {
+            ft.params.iter().any(|p| type_has_external_anchor(p, vars_before))
+                || type_has_external_anchor(&ft.ret, vars_before)
+        }
+        _ => false,
+    }
+}
+
 /// A type constraint generated during inference.
 #[derive(Debug, Clone)]
 pub enum Constraint {
@@ -8374,6 +8403,8 @@ impl<'a> InferCtx<'a> {
         // Snapshot constraint counts before inferring value, for let-polymorphism analysis
         let constraints_before = self.constraints.len();
         let pending_methods_before = self.pending_method_calls.len();
+        // Snapshot var counter to distinguish lambda-internal vars from outer-scope vars
+        let vars_before = self.env.next_var;
 
         let value_ty = self.infer_expr(&binding.value)?;
 
@@ -8381,28 +8412,52 @@ impl<'a> InferCtx<'a> {
         // mark its free type variables as polymorphic so that each use of the binding
         // gets fresh copies. This enables `id = (x) => x; a = id(42); b = id("hi")`.
         // Only do this for non-mutable bindings (mutable vars should keep a fixed type).
-        // IMPORTANT: Only generalize vars that are NOT constrained by the lambda body.
-        // Vars that appear in new constraints (e.g., `x => x + "hello"` constrains x
-        // via Num trait) must NOT be generalized, as that would disconnect body constraints
-        // from call-site argument types.
+        // IMPORTANT: Only generalize vars that are NOT constrained by the lambda body
+        // against external types. A constraint that only relates lambda-internal vars
+        // (e.g., from `[x]` creating Equal(?param, ?elem_ty)) does NOT prevent
+        // generalization. Only constraints that pin a var to a concrete type or an
+        // outer-scope variable prevent generalization. This allows `wrap = (x) => [x]`
+        // to be used polymorphically.
         if !binding.mutable && matches!(&binding.value, Expr::Lambda(_, _, _)) {
             if let Type::Function(_) = &value_ty {
                 let mut var_ids = Vec::new();
                 self.collect_var_ids(&value_ty, &mut var_ids);
 
-                // Collect all var IDs that appear in constraints added during lambda inference
+                // Collect vars that are constrained against external types/vars.
+                // A constraint is "externally anchored" if it involves a concrete type
+                // (Int, String, Named, etc.) or a var from before the lambda (id < vars_before).
+                // Constraints that only relate lambda-internal vars to each other
+                // (e.g., Equal(?param, ?elem_ty) from `[x]`) don't prevent generalization.
                 let mut constrained_vars: HashSet<u32> = HashSet::new();
+                // Collect internal-only Equal constraints for transitive propagation
+                let mut internal_equals: Vec<(Vec<u32>, Vec<u32>)> = Vec::new();
                 for constraint in &self.constraints[constraints_before..] {
                     match constraint {
                         Constraint::Equal(a, b, _) => {
-                            let mut ids = Vec::new();
-                            self.collect_var_ids(a, &mut ids);
-                            self.collect_var_ids(b, &mut ids);
-                            for id in ids {
-                                constrained_vars.insert(id);
+                            // Only mark vars as constrained if this constraint involves
+                            // something external (concrete type or outer-scope var)
+                            let a_external = type_has_external_anchor(a, vars_before);
+                            let b_external = type_has_external_anchor(b, vars_before);
+                            if a_external || b_external {
+                                let mut ids = Vec::new();
+                                self.collect_var_ids(a, &mut ids);
+                                self.collect_var_ids(b, &mut ids);
+                                for id in &ids {
+                                    constrained_vars.insert(*id);
+                                }
+                            } else {
+                                // Internal-only: save for transitive propagation
+                                let mut a_ids = Vec::new();
+                                let mut b_ids = Vec::new();
+                                self.collect_var_ids(a, &mut a_ids);
+                                self.collect_var_ids(b, &mut b_ids);
+                                if !a_ids.is_empty() || !b_ids.is_empty() {
+                                    internal_equals.push((a_ids, b_ids));
+                                }
                             }
                         }
                         Constraint::HasTrait(ty, _) => {
+                            // HasTrait always constrains - it pins to a specific trait
                             let mut ids = Vec::new();
                             self.collect_var_ids(ty, &mut ids);
                             for id in ids {
@@ -8410,6 +8465,7 @@ impl<'a> InferCtx<'a> {
                             }
                         }
                         Constraint::HasField(ty, _, field_ty) => {
+                            // HasField constrains against a specific field name (external)
                             let mut ids = Vec::new();
                             self.collect_var_ids(ty, &mut ids);
                             self.collect_var_ids(field_ty, &mut ids);
@@ -8421,10 +8477,32 @@ impl<'a> InferCtx<'a> {
                 }
                 // Also check pending method calls added during lambda inference
                 for pmc in &self.pending_method_calls[pending_methods_before..] {
+                    // Method calls constrain the receiver to a type that has that method
                     let mut ids = Vec::new();
                     self.collect_var_ids(&pmc.receiver_ty, &mut ids);
                     for id in ids {
                         constrained_vars.insert(id);
+                    }
+                }
+
+                // Transitive propagation: if an internal Equal constraint connects
+                // a constrained var to an unconstrained one, the unconstrained one
+                // also becomes constrained. E.g., if ?N+1 is constrained (has .length()
+                // method call) and Equal(?N, ?N+1) exists, then ?N is also constrained.
+                // Repeat until fixed point.
+                let mut changed = true;
+                while changed {
+                    changed = false;
+                    for (a_ids, b_ids) in &internal_equals {
+                        let a_has = a_ids.iter().any(|id| constrained_vars.contains(id));
+                        let b_has = b_ids.iter().any(|id| constrained_vars.contains(id));
+                        if a_has || b_has {
+                            for id in a_ids.iter().chain(b_ids.iter()) {
+                                if constrained_vars.insert(*id) {
+                                    changed = true;
+                                }
+                            }
+                        }
                     }
                 }
 
