@@ -1,0 +1,10 @@
+# expect: 42
+# Regression test: top-level closure binding with generic function call
+# Bug: temp InferCtx var counter not advanced, causing Var ID collision
+
+myShowFn = (x) => show(x)
+
+main() = {
+  s = myShowFn(42)
+  s.length() + 40
+}
