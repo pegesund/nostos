@@ -1741,6 +1741,8 @@ Covered:
 | 158b+   | ~6 (10632-10637) | (none - clean run: remaining 6 multi-file probes pass after HasMethod fix. Circular-ish deps, type alias chain, module re-exports, same-name different-sig functions, 5-module chain, module with both type def and trait impl.) | N/A | ~10637 |
 | 159     | ~10 (10638-10647) | Top-level closure binding with generic function: `myFn = (x) => show(x); myFn(42)` false type error — temp InferCtx var counter not advanced, causing Var ID collision | Yes (896b967) | ~10647 |
 | 159+    | ~5 (10648-10652) | (none - clean run: remaining probes pass. Trait method chaining, two-arg inferred trait bounds, id(id)(42), deeply nested lambdas, match on tuple of Options.) | N/A | ~10652 |
+| 160     | ~15 (10653-10667) | (none - clean run: ALL ~15 SF probes pass. Multiple top-level generic closures composed, closure as HOF arg to .map().sum(), recursive tuple-list builder, nested closure capture, Result with error path, .map chain changing types Int→String→Int, tuple destructuring with generic fn, applyTwice HOF, match-as-argument, records sortBy, polymorphic first160, mutable var in .map, generic fn in if-condition, nested match Some(Some(42)), string concat with show(sum).) | N/A | ~10667 |
+| 160b    | ~10 (10668-10677) | (none - clean run: ALL ~10 MF probes pass. Top-level closure cross-module, generic HasMethod at multiple types, cross-module default params, re-exported trait via bridge module, cross-module recursive Tree160, same-module trait+consumer, 3 traits on same type from 3 modules, cross-module poly chain wrap/unwrap, overlapping ctor names across modules, cross-module closure factory.) | N/A | ~10677 |
 
 ### Probe 156b: **BUG FOUND** - compile_fn_def not restoring compiler state on error paths
 
