@@ -2570,6 +2570,19 @@ fn report_error(error: &nostos_syntax::SourceError, filename: &str, source: &str
     }
 }
 
+/// Report a plain error message (not a SourceError), either as eprintln or JSON.
+fn report_plain_error(message: &str, filename: &str, json: bool) {
+    if json {
+        println!(
+            "{{\"file\":{},\"line\":0,\"column\":0,\"endLine\":0,\"endColumn\":0,\"severity\":\"error\",\"kind\":\"compile\",\"message\":{}}}",
+            nostos_syntax::json_escape(filename),
+            nostos_syntax::json_escape(message)
+        );
+    } else {
+        eprintln!("{}", message);
+    }
+}
+
 /// Report multiple SourceErrors, either as pretty-printed output or JSON.
 fn report_errors(errors: &[nostos_syntax::SourceError], filename: &str, source: &str, json: bool) {
     if json {
@@ -2683,10 +2696,13 @@ fn main() -> ExitCode {
                 println!("    --profile         Show function call timing after execution");
                 println!("    --no-jit          Disable JIT compilation");
                 println!();
+                println!("TOOLING:");
+                println!("    --check           Check for errors without executing (exit 0=ok, 1=error)");
+                println!("    --json-errors     Output errors as JSON lines (for IDE/CI integration)");
+                println!("                      Best used with --check for pure diagnostics");
+                println!();
                 println!("DEBUGGING:");
                 println!("    --debug           Show local variables in stack traces");
-                println!("    --check           Check for errors without executing");
-                println!("    --json-errors     Output errors as JSON (for IDE integration)");
                 println!();
                 println!("COMMANDS:");
                 println!("    init [name]       Create a new project (in current dir or new dir)");
@@ -3257,7 +3273,11 @@ fn main() -> ExitCode {
             let source = match fs::read_to_string(path) {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("Error reading file '{}': {}", path.display(), e);
+                    report_plain_error(
+                        &format!("Error reading file '{}': {}", path.display(), e),
+                        path.to_str().unwrap_or("unknown"),
+                        json_errors,
+                    );
                     return ExitCode::FAILURE;
                 }
             };
@@ -3275,7 +3295,11 @@ fn main() -> ExitCode {
             let mut module = match module_opt {
                 Some(m) => m,
                 None => {
-                    eprintln!("Failed to parse '{}'", path.display());
+                    report_plain_error(
+                        &format!("Failed to parse '{}'", path.display()),
+                        path.to_str().unwrap_or("unknown"),
+                        json_errors,
+                    );
                     return ExitCode::FAILURE;
                 }
             };
@@ -3310,7 +3334,11 @@ fn main() -> ExitCode {
             // Register forward declarations before any compilation
             // This ensures all exports are known when use statements are processed
             if let Err(e) = compiler.register_module_forward_declarations(&module, module_path.clone()) {
-                eprintln!("Error registering forward declarations for '{}': {}", path.display(), e);
+                report_plain_error(
+                    &format!("Error registering forward declarations for '{}': {}", path.display(), e),
+                    path.to_str().unwrap_or("unknown"),
+                    json_errors,
+                );
                 return ExitCode::FAILURE;
             }
 
@@ -3451,19 +3479,25 @@ fn main() -> ExitCode {
                     match find_func(&bin_entry.entry) {
                         Some(f) => f,
                         None => {
-                            eprintln!("Error: Entry point '{}' for bin '{}' not found", bin_entry.entry, name);
+                            report_plain_error(
+                                &format!("Entry point '{}' for bin '{}' not found", bin_entry.entry, name),
+                                file_path_arg,
+                                json_errors,
+                            );
                             return ExitCode::FAILURE;
                         }
                     }
                 } else {
-                    eprintln!("Error: No [[bin]] entry named '{}' in nostos.toml", name);
-                    if cfg.has_bins() {
-                        eprintln!("Available bins: {}", cfg.bin_names().join(", "));
-                    }
+                    let msg = if cfg.has_bins() {
+                        format!("No [[bin]] entry named '{}' in nostos.toml. Available: {}", name, cfg.bin_names().join(", "))
+                    } else {
+                        format!("No [[bin]] entry named '{}' in nostos.toml", name)
+                    };
+                    report_plain_error(&msg, file_path_arg, json_errors);
                     return ExitCode::FAILURE;
                 }
             } else {
-                eprintln!("Error: --bin requires a nostos.toml with [[bin]] entries");
+                report_plain_error("--bin requires a nostos.toml with [[bin]] entries", file_path_arg, json_errors);
                 return ExitCode::FAILURE;
             }
         }
@@ -3473,33 +3507,42 @@ fn main() -> ExitCode {
                 match find_func(&default_bin.entry) {
                     Some(f) => f,
                     None => {
-                        eprintln!("Error: Default entry point '{}' not found", default_bin.entry);
+                        report_plain_error(
+                            &format!("Default entry point '{}' not found", default_bin.entry),
+                            file_path_arg,
+                            json_errors,
+                        );
                         return ExitCode::FAILURE;
                     }
                 }
             } else if cfg.has_bins() {
                 // Has bins but none is default - require --bin
-                eprintln!("Error: Project has [[bin]] entries but none is marked as default.");
-                eprintln!("Use --bin NAME to specify which to run. Available: {}", cfg.bin_names().join(", "));
+                report_plain_error(
+                    &format!("Project has [[bin]] entries but none is marked as default. Use --bin NAME to specify which to run. Available: {}", cfg.bin_names().join(", ")),
+                    file_path_arg,
+                    json_errors,
+                );
                 return ExitCode::FAILURE;
             } else {
                 // No bins defined, fall back to main.main or main
-                find_func("main.main")
-                    .or_else(|| find_func("main"))
-                    .unwrap_or_else(|| {
-                        eprintln!("Error: No 'main.main' or 'main' function found in project.");
-                        std::process::exit(1);
-                    })
+                match find_func("main.main").or_else(|| find_func("main")) {
+                    Some(f) => f,
+                    None => {
+                        report_plain_error("No 'main.main' or 'main' function found in project", file_path_arg, json_errors);
+                        return ExitCode::FAILURE;
+                    }
+                }
             }
         }
         // No project config, fall back to main.main or main
         else {
-            find_func("main.main")
-                .or_else(|| find_func("main"))
-                .unwrap_or_else(|| {
-                    eprintln!("Error: No 'main.main' or 'main' function found in project.");
-                    std::process::exit(1);
-                })
+            match find_func("main.main").or_else(|| find_func("main")) {
+                Some(f) => f,
+                None => {
+                    report_plain_error("No 'main.main' or 'main' function found in project", file_path_arg, json_errors);
+                    return ExitCode::FAILURE;
+                }
+            }
         }
     } else {
         "main/".to_string()
@@ -3507,7 +3550,11 @@ fn main() -> ExitCode {
 
     // Verify entry point exists
     if compiler.get_function(&entry_point_name).is_none() {
-        eprintln!("Error: Entry point '{}' not found", entry_point_name);
+        report_plain_error(
+            &format!("Entry point '{}' not found", entry_point_name),
+            file_path_arg,
+            json_errors,
+        );
         return ExitCode::FAILURE;
     }
 
