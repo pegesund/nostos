@@ -1,0 +1,9 @@
+# expect_error: Num
+# Regression test: let-poly with Num trait bound must reject String
+# Bug: HasTrait(Num) was not registered in trait_bounds for generalized vars,
+# so double("hello") compiled but failed at runtime
+
+main() = {
+  double = (x) => x + x
+  double("hello")
+}

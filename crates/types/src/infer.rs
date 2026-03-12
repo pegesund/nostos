@@ -6036,7 +6036,13 @@ impl<'a> InferCtx<'a> {
                 }
                 // Then check bindings
                 if let Some((ty, _)) = self.env.lookup(name) {
-                    Ok(ty.clone())
+                    let ty = ty.clone();
+                    // Let-polymorphism: when a local binding with a polymorphic function type
+                    // is referenced as a value (e.g., passed as HOF argument like `xs.map(double)`),
+                    // freshen its type variables just like we do for direct calls.
+                    // Without this, `double = (x) => x + x; [1,2,3].map(double)` would lock
+                    // ?N to Int, preventing later use with other types.
+                    Ok(self.instantiate_local_binding(&ty, name, Some(ident.span)))
                 } else if let Some(sig) = self.env.functions.get(name).cloned() {
                     // Check if there are multiple typed overloads for this function name.
                     // When a function reference like `double` is used as a HOF argument
@@ -8431,6 +8437,9 @@ impl<'a> InferCtx<'a> {
                 let mut constrained_vars: HashSet<u32> = HashSet::new();
                 // Collect internal-only Equal constraints for transitive propagation
                 let mut internal_equals: Vec<(Vec<u32>, Vec<u32>)> = Vec::new();
+                // Collect internal HasTrait constraints to register as trait_bounds
+                // for generalized vars (so instantiate_local_binding can copy them)
+                let mut internal_has_traits: Vec<(u32, String)> = Vec::new();
                 for constraint in &self.constraints[constraints_before..] {
                     match constraint {
                         Constraint::Equal(a, b, _) => {
@@ -8456,12 +8465,26 @@ impl<'a> InferCtx<'a> {
                                 }
                             }
                         }
-                        Constraint::HasTrait(ty, _) => {
-                            // HasTrait always constrains - it pins to a specific trait
-                            let mut ids = Vec::new();
-                            self.collect_var_ids(ty, &mut ids);
-                            for id in ids {
-                                constrained_vars.insert(id);
+                        Constraint::HasTrait(ty, trait_name) => {
+                            // HasTrait constrains only if it involves external types/vars.
+                            // A HasTrait(?X, "Num") where ?X is internal to the lambda
+                            // should NOT prevent generalization - the trait bound gets
+                            // copied to fresh vars in instantiate_local_binding.
+                            // This enables let-poly for `double = (x) => x + x` (Num constraint).
+                            if type_has_external_anchor(ty, vars_before) {
+                                let mut ids = Vec::new();
+                                self.collect_var_ids(ty, &mut ids);
+                                for id in ids {
+                                    constrained_vars.insert(id);
+                                }
+                            } else {
+                                // Internal HasTrait: record for trait_bounds registration
+                                // so instantiate_local_binding can copy the bound to fresh vars
+                                let mut ids = Vec::new();
+                                self.collect_var_ids(ty, &mut ids);
+                                for id in &ids {
+                                    internal_has_traits.push((*id, trait_name.clone()));
+                                }
                             }
                         }
                         Constraint::HasField(ty, _, field_ty) => {
@@ -8475,9 +8498,11 @@ impl<'a> InferCtx<'a> {
                         }
                     }
                 }
-                // Also check pending method calls added during lambda inference
+                // Also check pending method calls added during lambda inference.
+                // Method calls constrain the receiver to a type that has that method.
+                // These prevent generalization because the pending method call is registered
+                // with the original type variable and cannot be duplicated for fresh vars.
                 for pmc in &self.pending_method_calls[pending_methods_before..] {
-                    // Method calls constrain the receiver to a type that has that method
                     let mut ids = Vec::new();
                     self.collect_var_ids(&pmc.receiver_ty, &mut ids);
                     for id in ids {
@@ -8509,6 +8534,17 @@ impl<'a> InferCtx<'a> {
                 for var_id in var_ids {
                     if !constrained_vars.contains(&var_id) {
                         self.polymorphic_vars.insert(var_id);
+                    }
+                }
+
+                // Register internal HasTrait constraints as trait_bounds for
+                // generalized vars, so instantiate_local_binding can copy them
+                // to fresh vars. This ensures `double = (x) => x + x` correctly
+                // propagates the Num bound when freshened, catching
+                // `double("hello")` at compile time.
+                for (var_id, trait_name) in &internal_has_traits {
+                    if self.polymorphic_vars.contains(var_id) {
+                        self.add_trait_bound(*var_id, trait_name.clone());
                     }
                 }
             }
