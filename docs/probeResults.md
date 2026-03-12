@@ -1734,6 +1734,27 @@ Covered:
 | 154     | ~22 (10543-10564) | (none - clean run: ALL ~22 probes pass. **Manual MF (5):** Maybe154 type with mapMaybe/bindMaybe/safeDivide/pipeline cross-module, BST insert/toList/fromList cross-module, groupBy154+histogram+topN 3-module chain, Counter154 with trait Steppable154 (stepFwd/stepBack/getValue UFCS), 4-module Item pipeline (types→ops→pipeline→main totalRevenue/expensive/cheapItems). **Agent SF (17/25):** error detection, recursive algorithms, HOF patterns, closures, generic composition (8 design errors: wrong error text patterns, unknown vars, list pattern syntax). All 1538 tests pass.) | N/A | ~10564 |
 | 155     | ~16 (10565-10580) | (none - clean run: ALL ~16 probes pass. Focus on hard type inference patterns. **Manual SF (13):** same generic fn monomorphized at 5 types (Int/String/Bool/Float/List), nested Option[Option[Int]] pattern match, list of functions applied via foldl, recursive fn building [(Int,Int)] vs [], chained .map changing element type (Int→String→Int), generic Tree155 mapTree/foldTree with type-changing map, categorize+stats complex tuple flow, recursive fn building list of triples, mutual recursion with interleaving, Either155 with mapLeft/mapRight/partitionEithers, deep polymorphic chain (singleton→nest→count), closure factory (makeAdder/makeMulBy/makeComposer), Map merge via foldl. **Manual MF (3):** cross-module Tree155 with mapTree+foldTree+treeToList, cross-module Either155 with partitionEithers, cross-module wrap155/pair155 at multiple type instantiations. All 1538 tests pass.) | N/A | ~10580 |
 | 156     | ~6 (10581-10586) | (none - clean run: ALL ~6 probes pass. **Manual SF (5):** nested generic Option[List[Option[Int]]] wrapDeep/extractDeep, 3 different accumulator patterns (joinWith string, withIndices pairs, tally Map), generic repeat156 with default param at 3 types, complex Stats156 record with foldl accumulator, postgres complex aggregation (AVG/DISTINCT ON). **Agent MF (1/10):** cross-module trait Self return (9 design errors: wrong pattern match syntax in function bodies). All 1538 tests pass.) | N/A | ~10586 |
+| 156b    | 1 (10587)         | compile_fn_def not restoring state on error paths — trait UFCS in match + None crashes | Yes (eba1b85) | ~10587 |
+
+### Probe 156b: **BUG FOUND** - compile_fn_def not restoring compiler state on error paths
+
+**Problem**: Calling a polymorphic function that uses trait UFCS method in a match arm with both `Some(x)` and
+`None` arguments crashes at runtime. Example: `extract(opt) = match opt { Some(v) -> v.traitMethod(), None -> 0 }`;
+calling `extract(Some(-5))` then `extract(None)` corrupts the main function's bytecode.
+
+**Root cause**: When monomorphization of `extract$Option[?209]` fails (UnresolvedTraitMethod for `v.traitMethod()`),
+`compile_fn_def` returned `Err` WITHOUT restoring `self.chunk` and other compiler state. Main's chunk was permanently
+replaced with the failed variant's partial chunk. The fallback code found the existing `Option[Int]` variant for the
+call, but main's remaining bytecode was emitted into the wrong (now-dead) chunk.
+
+**Fix**: Added full state restoration (chunk, locals, next_reg, current_function_name, local_types, param_types,
+fn_type_params, fn_generic_hm, mvar_reads, mvar_writes, fn_calls, has_blocking) to ALL error return paths in
+`compile_fn_def`'s body compilation section — both the `needs_dispatch` multi-clause path and the simple
+single-clause path. Also added `inferred_expr_types` save/restore to `compile_monomorphized_variant` and
+`compile_monomorphized_variant_with_type_args` as a defensive measure.
+
+**Test**: `tests/traits/ufcs_trait_match_none.nos`
+**Commit**: `eba1b85` - Fix compile_fn_def not restoring state on error paths, corrupting caller's chunk
 
 ### Probe 151: **BUG FOUND** - False positive type mismatch on monomorphized variants with unresolved type vars
 **Problem**: When a polymorphic function (`transposeH` returning generic `List[List[a]]` via empty list branch)
