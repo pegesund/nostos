@@ -49,7 +49,7 @@ include!(concat!(env!("OUT_DIR"), "/embedded_stdlib.rs"));
 
 use nostos_compiler::compile::{Compiler, MvarInitValue};
 use nostos_jit::{JitCompiler, JitConfig};
-use nostos_syntax::{parse, parse_errors_to_source_errors, eprint_errors};
+use nostos_syntax::{parse, parse_errors_to_source_errors};
 use nostos_vm::async_vm::{AsyncVM, AsyncConfig};
 use nostos_vm::cache::{BytecodeCache, CachedModule, CachedMvar, CachedMvarValue, function_to_cached_with_fn_list, compute_file_hash};
 use nostos_vm::process::ThreadSafeValue;
@@ -2561,6 +2561,26 @@ fn nostlet_installed() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Report a single SourceError, either as pretty-printed output or JSON.
+fn report_error(error: &nostos_syntax::SourceError, filename: &str, source: &str, json: bool) {
+    if json {
+        println!("{}", error.to_json(filename, source));
+    } else {
+        error.eprint(filename, source);
+    }
+}
+
+/// Report multiple SourceErrors, either as pretty-printed output or JSON.
+fn report_errors(errors: &[nostos_syntax::SourceError], filename: &str, source: &str, json: bool) {
+    if json {
+        for error in errors {
+            println!("{}", error.to_json(filename, source));
+        }
+    } else {
+        nostos_syntax::eprint_errors(errors, filename, source);
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
 
@@ -2614,6 +2634,8 @@ fn main() -> ExitCode {
     let mut extension_paths: Vec<String> = Vec::new(); // Extension library paths
     let mut use_extensions: Vec<String> = Vec::new(); // Extensions to load by name from ~/.nostos/extensions/
     let mut bin_name: Option<String> = None; // Binary entry point name from [[bin]] in nostos.toml
+    let mut check_only = false; // Compile without executing (--check)
+    let mut json_errors = false; // Output errors as JSON for IDE integration (--json-errors)
 
     let mut i = 1;
     let mut file_idx: Option<usize> = None;
@@ -2663,6 +2685,7 @@ fn main() -> ExitCode {
                 println!();
                 println!("DEBUGGING:");
                 println!("    --debug           Show local variables in stack traces");
+                println!("    --check           Check for errors without executing");
                 println!("    --json-errors     Output errors as JSON (for IDE integration)");
                 println!();
                 println!("COMMANDS:");
@@ -2738,6 +2761,16 @@ fn main() -> ExitCode {
                     eprintln!("Error: --bin requires a binary name");
                     return ExitCode::FAILURE;
                 }
+            }
+            if arg == "--check" {
+                check_only = true;
+                i += 1;
+                continue;
+            }
+            if arg == "--json-errors" {
+                json_errors = true;
+                i += 1;
+                continue;
             }
             i += 1;
         } else {
@@ -3044,7 +3077,7 @@ fn main() -> ExitCode {
             // project cache causes compile_all() to be skipped later.
             if let Err((e, filename, source)) = compiler.compile_all() {
                 let source_error = e.to_source_error();
-                source_error.eprint(&filename, &source);
+                report_error(&source_error, &filename, &source, json_errors);
                 return ExitCode::FAILURE;
             }
         } // end of else (no cache)
@@ -3235,7 +3268,7 @@ fn main() -> ExitCode {
             let (module_opt, errors) = parse(&source);
             if !errors.is_empty() {
                 let source_errors = parse_errors_to_source_errors(&errors);
-                eprint_errors(&source_errors, path.to_str().unwrap_or("unknown"), &source);
+                report_errors(&source_errors, path.to_str().unwrap_or("unknown"), &source, json_errors);
                 return ExitCode::FAILURE;
             }
 
@@ -3311,7 +3344,7 @@ fn main() -> ExitCode {
                 parsed.path.to_str().unwrap_or("unknown").to_string(),
             ) {
                 let source_error = e.to_source_error();
-                source_error.eprint(parsed.path.to_str().unwrap_or("unknown"), &parsed.source);
+                report_error(&source_error, parsed.path.to_str().unwrap_or("unknown"), &parsed.source, json_errors);
                 return ExitCode::FAILURE;
             }
         }
@@ -3328,7 +3361,7 @@ fn main() -> ExitCode {
                 parsed.path.to_str().unwrap_or("unknown").to_string(),
             ) {
                 let source_error = e.to_source_error();
-                source_error.eprint(parsed.path.to_str().unwrap_or("unknown"), &parsed.source);
+                report_error(&source_error, parsed.path.to_str().unwrap_or("unknown"), &parsed.source, json_errors);
                 return ExitCode::FAILURE;
             }
         }
@@ -3342,7 +3375,7 @@ fn main() -> ExitCode {
         for parsed in &parsed_modules {
             if let Err(e) = compiler.forward_declare_module_functions(&parsed.module, parsed.module_path.clone()) {
                 let source_error = e.to_source_error();
-                source_error.eprint(parsed.path.to_str().unwrap_or("unknown"), &parsed.source);
+                report_error(&source_error, parsed.path.to_str().unwrap_or("unknown"), &parsed.source, json_errors);
                 return ExitCode::FAILURE;
             }
         }
@@ -3358,7 +3391,7 @@ fn main() -> ExitCode {
             // Add to compiler with source tracking
             if let Err(e) = compiler.add_module(&module, module_path, std::sync::Arc::new(source.clone()), path.to_str().unwrap_or("unknown").to_string()) {
                 let source_error = e.to_source_error();
-                source_error.eprint(path.to_str().unwrap_or("unknown"), &source);
+                report_error(&source_error, path.to_str().unwrap_or("unknown"), &source, json_errors);
                 return ExitCode::FAILURE;
             }
         }
@@ -3368,7 +3401,7 @@ fn main() -> ExitCode {
     if !project_cache_used {
         if let Err((e, filename, source)) = compiler.compile_all() {
             let source_error = e.to_source_error();
-            source_error.eprint(&filename, &source);
+            report_error(&source_error, &filename, &source, json_errors);
             return ExitCode::FAILURE;
         }
     }
@@ -3476,6 +3509,11 @@ fn main() -> ExitCode {
     if compiler.get_function(&entry_point_name).is_none() {
         eprintln!("Error: Entry point '{}' not found", entry_point_name);
         return ExitCode::FAILURE;
+    }
+
+    // --check: compilation succeeded, exit without executing
+    if check_only {
+        return ExitCode::SUCCESS;
     }
 
     // Run with AsyncVM

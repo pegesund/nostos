@@ -158,6 +158,60 @@ impl SourceError {
         self.write_formatted(&mut std::io::stderr(), filename, source)
             .expect("writing to stderr should not fail");
     }
+
+    /// Format the error as a JSON object for IDE integration.
+    pub fn to_json(&self, filename: &str, source: &str) -> String {
+        let (line, column) = offset_to_line_col(source, self.span.start);
+        let (end_line, end_column) = offset_to_line_col(source, self.span.end);
+        let severity = match self.kind {
+            ErrorKind::Parse => "error",
+            ErrorKind::Compile => "error",
+            ErrorKind::Runtime => "warning",
+        };
+
+        let mut json = format!(
+            "{{\"file\":{},\"line\":{},\"column\":{},\"endLine\":{},\"endColumn\":{},\"severity\":{},\"message\":{}",
+            json_escape(filename), line, column, end_line, end_column,
+            json_escape(severity), json_escape(&self.message)
+        );
+
+        if let Some(hint) = &self.hint {
+            json.push_str(&format!(",\"hint\":{}", json_escape(hint)));
+        }
+
+        if !self.notes.is_empty() {
+            json.push_str(",\"notes\":[");
+            for (i, note) in self.notes.iter().enumerate() {
+                if i > 0 { json.push(','); }
+                json.push_str(&json_escape(note));
+            }
+            json.push(']');
+        }
+
+        json.push('}');
+        json
+    }
+}
+
+/// Escape a string for JSON output.
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Helper to convert byte offset to line and column.
