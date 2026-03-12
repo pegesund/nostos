@@ -27320,7 +27320,7 @@ impl Compiler {
             // should_suppress() uses deep checking (any nested Var) which is needed for
             // try_hm_inference but too aggressive here in type_check_fn.
             let suppress = if let nostos_types::TypeError::StructuralMismatch(t1, t2) = &e {
-                // Only suppress if at least one top-level type is unresolved
+                // Suppress if at least one top-level type is unresolved
                 fn is_top_level_unresolved(ty: &nostos_types::Type) -> bool {
                     match ty {
                         nostos_types::Type::Var(_) | nostos_types::Type::TypeParam(_) => true,
@@ -27328,7 +27328,24 @@ impl Compiler {
                         _ => false,
                     }
                 }
+                // Also suppress when both types share the same top-level constructor
+                // but one has unresolved TypeParams inside (e.g., List[TypeParam("a")] vs List[Int]).
+                // This is noise from batch inference where a generic function's return type
+                // wasn't fully instantiated. But keep errors where constructors differ
+                // (e.g., Int vs List[TypeParam]) as those are likely real structural mismatches.
+                fn same_top_constructor(t1: &nostos_types::Type, t2: &nostos_types::Type) -> bool {
+                    use nostos_types::Type;
+                    matches!((t1, t2),
+                        (Type::List(_), Type::List(_)) |
+                        (Type::Set(_), Type::Set(_)) |
+                        (Type::Map(_, _), Type::Map(_, _)) |
+                        (Type::Array(_), Type::Array(_)) |
+                        (Type::IO(_), Type::IO(_)) |
+                        (Type::Tuple(_), Type::Tuple(_))
+                    ) || matches!((t1, t2), (Type::Named { name: n1, .. }, Type::Named { name: n2, .. }) if n1 == n2)
+                }
                 is_top_level_unresolved(t1) || is_top_level_unresolved(t2)
+                    || (same_top_constructor(t1, t2) && (t1.has_any_type_var() || t2.has_any_type_var()))
             } else if e.should_suppress() {
                 true
             } else if let nostos_types::TypeError::NoSuchField { ref ty, ref field, ref resolved_type } = e {
@@ -27349,30 +27366,35 @@ impl Compiler {
         // false positives involving unresolved type variables (e.g., `? vs Int` when
         // a generic function's return type couldn't be determined by isolated HM inference).
         if let Some(mismatch_err) = ctx.check_fn_call_mismatches() {
+
             let error_span = ctx.last_error_span().unwrap_or(span);
             return Err(self.convert_type_error(mismatch_err, error_span));
         }
 
         // Check indirect calls (curried functions, higher-order returns)
         if let Some(mismatch_err) = ctx.check_indirect_call_mismatches() {
+
             let error_span = ctx.last_error_span().unwrap_or(span);
             return Err(self.convert_type_error(mismatch_err, error_span));
         }
 
         // Check freshened binding var conflicts (let-polymorphism applied to monomorphic HOF results)
         if let Some(freshened_err) = ctx.check_freshened_binding_conflicts() {
+
             let error_span = ctx.last_error_span().unwrap_or(span);
             return Err(self.convert_type_error(freshened_err, error_span));
         }
 
         // Check generic function trait bounds (e.g., equal[T: Eq] called with functions)
         if let Some(trait_err) = ctx.check_generic_trait_bounds() {
+
             let error_span = ctx.last_error_span().unwrap_or(span);
             return Err(self.convert_type_error(trait_err, error_span));
         }
 
         // Check typed binding annotations (e.g., b: Box[Int] = Box(value: "hello"))
         if let Some(binding_err) = ctx.check_typed_binding_mismatches() {
+
             let error_span = ctx.last_error_span().unwrap_or(span);
             return Err(self.convert_type_error(binding_err, error_span));
         }

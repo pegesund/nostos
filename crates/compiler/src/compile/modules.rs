@@ -10,7 +10,21 @@ impl Compiler {
     /// Compile all pending functions.
     /// Returns (error, source_filename, source_code) on failure.
     pub fn compile_all(&mut self) -> Result<(), (CompileError, String, Arc<String>)> {
-        let errors = self.compile_all_collecting_errors();
+        let mut errors = self.compile_all_collecting_errors();
+        // Filter out false positive type errors from monomorphized variants that were
+        // instantiated with incomplete type information (type variables like ?N in the name).
+        // These arise when polymorphic functions are monomorphized before all type variables
+        // are resolved, leading to spurious StructuralMismatch errors.
+        errors.retain(|(fn_name, e, _, _)| {
+            if fn_name.contains('$') && fn_name.contains('?') {
+                if let CompileError::TypeError { message, .. } = e {
+                    if message.contains("type mismatch") {
+                        return false; // suppress
+                    }
+                }
+            }
+            true
+        });
         if errors.is_empty() {
             return Ok(());
         }
@@ -2181,7 +2195,22 @@ impl Compiler {
                                 _ => false,
                             }
                         }
+                        // Also suppress when both types share the same top-level constructor
+                        // but one has unresolved TypeParams inside (e.g., List[TypeParam("a")] vs List[Int]).
+                        // Keep errors where constructors differ (e.g., List vs Int) as those are real.
+                        fn same_top_constructor(t1: &nostos_types::Type, t2: &nostos_types::Type) -> bool {
+                            use nostos_types::Type;
+                            matches!((t1, t2),
+                                (Type::List(_), Type::List(_)) |
+                                (Type::Set(_), Type::Set(_)) |
+                                (Type::Map(_, _), Type::Map(_, _)) |
+                                (Type::Array(_), Type::Array(_)) |
+                                (Type::IO(_), Type::IO(_)) |
+                                (Type::Tuple(_), Type::Tuple(_))
+                            ) || matches!((t1, t2), (Type::Named { name: n1, .. }, Type::Named { name: n2, .. }) if n1 == n2)
+                        }
                         is_top_level_unresolved(t1) || is_top_level_unresolved(t2)
+                            || (same_top_constructor(t1, t2) && (t1.has_any_type_var() || t2.has_any_type_var()))
                     }
                     _ => type_err.should_suppress(),
                 };

@@ -1,0 +1,33 @@
+# expect: 0
+# Test: monomorphized variant with unresolved type variable
+# Regression test for false positive "type mismatch: expected List[a], found List[Int]"
+# when a polymorphic function (transposeH2 returns generic List[List[a]] via empty list branch)
+# and a concrete function (matRow3 returns List[Int]) are combined in a third function (matMul2).
+
+dotProdX(a, b) = a.zip(b).map(p => { pa = p.0; pb = p.1; pa * pb }).foldl(0, (acc, x) => acc + x)
+
+matRowX(row, cols) = cols.map(col => dotProdX(row, col))
+
+transposeHX(matrix, col) = {
+    row0 = get(matrix, 0)
+    if col >= row0.length() then []
+    else {
+        column = matrix.map(row => get(row, col))
+        [column] ++ transposeHX(matrix, col + 1)
+    }
+}
+
+matMulX(a, b) = {
+    bt = transposeHX(b, 0)
+    a.map(row => matRowX(row, bt))
+}
+
+main() = {
+    result = matRowX([1, 2], [[3, 4], [5, 6]])
+    assert_eq([11, 17], result)
+
+    m = matMulX([[1, 2], [3, 4]], [[5, 6], [7, 8]])
+    assert_eq([[19, 22], [43, 50]], m)
+
+    0
+}
