@@ -9283,6 +9283,78 @@ impl Compiler {
             return Some("Ord".to_string());
         }
 
+        // HasMethod(methodName|...) is a structural constraint from HM type inference.
+        // Check if the concrete type has a method with the given name via any trait impl
+        // or directly registered function. This handles cross-module dispatch where a
+        // generic wrapper function (applyFoo(x: a) = x.foo()) is called with a concrete
+        // type that implements a trait in a different module.
+        if trait_name.starts_with("HasMethod(") {
+            // Extract method name: HasMethod(sumUp|a,b) -> "sumUp"
+            let inner = &trait_name["HasMethod(".len()..];
+            let method_name = inner
+                .find(|c| c == '|' || c == ',' || c == ')')
+                .map(|i| &inner[..i])
+                .unwrap_or(inner.trim_end_matches(')'));
+
+            // Build the set of type name variants to try
+            let mut type_names_to_try = vec![type_name.to_string()];
+            if let Some(qualified) = self.imports.get(type_name) {
+                if !type_names_to_try.contains(qualified) {
+                    type_names_to_try.push(qualified.clone());
+                }
+            }
+            let qualified = self.qualify_name(type_name);
+            if !type_names_to_try.contains(&qualified) {
+                type_names_to_try.push(qualified);
+            }
+            let type_base = type_name.rsplit('.').next().unwrap_or(type_name);
+
+            // Check: is there ANY function `TypeBase.method` or `module.TypeBase.Trait.method`
+            // registered? This means the type has a trait impl providing this method.
+            for fn_name in self.functions.keys() {
+                let fn_base = fn_name.split('/').next().unwrap_or(fn_name);
+                // The function base can be like "b_impl.MyPair.Summable.sumUp"
+                // or "defs.MyPair.Summable.sumUp" - we want: last segment = method_name
+                // and an earlier segment = type_base
+                let parts: Vec<&str> = fn_base.split('.').collect();
+                if parts.last() == Some(&method_name) {
+                    // Check if one of the earlier parts matches the type base name
+                    for &part in &parts[..parts.len().saturating_sub(1)] {
+                        if part == type_base {
+                            return Some(trait_name.to_string());
+                        }
+                    }
+                }
+            }
+
+            // Also check trait_method_ufcs_signatures
+            for fn_name in self.trait_method_ufcs_signatures.keys() {
+                let parts: Vec<&str> = fn_name.split('.').collect();
+                if parts.last() == Some(&method_name) {
+                    for &part in &parts[..parts.len().saturating_sub(1)] {
+                        if part == type_base {
+                            return Some(trait_name.to_string());
+                        }
+                    }
+                }
+            }
+
+            // Also check pending_fn_signatures
+            for fn_name in self.pending_fn_signatures.keys() {
+                let fn_base = fn_name.split('/').next().unwrap_or(fn_name);
+                let parts: Vec<&str> = fn_base.split('.').collect();
+                if parts.last() == Some(&method_name) {
+                    for &part in &parts[..parts.len().saturating_sub(1)] {
+                        if part == type_base {
+                            return Some(trait_name.to_string());
+                        }
+                    }
+                }
+            }
+
+            return None;
+        }
+
         // Check if the type has an explicit trait implementation
         // Try direct name first, then resolve through imports (e.g., "Age" -> "Validator.Age")
         let mut type_names_to_try = vec![type_name.to_string()];
@@ -22805,7 +22877,6 @@ impl Compiler {
         // Check if this is a variant constructor (not a record type)
         // If type_name matches a variant constructor, emit MakeVariant instead of MakeRecord
         let mut is_variant_ctor = false;
-        // (debug removed)
         let mut is_reactive_variant = false;
         let mut parent_type_name: Option<String> = None;
 
