@@ -25525,6 +25525,11 @@ impl Compiler {
                         env.bind(qualified, resolved, false);
                     }
                 }
+                // Advance the main env's var counter past all vars used in tmp_env
+                // to avoid Var ID aliasing with binding type vars (see type_check_fn fix).
+                if tmp_env.next_var > env.next_var {
+                    env.next_var = tmp_env.next_var;
+                }
             }
         }
 
@@ -27341,6 +27346,15 @@ impl Compiler {
                     if qualified != name {
                         env.bind(qualified, resolved, false);
                     }
+                }
+                // CRITICAL: Advance the main env's var counter past all vars used in tmp_env.
+                // If resolved types contain unresolved Var(id) from tmp_env, and we don't
+                // advance next_var, the main InferCtx will generate fresh vars with the same
+                // IDs, causing those fresh vars to alias the binding's type vars and producing
+                // false type errors (e.g., `myFn = (x) => show(x); myFn(42)` failing with
+                // "expected String, found Int").
+                if tmp_env.next_var > env.next_var {
+                    env.next_var = tmp_env.next_var;
                 }
             }
         }
