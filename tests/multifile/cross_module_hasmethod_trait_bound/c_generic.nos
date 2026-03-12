@@ -1,0 +1,5 @@
+use a_trait.{Summable158}
+use b_impl.{MyPair158}
+
+# Generic function using trait method - the HasMethod constraint must resolve cross-module
+pub applySum158(val) = val.sumUp158()

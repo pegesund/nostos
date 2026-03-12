@@ -1,0 +1,11 @@
+# expect: 15
+# Regression test: cross-module HasMethod trait bound resolution
+# Bug: find_implemented_trait didn't handle HasMethod(...) structural constraints,
+# so generic wrapper functions calling trait methods failed cross-module.
+use b_impl.{MyPair158}
+use c_generic.{applySum158}
+
+main() = {
+  p = MyPair158(x: 7, y: 8)
+  applySum158(p)
+}

@@ -1,0 +1,7 @@
+use a_trait.{Summable158}
+
+pub type MyPair158 = { x: Int, y: Int }
+
+MyPair158: Summable158
+  sumUp158(self) = self.x + self.y
+end
