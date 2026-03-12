@@ -10073,10 +10073,38 @@ impl Compiler {
                             return Ok(());
                         } else {
                             // Non-polymorphic function with unresolved trait method - real error
+                            // Must restore compiler state before returning error to avoid
+                            // corrupting the caller's chunk/locals/registers.
+                            self.chunk = saved_chunk;
+                            self.locals = saved_locals;
+                            self.local_types = saved_local_types;
+                            self.next_reg = saved_next_reg;
+                            self.current_function_name = saved_function_name;
+                            self.param_types = saved_param_types;
+                            self.current_fn_type_params = saved_fn_type_params;
+                            self.current_fn_generic_hm = saved_fn_generic_hm;
+                            self.current_fn_mvar_reads = saved_mvar_reads;
+                            self.current_fn_mvar_writes = saved_mvar_writes;
+                            self.current_fn_calls = saved_fn_calls;
+                            self.current_fn_has_blocking = saved_has_blocking;
                             return Err(CompileError::UnresolvedTraitMethod { method, span });
                         }
                     }
                     Err(e) => {
+                        // Must restore compiler state before returning error to avoid
+                        // corrupting the caller's chunk/locals/registers.
+                        self.chunk = saved_chunk;
+                        self.locals = saved_locals;
+                        self.local_types = saved_local_types;
+                        self.next_reg = saved_next_reg;
+                        self.current_function_name = saved_function_name;
+                        self.param_types = saved_param_types;
+                        self.current_fn_type_params = saved_fn_type_params;
+                        self.current_fn_generic_hm = saved_fn_generic_hm;
+                        self.current_fn_mvar_reads = saved_mvar_reads;
+                        self.current_fn_mvar_writes = saved_mvar_writes;
+                        self.current_fn_calls = saved_fn_calls;
+                        self.current_fn_has_blocking = saved_has_blocking;
                         return Err(e);
                     }
                 };
@@ -10186,10 +10214,36 @@ impl Compiler {
                         return Ok(());
                     } else {
                         // Non-polymorphic function with unresolved trait method - real error
+                        // Must restore compiler state before returning error.
+                        self.chunk = saved_chunk;
+                        self.locals = saved_locals;
+                        self.local_types = saved_local_types;
+                        self.next_reg = saved_next_reg;
+                        self.current_function_name = saved_function_name;
+                        self.param_types = saved_param_types;
+                        self.current_fn_type_params = saved_fn_type_params;
+                        self.current_fn_generic_hm = saved_fn_generic_hm;
+                        self.current_fn_mvar_reads = saved_mvar_reads;
+                        self.current_fn_mvar_writes = saved_mvar_writes;
+                        self.current_fn_calls = saved_fn_calls;
+                        self.current_fn_has_blocking = saved_has_blocking;
                         return Err(CompileError::UnresolvedTraitMethod { method, span });
                     }
                 }
                 Err(e) => {
+                    // Must restore compiler state before returning error.
+                    self.chunk = saved_chunk;
+                    self.locals = saved_locals;
+                    self.local_types = saved_local_types;
+                    self.next_reg = saved_next_reg;
+                    self.current_function_name = saved_function_name;
+                    self.param_types = saved_param_types;
+                    self.current_fn_type_params = saved_fn_type_params;
+                    self.current_fn_generic_hm = saved_fn_generic_hm;
+                    self.current_fn_mvar_reads = saved_mvar_reads;
+                    self.current_fn_mvar_writes = saved_mvar_writes;
+                    self.current_fn_calls = saved_fn_calls;
+                    self.current_fn_has_blocking = saved_has_blocking;
                     return Err(e);
                 }
             };
@@ -18699,6 +18753,10 @@ impl Compiler {
             self.imports.extend(original_imports.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
         let saved_type_bindings = std::mem::take(&mut self.current_type_bindings);
+        // Save inferred_expr_types: monomorphized variants use cloned AST with same spans,
+        // so stale entries from previous compilations would corrupt type lookups (e.g.,
+        // causing match arms to be dropped during pattern compilation).
+        let saved_inferred_expr_types = std::mem::take(&mut self.inferred_expr_types);
 
         // Set param_types for this specialization (skip "_" unknown types)
         for (i, param_name) in param_names.iter().enumerate() {
@@ -18839,6 +18897,7 @@ impl Compiler {
             self.module_path = saved_module_path;
             self.imports = saved_imports;
             self.current_type_bindings = saved_type_bindings;
+            self.inferred_expr_types = saved_inferred_expr_types;
             return Err(e);
         }
 
@@ -18874,7 +18933,10 @@ impl Compiler {
             }
         }
 
-        // Restore context
+        // Restore context — merge inferred_expr_types: variant's fresh entries take priority
+        // over caller's (which may have stale types for the same spans from the generic version)
+        let variant_expr_types = std::mem::replace(&mut self.inferred_expr_types, saved_inferred_expr_types);
+        self.inferred_expr_types.extend(variant_expr_types);
         self.param_types = saved_param_types;
         self.module_path = saved_module_path;
         self.imports = saved_imports;
@@ -18970,6 +19032,7 @@ impl Compiler {
             self.imports.extend(original_imports.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
         let saved_type_bindings = std::mem::take(&mut self.current_type_bindings);
+        let saved_inferred_expr_types = std::mem::take(&mut self.inferred_expr_types);
 
         // Build type parameter bindings from declared type params and explicit type args
         // This is the key difference from compile_monomorphized_variant
@@ -19029,10 +19092,13 @@ impl Compiler {
             self.module_path = saved_module_path;
             self.imports = saved_imports;
             self.current_type_bindings = saved_type_bindings;
+            self.inferred_expr_types = saved_inferred_expr_types;
             return Err(e);
         }
 
-        // Restore context
+        // Restore context — merge inferred_expr_types: variant's fresh entries take priority
+        let variant_expr_types = std::mem::replace(&mut self.inferred_expr_types, saved_inferred_expr_types);
+        self.inferred_expr_types.extend(variant_expr_types);
         self.param_types = saved_param_types;
         self.module_path = saved_module_path;
         self.imports = saved_imports;
@@ -22739,6 +22805,7 @@ impl Compiler {
         // Check if this is a variant constructor (not a record type)
         // If type_name matches a variant constructor, emit MakeVariant instead of MakeRecord
         let mut is_variant_ctor = false;
+        // (debug removed)
         let mut is_reactive_variant = false;
         let mut parent_type_name: Option<String> = None;
 

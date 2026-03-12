@@ -13,6 +13,7 @@ impl Compiler {
         // Prefer structural Type from HM inference, fall back to string
         let scrut_type_structural = self.inferred_expr_types.get(&scrutinee.span()).cloned();
         let scrut_type = self.expr_type_name(scrutinee);
+
         if let Some(ref ty) = scrut_type {
             self.check_match_exhaustiveness(ty, scrut_type_structural.as_ref(), arms, scrutinee.span())?;
         }

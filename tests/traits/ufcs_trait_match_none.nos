@@ -1,0 +1,20 @@
+# expect: 0
+# Regression test: trait UFCS method in match arm with both Some and None calls
+# Bug: compile_fn_def didn't restore state on error paths, corrupting main's chunk
+
+trait Mag mag(self) -> Int end
+
+Int: Mag
+  mag(self) = if self < 0 then 0 - self else self
+end
+
+extractMag(opt) = match opt {
+  Some(v) -> v.mag()
+  None -> 0
+}
+
+main() = {
+  a = extractMag(Some(-5))
+  b = extractMag(None)
+  a - 5 + b
+}
