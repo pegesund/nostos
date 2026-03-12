@@ -13614,7 +13614,6 @@ impl Compiler {
                             let module_prefix = format!("{}.", module_path);
                             let is_user_module = self.function_prefixes.contains(&module_prefix)
                                 || self.known_modules.contains(&module_path);
-                            eprintln!("DEBUG: fn not found: qualified_name={}, module_path={}, is_user_module={}, known_modules={:?}", qualified_name, module_path, is_user_module, self.known_modules.iter().take(10).collect::<Vec<_>>());
                             if is_user_module {
                                 return Err(CompileError::UnknownFunction {
                                     name: qualified_name.clone(),
@@ -14472,7 +14471,6 @@ impl Compiler {
                                 self.emit_call_native(dst, native_name, arg_regs.into(), line);
                                 return Ok(dst);
                             }
-                            eprintln!("DEBUG: UnresolvedTraitMethod from UFCS error handler: name={}, receiver_type={}, is_polymorphic={}, is_type_param={}, is_unknown_in_generic={}", name, receiver_type, is_polymorphic, is_type_param, is_unknown_in_generic);
                             return Err(CompileError::UnresolvedTraitMethod {
                                 method: name.clone(),
                                 span,
@@ -17378,7 +17376,11 @@ impl Compiler {
                             // monomorphization instead of emitting a call to a placeholder.
                             // This ensures generic functions with custom trait bounds get
                             // properly specialized at call sites.
-                            if !self.is_type_concrete(arg_type) {
+                            // However, if the BASE type is known (e.g., Maybe[?a] has base Maybe),
+                            // we can still dispatch to the trait impl since it's registered on the
+                            // base type. Only trigger monomorphization for truly unknown types
+                            // (pure type params like T) or when we're in a generic context.
+                            if !self.is_type_concrete(arg_type) && !self.has_known_base_type(arg_type) {
                                 return Err(CompileError::UnresolvedTraitMethod {
                                     method: qualified_name.clone(),
                                     span: func.span(),
