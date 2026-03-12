@@ -21344,7 +21344,10 @@ impl Compiler {
             }
             Expr::UnaryOp(_, e, _) => self.expr_references_name(e, name),
             Expr::Tuple(es, _) => es.iter().any(|e| self.expr_references_name(e, name)),
-            Expr::List(es, _, _) => es.iter().any(|e| self.expr_references_name(e, name)),
+            Expr::List(es, tail, _) => {
+                es.iter().any(|e| self.expr_references_name(e, name))
+                    || tail.as_ref().map_or(false, |t| self.expr_references_name(t, name))
+            }
             Expr::Match(scrut, arms, _) => {
                 self.expr_references_name(scrut, name)
                     || arms.iter().any(|arm| self.expr_references_name(&arm.body, name))
