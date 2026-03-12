@@ -390,19 +390,39 @@ impl Compiler {
         let impl_specifies_type_args = unqualified_type_name.contains('[');
         let type_def_for_impl = self.type_defs.get(&qualified_type_name)
             .or_else(|| self.type_defs.get(&unqualified_type_name));
+        // Check if type is generic: either from type_defs (user-defined) or built-in generics.
+        // Built-in types like List, Map, Set, Option, Result are NOT in type_defs but are
+        // still generic - they need parameterized self types for trait impls.
+        let builtin_generic_params: Option<&[&str]> = if !impl_specifies_type_args {
+            match unqualified_type_name.as_str() {
+                "List" | "Set" | "Array" => Some(&["a"]),
+                "Map" => Some(&["k", "v"]),
+                "Option" => Some(&["a"]),
+                "Result" => Some(&["a", "b"]),
+                "IO" => Some(&["a"]),
+                _ => None,
+            }
+        } else {
+            None
+        };
         let impl_type_is_generic = !impl_specifies_type_args
-            && type_def_for_impl.map(|td| !td.type_params.is_empty()).unwrap_or(false);
+            && (type_def_for_impl.map(|td| !td.type_params.is_empty()).unwrap_or(false)
+                || builtin_generic_params.is_some());
         // For generic types without specified type args, build a parameterized type string
         // with lowercase type variables. E.g., Box[A] → "Box[a]", Pair[A,B] → "Pair[a, b]".
         // This preserves the base type name (for field access/trait dispatch) while using
         // fresh type vars (to avoid TypeArityMismatch with concrete instantiations).
         let generic_self_type = if impl_type_is_generic {
-            type_def_for_impl.map(|td| {
-                let vars: Vec<String> = td.type_params.iter()
-                    .map(|p| p.name.node.to_lowercase())
-                    .collect();
-                format!("{}[{}]", unqualified_type_name, vars.join(", "))
-            })
+            if let Some(params) = builtin_generic_params {
+                Some(format!("{}[{}]", unqualified_type_name, params.join(", ")))
+            } else {
+                type_def_for_impl.map(|td| {
+                    let vars: Vec<String> = td.type_params.iter()
+                        .map(|p| p.name.node.to_lowercase())
+                        .collect();
+                    format!("{}[{}]", unqualified_type_name, vars.join(", "))
+                })
+            }
         } else {
             None
         };
