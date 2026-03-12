@@ -2295,7 +2295,9 @@ impl Heap {
             }
             GcValue::Record(ptr) => {
                 if let Some(rec) = self.get_record(*ptr) {
-                    let mut result = format!("{}{{", rec.type_name);
+                    // Strip module prefix for display (e.g., "mymod.Foo" → "Foo")
+                    let display_name = rec.type_name.rsplit('.').next().unwrap_or(&rec.type_name);
+                    let mut result = format!("{}{{", display_name);
                     for (i, (name, val)) in rec.field_names.iter().zip(rec.fields.iter()).enumerate()
                     {
                         if i > 0 {
@@ -2456,7 +2458,9 @@ impl Heap {
             }
             GcValue::Record(ptr) => {
                 if let Some(rec) = self.get_record(*ptr) {
-                    let mut result = format!("{}{{", rec.type_name);
+                    // Strip module prefix for display (e.g., "mymod.Foo" → "Foo")
+                    let display_name = rec.type_name.rsplit('.').next().unwrap_or(&rec.type_name);
+                    let mut result = format!("{}{{", display_name);
                     for (i, (name, val)) in rec.field_names.iter().zip(rec.fields.iter()).enumerate()
                     {
                         if i > 0 {
