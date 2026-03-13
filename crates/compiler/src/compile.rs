@@ -6936,9 +6936,14 @@ impl Compiler {
                         });
                     if let Some(resolved) = imported {
                         resolved
-                    } else {
-                        // Qualify unknown type names - handles self-referential types
+                    } else if self.type_visibility.contains_key(&qualified) {
+                        // Qualify known type names - handles self-referential types
                         qualified
+                    } else {
+                        // Unknown name in module context - likely a type parameter
+                        // (e.g., `Left` in `type Pair[Left, Right] = Pair(Left, Right)`)
+                        // Don't qualify as `types.Left` — return as-is
+                        name.clone()
                     }
                 } else {
                     // Top-level code - use as-is

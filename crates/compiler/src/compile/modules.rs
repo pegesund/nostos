@@ -827,19 +827,31 @@ impl Compiler {
                 // have custom trait implementations that the inference env doesn't know about.
                 if let TypeError::MissingTraitImpl { ref ty, ref trait_name, ref resolved_type } = e {
                     // Use resolved Type enum when available for type classification
+                    // Also check if the type name matches a declared type parameter
+                    // in any of the user functions (e.g., fn[Elem, Result](...))
+                    let is_declared_type_param = user_fns.iter().any(|(_, (fn_def, _, _, _, _, _))| {
+                        fn_def.type_params.iter().any(|tp| tp.name.node == *ty)
+                    });
                     let is_type_param = if let Some(ref rty) = resolved_type {
                         matches!(rty, nostos_types::Type::TypeParam(_))
                     } else {
                         ty.len() <= 2 && ty.chars().next().map_or(false, |c| c.is_alphabetic())
                     };
+                    let is_type_param = is_type_param || is_declared_type_param;
                     let is_type_var = if let Some(ref rty) = resolved_type {
                         matches!(rty, nostos_types::Type::Var(_))
                     } else {
                         ty.starts_with('?')
                     };
 
+                    // For declared type parameters (multi-char like Result, Elem),
+                    // batch inference may create false Num/Ord constraints from call sites.
+                    // Suppress these entirely — per-function inference handles them correctly.
+                    if is_declared_type_param {
+                        // Don't report — batch inference can't distinguish function-body vs call-site constraints
+                    }
                     // For type parameters used with Num/Ord, check if the function has that trait bound.
-                    if is_type_param && matches!(trait_name.as_str(), "Num" | "Ord") {
+                    else if is_type_param && matches!(trait_name.as_str(), "Num" | "Ord") {
                         let has_explicit_type_params = user_fns.iter().any(|(_, (fn_def, _, _, _, _, _))| {
                             !fn_def.type_params.is_empty()
                         });

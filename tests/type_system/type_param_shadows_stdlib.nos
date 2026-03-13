@@ -1,0 +1,4 @@
+# expect: [10, 20, 30]
+# Multi-char type param that shadows stdlib name (Result)
+applyMap[Elem, Result](f: (Elem) -> Result, xs: List[Elem]) -> List[Result] = xs.map(f)
+main() = applyMap(x => x * 10, [1, 2, 3])
