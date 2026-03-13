@@ -1,0 +1,10 @@
+# expect: 42true
+# Regression test: let-poly lambda calling overloaded function (show)
+# Bug: Equal(Function(?25->String), Function(?24->?26)) treated as
+# externally anchored because String in return type, constraining ALL vars.
+# Fix: decompose Function-vs-Function Equal constraints into param/ret pairs.
+
+main() = {
+  showAny = (x) => show(x)
+  showAny(42) ++ showAny(true)
+}

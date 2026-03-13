@@ -305,10 +305,17 @@ pub struct InferCtx<'a> {
     /// so that `(a, b) => a + b; addUp(1, "hello")` catches the type mismatch.
     polymorphic_body_constraints: Vec<(Type, Type)>,
     /// Internal pending method calls from let-bound lambda bodies that involve
-    /// only polymorphic (generalizable) vars. When instantiate_local_binding
+    /// polymorphic (generalizable) vars. When instantiate_local_binding
     /// freshens these vars, it replicates these method calls with fresh vars
     /// so that `first = (xs) => xs.head()` can be used at multiple types.
     polymorphic_body_method_calls: Vec<PendingMethodCall>,
+    /// Internal deferred overload calls from let-bound lambda bodies that involve
+    /// polymorphic vars. These must be replicated with fresh vars during
+    /// instantiation, otherwise the deferred resolution during solve() would
+    /// lock the original vars to a concrete type. E.g., `showAny = (x) => show(x)`
+    /// where show has overloads for Int, Bool, String etc.
+    #[allow(clippy::type_complexity)]
+    polymorphic_body_deferred_overloads: Vec<(Vec<FunctionType>, Vec<Type>, Type, Span)>,
     /// Freshened var pairs from instantiate_local_binding: (original_var_id, fresh_var_id, call_span).
     /// After solve(), if original and fresh both resolve to concrete but different types,
     /// the freshening was incorrect (let-polymorphism was applied to a monomorphic binding).
@@ -357,6 +364,7 @@ impl<'a> InferCtx<'a> {
             polymorphic_vars: HashSet::new(),
             polymorphic_body_constraints: Vec::new(),
             polymorphic_body_method_calls: Vec::new(),
+            polymorphic_body_deferred_overloads: Vec::new(),
             freshened_binding_vars: Vec::new(),
         }
     }
@@ -1526,6 +1534,26 @@ impl<'a> InferCtx<'a> {
                     ret_ty: fresh_ret,
                     span: pmc.span,
                 });
+            }
+        }
+
+        // Duplicate deferred overload calls with fresh vars.
+        // E.g., if `showAny = (x) => show(x)` had a deferred overload for show
+        // with arg_types=[?x], generate a new deferred overload with [?fresh_x]
+        // so each call to showAny gets its own overload resolution.
+        let body_docs = self.polymorphic_body_deferred_overloads.clone();
+        for (overloads, arg_types, ret_ty, span) in &body_docs {
+            let fresh_args: Vec<Type> = arg_types.iter()
+                .map(|a| self.apply_var_subst(a, &var_subst))
+                .collect();
+            let fresh_ret = self.apply_var_subst(ret_ty, &var_subst);
+            if fresh_args != *arg_types || fresh_ret != *ret_ty {
+                self.deferred_overload_calls.push((
+                    overloads.clone(),
+                    fresh_args,
+                    fresh_ret,
+                    *span,
+                ));
             }
         }
 
@@ -8537,6 +8565,7 @@ impl<'a> InferCtx<'a> {
         // Snapshot constraint counts before inferring value, for let-polymorphism analysis
         let constraints_before = self.constraints.len();
         let pending_methods_before = self.pending_method_calls.len();
+        let deferred_overloads_before = self.deferred_overload_calls.len();
         // Snapshot var counter to distinguish lambda-internal vars from outer-scope vars
         let vars_before = self.env.next_var;
 
@@ -8568,30 +8597,75 @@ impl<'a> InferCtx<'a> {
                 // Collect internal HasTrait constraints to register as trait_bounds
                 // for generalized vars (so instantiate_local_binding can copy them)
                 let mut internal_has_traits: Vec<(u32, String)> = Vec::new();
-                for constraint in &self.constraints[constraints_before..] {
-                    match constraint {
-                        Constraint::Equal(a, b, _) => {
-                            // Only mark vars as constrained if this constraint involves
-                            // something external (concrete type or outer-scope var)
-                            let a_external = type_has_external_anchor(a, vars_before);
-                            let b_external = type_has_external_anchor(b, vars_before);
-                            if a_external || b_external {
+                // Helper: analyze a pair of types for external anchoring.
+                // Decomposes Function-vs-Function equalities into param/ret pairs
+                // so that a concrete return type doesn't prevent generalization of params.
+                // E.g., Equal(Function(?25 -> String), Function(?24 -> ?26)) decomposes into
+                // Equal(?25, ?24) [internal] and Equal(String, ?26) [external: constrains ?26].
+                let mut analyze_constraint_pair = |a: &Type, b: &Type, constrained_vars: &mut HashSet<u32>, internal_equals: &mut Vec<(Vec<u32>, Vec<u32>)>| {
+                    // If both sides are Function types, decompose into component constraints
+                    if let (Type::Function(ft_a), Type::Function(ft_b)) = (a, b) {
+                        // Analyze each param pair separately
+                        for (pa, pb) in ft_a.params.iter().zip(ft_b.params.iter()) {
+                            let pa_ext = type_has_external_anchor(pa, vars_before);
+                            let pb_ext = type_has_external_anchor(pb, vars_before);
+                            if pa_ext || pb_ext {
                                 let mut ids = Vec::new();
-                                self.collect_var_ids(a, &mut ids);
-                                self.collect_var_ids(b, &mut ids);
-                                for id in &ids {
-                                    constrained_vars.insert(*id);
-                                }
+                                self.collect_var_ids(pa, &mut ids);
+                                self.collect_var_ids(pb, &mut ids);
+                                for id in &ids { constrained_vars.insert(*id); }
                             } else {
-                                // Internal-only: save for transitive propagation
                                 let mut a_ids = Vec::new();
                                 let mut b_ids = Vec::new();
-                                self.collect_var_ids(a, &mut a_ids);
-                                self.collect_var_ids(b, &mut b_ids);
+                                self.collect_var_ids(pa, &mut a_ids);
+                                self.collect_var_ids(pb, &mut b_ids);
                                 if !a_ids.is_empty() || !b_ids.is_empty() {
                                     internal_equals.push((a_ids, b_ids));
                                 }
                             }
+                        }
+                        // Analyze return type separately
+                        let ra_ext = type_has_external_anchor(&ft_a.ret, vars_before);
+                        let rb_ext = type_has_external_anchor(&ft_b.ret, vars_before);
+                        if ra_ext || rb_ext {
+                            let mut ids = Vec::new();
+                            self.collect_var_ids(&ft_a.ret, &mut ids);
+                            self.collect_var_ids(&ft_b.ret, &mut ids);
+                            for id in &ids { constrained_vars.insert(*id); }
+                        } else {
+                            let mut a_ids = Vec::new();
+                            let mut b_ids = Vec::new();
+                            self.collect_var_ids(&ft_a.ret, &mut a_ids);
+                            self.collect_var_ids(&ft_b.ret, &mut b_ids);
+                            if !a_ids.is_empty() || !b_ids.is_empty() {
+                                internal_equals.push((a_ids, b_ids));
+                            }
+                        }
+                        return;
+                    }
+                    // Non-function: treat as a single constraint
+                    let a_external = type_has_external_anchor(a, vars_before);
+                    let b_external = type_has_external_anchor(b, vars_before);
+                    if a_external || b_external {
+                        let mut ids = Vec::new();
+                        self.collect_var_ids(a, &mut ids);
+                        self.collect_var_ids(b, &mut ids);
+                        for id in &ids { constrained_vars.insert(*id); }
+                    } else {
+                        let mut a_ids = Vec::new();
+                        let mut b_ids = Vec::new();
+                        self.collect_var_ids(a, &mut a_ids);
+                        self.collect_var_ids(b, &mut b_ids);
+                        if !a_ids.is_empty() || !b_ids.is_empty() {
+                            internal_equals.push((a_ids, b_ids));
+                        }
+                    }
+                };
+
+                for constraint in &self.constraints[constraints_before..] {
+                    match constraint {
+                        Constraint::Equal(a, b, _) => {
+                            analyze_constraint_pair(a, b, &mut constrained_vars, &mut internal_equals);
                         }
                         Constraint::HasTrait(ty, trait_name) => {
                             // HasTrait constrains only if it involves external types/vars.
@@ -8733,6 +8807,32 @@ impl<'a> InferCtx<'a> {
                     if any_poly {
                         self.polymorphic_body_method_calls.push(pmc.clone());
                     }
+                }
+
+                // Record internal deferred overload calls as polymorphic_body_deferred_overloads
+                // so that instantiate_local_binding can duplicate them with fresh vars.
+                // This enables `showAny = (x) => show(x)` to be used at multiple types.
+                // Without this, the deferred overload resolution during solve() locks the
+                // original vars to a concrete type, preventing polymorphic use.
+                // Also remove the originals from deferred_overload_calls to prevent
+                // solve() from resolving the polymorphic vars to a concrete type.
+                let mut indices_to_remove = Vec::new();
+                for (idx, doc) in self.deferred_overload_calls[deferred_overloads_before..].iter().enumerate() {
+                    let (_, arg_types, ret_ty, _) = doc;
+                    let mut ids = Vec::new();
+                    for arg in arg_types {
+                        self.collect_var_ids(arg, &mut ids);
+                    }
+                    self.collect_var_ids(ret_ty, &mut ids);
+                    let any_poly = ids.iter().any(|id| self.polymorphic_vars.contains(id));
+                    if any_poly {
+                        self.polymorphic_body_deferred_overloads.push(doc.clone());
+                        indices_to_remove.push(deferred_overloads_before + idx);
+                    }
+                }
+                // Remove in reverse order to maintain indices
+                for idx in indices_to_remove.into_iter().rev() {
+                    self.deferred_overload_calls.remove(idx);
                 }
             }
         }
