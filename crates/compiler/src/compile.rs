@@ -18808,18 +18808,22 @@ impl Compiler {
         specialized_def.name = Spanned::new(local_name, fn_def.name.span);
         specialized_def.type_params.clear(); // No longer polymorphic
 
-        // Build type param substitution map from the original function's type params
-        // This is needed to substitute both parameter types AND the return type annotation.
-        // E.g., fn[El](x: El) -> El: when specializing to Int, both x:El and ->El become Int.
+        // Build type param substitution map by recursively matching parameter annotations
+        // against concrete argument types. This handles both direct (El) and nested (List[El])
+        // type parameter positions.
+        // E.g., fn[El](xs: List[El]) -> List[El] called with List[Int]: El -> Int
         let type_param_subst_map: HashMap<String, String> = {
             let mut map = HashMap::new();
-            if let Some(first_clause) = fn_def.clauses.first() {
-                for (i, param) in first_clause.params.iter().enumerate() {
-                    if i < arg_type_names.len() && arg_type_names[i] != "_" {
-                        if let Some(TypeExpr::Name(type_ident)) = &param.ty {
-                            let is_type_param = fn_def.type_params.iter().any(|tp| tp.name.node == type_ident.node);
-                            if is_type_param {
-                                map.insert(type_ident.node.clone(), arg_type_names[i].clone());
+            let type_param_names: HashSet<String> = fn_def.type_params.iter()
+                .map(|tp| tp.name.node.clone())
+                .collect();
+            if !type_param_names.is_empty() {
+                if let Some(first_clause) = fn_def.clauses.first() {
+                    for (i, param) in first_clause.params.iter().enumerate() {
+                        if i < arg_type_names.len() && arg_type_names[i] != "_" {
+                            if let Some(annotation) = &param.ty {
+                                let concrete = Self::parse_type_string_to_type_expr(&arg_type_names[i]);
+                                self.extract_type_param_mappings(annotation, &concrete, &type_param_names, &mut map);
                             }
                         }
                     }
@@ -20671,6 +20675,98 @@ impl Compiler {
                         Self::extract_type_bindings(type_elem, concrete_elem, map);
                     }
                 }
+            }
+            _ => {}
+        }
+    }
+
+    /// Convert a TypeExpr annotation to an HM Type, replacing declared type params with
+    /// the corresponding fresh vars from the map. Non-type-param names use type_name_to_type.
+    fn type_expr_to_hm_type(
+        ty_expr: &TypeExpr,
+        type_param_vars: &HashMap<String, nostos_types::Type>,
+        compiler: &Compiler,
+        env: &mut nostos_types::TypeEnv,
+    ) -> nostos_types::Type {
+        match ty_expr {
+            TypeExpr::Name(ident) => {
+                if let Some(var) = type_param_vars.get(&ident.node) {
+                    var.clone()
+                } else {
+                    compiler.type_name_to_type(&ident.node)
+                }
+            }
+            TypeExpr::Generic(name, args) => {
+                let inner_types: Vec<nostos_types::Type> = args.iter()
+                    .map(|a| Self::type_expr_to_hm_type(a, type_param_vars, compiler, env))
+                    .collect();
+                let base_name = &name.node;
+                // Build Named type with generic args
+                nostos_types::Type::Named {
+                    name: base_name.clone(),
+                    args: inner_types,
+                }
+            }
+            TypeExpr::Tuple(types) => {
+                let inner: Vec<nostos_types::Type> = types.iter()
+                    .map(|t| Self::type_expr_to_hm_type(t, type_param_vars, compiler, env))
+                    .collect();
+                nostos_types::Type::Tuple(inner)
+            }
+            TypeExpr::Function(params, ret) => {
+                let param_types: Vec<nostos_types::Type> = params.iter()
+                    .map(|p| Self::type_expr_to_hm_type(p, type_param_vars, compiler, env))
+                    .collect();
+                let ret_type = Self::type_expr_to_hm_type(ret, type_param_vars, compiler, env);
+                nostos_types::Type::Function(nostos_types::FunctionType {
+                    type_params: vec![],
+                    params: param_types,
+                    ret: Box::new(ret_type),
+                    var_bounds: vec![],
+                    required_params: None,
+                })
+            }
+            TypeExpr::Unit => nostos_types::Type::Named { name: "()".to_string(), args: vec![] },
+            _ => env.fresh_var(),
+        }
+    }
+
+    /// Extract type parameter mappings by recursively matching a TypeExpr annotation
+    /// against a concrete type string. E.g., matching `List[El]` against `List[Int]`
+    /// with type_params={El} yields {El -> Int}.
+    fn extract_type_param_mappings(
+        &self,
+        annotation: &TypeExpr,
+        concrete: &TypeExpr,
+        type_param_names: &HashSet<String>,
+        map: &mut HashMap<String, String>,
+    ) {
+        match (annotation, concrete) {
+            (TypeExpr::Name(ident), _) if type_param_names.contains(&ident.node) => {
+                // This annotation IS a type param — map it to the concrete type string
+                map.insert(ident.node.clone(), self.type_expr_to_string(concrete));
+            }
+            (TypeExpr::Generic(ann_name, ann_args), TypeExpr::Generic(con_name, con_args))
+                if ann_name.node == con_name.node && ann_args.len() == con_args.len() =>
+            {
+                for (a, c) in ann_args.iter().zip(con_args.iter()) {
+                    self.extract_type_param_mappings(a, c, type_param_names, map);
+                }
+            }
+            (TypeExpr::Tuple(ann_types), TypeExpr::Tuple(con_types))
+                if ann_types.len() == con_types.len() =>
+            {
+                for (a, c) in ann_types.iter().zip(con_types.iter()) {
+                    self.extract_type_param_mappings(a, c, type_param_names, map);
+                }
+            }
+            (TypeExpr::Function(ann_params, ann_ret), TypeExpr::Function(con_params, con_ret))
+                if ann_params.len() == con_params.len() =>
+            {
+                for (a, c) in ann_params.iter().zip(con_params.iter()) {
+                    self.extract_type_param_mappings(a, c, type_param_names, map);
+                }
+                self.extract_type_param_mappings(ann_ret, con_ret, type_param_names, map);
             }
             _ => {}
         }
@@ -25962,30 +26058,24 @@ impl Compiler {
             .map(|tp| tp.name.node.clone())
             .collect();
         if let Some(clause) = def.clauses.first() {
+            // Map each declared type param to a fresh var for consistent pre-registration
+            let mut type_param_var_map: HashMap<String, nostos_types::Type> = HashMap::new();
+            for tp_name in &declared_type_params {
+                type_param_var_map.insert(tp_name.clone(), env.fresh_var());
+            }
             // Use a loop instead of .map() so we can call env.fresh_var() alongside self methods
             let mut param_types: Vec<nostos_types::Type> = Vec::new();
             for p in &clause.params {
                 let ty = if let Some(ty_expr) = &p.ty {
-                    let ty_str = self.type_expr_to_string(ty_expr);
-                    // If the annotation refers to a declared type param, use a fresh var
-                    // (type_name_to_type("El") would return Named{El}, not TypeParam("El"))
-                    if declared_type_params.contains(&ty_str) {
-                        env.fresh_var()
-                    } else {
-                        self.type_name_to_type(&ty_str)
-                    }
+                    // Convert type annotation to Type, replacing declared type params with fresh vars
+                    Self::type_expr_to_hm_type(ty_expr, &type_param_var_map, self, &mut env)
                 } else {
                     env.fresh_var()
                 };
                 param_types.push(ty);
             }
             let ret_ty = if let Some(ty) = &clause.return_type {
-                let ty_str = self.type_expr_to_string(ty);
-                if declared_type_params.contains(&ty_str) {
-                    env.fresh_var()
-                } else {
-                    self.type_name_to_type(&ty_str)
-                }
+                Self::type_expr_to_hm_type(ty, &type_param_var_map, self, &mut env)
             } else {
                 env.fresh_var()
             };

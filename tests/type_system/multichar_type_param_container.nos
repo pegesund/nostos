@@ -1,0 +1,5 @@
+# expect: ([1, 2, 3, 1, 2, 3], (world, hello))
+# Multi-char type params nested inside container types (List, Tuple)
+passThrough[El](xs: List[El]) -> List[El] = xs ++ xs
+swapTuple[First, Second](t: (First, Second)) -> (Second, First) = (t.1, t.0)
+main() = (passThrough([1, 2, 3]), swapTuple(("hello", "world")))
