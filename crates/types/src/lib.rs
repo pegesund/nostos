@@ -478,6 +478,16 @@ impl TypeError {
                 if expected.contains("HasMethod") || expected.contains("HasField") {
                     return true;
                 }
+                // Single-letter type parameter names (A, B, T, a, b, etc.) appearing as
+                // Mismatch are noise from annotated generic functions like swapPair(p: Pair[A, B]).
+                // When cross-module generic types are used in annotations, A and B become
+                // Named types that the solver may try to unify, producing false Mismatch errors.
+                let is_single_letter_type_param = |s: &str| {
+                    s.len() == 1 && s.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false)
+                };
+                if is_single_letter_type_param(expected) || is_single_letter_type_param(found) {
+                    return true;
+                }
                 false
             }
 

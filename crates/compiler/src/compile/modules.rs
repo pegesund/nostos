@@ -895,7 +895,8 @@ impl Compiler {
                     // constraints weren't fully resolved. The per-function type_check_fn
                     // pass will catch real errors with fully-resolved types.
                     let has_type_var = |s: &str| s.contains('?');
-                    if !has_type_var(expected) && !has_type_var(found) {
+                    let is_type_param = |s: &str| s.len() == 1 && s.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false);
+                    if !has_type_var(expected) && !has_type_var(found) && !is_type_param(expected) && !is_type_param(found) {
                         let error_span = ctx.last_error_span().unwrap_or_else(|| Span::new(0, 0));
                         let compile_error = self.convert_type_error(e.clone(), error_span);
                         let (source_name, source) = user_fns.first()

@@ -27474,13 +27474,17 @@ impl Compiler {
             // Before returning the solve error, check for more specific errors that
             // bypass string-based error filters. These produce Mismatch errors.
             if let Some(mismatch_err) = ctx.check_fn_call_mismatches() {
-                let error_span = ctx.last_error_span().unwrap_or(span);
-                return Err(self.convert_type_error(mismatch_err, error_span));
+                if !mismatch_err.should_suppress() {
+                    let error_span = ctx.last_error_span().unwrap_or(span);
+                    return Err(self.convert_type_error(mismatch_err, error_span));
+                }
             }
             // Check indirect calls (curried functions, higher-order returns)
             if let Some(mismatch_err) = ctx.check_indirect_call_mismatches() {
-                let error_span = ctx.last_error_span().unwrap_or(span);
-                return Err(self.convert_type_error(mismatch_err, error_span));
+                if !mismatch_err.should_suppress() {
+                    let error_span = ctx.last_error_span().unwrap_or(span);
+                    return Err(self.convert_type_error(mismatch_err, error_span));
+                }
             }
             // Check freshened binding var conflicts (let-polymorphism on monomorphic HOF results)
             if let Some(freshened_err) = ctx.check_freshened_binding_conflicts() {
@@ -27558,16 +27562,18 @@ impl Compiler {
         // false positives involving unresolved type variables (e.g., `? vs Int` when
         // a generic function's return type couldn't be determined by isolated HM inference).
         if let Some(mismatch_err) = ctx.check_fn_call_mismatches() {
-
-            let error_span = ctx.last_error_span().unwrap_or(span);
-            return Err(self.convert_type_error(mismatch_err, error_span));
+            if !mismatch_err.should_suppress() {
+                let error_span = ctx.last_error_span().unwrap_or(span);
+                return Err(self.convert_type_error(mismatch_err, error_span));
+            }
         }
 
         // Check indirect calls (curried functions, higher-order returns)
         if let Some(mismatch_err) = ctx.check_indirect_call_mismatches() {
-
-            let error_span = ctx.last_error_span().unwrap_or(span);
-            return Err(self.convert_type_error(mismatch_err, error_span));
+            if !mismatch_err.should_suppress() {
+                let error_span = ctx.last_error_span().unwrap_or(span);
+                return Err(self.convert_type_error(mismatch_err, error_span));
+            }
         }
 
         // Check freshened binding var conflicts (let-polymorphism applied to monomorphic HOF results)

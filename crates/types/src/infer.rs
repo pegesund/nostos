@@ -2009,6 +2009,16 @@ impl<'a> InferCtx<'a> {
                     if matches!(&resolved_param, Type::Var(_) | Type::TypeParam(_)) { continue; }
                     if matches!(&resolved_arg, Type::Var(_) | Type::TypeParam(_)) { continue; }
 
+                    // Skip if either is a single-letter Named type (leaked type parameter).
+                    // This happens when function annotations use Pair[A, B] with cross-module types:
+                    // A and B become Named { name: "A", args: [] } rather than TypeParam.
+                    let is_named_type_param = |t: &Type| matches!(t,
+                        Type::Named { name, args }
+                        if args.is_empty() && name.len() == 1
+                            && name.starts_with(|c: char| c.is_alphabetic())
+                    );
+                    if is_named_type_param(&resolved_param) || is_named_type_param(&resolved_arg) { continue; }
+
                     // Check concrete type mismatch: both are concrete and differ
                     let is_concrete_simple = |t: &Type| -> bool {
                         matches!(t, Type::Int | Type::Float | Type::Bool |
@@ -6105,6 +6115,22 @@ impl<'a> InferCtx<'a> {
                         if name.len() == 1 && name.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false) {
                             let var_id = (name.chars().next().unwrap() as u32) - ('a' as u32) + 1;
                             Type::Var(var_id)
+                        } else if name.len() == 1 && name.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false) {
+                            // Single uppercase letters (A, B, T, etc.) are implicitly treated as
+                            // type parameters when they are not known concrete types.
+                            // This handles annotations like `fn(p: Pair[A, B])` where A and B
+                            // are implicit type parameters rather than explicit `[A, B]` declarations.
+                            let resolved = self.env.resolve_type_name(name);
+                            if self.env.types.contains_key(&resolved) || resolved != name.as_str() {
+                                // It's a known type (either directly or via alias) - use as Named
+                                Type::Named {
+                                    name: resolved,
+                                    args: vec![],
+                                }
+                            } else {
+                                // Not a known type - treat as implicit type parameter
+                                Type::TypeParam(name.clone())
+                            }
                         } else {
                             Type::Named {
                                 // Resolve through type aliases (e.g., Option -> stdlib.list.Option)
