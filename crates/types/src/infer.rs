@@ -8717,7 +8717,10 @@ impl<'a> InferCtx<'a> {
                 // Record internal pending method calls as polymorphic_body_method_calls
                 // so that instantiate_local_binding can duplicate them with fresh vars.
                 // This enables `first = (xs) => xs.head()` to be used at multiple types.
-                // Only record PMCs where ALL involved vars are polymorphic.
+                // Record PMCs where ANY involved var is polymorphic. Non-polymorphic vars
+                // stay fixed during duplication (apply_var_subst only replaces vars in
+                // var_subst). This handles cases like `addOne = (xs) => xs.map(x => x+1)`
+                // where the callback's param is fixed to Int but the receiver is polymorphic.
                 for pmc_idx in &internal_pmcs {
                     let pmc = &self.pending_method_calls[*pmc_idx];
                     let mut ids = Vec::new();
@@ -8726,8 +8729,8 @@ impl<'a> InferCtx<'a> {
                         self.collect_var_ids(arg, &mut ids);
                     }
                     self.collect_var_ids(&pmc.ret_ty, &mut ids);
-                    let all_poly = ids.iter().all(|id| self.polymorphic_vars.contains(id));
-                    if all_poly {
+                    let any_poly = ids.iter().any(|id| self.polymorphic_vars.contains(id));
+                    if any_poly {
                         self.polymorphic_body_method_calls.push(pmc.clone());
                     }
                 }

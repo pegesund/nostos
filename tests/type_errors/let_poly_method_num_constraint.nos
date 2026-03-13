@@ -1,0 +1,11 @@
+# expect_error: type mismatch
+# Regression test: let-poly with method call must propagate type constraints
+# Bug: addOne = (xs) => xs.map(x => x+1) compiled with ["a","b"] arg,
+# giving runtime error instead of compile-time type error.
+# Root cause: PMC not recorded because non-polymorphic callback vars
+# made all_poly check fail.
+
+main() = {
+  addOne = (xs) => xs.map(x => x + 1)
+  addOne(["a", "b"])
+}
