@@ -1454,19 +1454,34 @@ impl<'a> InferCtx<'a> {
         // E.g., if `(a, b) => a + b` had Equal(?a, ?b) from the `+` operator,
         // generate Equal(?fresh_a, ?fresh_b) so type checking catches `addUp(1, "hello")`.
         //
-        // IMPORTANT: Body constraints may reference polymorphic vars that are NOT in the
-        // function type signature. E.g., for `g = (y) => f(y)` where f is let-poly,
-        // the body constraint is Equal(Function(?f_fresh->?f_fresh), Function(?y->?ret)).
-        // ?f_fresh is not in g's type signature but must be freshened on each instantiation
-        // of g, otherwise all calls to g share the same ?f_fresh and conflict.
-        // We extend var_subst with fresh vars for any such "hidden" polymorphic vars.
-        let body_constraints = self.polymorphic_body_constraints.clone();
-        if !body_constraints.is_empty() {
-            // Find all polymorphic vars in body constraints that aren't yet in var_subst
+        // IMPORTANT: Body constraints, PMCs, and deferred overloads may reference
+        // polymorphic vars that are NOT in the function type signature. E.g., for
+        // `g = (y) => f(y)` where f is let-poly, the body constraint has ?f_fresh.
+        // For `transform = (xs) => xs.map(x => [x])`, the PMC contains inner lambda
+        // vars ?x and ?elem. These must be freshened on each instantiation.
+        // We extend var_subst with fresh vars for any such "hidden" polymorphic vars
+        // found across ALL body state (constraints, PMCs, deferred overloads).
+        {
             let mut extra_var_ids = Vec::new();
-            for (a, b) in &body_constraints {
+            // Collect from body constraints
+            for (a, b) in &self.polymorphic_body_constraints {
                 self.collect_var_ids(a, &mut extra_var_ids);
                 self.collect_var_ids(b, &mut extra_var_ids);
+            }
+            // Collect from body method calls
+            for pmc in &self.polymorphic_body_method_calls {
+                self.collect_var_ids(&pmc.receiver_ty, &mut extra_var_ids);
+                for arg in &pmc.arg_types {
+                    self.collect_var_ids(arg, &mut extra_var_ids);
+                }
+                self.collect_var_ids(&pmc.ret_ty, &mut extra_var_ids);
+            }
+            // Collect from body deferred overloads
+            for (_, arg_types, ret_ty, _) in &self.polymorphic_body_deferred_overloads {
+                for arg in arg_types {
+                    self.collect_var_ids(arg, &mut extra_var_ids);
+                }
+                self.collect_var_ids(ret_ty, &mut extra_var_ids);
             }
             for extra_id in extra_var_ids {
                 if !var_subst.contains_key(&extra_id) && self.polymorphic_vars.contains(&extra_id) {
@@ -1489,14 +1504,15 @@ impl<'a> InferCtx<'a> {
                     var_subst.insert(extra_id, fresh);
                 }
             }
+        }
 
-            for (a, b) in &body_constraints {
-                let fresh_a = self.apply_var_subst(a, &var_subst);
-                let fresh_b = self.apply_var_subst(b, &var_subst);
-                // Only push if at least one side was actually substituted
-                if fresh_a != *a || fresh_b != *b {
-                    self.constraints.push(Constraint::Equal(fresh_a, fresh_b, call_span));
-                }
+        // Replicate body constraints with fresh vars
+        let body_constraints = self.polymorphic_body_constraints.clone();
+        for (a, b) in &body_constraints {
+            let fresh_a = self.apply_var_subst(a, &var_subst);
+            let fresh_b = self.apply_var_subst(b, &var_subst);
+            if fresh_a != *a || fresh_b != *b {
+                self.constraints.push(Constraint::Equal(fresh_a, fresh_b, call_span));
             }
         }
 
@@ -8753,6 +8769,48 @@ impl<'a> InferCtx<'a> {
                     if !constrained_vars.contains(&var_id) {
                         self.polymorphic_vars.insert(var_id);
                     }
+                }
+
+                // Also mark internal vars from PMCs and body constraints as polymorphic
+                // if they're not externally constrained. These "hidden" vars (not in the
+                // function type signature) must be freshened on each instantiation.
+                // E.g., for `transform = (xs) => xs.map(x => [x])`, the inner lambda's
+                // param ?V2 and list element ?V3 are not in transform's type signature
+                // but must be freshened for each call to transform.
+                let mut extra_poly_vars: Vec<u32> = Vec::new();
+                for pmc_idx in &internal_pmcs {
+                    let pmc = &self.pending_method_calls[*pmc_idx];
+                    let mut ids = Vec::new();
+                    self.collect_var_ids(&pmc.receiver_ty, &mut ids);
+                    for arg in &pmc.arg_types {
+                        self.collect_var_ids(arg, &mut ids);
+                    }
+                    self.collect_var_ids(&pmc.ret_ty, &mut ids);
+                    for id in ids {
+                        if id >= vars_before && !constrained_vars.contains(&id) {
+                            extra_poly_vars.push(id);
+                        }
+                    }
+                }
+                // Also check internal Equal constraints for hidden vars
+                for constraint in &self.constraints[constraints_before..] {
+                    if let Constraint::Equal(a, b, _) = constraint {
+                        let a_ext = type_has_external_anchor(a, vars_before);
+                        let b_ext = type_has_external_anchor(b, vars_before);
+                        if !a_ext && !b_ext {
+                            let mut ids = Vec::new();
+                            self.collect_var_ids(a, &mut ids);
+                            self.collect_var_ids(b, &mut ids);
+                            for id in ids {
+                                if id >= vars_before && !constrained_vars.contains(&id) {
+                                    extra_poly_vars.push(id);
+                                }
+                            }
+                        }
+                    }
+                }
+                for id in extra_poly_vars {
+                    self.polymorphic_vars.insert(id);
                 }
 
                 // Register internal HasTrait constraints as trait_bounds for

@@ -1,0 +1,12 @@
+# expect: 2
+# Regression test: let-poly lambda with method call containing callback
+# Bug: transform = (xs) => xs.map(x => [x]) wasn't polymorphic because
+# inner lambda vars (?x, ?elem) in the PMC weren't marked polymorphic
+# and weren't freshened during instantiation.
+
+main() = {
+  transform = (xs) => xs.map(x => show(x))
+  r1 = transform([42, 43])
+  r2 = transform(["a", "b"])
+  r1.length()
+}
