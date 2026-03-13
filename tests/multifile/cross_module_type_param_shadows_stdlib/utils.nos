@@ -1,0 +1,2 @@
+# Generic function where type param name shadows stdlib type (Option)
+pub wrapInList[Option](x: Option) -> List[Option] = [x]

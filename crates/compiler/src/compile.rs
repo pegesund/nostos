@@ -5738,9 +5738,152 @@ impl Compiler {
         self.current_type_bindings.get(name).map(|ty| ty.display())
     }
 
+    /// Check if a TypeExpr is (or contains only) a declared type parameter.
+    /// Used to skip inserting concrete types for generic params in param_types.
+    fn type_expr_is_type_param(ty: &nostos_syntax::TypeExpr, declared_tp_names: &std::collections::HashSet<String>) -> bool {
+        match ty {
+            nostos_syntax::TypeExpr::Name(ident) => declared_tp_names.contains(&ident.node),
+            _ => false,
+        }
+    }
+
+    /// Recursively replace Named types whose name matches a key in `tp_resolved` with the
+    /// corresponding Var type. Used to fix pending_fn_signatures for functions with declared
+    /// type params that shadow stdlib names (e.g., fn[Option](x: Option) where Option is a
+    /// type param, not stdlib.list.Option).
+    fn replace_type_params_in_type(ty: &nostos_types::Type, tp_resolved: &std::collections::HashMap<String, nostos_types::Type>) -> nostos_types::Type {
+        use nostos_types::Type;
+        match ty {
+            Type::Named { name, args } => {
+                if args.is_empty() {
+                    if let Some(var_ty) = tp_resolved.get(name) {
+                        return var_ty.clone();
+                    }
+                }
+                Type::Named {
+                    name: name.clone(),
+                    args: args.iter().map(|a| Self::replace_type_params_in_type(a, tp_resolved)).collect(),
+                }
+            }
+            Type::List(inner) => Type::List(Box::new(Self::replace_type_params_in_type(inner, tp_resolved))),
+            Type::Array(inner) => Type::Array(Box::new(Self::replace_type_params_in_type(inner, tp_resolved))),
+            Type::Set(inner) => Type::Set(Box::new(Self::replace_type_params_in_type(inner, tp_resolved))),
+            Type::IO(inner) => Type::IO(Box::new(Self::replace_type_params_in_type(inner, tp_resolved))),
+            Type::Map(k, v) => Type::Map(
+                Box::new(Self::replace_type_params_in_type(k, tp_resolved)),
+                Box::new(Self::replace_type_params_in_type(v, tp_resolved)),
+            ),
+            Type::Tuple(types) => Type::Tuple(
+                types.iter().map(|t| Self::replace_type_params_in_type(t, tp_resolved)).collect(),
+            ),
+            Type::Function(ft) => Type::Function(nostos_types::FunctionType {
+                params: ft.params.iter().map(|t| Self::replace_type_params_in_type(t, tp_resolved)).collect(),
+                ret: Box::new(Self::replace_type_params_in_type(&ft.ret, tp_resolved)),
+                type_params: ft.type_params.clone(),
+                required_params: ft.required_params,
+                var_bounds: ft.var_bounds.clone(),
+            }),
+            // Primitives, Var, TypeParam, Record, Variant, Pid, Ref - no replacement needed
+            other => other.clone(),
+        }
+    }
+
     /// Convert a TypeExpr AST node to a Type value.
     fn type_expr_to_type(&self, ty: &nostos_syntax::TypeExpr) -> nostos_types::Type {
         self.type_name_to_type(&self.type_expr_to_string(ty))
+    }
+
+    /// Convert a TypeExpr AST node to a Type value, checking declared type params first.
+    /// Type param names (e.g., `Option` in `fn[Option](x: Option)`) are mapped to their
+    /// assigned type variables instead of being resolved to stdlib types.
+    /// Convert a TypeExpr AST node to a Type value, checking declared type params first.
+    /// Type param names (e.g., `Option` in `fn[Option](x: Option)`) are mapped to their
+    /// assigned type variables instead of being resolved to stdlib types.
+    /// For non-type-param names, delegates to type_name_to_type which correctly handles
+    /// container types (List, Set, Map, etc.) producing List(...), Set(...), Map(...) wrappers.
+    fn type_expr_to_type_with_params(&self, ty: &nostos_syntax::TypeExpr, type_param_vars: &std::collections::HashMap<String, nostos_types::Type>) -> nostos_types::Type {
+        use nostos_syntax::TypeExpr;
+        match ty {
+            TypeExpr::Name(ident) => {
+                if let Some(var) = type_param_vars.get(&ident.node) {
+                    var.clone()
+                } else {
+                    self.type_name_to_type(&ident.node)
+                }
+            }
+            TypeExpr::Generic(name, args) => {
+                // Check if the generic name itself is a type param (unlikely but handle it)
+                if let Some(var) = type_param_vars.get(&name.node) {
+                    return var.clone();
+                }
+                // Check if any arg contains a declared type param. If not, fall through
+                // to the string-based path which handles List/Set/Map/etc. correctly.
+                let has_type_param_in_args = args.iter().any(|a| self.type_expr_contains_type_param(a, type_param_vars));
+                if !has_type_param_in_args {
+                    // No declared type params in args — use string-based conversion
+                    // which correctly produces List(...), Set(...), Map(...) wrappers
+                    return self.type_name_to_type(&self.type_expr_to_string(ty));
+                }
+                // Has type params in args — need to recursively convert
+                let inner_types: Vec<nostos_types::Type> = args.iter()
+                    .map(|a| self.type_expr_to_type_with_params(a, type_param_vars))
+                    .collect();
+                // Use proper container wrappers for known container types
+                match name.node.as_str() {
+                    "List" if inner_types.len() == 1 => nostos_types::Type::List(Box::new(inner_types[0].clone())),
+                    "Set" if inner_types.len() == 1 => nostos_types::Type::Set(Box::new(inner_types[0].clone())),
+                    "Map" if inner_types.len() == 2 => nostos_types::Type::Map(Box::new(inner_types[0].clone()), Box::new(inner_types[1].clone())),
+                    "IO" if inner_types.len() == 1 => nostos_types::Type::IO(Box::new(inner_types[0].clone())),
+                    "Array" if inner_types.len() == 1 => nostos_types::Type::Array(Box::new(inner_types[0].clone())),
+                    _ => nostos_types::Type::Named {
+                        name: name.node.clone(),
+                        args: inner_types,
+                    }
+                }
+            }
+            TypeExpr::Tuple(types) => {
+                let inner: Vec<nostos_types::Type> = types.iter()
+                    .map(|t| self.type_expr_to_type_with_params(t, type_param_vars))
+                    .collect();
+                nostos_types::Type::Tuple(inner)
+            }
+            TypeExpr::Function(params, ret) => {
+                let param_types: Vec<nostos_types::Type> = params.iter()
+                    .map(|p| self.type_expr_to_type_with_params(p, type_param_vars))
+                    .collect();
+                let ret_type = self.type_expr_to_type_with_params(ret, type_param_vars);
+                nostos_types::Type::Function(nostos_types::FunctionType {
+                    type_params: vec![],
+                    params: param_types,
+                    ret: Box::new(ret_type),
+                    var_bounds: vec![],
+                    required_params: None,
+                })
+            }
+            TypeExpr::Unit => nostos_types::Type::Named { name: "()".to_string(), args: vec![] },
+            _ => {
+                // Fallback: use string-based conversion
+                self.type_name_to_type(&self.type_expr_to_string(ty))
+            }
+        }
+    }
+
+    /// Check if a type expression contains any declared type param names.
+    fn type_expr_contains_type_param(&self, ty: &nostos_syntax::TypeExpr, type_param_vars: &std::collections::HashMap<String, nostos_types::Type>) -> bool {
+        use nostos_syntax::TypeExpr;
+        match ty {
+            TypeExpr::Name(ident) => type_param_vars.contains_key(&ident.node),
+            TypeExpr::Generic(name, args) => {
+                type_param_vars.contains_key(&name.node)
+                    || args.iter().any(|a| self.type_expr_contains_type_param(a, type_param_vars))
+            }
+            TypeExpr::Tuple(types) => types.iter().any(|t| self.type_expr_contains_type_param(t, type_param_vars)),
+            TypeExpr::Function(params, ret) => {
+                params.iter().any(|p| self.type_expr_contains_type_param(p, type_param_vars))
+                    || self.type_expr_contains_type_param(ret, type_param_vars)
+            }
+            _ => false,
+        }
     }
 
     /// Convert a TypeExpr to a Type with current_type_bindings substituted.
@@ -9871,12 +10014,32 @@ impl Compiler {
         // Save and set up param_types for typed parameters (for compile-time type coercion)
         // Note: We clone instead of take to preserve any pre-set entries (e.g., self -> TypeName from trait impls)
         let saved_param_types = self.param_types.clone();
+        // Build set of declared type param names so we can skip them
+        let declared_tp_names: std::collections::HashSet<String> = self.current_fn_type_params.iter()
+            .map(|tp| tp.name.node.clone())
+            .collect();
         for param in def.clauses[0].params.iter() {
             if let Some(param_name) = self.pattern_binding_name(&param.pattern) {
                 if let Some(ty) = &param.ty {
-                    let type_val = self.type_expr_to_type(ty);
-                    // Only insert if not already set (preserve trait impl's self -> TypeName)
-                    self.param_types.entry(param_name).or_insert(type_val);
+                    // Check if this type annotation refers to a declared type param.
+                    // If so, don't insert a concrete type — it would wrongly resolve
+                    // e.g., `Option` (type param) to stdlib Option.
+                    let is_type_param = Self::type_expr_is_type_param(ty, &declared_tp_names);
+                    if is_type_param {
+                        // Store as TypeParam so expr_type_info can detect it
+                        // and trigger monomorphization for operators with trait bounds
+                        let tp_name = match ty {
+                            nostos_syntax::TypeExpr::Name(ident) => ident.node.clone(),
+                            _ => unreachable!(),
+                        };
+                        self.param_types.entry(param_name).or_insert(
+                            nostos_types::Type::TypeParam(tp_name)
+                        );
+                    } else {
+                        let type_val = self.type_expr_to_type(ty);
+                        // Only insert if not already set (preserve trait impl's self -> TypeName)
+                        self.param_types.entry(param_name).or_insert(type_val);
+                    }
                 }
             }
         }

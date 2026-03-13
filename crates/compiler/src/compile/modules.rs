@@ -70,11 +70,46 @@ impl Compiler {
             // Set module_path so type_name_to_type can resolve unqualified type names
             let saved_module_path = std::mem::replace(&mut self.module_path, module_path.clone());
             if let Some(clause) = fn_def.clauses.first() {
+                // Build a map from declared type param names to the concrete type strings
+                // they resolve to, so we can replace them after type conversion.
+                // E.g., for fn[Option](x: Option), "Option" resolves to stdlib.list.Option
+                // but should be treated as a type variable.
+                let tp_name_set: std::collections::HashSet<String> = fn_def.type_params.iter()
+                    .map(|tp| tp.name.node.clone())
+                    .collect();
+                // Map the resolved concrete type name to a Var (for post-processing).
+                // E.g., for fn[Option](x: Option), type_name_to_type("Option") resolves to
+                // Named { name: "stdlib.list.Option" }, so we map "stdlib.list.Option" → Var(id).
+                let tp_resolved: std::collections::HashMap<String, nostos_types::Type> = if tp_name_set.is_empty() {
+                    std::collections::HashMap::new()
+                } else {
+                    let mut tp_counter = 10000u32 + (counter * 10);
+                    fn_def.type_params.iter().filter_map(|tp| {
+                        tp_counter += 1;
+                        let resolved_type = self.type_name_to_type(&tp.name.node);
+                        // Only add to map if the name resolves to a Named type
+                        // (i.e., it shadows a real type like Option, Result, etc.)
+                        if let nostos_types::Type::Named { name, args } = &resolved_type {
+                            if args.is_empty() {
+                                return Some((name.clone(), nostos_types::Type::Var(tp_counter)));
+                            }
+                        }
+                        // Also handle when the name stays as-is (lowercase type params
+                        // that don't shadow anything - these are already Var from type_name_to_type)
+                        None
+                    }).collect()
+                };
+
                 let param_types: Vec<nostos_types::Type> = clause.params
                     .iter()
                     .map(|p| {
                         if let Some(ty_expr) = &p.ty {
-                            self.type_name_to_type(&self.type_expr_to_string(ty_expr))
+                            let ty = self.type_name_to_type(&self.type_expr_to_string(ty_expr));
+                            if tp_resolved.is_empty() {
+                                ty
+                            } else {
+                                Self::replace_type_params_in_type(&ty, &tp_resolved)
+                            }
                         } else {
                             // Create unique type variable for each untyped param
                             counter += 1;
@@ -83,7 +118,14 @@ impl Compiler {
                     })
                     .collect();
                 let ret_ty = clause.return_type.as_ref()
-                    .map(|ty| self.type_name_to_type(&self.type_expr_to_string(ty)))
+                    .map(|ty| {
+                        let resolved = self.type_name_to_type(&self.type_expr_to_string(ty));
+                        if tp_resolved.is_empty() {
+                            resolved
+                        } else {
+                            Self::replace_type_params_in_type(&resolved, &tp_resolved)
+                        }
+                    })
                     .unwrap_or_else(|| {
                         counter += 1;
                         nostos_types::Type::Var(counter)

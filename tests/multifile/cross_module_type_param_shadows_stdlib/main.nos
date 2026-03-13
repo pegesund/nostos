@@ -1,0 +1,9 @@
+# expect: 1
+# Tests that declared type params shadowing stdlib names (like Option, Result)
+# are treated as type variables in cross-module context, not as the stdlib type.
+# Bug: "type mismatch: expected Option, found Int" when calling wrapInList(42)
+# because `Option` in the param annotation was resolved to stdlib.list.Option
+# instead of being treated as a generic type variable.
+use utils.{wrapInList}
+
+main() = wrapInList(42).length()

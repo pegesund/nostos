@@ -912,6 +912,43 @@ impl FnDef {
     ///
     /// Examples:
     /// - `add(x: Int, y: Int) -> Int` -> "Int -> Int -> Int"
+    /// Replace declared type param names in a TypeExpr with their assigned letters.
+    fn subst_type_params_in_type_expr(ty: &TypeExpr, map: &std::collections::HashMap<String, char>) -> String {
+        match ty {
+            TypeExpr::Name(ident) => {
+                if let Some(&letter) = map.get(&ident.node) {
+                    letter.to_string()
+                } else {
+                    ident.node.clone()
+                }
+            }
+            TypeExpr::Generic(name, args) => {
+                let args_str: Vec<String> = args.iter()
+                    .map(|a| Self::subst_type_params_in_type_expr(a, map))
+                    .collect();
+                if let Some(&letter) = map.get(&name.node) {
+                    format!("{}[{}]", letter, args_str.join(", "))
+                } else {
+                    format!("{}[{}]", name.node, args_str.join(", "))
+                }
+            }
+            TypeExpr::Tuple(types) => {
+                let types_str: Vec<String> = types.iter()
+                    .map(|t| Self::subst_type_params_in_type_expr(t, map))
+                    .collect();
+                format!("({})", types_str.join(", "))
+            }
+            TypeExpr::Function(params, ret) => {
+                let params_str: Vec<String> = params.iter()
+                    .map(|p| Self::subst_type_params_in_type_expr(p, map))
+                    .collect();
+                let ret_str = Self::subst_type_params_in_type_expr(ret, map);
+                format!("({}) -> {}", params_str.join(", "), ret_str)
+            }
+            _ => ty.to_string_pretty(),
+        }
+    }
+
     /// - `add(x, y) = x + y` -> "a -> a -> a" (x and y unified by +)
     /// - `identity(x) = x` -> "a -> a"
     /// - `constant() -> Int` -> "Int"
@@ -1089,9 +1126,23 @@ impl FnDef {
         let mut class_to_type_var: HashMap<String, char> = HashMap::new();
         let mut type_var_counter = 0u8;
 
+        // Build a mapping from declared type param names to single-letter type variables.
+        // E.g., fn[Option, Element] -> {Option: 'a', Element: 'b'}
+        // This prevents collision with known type names in signatures.
+        let mut declared_tp_to_letter: HashMap<String, char> = HashMap::new();
+        for tp in &self.type_params {
+            let letter = (b'a' + type_var_counter) as char;
+            declared_tp_to_letter.insert(tp.name.node.clone(), letter);
+            type_var_counter += 1;
+        }
+
         // Collect type parameter letters already used in annotations (e.g., 'a' and 'b'
         // from `p: Pair[a, b]`) so we don't assign them to untyped parameters.
         let mut used_letters: HashSet<char> = HashSet::new();
+        // Reserve letters already assigned to declared type params
+        for &letter in declared_tp_to_letter.values() {
+            used_letters.insert(letter);
+        }
         fn collect_type_param_letters(ty: &TypeExpr, used: &mut HashSet<char>) {
             match ty {
                 TypeExpr::Name(ident) => {
@@ -1146,7 +1197,11 @@ impl FnDef {
             .enumerate()
             .map(|(i, p)| {
                 if let Some(t) = p.ty.as_ref() {
-                    t.to_string_pretty()
+                    if declared_tp_to_letter.is_empty() {
+                        t.to_string_pretty()
+                    } else {
+                        Self::subst_type_params_in_type_expr(t, &declared_tp_to_letter)
+                    }
                 } else if let Some(ref name) = param_names[i] {
                     // Find the equivalence class for this parameter
                     let root = find(&mut parent, name);
@@ -1175,7 +1230,13 @@ impl FnDef {
 
         // For return type, check if it's constrained by parameters
         let ret_type = clause.return_type.as_ref()
-            .map(|t| t.to_string_pretty())
+            .map(|t| {
+                if declared_tp_to_letter.is_empty() {
+                    t.to_string_pretty()
+                } else {
+                    Self::subst_type_params_in_type_expr(t, &declared_tp_to_letter)
+                }
+            })
             .unwrap_or_else(|| {
                 // Check if return expression uses parameters from a unified class
                 // For simple cases like `x + y`, the result has same type as operands
