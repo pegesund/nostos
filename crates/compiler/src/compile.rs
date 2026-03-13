@@ -6719,6 +6719,10 @@ impl Compiler {
     /// Validate a type expression and return an error if the type is unknown.
     /// Returns None if the type is valid, Some(error) if not.
     fn validate_type_expr(&self, ty: &nostos_syntax::TypeExpr, _fn_name: &str) -> Option<CompileError> {
+        self.validate_type_expr_with_type_params(ty, _fn_name, &std::collections::HashSet::new())
+    }
+
+    fn validate_type_expr_with_type_params(&self, ty: &nostos_syntax::TypeExpr, _fn_name: &str, fn_type_params: &std::collections::HashSet<String>) -> Option<CompileError> {
         use nostos_syntax::TypeExpr;
         match ty {
             TypeExpr::Name(ident) => {
@@ -6729,6 +6733,10 @@ impl Compiler {
                 }
                 // Skip single-letter type params (lowercase like 'a' or uppercase like 'T')
                 if name.len() == 1 && name.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
+                    return None;
+                }
+                // Skip explicitly declared multi-char type params (e.g., El, Key, Val from fn[El, Key, Val])
+                if fn_type_params.contains(name.as_str()) {
                     return None;
                 }
                 // Skip Self (used in trait methods)
@@ -6790,12 +6798,12 @@ impl Compiler {
             }
             TypeExpr::Generic(base, params) => {
                 // Check the base type
-                if let Some(err) = self.validate_type_expr(&TypeExpr::Name(base.clone()), _fn_name) {
+                if let Some(err) = self.validate_type_expr_with_type_params(&TypeExpr::Name(base.clone()), _fn_name, fn_type_params) {
                     return Some(err);
                 }
                 // Check all type parameters
                 for param in params {
-                    if let Some(err) = self.validate_type_expr(param, _fn_name) {
+                    if let Some(err) = self.validate_type_expr_with_type_params(param, _fn_name, fn_type_params) {
                         return Some(err);
                     }
                 }
@@ -6803,15 +6811,15 @@ impl Compiler {
             }
             TypeExpr::Function(params, ret) => {
                 for param in params {
-                    if let Some(err) = self.validate_type_expr(param, _fn_name) {
+                    if let Some(err) = self.validate_type_expr_with_type_params(param, _fn_name, fn_type_params) {
                         return Some(err);
                     }
                 }
-                self.validate_type_expr(ret, _fn_name)
+                self.validate_type_expr_with_type_params(ret, _fn_name, fn_type_params)
             }
             TypeExpr::Tuple(elements) => {
                 for elem in elements {
-                    if let Some(err) = self.validate_type_expr(elem, _fn_name) {
+                    if let Some(err) = self.validate_type_expr_with_type_params(elem, _fn_name, fn_type_params) {
                         return Some(err);
                     }
                 }
@@ -6819,7 +6827,7 @@ impl Compiler {
             }
             TypeExpr::Record(fields) => {
                 for (_field_name, field_type) in fields {
-                    if let Some(err) = self.validate_type_expr(field_type, _fn_name) {
+                    if let Some(err) = self.validate_type_expr_with_type_params(field_type, _fn_name, fn_type_params) {
                         return Some(err);
                     }
                 }
@@ -18800,6 +18808,26 @@ impl Compiler {
         specialized_def.name = Spanned::new(local_name, fn_def.name.span);
         specialized_def.type_params.clear(); // No longer polymorphic
 
+        // Build type param substitution map from the original function's type params
+        // This is needed to substitute both parameter types AND the return type annotation.
+        // E.g., fn[El](x: El) -> El: when specializing to Int, both x:El and ->El become Int.
+        let type_param_subst_map: HashMap<String, String> = {
+            let mut map = HashMap::new();
+            if let Some(first_clause) = fn_def.clauses.first() {
+                for (i, param) in first_clause.params.iter().enumerate() {
+                    if i < arg_type_names.len() && arg_type_names[i] != "_" {
+                        if let Some(TypeExpr::Name(type_ident)) = &param.ty {
+                            let is_type_param = fn_def.type_params.iter().any(|tp| tp.name.node == type_ident.node);
+                            if is_type_param {
+                                map.insert(type_ident.node.clone(), arg_type_names[i].clone());
+                            }
+                        }
+                    }
+                }
+            }
+            map
+        };
+
         // Update parameter types in clauses to use concrete types instead of type params
         // This ensures the function signature uses concrete types.
         // Skip parameters with "_" type (unknown, e.g. lambda arguments) - keep original annotation.
@@ -18810,6 +18838,12 @@ impl Compiler {
                     let concrete_type_name = &arg_type_names[i];
                     // Parse parameterized types like "List[Box]" into proper TypeExpr::Generic
                     param.ty = Some(Self::parse_type_string_to_type_expr(concrete_type_name));
+                }
+            }
+            // Also substitute type params in the return type annotation
+            if !type_param_subst_map.is_empty() {
+                if let Some(ret_ty) = &clause.return_type {
+                    clause.return_type = Some(self.substitute_type_params(ret_ty, &type_param_subst_map));
                 }
             }
         }
@@ -19085,6 +19119,15 @@ impl Compiler {
         specialized_def.name = Spanned::new(local_name, fn_def.name.span);
         specialized_def.type_params.clear(); // No longer polymorphic
 
+        // Build type param substitution map from declared type params and explicit type args
+        // E.g., fn[El](x: El) -> El called with [Int]: El -> Int
+        let type_param_subst_map_with_args: HashMap<String, String> = declared_type_params.iter()
+            .enumerate()
+            .filter_map(|(i, tp)| {
+                type_arg_names.get(i).map(|concrete| (tp.name.node.clone(), concrete.clone()))
+            })
+            .collect();
+
         // Update parameter types in clauses to use concrete types
         // This ensures compile_fn_def generates the correct mangled function name
         for clause in &mut specialized_def.clauses {
@@ -19092,6 +19135,12 @@ impl Compiler {
                 if i < arg_type_names.len() {
                     let concrete_type_name = &arg_type_names[i];
                     param.ty = Some(Self::parse_type_string_to_type_expr(concrete_type_name));
+                }
+            }
+            // Also substitute type params in the return type annotation
+            if !type_param_subst_map_with_args.is_empty() {
+                if let Some(ret_ty) = &clause.return_type {
+                    clause.return_type = Some(self.substitute_type_params(ret_ty, &type_param_subst_map_with_args));
                 }
             }
         }
@@ -25907,20 +25956,39 @@ impl Compiler {
         // This allows the function to call itself during type inference
         // Always register (overwrite builtins if needed) so user functions can shadow builtins
         let fn_name = &def.name.node;
+        // Build set of explicitly declared type parameters (e.g., El, Key, Val from fn[El, Key, Val])
+        // These must map to fresh type variables (not Named{El}) to match what HM inference uses
+        let declared_type_params: std::collections::HashSet<String> = def.type_params.iter()
+            .map(|tp| tp.name.node.clone())
+            .collect();
         if let Some(clause) = def.clauses.first() {
-            let param_types: Vec<nostos_types::Type> = clause.params
-                    .iter()
-                    .map(|p| {
-                        if let Some(ty_expr) = &p.ty {
-                            self.type_name_to_type(&self.type_expr_to_string(ty_expr))
-                        } else {
-                            env.fresh_var()
-                        }
-                    })
-                    .collect();
-            let ret_ty = clause.return_type.as_ref()
-                    .map(|ty| self.type_name_to_type(&self.type_expr_to_string(ty)))
-                    .unwrap_or_else(|| env.fresh_var());
+            // Use a loop instead of .map() so we can call env.fresh_var() alongside self methods
+            let mut param_types: Vec<nostos_types::Type> = Vec::new();
+            for p in &clause.params {
+                let ty = if let Some(ty_expr) = &p.ty {
+                    let ty_str = self.type_expr_to_string(ty_expr);
+                    // If the annotation refers to a declared type param, use a fresh var
+                    // (type_name_to_type("El") would return Named{El}, not TypeParam("El"))
+                    if declared_type_params.contains(&ty_str) {
+                        env.fresh_var()
+                    } else {
+                        self.type_name_to_type(&ty_str)
+                    }
+                } else {
+                    env.fresh_var()
+                };
+                param_types.push(ty);
+            }
+            let ret_ty = if let Some(ty) = &clause.return_type {
+                let ty_str = self.type_expr_to_string(ty);
+                if declared_type_params.contains(&ty_str) {
+                    env.fresh_var()
+                } else {
+                    self.type_name_to_type(&ty_str)
+                }
+            } else {
+                env.fresh_var()
+            };
 
             // Compute required_params for functions with optional parameters
             let required_count = clause.params.iter()

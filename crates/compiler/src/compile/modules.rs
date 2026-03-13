@@ -2004,17 +2004,23 @@ impl Compiler {
                 .collect();
             let saved_path = std::mem::replace(&mut self.module_path, module_path);
 
+            // Build set of explicitly declared type params (e.g., [El, Key, Val] from fn[El, Key, Val])
+            let fn_type_param_names: std::collections::HashSet<String> = fn_def.type_params
+                .iter()
+                .map(|tp| tp.name.node.clone())
+                .collect();
+
             if let Some(clause) = fn_def.clauses.first() {
                 for param in &clause.params {
                     if let Some(ty_expr) = &param.ty {
-                        if let Some(err) = self.validate_type_expr(ty_expr, &fn_name) {
+                        if let Some(err) = self.validate_type_expr_with_type_params(ty_expr, &fn_name, &fn_type_param_names) {
                             errors.push((fn_name.clone(), err, source_name.clone(), source.clone()));
                         }
                     }
                 }
                 // Also check return type annotation
                 if let Some(ret_ty) = &clause.return_type {
-                    if let Some(err) = self.validate_type_expr(ret_ty, &fn_name) {
+                    if let Some(err) = self.validate_type_expr_with_type_params(ret_ty, &fn_name, &fn_type_param_names) {
                         errors.push((fn_name.clone(), err, source_name.clone(), source.clone()));
                     }
                 }

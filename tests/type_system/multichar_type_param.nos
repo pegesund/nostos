@@ -1,0 +1,12 @@
+# expect: (5, hello)
+# Test that multi-char type parameters (e.g., El, Key, Val) work correctly
+# in function definitions with explicit type parameter syntax fn[El](x: El) -> El
+
+myId[El](x: El) -> El = x
+makePair[Key, Val](k: Key, v: Val) -> (Key, Val) = (k, v)
+
+main() = {
+  a = myId[Int](5)
+  b = myId[String]("hello")
+  makePair[Int, String](a, b)
+}
