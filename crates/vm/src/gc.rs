@@ -2252,6 +2252,51 @@ impl Heap {
                     _ => None,
                 }
             }
+            // Records - compare by field values lexicographically (like Erlang term ordering)
+            (GcValue::Record(a), GcValue::Record(b)) => {
+                match (self.get_record(*a), self.get_record(*b)) {
+                    (Some(ra), Some(rb)) => {
+                        // Different types are not comparable
+                        if ra.type_name != rb.type_name {
+                            return None;
+                        }
+                        // Compare fields in order
+                        for (fa, fb) in ra.fields.iter().zip(rb.fields.iter()) {
+                            match self.gc_values_compare(fa, fb) {
+                                Some(std::cmp::Ordering::Equal) => continue,
+                                other => return other,
+                            }
+                        }
+                        Some(std::cmp::Ordering::Equal)
+                    }
+                    _ => None,
+                }
+            }
+            // Variants - compare by constructor name, then field values
+            (GcValue::Variant(a), GcValue::Variant(b)) => {
+                match (self.get_variant(*a), self.get_variant(*b)) {
+                    (Some(va), Some(vb)) => {
+                        if va.type_name != vb.type_name {
+                            return None;
+                        }
+                        // Compare constructors first
+                        match va.constructor.cmp(&vb.constructor) {
+                            std::cmp::Ordering::Equal => {
+                                // Same constructor - compare fields
+                                for (fa, fb) in va.fields.iter().zip(vb.fields.iter()) {
+                                    match self.gc_values_compare(fa, fb) {
+                                        Some(std::cmp::Ordering::Equal) => continue,
+                                        other => return other,
+                                    }
+                                }
+                                Some(std::cmp::Ordering::Equal)
+                            }
+                            ord => Some(ord),
+                        }
+                    }
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
