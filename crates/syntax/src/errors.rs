@@ -158,6 +158,79 @@ impl SourceError {
         self.write_formatted(&mut std::io::stderr(), filename, source)
             .expect("writing to stderr should not fail");
     }
+
+    /// Format the error as a JSON object for IDE integration.
+    pub fn to_json(&self, filename: &str, source: &str) -> String {
+        let (line, column) = offset_to_line_col(source, self.span.start);
+        let (end_line, end_column) = offset_to_line_col(source, self.span.end);
+        let severity = match self.kind {
+            ErrorKind::Parse => "error",
+            ErrorKind::Compile => "error",
+            ErrorKind::Runtime => "warning",
+        };
+        let kind = match self.kind {
+            ErrorKind::Parse => "parse",
+            ErrorKind::Compile => "compile",
+            ErrorKind::Runtime => "runtime",
+        };
+
+        let mut json = format!(
+            "{{\"file\":{},\"line\":{},\"column\":{},\"endLine\":{},\"endColumn\":{},\"severity\":{},\"kind\":{},\"message\":{}",
+            json_escape(filename), line, column, end_line, end_column,
+            json_escape(severity), json_escape(kind), json_escape(&self.message)
+        );
+
+        if let Some(hint) = &self.hint {
+            json.push_str(&format!(",\"hint\":{}", json_escape(hint)));
+        }
+
+        if !self.notes.is_empty() {
+            json.push_str(",\"notes\":[");
+            for (i, note) in self.notes.iter().enumerate() {
+                if i > 0 { json.push(','); }
+                json.push_str(&json_escape(note));
+            }
+            json.push(']');
+        }
+
+        if !self.labels.is_empty() {
+            json.push_str(",\"labels\":[");
+            for (i, (span, msg)) in self.labels.iter().enumerate() {
+                if i > 0 { json.push(','); }
+                let (l, c) = offset_to_line_col(source, span.start);
+                let (el, ec) = offset_to_line_col(source, span.end);
+                json.push_str(&format!(
+                    "{{\"line\":{},\"column\":{},\"endLine\":{},\"endColumn\":{},\"message\":{}}}",
+                    l, c, el, ec, json_escape(msg)
+                ));
+            }
+            json.push(']');
+        }
+
+        json.push('}');
+        json
+    }
+}
+
+/// Escape a string for JSON output.
+pub fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Helper to convert byte offset to line and column.
@@ -541,5 +614,73 @@ mod tests {
 
         let output = err.format("test.nos", source);
         assert!(output.contains("undefined"));
+    }
+
+    #[test]
+    fn test_json_escape() {
+        assert_eq!(json_escape("hello"), "\"hello\"");
+        assert_eq!(json_escape("say \"hi\""), "\"say \\\"hi\\\"\"");
+        assert_eq!(json_escape("back\\slash"), "\"back\\\\slash\"");
+        assert_eq!(json_escape("line\nbreak"), "\"line\\nbreak\"");
+        assert_eq!(json_escape("tab\there"), "\"tab\\there\"");
+        assert_eq!(json_escape("cr\rhere"), "\"cr\\rhere\"");
+        // Control character below U+0020
+        let s = String::from("\x01");
+        assert_eq!(json_escape(&s), "\"\\u0001\"");
+    }
+
+    #[test]
+    fn test_to_json_basic() {
+        let source = "main() = x + 1";
+        let span = Span::new(9, 10);
+        let err = SourceError::compile("unknown variable `x`", span);
+        let json_str = err.to_json("test.nos", source);
+
+        // Parse as JSON to validate structure
+        assert!(json_str.starts_with('{'));
+        assert!(json_str.ends_with('}'));
+        assert!(json_str.contains("\"file\":\"test.nos\""));
+        assert!(json_str.contains("\"severity\":\"error\""));
+        assert!(json_str.contains("\"kind\":\"compile\""));
+        assert!(json_str.contains("\"message\":\"unknown variable `x`\""));
+        assert!(json_str.contains("\"line\":1"));
+        assert!(json_str.contains("\"column\":10"));
+    }
+
+    #[test]
+    fn test_to_json_with_hint_notes_labels() {
+        let source = "x = 1\nx = 2";
+        let err = SourceError::compile("duplicate definition", Span::new(6, 11))
+            .with_hint("rename one of them")
+            .with_note("first defined on line 1")
+            .with_label(Span::new(0, 5), "first defined here");
+        let json_str = err.to_json("test.nos", source);
+
+        assert!(json_str.contains("\"hint\":\"rename one of them\""));
+        assert!(json_str.contains("\"notes\":[\"first defined on line 1\"]"));
+        assert!(json_str.contains("\"labels\":[{"));
+        assert!(json_str.contains("\"message\":\"first defined here\""));
+    }
+
+    #[test]
+    fn test_to_json_kind_field() {
+        let source = "bad";
+        let parse_err = SourceError::parse("unexpected token", Span::new(0, 3));
+        let compile_err = SourceError::compile("type error", Span::new(0, 3));
+        let runtime_err = SourceError::runtime("division by zero", Span::new(0, 3));
+
+        assert!(parse_err.to_json("f.nos", source).contains("\"kind\":\"parse\""));
+        assert!(compile_err.to_json("f.nos", source).contains("\"kind\":\"compile\""));
+        assert!(runtime_err.to_json("f.nos", source).contains("\"kind\":\"runtime\""));
+        assert!(runtime_err.to_json("f.nos", source).contains("\"severity\":\"warning\""));
+    }
+
+    #[test]
+    fn test_to_json_message_with_special_chars() {
+        let source = "test";
+        let err = SourceError::compile("expected `Int`, found \"String\"", Span::new(0, 4));
+        let json_str = err.to_json("test.nos", source);
+        // Verify quotes in message are escaped
+        assert!(json_str.contains("\\\"String\\\""));
     }
 }
