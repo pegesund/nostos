@@ -25491,6 +25491,8 @@ impl Compiler {
         }
 
         // Register top-level bindings (expensive: involves InferCtx)
+        // Lambda bindings are NOT registered here - they are registered via ctx.infer_binding()
+        // in try_hm_inference and type_check_fn for proper let-polymorphism support.
         {
             let mut to_infer: Vec<(&str, &str, &nostos_syntax::Expr)> = Vec::new();
             for (binding_name, (binding, _, _)) in &self.top_level_bindings {
@@ -25503,7 +25505,8 @@ impl Compiler {
                         if binding_name.as_str() != bind_name {
                             env.bind(binding_name.clone(), binding_type, false);
                         }
-                    } else {
+                    } else if !matches!(&binding.value, nostos_syntax::Expr::Lambda(_, _, _)) {
+                        // Skip lambda bindings - registered via ctx.infer_binding() later
                         to_infer.push((bind_name, binding_name.as_str(), &binding.value));
                     }
                 }
@@ -25952,6 +25955,18 @@ impl Compiler {
 
         // Create inference context
         let mut ctx = InferCtx::new(&mut env);
+
+        // Register top-level lambda bindings via infer_binding for let-polymorphism.
+        // These are NOT in the cached base env - they must be registered here so that
+        // polymorphic_vars tracking works, enabling lambda bindings to be used at multiple types.
+        for (_, (binding, _, _)) in &self.top_level_bindings {
+            if let Pattern::Var(_) = &binding.pattern {
+                if matches!(&binding.value, nostos_syntax::Expr::Lambda(_, _, _)) {
+                    let _ = ctx.infer_binding(binding);
+                }
+            }
+        }
+
         // Infer the function type
         let func_ty = match ctx.infer_function(def) {
             Ok(ft) => ft,
@@ -27308,6 +27323,15 @@ impl Compiler {
         // (e.g., Map[Int, String] for %{1: "a"}). This enables catching errors like
         // `data = %{1: "a"}; main() = data.head()` at compile time.
         // Using a separate context avoids binding errors leaking into function type checking.
+        //
+        // EXCEPTION: Lambda bindings (e.g., `f = (x) => x`) are NOT pre-registered here.
+        // Instead, they are registered via ctx.infer_binding() after the main InferCtx is
+        // created, so that let-polymorphism works correctly (polymorphic_vars tracking).
+        // This allows lambda bindings to be used at multiple types:
+        //   expand = (xs) => xs.flatMap(x => [x, x])
+        //   r1 = expand([1, 2, 3])   # Int use
+        //   r2 = expand(["a", "b"])  # String use
+        let mut lambda_bindings_to_infer: Vec<nostos_syntax::Binding> = Vec::new();
         {
             // Collect unannotated bindings to infer
             let mut to_infer: Vec<(&str, &str, &nostos_syntax::Expr)> = Vec::new();
@@ -27323,12 +27347,15 @@ impl Compiler {
                         if binding_name.as_str() != bind_name {
                             env.bind(binding_name.clone(), binding_type, false);
                         }
+                    } else if matches!(&binding.value, nostos_syntax::Expr::Lambda(_, _, _)) {
+                        // Lambda bindings are deferred for let-poly support (see above)
+                        lambda_bindings_to_infer.push((*binding).clone());
                     } else {
                         to_infer.push((bind_name, binding_name.as_str(), &binding.value));
                     }
                 }
             }
-            // Infer all unannotated bindings in a single temporary context (one clone)
+            // Infer all unannotated non-lambda bindings in a single temporary context (one clone)
             if !to_infer.is_empty() {
                 let mut tmp_env = env.clone();
                 let mut tmp_ctx = InferCtx::new(&mut tmp_env);
@@ -27386,6 +27413,16 @@ impl Compiler {
 
         // Create inference context
         let mut ctx = InferCtx::new(&mut env);
+
+        // Register top-level lambda bindings via ctx.infer_binding() for let-polymorphism.
+        // This must happen AFTER ctx is created so that polymorphic_vars are tracked in
+        // the same InferCtx that will infer the function body. This allows lambda bindings
+        // like `expand = (xs) => xs.flatMap(x => [x, x])` to be used at multiple types.
+        for binding in &lambda_bindings_to_infer {
+            // Ignore errors - they will be caught at use sites or by other checks.
+            // We also ignore the returned type since infer_binding registers in env.
+            let _ = ctx.infer_binding(binding);
+        }
 
         // Set up implicit conversion functions (e.g., tensorFromList) so the solver
         // accepts type mismatches that can be resolved by auto-inserting conversions.
