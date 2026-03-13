@@ -1,4 +1,4 @@
-# expect_error: does not implement Ord
-# Sorting variants without Ord impl should fail at compile time
+# expect: [Blue, Green, Red]
+# Variants auto-derive Ord (alphabetical by constructor name)
 type Color = Red | Green | Blue
 main() = [Red, Green, Blue].sort()

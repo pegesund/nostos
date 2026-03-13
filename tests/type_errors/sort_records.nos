@@ -1,4 +1,4 @@
-# expect_error: does not implement Ord
-# Sorting records without Ord impl should fail at compile time
+# expect: [Point{x: 1, y: 2}, Point{x: 3, y: 4}]
+# Records auto-derive Ord (structural field-by-field comparison)
 type Point = { x: Int, y: Int }
 main() = [Point(3,4), Point(1,2)].sort()

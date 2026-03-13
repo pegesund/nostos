@@ -1,4 +1,5 @@
-# expect_error: does not implement Ord
-# Variant comparison without Ord impl should fail at compile time
+# expect: true
+# Variants auto-derive Ord (alphabetical by constructor name)
+# Red > Green because "Red" > "Green" alphabetically
 type Color = Red | Green | Blue
 main() = Red > Green

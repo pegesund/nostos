@@ -2272,6 +2272,22 @@ impl Heap {
                     _ => None,
                 }
             }
+            // Tuples - compare element-by-element (lexicographic)
+            (GcValue::Tuple(a), GcValue::Tuple(b)) => {
+                match (self.get_tuple(*a), self.get_tuple(*b)) {
+                    (Some(ta), Some(tb)) => {
+                        for (ea, eb) in ta.items.iter().zip(tb.items.iter()) {
+                            match self.gc_values_compare(ea, eb) {
+                                Some(std::cmp::Ordering::Equal) => continue,
+                                other => return other,
+                            }
+                        }
+                        // If one tuple is shorter, it's "less"
+                        Some(ta.items.len().cmp(&tb.items.len()))
+                    }
+                    _ => None,
+                }
+            }
             // Variants - compare by constructor name, then field values
             (GcValue::Variant(a), GcValue::Variant(b)) => {
                 match (self.get_variant(*a), self.get_variant(*b)) {

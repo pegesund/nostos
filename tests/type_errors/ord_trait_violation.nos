@@ -1,10 +1,10 @@
-# expect_error: does not implement
-# Test: using < on type that doesn't implement Ord
+# expect_error: not comparable
+# Test: using < on type with function field (functions don't support comparison)
 
-type Unordered = { data: Int -> Int }  # Functions don't implement Ord
+type Unordered = { data: Int -> Int }
 
 main() = {
     a = Unordered(x => x)
     b = Unordered(x => x * 2)
-    a < b  # Unordered doesn't implement Ord
+    a < b
 }

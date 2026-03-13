@@ -1,3 +1,3 @@
-# expect_error: does not implement Ord
-# Sorting tuples should fail at compile time (tuples don't implement Ord)
+# expect: [(1, "a"), (2, "b"), (3, "c")]
+# Tuples auto-derive Ord (element-by-element comparison)
 main() = [(2, "b"), (1, "a"), (3, "c")].sort()

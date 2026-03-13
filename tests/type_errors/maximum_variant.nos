@@ -1,3 +1,4 @@
-# expect_error: does not implement Ord
+# expect: Red
+# Variants auto-derive Ord (alphabetical by constructor name)
 type Color = Red | Green | Blue
 main() = [Red, Green, Blue].maximum()

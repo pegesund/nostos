@@ -1118,10 +1118,11 @@ impl TypeEnv {
         // These implement Eq and Show if their element types do
         match ty {
             Type::Named { name, args } => {
-                // Eq and Show are auto-derived for all user-defined types (variants/records)
-                // as long as their type arguments also implement the trait
+                // Eq, Show, and Ord are auto-derived for all user-defined types (variants/records)
+                // as long as their type arguments also implement the trait.
+                // Ord uses structural field-by-field comparison at runtime.
                 match trait_name {
-                    "Eq" | "Show" => {
+                    "Eq" | "Show" | "Ord" => {
                         // Check if all type arguments implement the trait
                         args.is_empty() || args.iter().all(|arg| self.implements(arg, trait_name))
                     }
@@ -1132,7 +1133,7 @@ impl TypeEnv {
                             (args.is_empty() || args.iter().all(|arg| self.implements(arg, trait_name)))
                     }
                     _ => {
-                        // Other traits (Num, Ord, etc.) are NOT auto-derived for container types
+                        // Other traits (Num, etc.) are NOT auto-derived for container types
                         false
                     }
                 }
@@ -1157,13 +1158,13 @@ impl TypeEnv {
             }
             Type::Tuple(elems) => {
                 match trait_name {
-                    "Eq" | "Show" | "Hash" => elems.iter().all(|e| self.implements(e, trait_name)),
+                    "Eq" | "Show" | "Hash" | "Ord" => elems.iter().all(|e| self.implements(e, trait_name)),
                     _ => false,
                 }
             }
-            // Variant and Record types auto-derive Eq, Show, and Hash
+            // Variant and Record types auto-derive Eq, Show, Hash, and Ord
             Type::Variant(_) | Type::Record(_) => {
-                matches!(trait_name, "Eq" | "Show" | "Hash")
+                matches!(trait_name, "Eq" | "Show" | "Hash" | "Ord")
             }
             // Numeric types implement Eq, Show, Num, Ord, and Hash
             Type::Int | Type::Int8 | Type::Int16 | Type::Int32 | Type::Int64 |
@@ -1223,20 +1224,20 @@ impl TypeEnv {
             }
             Type::Tuple(elems) => {
                 match trait_name {
-                    "Eq" | "Show" | "Hash" => {
+                    "Eq" | "Show" | "Hash" | "Ord" => {
                         elems.iter().any(|e| self.definitely_not_implements(e, trait_name))
                     }
-                    "Num" | "Ord" => true, // Tuples never implement Num/Ord
+                    "Num" => true, // Tuples never implement Num
                     _ => false,
                 }
             }
             Type::Named { args, .. } => {
                 match trait_name {
-                    "Eq" | "Show" => {
-                        // Named types auto-derive Eq/Show. Fails if any arg definitely fails.
+                    "Eq" | "Show" | "Ord" => {
+                        // Named types auto-derive Eq/Show/Ord. Fails if any arg definitely fails.
                         args.iter().any(|arg| self.definitely_not_implements(arg, trait_name))
                     }
-                    "Num" | "Ord" => {
+                    "Num" => {
                         // Check if there's an explicit implementation
                         !self.implements(ty, trait_name)
                     }
