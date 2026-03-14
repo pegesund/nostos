@@ -23351,6 +23351,38 @@ impl Compiler {
                 self.chunk.emit(Instruction::MakeVariantCached(dst, tmpl_idx, field_regs.into()), 0);
             }
         } else {
+            // If we have named fields for a record, reorder them to match definition order
+            if has_named_fields {
+                let def_field_names = self.get_constructor_field_names(local_type_name);
+                if !def_field_names.is_empty() {
+                    // Check for unknown fields
+                    for provided_name in named_fields_map.keys() {
+                        if !def_field_names.contains(provided_name) {
+                            return Err(CompileError::TypeError {
+                                message: format!("unknown field `{}` for record `{}`", provided_name, local_type_name),
+                                span: Span::default(),
+                            });
+                        }
+                    }
+                    // Check for missing fields
+                    for def_name in &def_field_names {
+                        if !named_fields_map.contains_key(def_name) {
+                            return Err(CompileError::TypeError {
+                                message: format!("missing field `{}` in record `{}`", def_name, local_type_name),
+                                span: Span::default(),
+                            });
+                        }
+                    }
+                    // Reorder field_regs according to definition order
+                    field_regs.clear();
+                    for def_name in &def_field_names {
+                        if let Some(&reg) = named_fields_map.get(def_name) {
+                            field_regs.push(reg);
+                        }
+                    }
+                }
+            }
+
             let type_idx = self.chunk.add_constant(Value::String(Arc::new(type_name.to_string())));
             // Check if this is a reactive record
             let is_reactive = self.types.get(type_name)

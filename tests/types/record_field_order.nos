@@ -1,0 +1,10 @@
+# expect: (10, "hello", true)
+# Record constructor with named fields in non-definition order
+# Fields should be accessible correctly regardless of construction order
+type Triple26 = { first26: Int, second26: String, third26: Bool }
+
+main() = {
+  # Construct with fields in reverse order
+  t = Triple26(third26: true, second26: "hello", first26: 10)
+  (t.first26, t.second26, t.third26)
+}
