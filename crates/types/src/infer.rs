@@ -4029,6 +4029,8 @@ impl<'a> InferCtx<'a> {
             for call in pending {
                 // Resolve the receiver type now that constraints are solved
                 let resolved_receiver = self.env.apply_subst(&call.receiver_ty);
+                // Expand type aliases so e.g. `type Nums = [Int]` resolves to List for method dispatch
+                let resolved_receiver = self.deep_expand_aliases(&resolved_receiver);
 
                 // Try to get the type name
                 let type_name_opt = self.get_type_name(&resolved_receiver);

@@ -291,6 +291,9 @@ impl Compiler {
     /// module's `mod_b.Config` rather than another module's `mod_a.Config`.
     pub(super) fn add_type_aliases_to_env(&self, env: &mut nostos_types::TypeEnv) {
         let mut type_names: Vec<_> = self.types.keys().collect();
+        // Also include type alias targets so "Weight" -> "base.Weight" aliases work
+        let alias_keys: Vec<_> = self.type_alias_targets.keys().collect();
+        type_names.extend(alias_keys);
         type_names.sort();
         let current_module_prefix = if self.module_path.is_empty() {
             String::new()

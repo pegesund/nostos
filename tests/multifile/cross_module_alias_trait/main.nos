@@ -1,0 +1,3 @@
+# expect: 30
+use base.{Weight, scale}
+main() = scale(10, 3)

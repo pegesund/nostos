@@ -1,0 +1,2 @@
+pub type Weight = Int
+pub scale(w: Weight, factor: Int) = w * factor
