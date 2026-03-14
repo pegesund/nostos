@@ -918,12 +918,11 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                                                 // Since we're in the `= body` branch, this must be a function def.
                                                 let params: Option<Vec<Pattern>> = call_args.into_iter().map(|arg| {
                                                     match arg {
-                                                        CallArg::Positional(Expr::Var(v)) => Some(Pattern::Var(v)),
+                                                        CallArg::Positional(expr) => expr_to_pattern(expr),
                                                         // Named args in a `f(...) = body` context are type-annotated params
                                                         // e.g., helper(i: Int, acc: Int) = ...
                                                         // Extract the param name, ignore the type (HM infers it)
                                                         CallArg::Named(param_name, _type_expr) => Some(Pattern::Var(param_name)),
-                                                        _ => None,
                                                     }
                                                 }).collect();
                                                 if let Some(param_patterns) = params {
