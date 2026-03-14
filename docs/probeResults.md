@@ -2073,3 +2073,8 @@ Fixed by restructuring `type_body()` parser to require `|` prefix, fields, or mu
 | 378   | 10 (Vec78 3D add/dot/scale cross + running sum + applyAll chain + reverse + take/drop + arithmetic + unique + isEmpty + factorial + string length) | All clean. 10/10 pass. | N/A | ~13,325 |
 | 379   | 10 (queue79 dequeue cross + insertion sort foldl + map *2 + head arithmetic + binomial C(10,4) + nested list literal + join + map squares + equality checks + compose apply) | All clean. 10/10 pass. | N/A | ~13,335 |
 | 380   | 10 (intersperse/span cross + tuple match + reverse + foldl sum + filter odds + Option equality + local recursive sum + zip select + foldl product + map+show+join) | All clean. 10/10 pass. | N/A | ~13,345 |
+| 381   | 10 (arithmetic + map squares + Map lookup + Map insert + Map size + Map keys + Map values + Map lookup check + Record fields + try/catch basic) | All clean. 10/10 pass. | N/A | ~13,355 |
+| 382   | 10 (safeDivide82 try/catch cross + cache82 Map ops cross + throw/catch + Map merge foldl + Map to pairs + string concat + nested try/catch + range recursion + string length + Record distance) | All clean. 10/10 pass. | N/A | ~13,365 |
+| 383   | 10 (basics + fibonacci list + filter primes + foldl product + map singleton + foldl sum) | All clean. 10/10 pass. | N/A | ~13,375 |
+| 384   | 10 (basics + math84 abs/sign cross + str84 repeat/pad cross + sort+reverse + foldl sum + chunk pairs) | All clean. 10/10 pass. | N/A | ~13,385 |
+| 385   | 10 (basics + monoid85 mconcat at Int+String cross + map*10 + list equality + find Option + nested list) | All clean. 10/10 pass. | N/A | ~13,395 |
