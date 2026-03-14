@@ -1930,6 +1930,9 @@ impl<'a> InferCtx<'a> {
         for (param_ty, arg_ty, span) in &self.deferred_fn_call_checks {
             let resolved_param = self.env.apply_subst(param_ty);
             let resolved_arg = self.env.apply_subst(arg_ty);
+            // Expand type aliases (e.g., `type Values = [Int]` → List[Int])
+            let resolved_param = self.deep_expand_aliases(&resolved_param);
+            let resolved_arg = self.deep_expand_aliases(&resolved_arg);
 
             // Only check when param type is a CONCRETE collection type (not a type variable).
             // This means the function explicitly expects a specific collection type.
@@ -2004,6 +2007,9 @@ impl<'a> InferCtx<'a> {
                 for (param_ty, arg_ty) in ft.params.iter().zip(arg_types.iter()) {
                     let resolved_param = self.env.apply_subst(param_ty);
                     let resolved_arg = self.env.apply_subst(arg_ty);
+                    // Expand type aliases (e.g., `type Values = [Int]` → List[Int])
+                    let resolved_param = self.deep_expand_aliases(&resolved_param);
+                    let resolved_arg = self.deep_expand_aliases(&resolved_arg);
 
                     // Skip if either is still a type variable (not yet resolved)
                     if matches!(&resolved_param, Type::Var(_) | Type::TypeParam(_)) { continue; }
