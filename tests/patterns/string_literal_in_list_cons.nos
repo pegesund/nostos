@@ -1,0 +1,18 @@
+# expect: (["3", "4"], " world")
+# String literals in list cons patterns work when type is known
+
+parseRest(tokens: [String]) = match tokens {
+  ["+" | rest] -> rest
+  _ -> []
+}
+
+greet45(s) = match s {
+  ["hello" | rest] -> rest
+  _ -> "unknown"
+}
+
+main() = {
+  listResult = parseRest(["+", "3", "4"])
+  strResult = greet45("hello world")
+  (listResult, strResult)
+}

@@ -38,8 +38,29 @@ impl Compiler {
             let saved_locals = self.locals.clone();
             let saved_local_types = self.local_types.clone();
 
+            // Convert StringCons to List pattern if scrutinee is a list type
+            // (StringCons is ambiguous: ["x" | rest] could match String or [String])
+            let pattern_to_use;
+            let is_list_scrutinee = scrut_type_structural.as_ref().map_or(false, |ty| matches!(ty, nostos_types::Type::List(_)));
+            if is_list_scrutinee {
+                if let Pattern::StringCons(nostos_syntax::ast::StringPattern::Cons(ref strings, ref tail_pat), span) = arm.pattern {
+                    // Convert string literals to Pattern::String elements in a List cons
+                    let head_patterns: Vec<Pattern> = strings.iter().map(|s| {
+                        Pattern::String(s.clone(), span)
+                    }).collect();
+                    pattern_to_use = Pattern::List(
+                        nostos_syntax::ast::ListPattern::Cons(head_patterns, Some(Box::new((**tail_pat).clone()))),
+                        span,
+                    );
+                } else {
+                    pattern_to_use = arm.pattern.clone();
+                }
+            } else {
+                pattern_to_use = arm.pattern.clone();
+            }
+
             // Try to match the pattern
-            let (match_success, bindings) = self.compile_pattern_test(&arm.pattern, scrut_reg)?;
+            let (match_success, bindings) = self.compile_pattern_test(&pattern_to_use, scrut_reg)?;
 
             // If pattern fails, jump to next arm (or panic if last)
             let pattern_fail_jump = self.chunk.emit(Instruction::JumpIfFalse(match_success, 0), 0);

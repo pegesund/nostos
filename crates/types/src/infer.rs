@@ -8214,14 +8214,70 @@ impl<'a> InferCtx<'a> {
             }
 
             Pattern::StringCons(string_pat, _) => {
-                // String cons pattern matches against strings
-                self.unify(expected.clone(), Type::String);
+                // StringCons is ambiguous: ["x" | rest] could match a String (char decomposition)
+                // or a List[String] (list element match). Check existing constraints to decide.
+                // Look through existing constraints to see if expected type is already
+                // constrained to be a List type.
+                // Follow the chain of Equal constraints to find what expected resolves to.
+                // We need to handle Var(a) = Var(b) = List[String] chains.
+                let is_constrained_as_list = {
+                    let mut is_list = matches!(expected, Type::List(_));
+                    if !is_list {
+                        // Collect all var IDs that are transitively equal to expected
+                        let mut var_ids: Vec<u32> = Vec::new();
+                        if let Type::Var(id) = expected {
+                            var_ids.push(*id);
+                        }
+                        let mut changed = true;
+                        while changed && !is_list {
+                            changed = false;
+                            for c in &self.constraints {
+                                if let Constraint::Equal(t1, t2, _) = c {
+                                    // Check if either side is one of our tracked vars
+                                    let t1_is_tracked = if let Type::Var(id) = t1 { var_ids.contains(id) } else { false };
+                                    let t2_is_tracked = if let Type::Var(id) = t2 { var_ids.contains(id) } else { false };
 
-                match string_pat {
-                    nostos_syntax::ast::StringPattern::Empty => {}
-                    nostos_syntax::ast::StringPattern::Cons(_, tail_pat) => {
-                        // tail_pat binds to the rest of the string
-                        self.infer_pattern(tail_pat, &Type::String)?;
+                                    if t1_is_tracked {
+                                        if matches!(t2, Type::List(_)) { is_list = true; break; }
+                                        if let Type::Var(id2) = t2 {
+                                            if !var_ids.contains(id2) { var_ids.push(*id2); changed = true; }
+                                        }
+                                    }
+                                    if t2_is_tracked {
+                                        if matches!(t1, Type::List(_)) { is_list = true; break; }
+                                        if let Type::Var(id1) = t1 {
+                                            if !var_ids.contains(id1) { var_ids.push(*id1); changed = true; }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    is_list
+                };
+
+                if is_constrained_as_list {
+                    // Expected type is a list - treat as list pattern with string literal elements
+                    let elem_ty = self.fresh();
+                    self.unify(expected.clone(), Type::List(Box::new(elem_ty.clone())));
+
+                    match string_pat {
+                        nostos_syntax::ast::StringPattern::Empty => {}
+                        nostos_syntax::ast::StringPattern::Cons(strings, tail_pat) => {
+                            for _ in strings {
+                                self.unify(elem_ty.clone(), Type::String);
+                            }
+                            self.infer_pattern(tail_pat, &Type::List(Box::new(elem_ty)))?;
+                        }
+                    }
+                } else {
+                    // Default: treat as string prefix matching
+                    self.unify(expected.clone(), Type::String);
+                    match string_pat {
+                        nostos_syntax::ast::StringPattern::Empty => {}
+                        nostos_syntax::ast::StringPattern::Cons(_, tail_pat) => {
+                            self.infer_pattern(tail_pat, &Type::String)?;
+                        }
                     }
                 }
                 Ok(())
