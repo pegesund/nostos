@@ -7438,12 +7438,13 @@ impl ReplEngine {
                     _ => None,
                 },
                 "List" => match method {
-                    "length" | "isEmpty" | "head" | "tail" | "last" | "init" |
+                    "length" | "len" | "isEmpty" | "head" | "tail" | "last" | "init" |
                     "reverse" | "sum" | "product" | "maximum" | "minimum" |
-                    "flatten" | "unique" | "enumerate" => Some(0),
-                    "map" | "filter" | "take" | "drop" | "contains" | "any" | "all" |
+                    "flatten" | "unique" | "enumerate" | "pop" | "sort" => Some(0),
+                    "map" | "filter" | "each" | "take" | "drop" | "contains" | "any" | "all" |
                     "find" | "count" | "takeWhile" | "dropWhile" | "push" | "get" |
-                    "remove" | "removeAt" | "group" | "concat" | "interleave" => Some(1),
+                    "remove" | "removeAt" | "group" | "concat" | "interleave" |
+                    "sortBy" | "groupBy" | "nth" => Some(1),
                     "fold" | "foldl" | "foldr" | "zip" | "zipWith" | "set" |
                     "insertAt" | "partition" | "span" | "scanl" => Some(2),
                     "slice" | "findIndices" => Some(2),
