@@ -14776,6 +14776,10 @@ impl Compiler {
                             && receiver_type.len() == 1
                             && receiver_type.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false));
 
+                        // Also detect unresolved HM type variables (e.g., "?124") which are
+                        // polymorphic types that haven't been resolved to concrete types yet
+                        let is_type_param = is_type_param || receiver_type.starts_with('?');
+
                         // If receiver type is "unknown", we can't determine whether the method
                         // exists or not. Treat as unresolved trait method and defer to
                         // monomorphization where concrete types are available.

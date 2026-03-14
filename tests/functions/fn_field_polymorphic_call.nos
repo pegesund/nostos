@@ -1,0 +1,18 @@
+# expect: 10
+# Calling a function-typed record field on a polymorphic receiver
+# Previously failed with "no method `fn2` found for type `a`" because
+# the compiler treated it as UFCS when the receiver had unresolved HM type
+type Callback = { name2: String, fn2: (Int) -> Int }
+
+findAndRun(xs, targetName, val) = {
+  matched = xs.filter(r => r.name2 == targetName)
+  match matched {
+    [r | _] -> r.fn2(val)
+    [] -> 0
+  }
+}
+
+main() = {
+  xs = [Callback(name2: "a", fn2: x => x * 2)]
+  findAndRun(xs, "a", 5)
+}
