@@ -1,0 +1,2 @@
+use base.{Id}
+pub type User = { id: Id, name: String }

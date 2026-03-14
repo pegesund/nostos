@@ -1,0 +1,5 @@
+# expect: 10
+# Function type alias used in parameter annotation
+type Handler = (Int) -> Int
+apply(f: Handler, x: Int) = f(x)
+main() = apply(x => x * 2, 5)

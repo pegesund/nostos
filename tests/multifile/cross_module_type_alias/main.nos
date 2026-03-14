@@ -1,0 +1,4 @@
+# expect: "Alice"
+use base.{Id}
+use users.{User}
+main() = User(1, "Alice").name

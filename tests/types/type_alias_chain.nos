@@ -1,0 +1,6 @@
+# expect: 42
+# Chained type aliases
+type Id = Int
+type UserId = Id
+type User = { id: UserId, name: String }
+main() = User(42, "Alice").id

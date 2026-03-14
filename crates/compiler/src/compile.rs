@@ -1674,6 +1674,9 @@ pub struct Compiler {
 
     /// Type definition ASTs for REPL introspection: type name -> TypeDef
     type_defs: HashMap<String, TypeDef>,
+    /// Type alias targets: qualified alias name -> target type name string
+    /// e.g., "base.Id" -> "Int", "mymod.Ids" -> "List[Int]"
+    type_alias_targets: HashMap<String, String>,
     /// Known module prefixes (for distinguishing module.func from value.field)
     /// Contains all module path prefixes, e.g., "String", "utils", "math.vector"
     known_modules: HashSet<String>,
@@ -2017,6 +2020,7 @@ impl Compiler {
             current_source: None,
             current_source_name: None,
             type_defs: HashMap::new(),
+            type_alias_targets: HashMap::new(),
             known_modules: builtin_modules,
             imported_modules: HashSet::new(),
             module_use_stmts: Vec::new(),
@@ -2632,6 +2636,7 @@ impl Compiler {
             current_source: Some(Arc::new(source.to_string())),
             current_source_name: Some("unknown".to_string()),
             type_defs: HashMap::new(),
+            type_alias_targets: HashMap::new(),
             known_modules: builtin_modules,
             imported_modules: HashSet::new(),
             module_use_stmts: Vec::new(),
@@ -6886,14 +6891,15 @@ impl Compiler {
                 if name == "Self" {
                     return None;
                 }
-                // Check if it's a registered type
+                // Check if it's a registered type or type alias
                 let qualified = self.qualify_name(name);
-                if self.types.contains_key(&qualified) || self.types.contains_key(name) {
+                if self.types.contains_key(&qualified) || self.types.contains_key(name)
+                    || self.type_alias_targets.contains_key(&qualified) || self.type_alias_targets.contains_key(name) {
                     return None;
                 }
                 // Check if it's imported via use statement (imports maps local_name -> qualified_name)
                 if let Some(qualified_name) = self.imports.get(name) {
-                    if self.types.contains_key(qualified_name) {
+                    if self.types.contains_key(qualified_name) || self.type_alias_targets.contains_key(qualified_name) {
                         return None;
                     }
                 }
@@ -6902,7 +6908,7 @@ impl Compiler {
                     // For wildcard imports, types are registered with qualified names
                     // Check if name matches the last part of a qualified type
                     if qualified_name.ends_with(&format!(".{}", name)) {
-                        if self.types.contains_key(qualified_name) {
+                        if self.types.contains_key(qualified_name) || self.type_alias_targets.contains_key(qualified_name) {
                             return None;
                         }
                     }
@@ -7041,6 +7047,22 @@ impl Compiler {
         }
     }
 
+    /// Resolve a type name through alias chains.
+    /// If `name` is a type alias, returns the ultimate target type name.
+    /// Otherwise returns the name unchanged.
+    fn resolve_type_alias_name(&self, name: &str) -> String {
+        let mut current = name.to_string();
+        // Follow alias chain (max 10 to prevent infinite loops)
+        for _ in 0..10 {
+            if let Some(target) = self.type_alias_targets.get(&current) {
+                current = target.clone();
+            } else {
+                break;
+            }
+        }
+        current
+    }
+
     fn type_expr_name(&self, ty: &nostos_syntax::TypeExpr) -> String {
         match ty {
             nostos_syntax::TypeExpr::Name(ident) => {
@@ -7059,7 +7081,7 @@ impl Compiler {
                 // Check if this is a user-defined type that needs qualification
                 let qualified = self.qualify_name(name);
                 // Check if it's a known type (already registered)
-                if self.types.contains_key(&qualified) {
+                let resolved_name = if self.types.contains_key(&qualified) {
                     qualified
                 } else if self.types.contains_key(name) {
                     // Type exists with unqualified name (from another module)
@@ -7091,7 +7113,9 @@ impl Compiler {
                 } else {
                     // Top-level code - use as-is
                     name.clone()
-                }
+                };
+                // Resolve type aliases (e.g., "Id" -> "Int", "base.Id" -> "Int")
+                self.resolve_type_alias_name(&resolved_name)
             }
             nostos_syntax::TypeExpr::Generic(ident, args) => {
                 // Include type parameters: List[Int], Map[String, Int], etc.
@@ -7864,7 +7888,12 @@ impl Compiler {
                     TypeInfoKind::Variant { constructors }
                 }
             }
-            TypeBody::Alias(_) => {
+            TypeBody::Alias(target_ty) => {
+                // Store the alias target for resolving references in other types
+                let target_name = self.type_expr_name(target_ty);
+                // Resolve transitively: if target is itself an alias, follow the chain
+                let resolved_target = self.resolve_type_alias_name(&target_name);
+                self.type_alias_targets.insert(name.clone(), resolved_target);
                 // Type aliases don't need runtime representation
                 return Ok(());
             }
@@ -25732,6 +25761,18 @@ impl Compiler {
             }
         }
 
+        // Register type alias definitions in the HM env for unification-time expansion
+        for (alias_name, target_name) in &self.type_alias_targets {
+            let target_type = self.type_name_to_type(target_name);
+            env.define_type(
+                alias_name.clone(),
+                nostos_types::TypeDef::Alias {
+                    params: vec![],
+                    target: target_type,
+                },
+            );
+        }
+
         // Register user-defined traits in the type environment
         for (trait_name, trait_info) in &self.trait_defs {
             let methods: Vec<nostos_types::TraitMethod> = trait_info.methods.iter()
@@ -26008,7 +26049,7 @@ impl Compiler {
 
         // Register type aliases from imports (module-specific)
         for (short_name, qualified_name) in &self.imports {
-            if self.types.contains_key(qualified_name) {
+            if self.types.contains_key(qualified_name) || self.type_alias_targets.contains_key(qualified_name) {
                 env.add_type_alias(short_name.clone(), qualified_name.clone());
             }
         }
@@ -26992,11 +27033,24 @@ impl Compiler {
             }
         }
 
+        // Register type alias definitions (e.g., "type Id = Int") in the HM env
+        // so that unification can expand aliases to their target types
+        for (alias_name, target_name) in &self.type_alias_targets {
+            let target_type = self.type_name_to_type(target_name);
+            env.define_type(
+                alias_name.clone(),
+                nostos_types::TypeDef::Alias {
+                    params: vec![],
+                    target: target_type,
+                },
+            );
+        }
+
         // Register type aliases from imports (e.g., "Option" -> "stdlib.list.Option")
         // This allows type annotations like "-> Option[Int]" to resolve correctly
         for (short_name, qualified_name) in &self.imports {
             // Only add alias if the qualified name is a known type
-            if self.types.contains_key(qualified_name) {
+            if self.types.contains_key(qualified_name) || self.type_alias_targets.contains_key(qualified_name) {
                 env.add_type_alias(short_name.clone(), qualified_name.clone());
             }
         }

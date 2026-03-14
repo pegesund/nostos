@@ -1,0 +1,5 @@
+# expect: 42
+# Type alias used in record field
+type Id = Int
+type User = { id: Id, name: String }
+main() = User(42, "Alice").id

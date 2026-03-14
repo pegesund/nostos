@@ -5693,9 +5693,66 @@ impl<'a> InferCtx<'a> {
     }
 
     /// Unify two types, updating the substitution.
+    /// Expand a Named type if it refers to a TypeDef::Alias, returning the target type.
+    /// For parameterized aliases like `type Ids[a] = List[a]`, substitutes type params.
+    fn expand_type_alias(&self, ty: &Type) -> Option<Type> {
+        if let Type::Named { name, args } = ty {
+            // Resolve the name through type_aliases first
+            let resolved_name = self.env.resolve_type_name(name);
+            if let Some(TypeDef::Alias { params, target }) = self.env.types.get(&resolved_name) {
+                // Substitute type parameters if the alias is parameterized
+                if params.is_empty() || args.is_empty() {
+                    return Some(target.clone());
+                }
+                // Build substitution map: param name -> provided arg
+                let mut result = target.clone();
+                for (param, arg) in params.iter().zip(args.iter()) {
+                    result = self.substitute_type_param_in_type(&result, &param.name, arg);
+                }
+                return Some(result);
+            }
+        }
+        None
+    }
+
+    /// Substitute a named type parameter in a type with a concrete type.
+    fn substitute_type_param_in_type(&self, ty: &Type, param_name: &str, replacement: &Type) -> Type {
+        match ty {
+            Type::TypeParam(name) if name == param_name => replacement.clone(),
+            Type::Named { name, args } if args.is_empty() && name == param_name => replacement.clone(),
+            Type::Named { name, args } => Type::Named {
+                name: name.clone(),
+                args: args.iter().map(|a| self.substitute_type_param_in_type(a, param_name, replacement)).collect(),
+            },
+            Type::List(inner) => Type::List(Box::new(self.substitute_type_param_in_type(inner, param_name, replacement))),
+            Type::Array(inner) => Type::Array(Box::new(self.substitute_type_param_in_type(inner, param_name, replacement))),
+            Type::Set(inner) => Type::Set(Box::new(self.substitute_type_param_in_type(inner, param_name, replacement))),
+            Type::IO(inner) => Type::IO(Box::new(self.substitute_type_param_in_type(inner, param_name, replacement))),
+            Type::Map(k, v) => Type::Map(
+                Box::new(self.substitute_type_param_in_type(k, param_name, replacement)),
+                Box::new(self.substitute_type_param_in_type(v, param_name, replacement)),
+            ),
+            Type::Tuple(elems) => Type::Tuple(
+                elems.iter().map(|e| self.substitute_type_param_in_type(e, param_name, replacement)).collect(),
+            ),
+            Type::Function(ft) => Type::Function(FunctionType {
+                params: ft.params.iter().map(|p| self.substitute_type_param_in_type(p, param_name, replacement)).collect(),
+                ret: Box::new(self.substitute_type_param_in_type(&ft.ret, param_name, replacement)),
+                type_params: ft.type_params.clone(),
+                required_params: ft.required_params,
+                var_bounds: ft.var_bounds.clone(),
+            }),
+            other => other.clone(),
+        }
+    }
+
     fn unify_types(&mut self, t1: &Type, t2: &Type) -> Result<(), TypeError> {
         let t1 = self.apply_full_subst(t1);
         let t2 = self.apply_full_subst(t2);
+
+        // Expand type aliases before matching (e.g., `type Id = Int` → Int)
+        let t1 = if let Some(expanded) = self.expand_type_alias(&t1) { expanded } else { t1 };
+        let t2 = if let Some(expanded) = self.expand_type_alias(&t2) { expanded } else { t2 };
 
         match (&t1, &t2) {
             // Same type - nothing to do

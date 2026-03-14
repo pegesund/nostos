@@ -1781,18 +1781,53 @@ fn type_body() -> impl Parser<Token, TypeBody, Error = Simple<Token>> + Clone {
     // Variants: | Variant1 | Variant2(T) | Variant3{field: Type}
     // Can start with | or not. Allow newlines before/between variants.
     let variant_sep = nl.clone().then(just(Token::Pipe)).then(nl.clone());
-    let variant = nl.clone()
-        .ignore_then(just(Token::Pipe).or_not())
-        .then_ignore(nl.clone())
-        .ignore_then(variant_item)
-        .separated_by(variant_sep)
-        .at_least(1)
-        .map(TypeBody::Variant);
 
-    // Type alias: just a type expression
+    // Case 1: Explicit pipe prefix → always a variant (even single: | Foo)
+    // Parse as: | Item1 (| Item2 (| Item3 ...)?)
+    let pipe_prefixed_item = nl.clone()
+        .ignore_then(just(Token::Pipe))
+        .then_ignore(nl.clone())
+        .ignore_then(variant_item.clone());
+    let variant_with_pipe = pipe_prefixed_item.clone()
+        .then(pipe_prefixed_item.repeated())
+        .map(|(first, rest)| {
+            let mut variants = vec![first];
+            variants.extend(rest);
+            TypeBody::Variant(variants)
+        });
+
+    // Case 2: No pipe prefix, first item has fields → variant (single or multi)
+    // e.g., Wrap(Int) or Ok(value) | Err(msg)
+    let variant_item_with_fields = type_name()
+        .then(variant_fields())
+        .try_map(|(name, fields), span| {
+            match &fields {
+                VariantFields::Unit => Err(Simple::custom(span, "expected variant fields")),
+                _ => Ok(Variant { name, fields }),
+            }
+        });
+    let variant_no_pipe_with_fields = variant_item_with_fields
+        .then(variant_sep.clone().ignore_then(variant_item.clone()).repeated())
+        .map(|(first, rest)| {
+            let mut variants = vec![first];
+            variants.extend(rest);
+            TypeBody::Variant(variants)
+        });
+
+    // Case 3: No pipe prefix, multiple items → multi-constructor variant
+    // e.g., type Color = Red | Green | Blue
+    let variant_no_pipe_multi = variant_item.clone()
+        .then(variant_sep.ignore_then(variant_item).repeated().at_least(1))
+        .map(|(first, rest)| {
+            let mut variants = vec![first];
+            variants.extend(rest);
+            TypeBody::Variant(variants)
+        });
+
+    // Type alias: just a type expression (includes single bare name like `Int`)
     let alias = type_expr().map(TypeBody::Alias);
 
-    choice((record, variant, alias))
+    choice((record, variant_with_pipe, variant_no_pipe_with_fields, variant_no_pipe_multi, alias))
 }
 
 /// Parser for type definition.
