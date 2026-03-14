@@ -4326,6 +4326,8 @@ impl<'a> InferCtx<'a> {
                             let resolved_recv = self.env.apply_subst(&call.receiver_ty);
                             if let Type::List(elem) = &resolved_recv {
                                 let resolved_elem = self.env.apply_subst(elem);
+                                // Expand type aliases before checking (e.g., `type Score = Int` → Int)
+                                let resolved_elem = self.deep_expand_aliases(&resolved_elem);
                                 // Check if element type is definitely non-numeric.
                                 // Numeric types: Int*, UInt*, Float*, BigInt, Decimal
                                 // Type variables (Var/TypeParam) might be numeric, so allow them.
@@ -4459,6 +4461,8 @@ impl<'a> InferCtx<'a> {
                             let resolved_recv = self.env.apply_subst(&call.receiver_ty);
                             if let Type::List(elem) = &resolved_recv {
                                 let resolved_elem = self.env.apply_subst(elem);
+                                // Expand type aliases before checking (e.g., `type Id = Int` → Int)
+                                let resolved_elem = self.deep_expand_aliases(&resolved_elem);
                                 // Check if element is a non-numeric type
                                 let is_non_numeric = matches!(&resolved_elem,
                                     Type::Tuple(_) | Type::Record(_) | Type::Named { .. });

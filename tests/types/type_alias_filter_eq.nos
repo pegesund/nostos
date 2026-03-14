@@ -1,0 +1,5 @@
+# expect: [2, 2]
+# Type alias with filter and Eq operator
+type Id = Int
+findAll(xs: [Id], target: Id) = xs.filter(x => x == target)
+main() = findAll([1, 2, 3, 2, 4], 2)

@@ -1,0 +1,5 @@
+# expect: 15
+# Type alias with sum (Num trait through method pre-check)
+type Score = Int
+total(xs: [Score]) = xs.sum()
+main() = total([1, 2, 3, 4, 5])
