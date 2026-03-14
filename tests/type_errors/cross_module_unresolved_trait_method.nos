@@ -1,0 +1,20 @@
+# expect_error: cannot resolve trait method
+# Previously, cross-module compilation would generate empty bytecode
+# instead of a clean error when UnresolvedTraitMethod occurred during
+# polymorphic recompilation. This test ensures we get a compile-time error.
+type ShowFn11[a] = { sfn11: (a) -> String }
+
+makeListShow11(elemShow) = ShowFn11(sfn11: xs => {
+  strs = xs.map(x => {
+    f = elemShow.sfn11
+    f(x)
+  })
+  "[" ++ strs.join(", ") ++ "]"
+})
+
+main() = {
+  intS = ShowFn11(sfn11: n => show(n))
+  listS = makeListShow11(intS)
+  f = listS.sfn11
+  f([1, 2, 3])
+}

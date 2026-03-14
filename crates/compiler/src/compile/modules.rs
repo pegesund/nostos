@@ -1930,7 +1930,8 @@ impl Compiler {
                 // Recompile to replace CallDirect/TailCallDirect with monomorphized variant calls.
                 if let Err(e) = self.compile_fn_def(fn_def) {
                     if matches!(e, CompileError::TypeError { .. }
-                        | CompileError::TraitBoundNotSatisfied { .. }) {
+                        | CompileError::TraitBoundNotSatisfied { .. }
+                        | CompileError::UnresolvedTraitMethod { .. }) {
                         errors.push((fn_name.clone(), e, source_name.clone(), source.clone()));
                     }
                 }
