@@ -1,0 +1,3 @@
+pub type Transform = Int -> Int
+pub apply(f: Transform, x: Int) -> Int = f(x)
+pub compose(f: Transform, g: Transform) -> Transform = x => f(g(x))

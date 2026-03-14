@@ -6051,6 +6051,9 @@ impl Compiler {
                 let expected = type_param_map.iter().fold(expected, |acc, (param, concrete)| {
                     Self::substitute_single_type_param(&acc, param, concrete)
                 });
+                // Expand type aliases, including cross-module scan
+                // (e.g., `type Transform = Int -> Int` → `(Int) -> Int`)
+                let expected = self.resolve_type_alias_name_deep(&expected);
 
                 // Helper to check if a type is a numeric type (auto-coercion applies)
                 let is_numeric = |s: &str| matches!(s, "Int" | "Float");
@@ -6157,6 +6160,9 @@ impl Compiler {
                 let expected = type_param_map.iter().fold(expected, |acc, (param, concrete)| {
                     Self::substitute_single_type_param(&acc, param, concrete)
                 });
+                // Expand type aliases, including cross-module scan
+                // (e.g., `type Transform = Int -> Int` → `(Int) -> Int`)
+                let expected = self.resolve_type_alias_name_deep(&expected);
 
                 // Helper functions
                 let is_numeric = |s: &str| matches!(s, "Int" | "Float");
@@ -7045,6 +7051,22 @@ impl Compiler {
             }
             nostos_syntax::TypeExpr::Unit => None,
         }
+    }
+
+    /// Like resolve_type_alias_name, but also scans for module-qualified aliases.
+    /// Used in argument type checking where the alias may not be imported.
+    fn resolve_type_alias_name_deep(&self, name: &str) -> String {
+        let result = self.resolve_type_alias_name(name);
+        if result == name && !name.contains('.') {
+            // Not resolved - try scanning type_alias_targets for module-qualified versions
+            let suffix = format!(".{}", name);
+            if let Some((_, target)) = self.type_alias_targets.iter()
+                .find(|(k, _)| k.ends_with(&suffix))
+            {
+                return target.clone();
+            }
+        }
+        result
     }
 
     /// Resolve a type name through alias chains.

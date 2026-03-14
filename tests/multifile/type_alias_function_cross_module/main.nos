@@ -1,0 +1,4 @@
+# expect: 12
+# Function type alias from another module - passing lambda should work
+use ops.{apply, compose}
+main() = apply(compose(x => x + 2, x => x * 2), 5)
