@@ -7345,14 +7345,15 @@ impl ReplEngine {
                 "List" => {
                     // List methods are top-level builtins called via UFCS
                     const LIST_METHODS: &[&str] = &[
-                        "map", "filter", "take", "drop", "reverse", "sort",
+                        "map", "filter", "take", "drop", "reverse", "sort", "sortBy",
                         "concat", "flatten", "unique", "takeWhile", "dropWhile",
                         "zip", "zipWith", "interleave", "group", "scanl",
-                        "init", "push", "remove", "removeAt", "insertAt",
+                        "init", "push", "pop", "remove", "removeAt", "insertAt",
                         "set", "slice", "findIndices", "any", "all", "contains",
                         "count", "fold", "foldl", "foldr", "find", "head", "tail",
-                        "last", "length", "isEmpty", "get", "sum", "product",
+                        "last", "length", "len", "isEmpty", "get", "nth", "sum", "product",
                         "maximum", "minimum", "enumerate", "partition", "span",
+                        "each", "groupBy",
                     ];
                     LIST_METHODS.contains(&method) || known_functions.contains(method)
                 }
