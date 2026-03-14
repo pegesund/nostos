@@ -9453,6 +9453,13 @@ impl Compiler {
     /// This is needed because traits may be registered with qualified names (e.g., "nalgebra.Num")
     /// but looked up with unqualified names (e.g., "Num").
     fn find_implemented_trait(&self, type_name: &str, trait_name: &str) -> Option<String> {
+        // Resolve type aliases before checking trait implementation
+        // e.g., `type Name = String` means Name should implement Concat (like String)
+        let resolved_alias = self.resolve_type_alias_name(type_name);
+        if resolved_alias != type_name {
+            return self.find_implemented_trait(&resolved_alias, trait_name);
+        }
+
         // Hash, Show, Eq, and Copy are now built-in for ALL types
         if matches!(trait_name, "Hash" | "Show" | "Eq" | "Copy") {
             return Some(trait_name.to_string());

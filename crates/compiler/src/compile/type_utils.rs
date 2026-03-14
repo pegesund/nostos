@@ -32,6 +32,13 @@ impl Compiler {
     pub(super) fn type_name_to_type(&self, ty: &str) -> nostos_types::Type {
         let ty = ty.trim();
 
+        // Resolve type aliases before any other processing
+        // e.g., "Score" -> "Int", "Palette" -> "List[Color]", "Predicate" -> "(Int) -> Bool"
+        let resolved = self.resolve_type_alias_name(ty);
+        if resolved != ty {
+            return self.type_name_to_type(&resolved);
+        }
+
         // Handle list shorthand syntax: [a] means List[a]
         if ty.starts_with('[') && ty.ends_with(']') {
             let inner = &ty[1..ty.len() - 1].trim();

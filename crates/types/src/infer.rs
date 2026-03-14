@@ -2093,6 +2093,9 @@ impl<'a> InferCtx<'a> {
         for (orig_id, fresh_id, span) in &self.freshened_binding_vars {
             let resolved_orig = self.env.apply_subst(&Type::Var(*orig_id));
             let resolved_fresh = self.env.apply_subst(&Type::Var(*fresh_id));
+            // Deep expand type aliases for transparent comparison
+            let resolved_orig = self.deep_expand_aliases(&resolved_orig);
+            let resolved_fresh = self.deep_expand_aliases(&resolved_fresh);
 
             // Skip if either is still unresolved (truly polymorphic)
             if resolved_orig.has_any_type_var() || resolved_fresh.has_any_type_var() {
@@ -2119,6 +2122,9 @@ impl<'a> InferCtx<'a> {
         for (value_ty, ann_ty, span) in &self.deferred_typed_binding_checks {
             let resolved_value = self.env.apply_subst(value_ty);
             let resolved_ann = self.env.apply_subst(ann_ty);
+            // Deep expand type aliases for transparent comparison (handles List[Score] vs List[Int])
+            let resolved_value = self.deep_expand_aliases(&resolved_value);
+            let resolved_ann = self.deep_expand_aliases(&resolved_ann);
 
             // Check structural container mismatches even with unresolved type vars.
             // E.g., List[?25] vs Set[Int] - different container types, always an error.
@@ -2229,6 +2235,8 @@ impl<'a> InferCtx<'a> {
                     continue;
                 }
             }
+            // Expand type aliases before checking
+            let resolved = self.expand_type_alias(&resolved).unwrap_or(resolved);
             // Check if the concrete type implements the required trait
             if !self.env.implements(&resolved, trait_name) {
                 self.last_error_span = Some(*span);
@@ -2426,6 +2434,8 @@ impl<'a> InferCtx<'a> {
                 }
                 Constraint::HasTrait(ty, trait_name) => {
                     let resolved = self.env.apply_subst(&ty);
+                    // Expand type aliases so e.g. `type Score = Int` makes Score implement Num
+                    let resolved = self.expand_type_alias(&resolved).unwrap_or(resolved);
                     match &resolved {
                         Type::Var(var_id) => {
                             // Track trait bound on the type variable
@@ -2674,6 +2684,8 @@ impl<'a> InferCtx<'a> {
         // unification that may create false positives).
         for (ty, trait_name) in &self.deferred_has_trait.clone() {
             let resolved = self.env.apply_subst(ty);
+            // Expand type aliases so e.g. `type Score = Int` makes Score implement Num
+            let resolved = self.expand_type_alias(&resolved).unwrap_or(resolved);
             match &resolved {
                 Type::Var(_) | Type::TypeParam(_) => {} // Still unresolved or polymorphic, skip
                 // Named types with single lowercase letter and no args are type params
@@ -2847,6 +2859,8 @@ impl<'a> InferCtx<'a> {
         // params get unified with List element types during check_pending_method_calls.
         for (ty, trait_name) in &self.deferred_has_trait.clone() {
             let resolved = self.env.apply_subst(ty);
+            // Expand type aliases
+            let resolved = self.expand_type_alias(&resolved).unwrap_or(resolved);
             match &resolved {
                 Type::Var(_) | Type::TypeParam(_) => {} // Still unresolved or polymorphic, skip
                 // Named type params leaked through apply_subst — skip
@@ -3048,6 +3062,8 @@ impl<'a> InferCtx<'a> {
         // becomes checkable. Without this third pass, the error goes undetected.
         for (ty, trait_name) in &self.deferred_has_trait.clone() {
             let resolved = self.env.apply_subst(ty);
+            // Expand type aliases
+            let resolved = self.expand_type_alias(&resolved).unwrap_or(resolved);
             match &resolved {
                 Type::Var(_) | Type::TypeParam(_) => {} // Still unresolved or polymorphic, skip
                 // Named type params leaked through apply_subst — skip
@@ -5715,6 +5731,39 @@ impl<'a> InferCtx<'a> {
         None
     }
 
+    /// Recursively expand all type aliases in a type, including inside containers.
+    /// Returns the type with all aliases resolved, or the original type unchanged.
+    fn deep_expand_aliases(&self, ty: &Type) -> Type {
+        // First try top-level expansion
+        if let Some(expanded) = self.expand_type_alias(ty) {
+            return self.deep_expand_aliases(&expanded);
+        }
+        // Then recurse into sub-types
+        match ty {
+            Type::List(inner) => Type::List(Box::new(self.deep_expand_aliases(inner))),
+            Type::Set(inner) => Type::Set(Box::new(self.deep_expand_aliases(inner))),
+            Type::Array(inner) => Type::Array(Box::new(self.deep_expand_aliases(inner))),
+            Type::IO(inner) => Type::IO(Box::new(self.deep_expand_aliases(inner))),
+            Type::Map(k, v) => Type::Map(
+                Box::new(self.deep_expand_aliases(k)),
+                Box::new(self.deep_expand_aliases(v)),
+            ),
+            Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| self.deep_expand_aliases(e)).collect()),
+            Type::Named { name, args } => Type::Named {
+                name: name.clone(),
+                args: args.iter().map(|a| self.deep_expand_aliases(a)).collect(),
+            },
+            Type::Function(ft) => Type::Function(FunctionType {
+                params: ft.params.iter().map(|p| self.deep_expand_aliases(p)).collect(),
+                ret: Box::new(self.deep_expand_aliases(&ft.ret)),
+                type_params: ft.type_params.clone(),
+                required_params: ft.required_params,
+                var_bounds: ft.var_bounds.clone(),
+            }),
+            _ => ty.clone(),
+        }
+    }
+
     /// Substitute a named type parameter in a type with a concrete type.
     fn substitute_type_param_in_type(&self, ty: &Type, param_name: &str, replacement: &Type) -> Type {
         match ty {
@@ -7925,6 +7974,9 @@ impl<'a> InferCtx<'a> {
                 // Resolve any type variables first to see actual types
                 let resolved_left = self.env.apply_subst(&left_ty);
                 let resolved_right = self.env.apply_subst(&right_ty);
+                // Expand type aliases (e.g., `type Name = String`)
+                let resolved_left = self.expand_type_alias(&resolved_left).unwrap_or(resolved_left);
+                let resolved_right = self.expand_type_alias(&resolved_right).unwrap_or(resolved_right);
 
                 match (&resolved_left, &resolved_right) {
                     // Both are concrete list types - try to unify element types

@@ -506,6 +506,19 @@ impl Compiler {
                 }
             }
 
+            // Register type alias definitions (e.g., `type Score = Int`) in the HM env
+            // so that alias expansion works during constraint solving (e.g., Score implements Num)
+            for (alias_name, target_name) in &self.type_alias_targets {
+                let target_type = self.type_name_to_type(target_name);
+                env.define_type(
+                    alias_name.clone(),
+                    nostos_types::TypeDef::Alias {
+                        params: vec![],
+                        target: target_type,
+                    },
+                );
+            }
+
             // Add type aliases (e.g., "Wrapper" -> "A.Wrapper") so that unqualified
             // type names used inside module functions resolve correctly during batch inference.
             self.add_type_aliases_to_env(&mut env);

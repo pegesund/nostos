@@ -1,0 +1,5 @@
+# expect: 20
+# Type alias should be transparent for trait checking (Num via *)
+type Score = Int
+double(s: Score) = s * 2
+main() = double(10)

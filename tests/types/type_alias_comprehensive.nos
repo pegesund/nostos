@@ -1,0 +1,17 @@
+# expect: 30
+# Type aliases should be transparent everywhere: traits, annotations, containers
+type Score = Int
+type Name = String
+type Predicate = (Int) -> Bool
+
+add_scores(a: Score, b: Score) = a + b
+greet(n: Name) = "Hello, " ++ n
+check(p: Predicate, x: Int) = p(x)
+
+main() = {
+    scores: [Score] = [10, 20, 12]
+    total = add_scores(scores.head(), scores.tail().head())
+    msg = greet("World")
+    valid = check(n => n > 0, 5)
+    if valid then total else 0
+}

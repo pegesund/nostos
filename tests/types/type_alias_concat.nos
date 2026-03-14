@@ -1,0 +1,5 @@
+# expect: "Hello, World"
+# Type alias should be transparent for Concat trait (++)
+type Name = String
+greet(n: Name) = "Hello, " ++ n
+main() = greet("World")

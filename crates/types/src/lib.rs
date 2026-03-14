@@ -1097,6 +1097,14 @@ impl TypeEnv {
 
     /// Check if a type implements a trait.
     pub fn implements(&self, ty: &Type, trait_name: &str) -> bool {
+        // Expand type aliases before checking trait implementation
+        if let Type::Named { name, args } = ty {
+            let resolved_name = self.resolve_type_name(name);
+            if let Some(TypeDef::Alias { target, .. }) = self.types.get(&resolved_name) {
+                return self.implements(target, trait_name);
+            }
+        }
+
         // First check exact matches from registered implementations
         if self.impls.iter().any(|i| {
             i.trait_name == trait_name && self.types_match(&i.for_type, ty)
@@ -1202,6 +1210,14 @@ impl TypeEnv {
     /// they might implement the trait). Used during deferred constraint checking where
     /// types may be partially resolved.
     pub fn definitely_not_implements(&self, ty: &Type, trait_name: &str) -> bool {
+        // Expand type aliases before checking
+        if let Type::Named { name, args } = ty {
+            let resolved_name = self.resolve_type_name(name);
+            if let Some(TypeDef::Alias { target, .. }) = self.types.get(&resolved_name) {
+                return self.definitely_not_implements(target, trait_name);
+            }
+        }
+
         match ty {
             Type::Var(_) | Type::TypeParam(_) => false, // Unknown - might implement
             Type::Function(_) => true, // Functions never implement any trait
