@@ -2078,3 +2078,8 @@ Fixed by restructuring `type_body()` parser to require `|` prefix, fields, or mu
 | 383   | 10 (basics + fibonacci list + filter primes + foldl product + map singleton + foldl sum) | All clean. 10/10 pass. | N/A | ~13,375 |
 | 384   | 10 (basics + math84 abs/sign cross + str84 repeat/pad cross + sort+reverse + foldl sum + chunk pairs) | All clean. 10/10 pass. | N/A | ~13,385 |
 | 385   | 10 (basics + monoid85 mconcat at Int+String cross + map*10 + list equality + find Option + nested list) | All clean. 10/10 pass. | N/A | ~13,395 |
+| 386   | 10 (3-module chain A→B→C cross + type+util+main 3-module cross + Color86 cycle/complement 3-module cross + diamond dependency cross + facade re-export cross + chunk groups + flatten + filter+foldl + join + map*5) | All clean. 10/10 pass. | N/A | ~13,405 |
+| 387   | 10 (map*2 + foldl sum + filter odds + safe try/catch Option + range recursion + twice/flip HOF cross + nested if + reverse + join show + length check) | All clean. 10/10 pass. | N/A | ~13,415 |
+| 388   | 10 (map*2 + foldl sum + filter odds + msort88 merge sort cross + fibonacci + zip equality + nested list + factorial + string concat + head/last) | All clean. 10/10 pass. | N/A | ~13,425 |
+| 389   | 10 (map*2 + foldl sum + filter odds + Action89 4-constructor state machine cross + map*3 + tuple match + map*10 + string contains + string length + sort) | All clean. 10/10 pass. | N/A | ~13,435 |
+| 390   | 10 (map*2 + foldl sum + filter odds + iterate90 powers/naturals cross + reverse + any + drop + take + length + string literal) | All clean. 10/10 pass. | N/A | ~13,445 |
