@@ -912,10 +912,17 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                                         // Desugar to: f = (a, b) => body
                                         if type_args.is_empty() {
                                             if let Expr::Var(fn_name) = *func_expr {
-                                                // All args must be positional Var patterns (simple param names)
+                                                // All args must be simple param names, optionally with type annotations.
+                                                // Positional: f(a, b) = body
+                                                // Named: f(a: Int, b: String) = body (type annotation, NOT named arg)
+                                                // Since we're in the `= body` branch, this must be a function def.
                                                 let params: Option<Vec<Pattern>> = call_args.into_iter().map(|arg| {
                                                     match arg {
                                                         CallArg::Positional(Expr::Var(v)) => Some(Pattern::Var(v)),
+                                                        // Named args in a `f(...) = body` context are type-annotated params
+                                                        // e.g., helper(i: Int, acc: Int) = ...
+                                                        // Extract the param name, ignore the type (HM infers it)
+                                                        CallArg::Named(param_name, _type_expr) => Some(Pattern::Var(param_name)),
                                                         _ => None,
                                                     }
                                                 }).collect();

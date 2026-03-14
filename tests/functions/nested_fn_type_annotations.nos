@@ -1,0 +1,10 @@
+# expect: 6
+# Nested function with type-annotated parameters
+# Previously failed with "unknown type Int" because parser
+# treated type annotations as named arguments
+foo(n) = {
+  helper(i: Int, acc: Int) = if i > n then acc else helper(i + 1, acc + i)
+  helper(1, 0)
+}
+
+main() = foo(3)
