@@ -14632,6 +14632,37 @@ impl Compiler {
                             let qualified = format!("{}.{}", type_name, method.node);
                             Expr::Var(Ident { node: qualified, span: method.span })
                         } else {
+                            // HM type is unresolved (e.g., polymorphic lambda parameter).
+                            // For lambda/closure bodies (current_function_name is None),
+                            // there's no monomorphization to fix the dispatch later.
+                            // Use runtime multi-dispatch native for methods that exist on
+                            // both String and List (take, drop, reverse). The native checks
+                            // the receiver type at runtime and dispatches accordingly.
+                            // For top-level functions (current_function_name is Some),
+                            // monomorphization will create a typed version, so let the
+                            // default UFCS resolution handle it.
+                            let dispatch_name = if self.current_function_name.is_none() {
+                                match method.node.as_str() {
+                                    "take" | "drop" | "reverse" => {
+                                        Some(format!("__dispatch_{}", method.node))
+                                    }
+                                    _ => None,
+                                }
+                            } else {
+                                None
+                            };
+                            if let Some(dispatch_fn) = dispatch_name {
+                                // Compile args and emit native dispatch call directly
+                                let obj_reg = self.compile_expr_tail(obj, false)?;
+                                let mut arg_regs = vec![obj_reg];
+                                for arg in args {
+                                    let reg = self.compile_expr_tail(Self::call_arg_expr(arg), false)?;
+                                    arg_regs.push(reg);
+                                }
+                                let dst = self.alloc_reg();
+                                self.emit_call_native(dst, &dispatch_fn, arg_regs.into(), line);
+                                return Ok(dst);
+                            }
                             Expr::Var(method.clone())
                         }
                     } else {

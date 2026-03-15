@@ -1,0 +1,19 @@
+# expect: (true, true, true, true, true, true)
+# Local function definitions with ambiguous methods (take, drop, reverse)
+# must dispatch correctly to both String and List implementations.
+# Previously, these always dispatched to the List version, crashing on Strings.
+main() = {
+  getFirst(s) = s.take(1)
+  getRest(s) = s.drop(1)
+  doReverse(s) = s.reverse()
+
+  takeStr = getFirst("hello") == "h"
+  dropStr = getRest("hello") == "ello"
+  revStr = doReverse("hello") == "olleh"
+
+  takeList = getFirst([1,2,3]) == [1]
+  dropList = getRest([1,2,3]) == [2,3]
+  revList = doReverse([1,2,3]) == [3,2,1]
+
+  (takeStr, dropStr, revStr, takeList, dropList, revList)
+}

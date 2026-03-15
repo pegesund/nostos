@@ -12784,6 +12784,110 @@ impl AsyncVM {
             }),
         }));
 
+        // === Multi-dispatch functions for ambiguous methods ===
+        // These handle methods that exist on both String and List (take, drop, reverse).
+        // When the compiler can't determine the receiver type at compile time (e.g.,
+        // inside polymorphic lambdas), it emits a call to these dispatch functions
+        // which check the type at runtime and call the appropriate implementation.
+
+        // __dispatch_take - take first n elements/characters
+        self.register_native("__dispatch_take", Arc::new(GcNativeFn {
+            name: "__dispatch_take".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let n = match &args[1] {
+                    GcValue::Int64(n) => *n as usize,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                match &args[0] {
+                    GcValue::String(ptr) => {
+                        let s = heap.get_string(*ptr).map(|s| s.data.clone());
+                        match s {
+                            Some(s) => {
+                                let chars: Vec<char> = s.chars().collect();
+                                let end = n.min(chars.len());
+                                let result: String = chars[..end].iter().collect();
+                                Ok(GcValue::String(heap.alloc_string(result)))
+                            },
+                            _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    GcValue::List(list) => {
+                        let items: Vec<GcValue> = list.iter().take(n).cloned().collect();
+                        Ok(GcValue::List(heap.make_list(items)))
+                    }
+                    GcValue::Int64List(list) => {
+                        let items: Vec<i64> = list.data.iter().skip(list.offset).take(n).copied().collect();
+                        Ok(GcValue::Int64List(GcInt64List::from_vec(items)))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String or List".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // __dispatch_drop - drop first n elements/characters
+        self.register_native("__dispatch_drop", Arc::new(GcNativeFn {
+            name: "__dispatch_drop".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                let n = match &args[1] {
+                    GcValue::Int64(n) => *n as usize,
+                    _ => return Err(RuntimeError::TypeError { expected: "Int".to_string(), found: "other".to_string() })
+                };
+                match &args[0] {
+                    GcValue::String(ptr) => {
+                        let s = heap.get_string(*ptr).map(|s| s.data.clone());
+                        match s {
+                            Some(s) => {
+                                let chars: Vec<char> = s.chars().collect();
+                                let start = n.min(chars.len());
+                                let result: String = chars[start..].iter().collect();
+                                Ok(GcValue::String(heap.alloc_string(result)))
+                            },
+                            _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    GcValue::List(list) => {
+                        let items: Vec<GcValue> = list.iter().skip(n).cloned().collect();
+                        Ok(GcValue::List(heap.make_list(items)))
+                    }
+                    GcValue::Int64List(list) => {
+                        let items: Vec<i64> = list.data.iter().skip(list.offset).skip(n).copied().collect();
+                        Ok(GcValue::Int64List(GcInt64List::from_vec(items)))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String or List".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
+        // __dispatch_reverse - reverse a string or list
+        self.register_native("__dispatch_reverse", Arc::new(GcNativeFn {
+            name: "__dispatch_reverse".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(ptr) => {
+                        if let Some(str_val) = heap.get_string(*ptr) {
+                            Ok(GcValue::String(heap.alloc_string(str_val.data.chars().rev().collect())))
+                        } else {
+                            Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    GcValue::List(list) => {
+                        let mut items: Vec<GcValue> = list.iter().cloned().collect();
+                        items.reverse();
+                        Ok(GcValue::List(heap.make_list(items)))
+                    }
+                    GcValue::Int64List(list) => {
+                        let mut items: Vec<i64> = list.data.iter().skip(list.offset).copied().collect();
+                        items.reverse();
+                        Ok(GcValue::Int64List(GcInt64List::from_vec(items)))
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String or List".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
         // === Time functions ===
 
         // Time.now - returns milliseconds since Unix epoch
