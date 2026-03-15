@@ -15727,6 +15727,26 @@ mod check_module_tests {
     }
 
     #[test]
+    fn test_multi_error_reporting() {
+        // Verify that check_module_compiles returns ALL errors, not just the first
+        let engine = ReplEngine::new(ReplConfig::default());
+        let code = r#"
+foo() = { x = 42; x.badMethod1() }
+bar() = { y = 42; y.badMethod2() }
+main() = foo() + bar()
+"#;
+        let result = engine.check_module_compiles("", code);
+        println!("Result: {:?}", result);
+        assert!(result.is_err(), "Expected errors");
+        let errors = result.unwrap_err();
+        println!("Errors ({}): {:?}", errors.len(), errors);
+        assert!(errors.len() >= 2, "Should report at least 2 errors, got {}: {:?}", errors.len(), errors);
+        let joined = errors.join("; ");
+        assert!(joined.contains("badMethod1"), "Should mention badMethod1: {}", joined);
+        assert!(joined.contains("badMethod2"), "Should mention badMethod2: {}", joined);
+    }
+
+    #[test]
     fn test_method_on_string_variable_valid() {
         let engine = ReplEngine::new(ReplConfig::default());
         let code = r#"main() = { s = "hello"; s.length() }"#;
