@@ -2058,8 +2058,46 @@ fn trait_impl() -> impl Parser<Token, TraitImpl, Error = Simple<Token>> + Clone 
         .or_not()
         .map(|w| w.unwrap_or_default());
 
+    // Trait method definitions must NOT have `pub` visibility — `pub` signals
+    // the start of a new top-level item, not a trait method.  Using fn_def()
+    // here would greedily consume `pub foo() = …` that comes AFTER the trait
+    // impl block, silently hiding it from the module's public exports.
+    // We create a variant of fn_def that never accepts `pub`.
+    let trait_method_def = ident()
+        .then(type_params())
+        .then(
+            fn_param()
+                .separated_by(just(Token::Comma))
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .then(just(Token::When).ignore_then(expr()).or_not())
+        .then(just(Token::RightArrow).ignore_then(type_expr()).or_not())
+        .then_ignore(skip_newlines())
+        .then_ignore(just(Token::Eq))
+        .then_ignore(skip_newlines())
+        .then(expr())
+        .map_with_span(|(((((name, type_params), params), guard), return_type), body), span| {
+            let clause = FnClause {
+                params,
+                guard,
+                return_type,
+                body,
+                span: to_span(span.clone()),
+            };
+            FnDef {
+                visibility: Visibility::Private,
+                doc: None,
+                decorators: vec![],
+                span: to_span(span),
+                name,
+                type_params,
+                clauses: vec![clause],
+                is_template: false,
+            }
+        });
+
     // Allow newlines between function definitions in trait impls
-    let fn_with_nl = nl.clone().ignore_then(fn_def());
+    let fn_with_nl = nl.clone().ignore_then(trait_method_def);
 
     type_expr()
         .then_ignore(just(Token::Colon))
