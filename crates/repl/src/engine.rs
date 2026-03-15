@@ -4660,6 +4660,37 @@ impl ReplEngine {
     }
 
     /// Reconstruct type source for check_module_compiles - handles reactive types properly
+    /// Strip qualified module prefixes from type names in a type expression.
+    /// e.g. "List[(src.models.Position, src.models.Colour)]" → "List[(Position, Colour)]"
+    /// The parser does not accept dots in type names inside type definitions.
+    fn strip_qualified_type_name(type_name: &str) -> String {
+        // Replace qualified names like "module.Name" with just "Name"
+        // A qualified type name segment is: word chars + '.' + uppercase letter
+        let mut result = String::with_capacity(type_name.len());
+        let chars: Vec<char> = type_name.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i].is_alphanumeric() || chars[i] == '_' {
+                // Collect a full identifier (possibly qualified)
+                let start = i;
+                while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == '.') {
+                    i += 1;
+                }
+                let ident = &type_name[start..i];
+                // Take only the last component after dots
+                if let Some(dot_pos) = ident.rfind('.') {
+                    result.push_str(&ident[dot_pos + 1..]);
+                } else {
+                    result.push_str(ident);
+                }
+            } else {
+                result.push(chars[i]);
+                i += 1;
+            }
+        }
+        result
+    }
+
     fn reconstruct_type_source_for_check(&self, type_val: &nostos_vm::value::TypeValue) -> String {
         use nostos_vm::value::TypeKind;
 
@@ -4692,7 +4723,7 @@ impl ReplEngine {
             TypeKind::Record { .. } | TypeKind::Reactive => {
                 output.push_str("{ ");
                 let fields: Vec<String> = type_val.fields.iter()
-                    .map(|f| format!("{}: {}", f.name, f.type_name))
+                    .map(|f| format!("{}: {}", f.name, Self::strip_qualified_type_name(&f.type_name)))
                     .collect();
                 output.push_str(&fields.join(", "));
                 output.push_str(" }");
@@ -4704,7 +4735,7 @@ impl ReplEngine {
                             c.name.clone()
                         } else {
                             let fields: Vec<String> = c.fields.iter()
-                                .map(|f| f.type_name.clone())
+                                .map(|f| Self::strip_qualified_type_name(&f.type_name))
                                 .collect();
                             format!("{}({})", c.name, fields.join(", "))
                         }
@@ -4713,7 +4744,7 @@ impl ReplEngine {
                 output.push_str(&variants.join(" | "));
             }
             TypeKind::Alias { target } => {
-                output.push_str(target);
+                output.push_str(&Self::strip_qualified_type_name(target));
             }
             TypeKind::Primitive => {
                 // Primitive types don't need to be reconstructed for check
