@@ -1258,6 +1258,11 @@ impl AsyncProcess {
                 return Ok(self.exit_value.take().unwrap_or(GcValue::Unit));
             }
 
+            // Stack overflow protection
+            if self.frames.len() > 10000 {
+                return Err(RuntimeError::StackOverflow);
+            }
+
             // Execute one instruction
             match self.step().await {
                 Ok(StepResult::Continue) => {
@@ -1299,6 +1304,11 @@ impl AsyncProcess {
                 return Err(RuntimeError::Interrupted);
             }
 
+            // Stack overflow protection
+            if self.frames.len() > 10000 {
+                return Err(RuntimeError::StackOverflow);
+            }
+
             // Yield for fairness (allow other tasks to run)
             tokio::task::yield_now().await;
         }
@@ -1313,7 +1323,11 @@ impl AsyncProcess {
         }
 
         // Cache frame index once - avoid repeated len() calls
-        let cur_frame = match self.frames.len().checked_sub(1) {
+        let frame_count = self.frames.len();
+        if frame_count > 10000 {
+            return Err(RuntimeError::StackOverflow);
+        }
+        let cur_frame = match frame_count.checked_sub(1) {
             Some(idx) => idx,
             None => return Ok(StepResult::Finished(GcValue::Unit)),
         };
