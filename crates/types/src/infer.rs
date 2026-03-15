@@ -14,6 +14,101 @@ use nostos_syntax::ast::{
     BinOp, Binding, CallArg, Expr, FnClause, FnDef, Item, MatchArm, Module, Pattern, RecordField,
     RecordPatternField, Span, Stmt, TypeExpr, UnaryOp, VariantPatternFields,
 };
+
+/// Check if an expression contains a reference to a variable with the given name.
+/// Used to detect recursive lambda bindings (e.g., `f = (x) => ... f(x-1) ...`).
+fn expr_references_name(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::Var(ident) => ident.node == name,
+        Expr::BinOp(l, _, r, _) | Expr::Index(l, r, _) | Expr::Send(l, r, _) => {
+            expr_references_name(l, name) || expr_references_name(r, name)
+        }
+        Expr::UnaryOp(_, e, _) | Expr::FieldAccess(e, _, _) | Expr::Try_(e, _)
+        | Expr::Quote(e, _) | Expr::Splice(e, _) => expr_references_name(e, name),
+        Expr::Call(callee, _, args, _) => {
+            expr_references_name(callee, name)
+                || args.iter().any(|a| call_arg_references_name(a, name))
+        }
+        Expr::MethodCall(recv, _, args, _) => {
+            expr_references_name(recv, name)
+                || args.iter().any(|a| call_arg_references_name(a, name))
+        }
+        Expr::Lambda(_, body, _) => expr_references_name(body, name),
+        Expr::If(cond, then_, else_, _) => {
+            expr_references_name(cond, name)
+                || expr_references_name(then_, name)
+                || expr_references_name(else_, name)
+        }
+        Expr::Match(scrutinee, arms, _) | Expr::Try(scrutinee, arms, _, _) => {
+            expr_references_name(scrutinee, name)
+                || arms.iter().any(|arm| expr_references_name(&arm.body, name)
+                    || arm.guard.as_ref().map_or(false, |g| expr_references_name(g, name)))
+        }
+        Expr::Receive(arms, timeout, _) => {
+            arms.iter().any(|arm| expr_references_name(&arm.body, name)
+                || arm.guard.as_ref().map_or(false, |g| expr_references_name(g, name)))
+            || timeout.as_ref().map_or(false, |(t, b)| {
+                expr_references_name(t, name) || expr_references_name(b, name)
+            })
+        }
+        Expr::Tuple(exprs, _) | Expr::List(exprs, _, _) | Expr::Set(exprs, _) => {
+            exprs.iter().any(|e| expr_references_name(e, name))
+        }
+        Expr::Map(pairs, _) => {
+            pairs.iter().any(|(k, v)| expr_references_name(k, name) || expr_references_name(v, name))
+        }
+        Expr::Block(stmts, _) => stmts.iter().any(|s| stmt_references_name(s, name)),
+        Expr::Record(_, fields, _) => {
+            fields.iter().any(|f| record_field_references_name(f, name))
+        }
+        Expr::RecordUpdate(_, base, fields, _) => {
+            expr_references_name(base, name)
+                || fields.iter().any(|f| record_field_references_name(f, name))
+        }
+        Expr::While(cond, body, _) => {
+            expr_references_name(cond, name) || expr_references_name(body, name)
+        }
+        Expr::For(_, start, end, body, _) => {
+            expr_references_name(start, name)
+                || expr_references_name(end, name)
+                || expr_references_name(body, name)
+        }
+        Expr::Spawn(_, callee, args, _) => {
+            expr_references_name(callee, name)
+                || args.iter().any(|a| expr_references_name(a, name))
+        }
+        Expr::Do(do_stmts, _) => {
+            do_stmts.iter().any(|ds| match ds {
+                nostos_syntax::ast::DoStmt::Bind(_, e) | nostos_syntax::ast::DoStmt::Expr(e) => {
+                    expr_references_name(e, name)
+                }
+            })
+        }
+        Expr::Return(Some(e), _) | Expr::Break(Some(e), _) => expr_references_name(e, name),
+        // Literals and other terminals don't reference names
+        _ => false,
+    }
+}
+
+fn call_arg_references_name(arg: &CallArg, name: &str) -> bool {
+    match arg {
+        CallArg::Positional(e) | CallArg::Named(_, e) => expr_references_name(e, name),
+    }
+}
+
+fn record_field_references_name(field: &RecordField, name: &str) -> bool {
+    match field {
+        RecordField::Positional(e) | RecordField::Named(_, e) => expr_references_name(e, name),
+    }
+}
+
+fn stmt_references_name(stmt: &Stmt, name: &str) -> bool {
+    match stmt {
+        Stmt::Expr(e) => expr_references_name(e, name),
+        Stmt::Let(b) => expr_references_name(&b.value, name),
+        Stmt::Assign(_, e, _) => expr_references_name(e, name),
+    }
+}
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
@@ -8788,7 +8883,36 @@ impl<'a> InferCtx<'a> {
         // Snapshot var counter to distinguish lambda-internal vars from outer-scope vars
         let vars_before = self.env.next_var;
 
+        // For recursive lambda bindings: pre-register the binding name with a fresh type
+        // variable so that recursive references within the lambda body can be resolved.
+        // Without this, recursive references fail with UnknownIdent, which causes all
+        // constraints from the lambda body (including match type mismatches) to be lost.
+        // IMPORTANT: Only do this for lambdas that actually reference their own name
+        // (recursive lambdas). Non-recursive lambdas must NOT be pre-registered because
+        // it would break let-polymorphism (the fresh var gets unified to a single type,
+        // preventing polymorphic use at multiple types).
+        let pre_registered_var = if !binding.mutable && matches!(&binding.value, Expr::Lambda(_, _, _)) {
+            if let Pattern::Var(ident) = &binding.pattern {
+                if expr_references_name(&binding.value, &ident.node) {
+                    let fresh_ty = self.fresh();
+                    self.env.bind(ident.node.clone(), fresh_ty.clone(), false);
+                    Some((ident.node.clone(), fresh_ty))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let value_ty = self.infer_expr(&binding.value)?;
+
+        // If we pre-registered, unify the fresh var with the actual inferred type
+        if let Some((_name, fresh_ty)) = &pre_registered_var {
+            self.unify(fresh_ty.clone(), value_ty.clone());
+        }
 
         // Let-polymorphism for local lambdas: when a let binding's value is a lambda,
         // mark its free type variables as polymorphic so that each use of the binding

@@ -1,0 +1,11 @@
+# expect_error: type mismatch
+# Recursive lambda binding with match on wrong type must be caught.
+# Without pre-registering recursive lambda names, the recursive reference
+# fails with UnknownIdent and all type constraints are silently lost.
+main() = {
+  f = (n) => match n {
+    None -> 0
+    Some(v) -> 1 + f(v - 1)
+  }
+  f(5)
+}
