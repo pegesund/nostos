@@ -877,10 +877,7 @@ impl SendableValue {
             SendableValue::BigInt(bi) => bi.to_string(),
             SendableValue::Decimal(d) => d.to_string(),
             SendableValue::Pid(p) => format!("<pid:{}>", p),
-            SendableValue::String(s) => {
-                let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-                format!("\"{}\"", escaped)
-            }
+            SendableValue::String(s) => format!("\"{}\"", s),
             SendableValue::List(items) => {
                 let items_str: Vec<String> = items.iter().map(|v| v.display()).collect();
                 format!("[{}]", items_str.join(", "))
