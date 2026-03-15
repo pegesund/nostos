@@ -86,17 +86,18 @@ pub fn test_check_module_compiles(code: &str, expect_error: Option<&str>) -> Res
             "Expected error containing '{}', but code compiled successfully",
             expected
         )),
-        (Err(e), None) => Err(format!(
+        (Err(errors), None) => Err(format!(
             "Expected successful compilation, but got error: {}",
-            e
+            errors.join("; ")
         )),
-        (Err(e), Some(expected)) => {
-            if e.contains(expected) {
+        (Err(errors), Some(expected)) => {
+            let joined = errors.join("; ");
+            if joined.contains(expected) {
                 Ok(())
             } else {
                 Err(format!(
                     "Expected error containing '{}', but got: {}",
-                    expected, e
+                    expected, joined
                 ))
             }
         }

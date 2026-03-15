@@ -1032,15 +1032,15 @@ fn execute_server_command(cmd: &ServerCommand, engine: &Rc<RefCell<ReplEngine>>)
                     completions: vec![],
                     completion_items: vec![],
                 },
-                Err(e) => ServerResponse {
+                Err(errors) => ServerResponse {
                     id: cmd.id,
                     status: "error".to_string(),
-                    output: e.clone(),
-                    errors: vec![ServerError {
+                    output: errors.join("\n"),
+                    errors: errors.iter().map(|e| ServerError {
                         file: "".to_string(),
                         line: 0,
-                        message: e,
-                    }],
+                        message: e.clone(),
+                    }).collect(),
                     completions: vec![],
                     completion_items: vec![],
                 },

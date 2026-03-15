@@ -214,18 +214,20 @@ impl NostosLanguageServer {
         eprintln!("Check result for {}: {:?}", module_name, result);
 
         // Build diagnostics from the check result
-        let error_diagnostics = if let Err(e) = &result {
-            let (line, message) = Self::parse_error_location(e, Some(content));
-            vec![Diagnostic {
-                range: Range {
-                    start: Position { line, character: 0 },
-                    end: Position { line, character: 100 },
-                },
-                severity: Some(DiagnosticSeverity::ERROR),
-                message,
-                source: Some("nostos".to_string()),
-                ..Default::default()
-            }]
+        let error_diagnostics = if let Err(errors) = &result {
+            errors.iter().map(|e| {
+                let (line, message) = Self::parse_error_location(e, Some(content));
+                Diagnostic {
+                    range: Range {
+                        start: Position { line, character: 0 },
+                        end: Position { line, character: 100 },
+                    },
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    message,
+                    source: Some("nostos".to_string()),
+                    ..Default::default()
+                }
+            }).collect()
         } else {
             vec![]
         };

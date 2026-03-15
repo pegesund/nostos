@@ -503,8 +503,8 @@ impl CodeEditor {
             Ok(()) => {
                 self.compile_status = CompileStatus::Ok;
             }
-            Err(error) => {
-                self.compile_status = CompileStatus::CompileError(error.clone());
+            Err(errors) => {
+                self.compile_status = CompileStatus::CompileError(errors.join("\n"));
             }
         }
 

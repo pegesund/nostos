@@ -6686,7 +6686,7 @@ impl ReplEngine {
 
     /// Check if module content would compile without actually saving it
     /// This is used for live compile status in the editor
-    pub fn check_module_compiles(&self, module_name: &str, content: &str) -> Result<(), String> {
+    pub fn check_module_compiles(&self, module_name: &str, content: &str) -> Result<(), Vec<String>> {
         // Helper to check if a method name is a stdlib UFCS method
         fn is_stdlib_ufcs_method(method: &str) -> bool {
             const STDLIB_METHODS: &[&str] = &[
@@ -6783,21 +6783,26 @@ impl ReplEngine {
         let (module_opt, errors) = parse(&full_content);
 
         if !errors.is_empty() {
-            // Convert raw parse errors to SourceErrors
+            // Convert raw parse errors to SourceErrors and return ALL of them
             let source_errors = parse_errors_to_source_errors(&errors);
-            if let Some(first) = source_errors.first() {
-                // Adjust line number for prepended prefix (imports, use statements, types)
-                let (line, _col) = offset_to_line_col(&full_content, first.span.start);
-                let adjusted_line = if line > prefix_line_count { line - prefix_line_count } else { line };
-                return Err(format!("line {}: {}", adjusted_line, first.message));
+            if !source_errors.is_empty() {
+                let parse_errs: Vec<String> = source_errors.iter().map(|err| {
+                    let (line, _col) = offset_to_line_col(&full_content, err.span.start);
+                    let adjusted_line = if line > prefix_line_count { line - prefix_line_count } else { line };
+                    format!("line {}: {}", adjusted_line, err.message)
+                }).collect();
+                return Err(parse_errs);
             }
-            return Err("Parse error".to_string());
+            return Err(vec!["Parse error".to_string()]);
         }
 
         let module = match module_opt {
             Some(m) => m,
-            None => return Err("Failed to parse module".to_string()),
+            None => return Err(vec!["Failed to parse module".to_string()]),
         };
+
+        // Collect all validation errors instead of returning on first one
+        let mut collected_errors: Vec<String> = Vec::new();
 
         // Build set of known function base names (without signature suffix)
         let mut known_functions: HashSet<String> = HashSet::new();
@@ -7068,7 +7073,7 @@ impl ReplEngine {
                             // Adjust line number for prefix
                             let (_line, _col) = offset_to_line_col(&full_content, trait_impl.trait_name.span.start);
                             let adjusted_line = if _line > prefix_line_count { _line - prefix_line_count } else { _line };
-                            return Err(format!(
+                            collected_errors.push(format!(
                                 "line {}: type `{}` must implement supertrait `{}` before implementing `{}`",
                                 adjusted_line, type_name, supertrait, trait_name
                             ));
@@ -7803,7 +7808,7 @@ impl ReplEngine {
                 // Uppercase name should be a known constructor or type
                 if !known_functions.contains(name) {
                     let line = get_adjusted_line(offset);
-                    return Err(format!(
+                    collected_errors.push(format!(
                         "line {}: unknown constructor `{}`",
                         line, name
                     ));
@@ -7826,10 +7831,11 @@ impl ReplEngine {
                         // Check if it might be a user-defined function
                         if !known_functions.contains(method_name) {
                             let line = get_adjusted_line(offset);
-                            return Err(format!(
+                            collected_errors.push(format!(
                                 "line {}: unknown method `{}`",
                                 line, method_name
                             ));
+                            continue;
                         }
                     } else if !valid_arities.contains(&arg_count) {
                         // Method exists but wrong arity
@@ -7839,12 +7845,13 @@ impl ReplEngine {
                         } else {
                             valid_arities.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(" or ")
                         };
-                        return Err(format!(
+                        collected_errors.push(format!(
                             "line {}: `{}` expects {} argument{}, got {}",
                             line, method_name, expected,
                             if valid_arities.len() == 1 && valid_arities[0] == 1 { "" } else { "s" },
                             arg_count
                         ));
+                        continue;
                     }
                     // Skip further validation for unknown types
                     continue;
@@ -7858,12 +7865,13 @@ impl ReplEngine {
                     let expected_arity = if is_qualified_call { ufcs_arity + 1 } else { ufcs_arity };
                     if arg_count != expected_arity {
                         let line = get_adjusted_line(offset);
-                        return Err(format!(
+                        collected_errors.push(format!(
                             "line {}: `{}` expects {} argument{}, got {}",
                             line, call_name, expected_arity,
                             if expected_arity == 1 { "" } else { "s" },
                             arg_count
                         ));
+                        continue;
                     }
                 }
 
@@ -7890,7 +7898,7 @@ impl ReplEngine {
                             );
                             if !implements_ord {
                                 let line = get_adjusted_line(offset);
-                                return Err(format!(
+                                collected_errors.push(format!(
                                     "line {}: {} does not implement Ord (required by {})",
                                     line, elem, method_name
                                 ));
@@ -7907,7 +7915,7 @@ impl ReplEngine {
                             );
                             if !implements_num {
                                 let line = get_adjusted_line(offset);
-                                return Err(format!(
+                                collected_errors.push(format!(
                                     "line {}: {} does not implement Num (required by {})",
                                     line, elem, method_name
                                 ));
@@ -7921,7 +7929,8 @@ impl ReplEngine {
                 let line = get_adjusted_line(offset);
                 // Convert "List[Int].xxx" to "List.xxx" for readability
                 let base_type = type_name.split('[').next().unwrap_or(type_name);
-                return Err(format!("line {}: unknown function `{}.{}`", line, base_type, method_name));
+                collected_errors.push(format!("line {}: unknown function `{}.{}`", line, base_type, method_name));
+                continue;
             }
 
             // Skip if it's a known function (non-method call)
@@ -7937,7 +7946,7 @@ impl ReplEngine {
 
             // Unknown function
             let line = get_adjusted_line(offset);
-            return Err(format!("line {}: unknown function `{}`", line, call_name));
+            collected_errors.push(format!("line {}: unknown function `{}`", line, call_name));
         }
 
         // === DEEP TYPE CHECKING ===
@@ -8033,7 +8042,7 @@ impl ReplEngine {
                         true
                     };
                     if should_report {
-                        return Err(format!("line {}: {}", line, message));
+                        collected_errors.push(format!("line {}: {}", line, message));
                     }
                 }
                 nostos_compiler::CompileError::UnknownType { name, .. } => {
@@ -8041,7 +8050,7 @@ impl ReplEngine {
                     let is_known = known_functions.contains(name) ||
                         known_functions.iter().any(|f| f.ends_with(&format!(".{}", name)));
                     if !is_known {
-                        return Err(format!("line {}: unknown type `{}`", line, name));
+                        collected_errors.push(format!("line {}: unknown type `{}`", line, name));
                     }
                 }
                 nostos_compiler::CompileError::UnknownVariable { name, .. } => {
@@ -8052,12 +8061,12 @@ impl ReplEngine {
                     let is_known = known_functions.contains(name) ||
                         known_functions.iter().any(|f| f.ends_with(&format!(".{}", name)));
                     if !is_known {
-                        return Err(format!("line {}: unknown variable `{}`", line, name));
+                        collected_errors.push(format!("line {}: unknown variable `{}`", line, name));
                     }
                 }
                 nostos_compiler::CompileError::TraitNotImplemented { ty, trait_name, .. } => {
                     // Report trait errors (e.g., Color does not implement Ord)
-                    return Err(format!("line {}: {} does not implement {} (required by this operation)", line, ty, trait_name));
+                    collected_errors.push(format!("line {}: {} does not implement {} (required by this operation)", line, ty, trait_name));
                 }
                 _ => {
                     // Other errors (like unknown function) might be due to missing stdlib
@@ -8104,7 +8113,7 @@ impl ReplEngine {
                         true
                     };
                     if should_report {
-                        return Err(format!("line {}: {}", line, message));
+                        collected_errors.push(format!("line {}: {}", line, message));
                     }
                 }
                 nostos_compiler::CompileError::UnknownType { name, .. } => {
@@ -8112,7 +8121,7 @@ impl ReplEngine {
                     let is_known = known_functions.contains(name) ||
                         known_functions.iter().any(|f| f.ends_with(&format!(".{}", name)));
                     if !is_known {
-                        return Err(format!("line {}: unknown type `{}`", line, name));
+                        collected_errors.push(format!("line {}: unknown type `{}`", line, name));
                     }
                 }
                 nostos_compiler::CompileError::UnknownVariable { name, .. } => {
@@ -8120,12 +8129,12 @@ impl ReplEngine {
                     let is_known = known_functions.contains(name) ||
                         known_functions.iter().any(|f| f.ends_with(&format!(".{}", name)));
                     if !is_known {
-                        return Err(format!("line {}: unknown variable `{}`", line, name));
+                        collected_errors.push(format!("line {}: unknown variable `{}`", line, name));
                     }
                 }
                 nostos_compiler::CompileError::TraitNotImplemented { ty, trait_name, .. } => {
                     // Report trait errors (e.g., Color does not implement Ord)
-                    return Err(format!("line {}: {} does not implement {} (required by this operation)", line, ty, trait_name));
+                    collected_errors.push(format!("line {}: {} does not implement {} (required by this operation)", line, ty, trait_name));
                 }
                 _ => {
                     // Other errors (like unknown function) might be due to missing stdlib
@@ -8133,7 +8142,11 @@ impl ReplEngine {
             }
         }
 
-        Ok(())
+        if collected_errors.is_empty() {
+            Ok(())
+        } else {
+            Err(collected_errors)
+        }
     }
 
     /// Clear compile status for a definition (e.g., when deleted)
@@ -15710,7 +15723,7 @@ mod check_module_tests {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for Int.xxx");
-        assert!(result.unwrap_err().contains("Int.xxx"), "Error should mention Int.xxx");
+        assert!(result.unwrap_err().join("; ").contains("Int.xxx"), "Error should mention Int.xxx");
     }
 
     #[test]
@@ -15729,7 +15742,7 @@ mod check_module_tests {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for String.xxx");
-        assert!(result.unwrap_err().contains("String.xxx"), "Error should mention String.xxx");
+        assert!(result.unwrap_err().join("; ").contains("String.xxx"), "Error should mention String.xxx");
     }
 
     #[test]
@@ -15739,7 +15752,7 @@ mod check_module_tests {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for Server.closex");
-        assert!(result.unwrap_err().contains("Server.closex"), "Error should mention Server.closex");
+        assert!(result.unwrap_err().join("; ").contains("Server.closex"), "Error should mention Server.closex");
     }
 
     #[test]
@@ -15770,7 +15783,7 @@ mod check_module_tests {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for Pid.xxx");
-        assert!(result.unwrap_err().contains("Pid.xxx"), "Error should mention Pid.xxx");
+        assert!(result.unwrap_err().join("; ").contains("Pid.xxx"), "Error should mention Pid.xxx");
     }
 
     #[test]
@@ -15788,7 +15801,7 @@ mod check_module_tests {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for Pid.fff");
-        assert!(result.unwrap_err().contains("Pid.fff"), "Error should mention Pid.fff");
+        assert!(result.unwrap_err().join("; ").contains("Pid.fff"), "Error should mention Pid.fff");
     }
 
     #[test]
@@ -15814,7 +15827,7 @@ mod check_module_tests {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for List.xxx on chained call");
-        assert!(result.unwrap_err().contains("List.xxx"), "Error should mention List.xxx");
+        assert!(result.unwrap_err().join("; ").contains("List.xxx"), "Error should mention List.xxx");
     }
 
     #[test]
@@ -15845,7 +15858,7 @@ mod check_module_tests {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for Map.xxx");
-        assert!(result.unwrap_err().contains("Map.xxx"), "Error should mention Map.xxx");
+        assert!(result.unwrap_err().join("; ").contains("Map.xxx"), "Error should mention Map.xxx");
     }
 
     #[test]
@@ -15866,7 +15879,7 @@ mod check_module_tests {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for Set.xxx");
-        assert!(result.unwrap_err().contains("Set.xxx"), "Error should mention Set.xxx");
+        assert!(result.unwrap_err().join("; ").contains("Set.xxx"), "Error should mention Set.xxx");
     }
 
     #[test]
@@ -15903,7 +15916,7 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for Person.xxx");
-        assert!(result.unwrap_err().contains("Person.xxx"), "Error should mention Person.xxx");
+        assert!(result.unwrap_err().join("; ").contains("Person.xxx"), "Error should mention Person.xxx");
     }
 
     #[test]
@@ -15917,7 +15930,7 @@ main() = { r = Ok(42); r.xxx() }
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for MyResult.xxx");
-        assert!(result.unwrap_err().contains("MyResult.xxx"), "Error should mention MyResult.xxx");
+        assert!(result.unwrap_err().join("; ").contains("MyResult.xxx"), "Error should mention MyResult.xxx");
     }
 
     #[test]
@@ -16207,7 +16220,7 @@ main() = startRWeb(8080, "Counter", session)
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for Map.xxx");
-        assert!(result.unwrap_err().contains("Map.xxx"), "Error should mention Map.xxx");
+        assert!(result.unwrap_err().join("; ").contains("Map.xxx"), "Error should mention Map.xxx");
     }
 
     #[test]
@@ -16228,7 +16241,7 @@ main() = startRWeb(8080, "Counter", session)
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for Set.xxx");
-        assert!(result.unwrap_err().contains("Set.xxx"), "Error should mention Set.xxx");
+        assert!(result.unwrap_err().join("; ").contains("Set.xxx"), "Error should mention Set.xxx");
     }
 
     #[test]
@@ -16249,7 +16262,7 @@ main() = startRWeb(8080, "Counter", session)
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for List.xxx");
-        assert!(result.unwrap_err().contains("List.xxx"), "Error should mention List.xxx");
+        assert!(result.unwrap_err().join("; ").contains("List.xxx"), "Error should mention List.xxx");
     }
 
     #[test]
@@ -16332,7 +16345,7 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for Bool.xxx");
-        assert!(result.unwrap_err().contains("Bool.xxx"), "Error should mention Bool.xxx");
+        assert!(result.unwrap_err().join("; ").contains("Bool.xxx"), "Error should mention Bool.xxx");
     }
 
     #[test]
@@ -16343,7 +16356,7 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for Float.xxx");
-        assert!(result.unwrap_err().contains("Float.xxx"), "Error should mention Float.xxx");
+        assert!(result.unwrap_err().join("; ").contains("Float.xxx"), "Error should mention Float.xxx");
     }
 
     #[test]
@@ -16354,7 +16367,7 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for Char.xxx");
-        assert!(result.unwrap_err().contains("Char.xxx"), "Error should mention Char.xxx");
+        assert!(result.unwrap_err().join("; ").contains("Char.xxx"), "Error should mention Char.xxx");
     }
 
     // Arity tests
@@ -16367,7 +16380,7 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected arity error for String.contains");
-        assert!(result.unwrap_err().contains("expects 1 argument"), "Error should mention arity");
+        assert!(result.unwrap_err().join("; ").contains("expects 1 argument"), "Error should mention arity");
     }
 
     #[test]
@@ -16388,7 +16401,7 @@ main() = {
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected arity error for List.map with 0 args");
         // Error comes from compiler type checking - may vary in format
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().join("; ");
         assert!(err.contains("argument") || err.contains("arity"), "Error should mention arguments: {}", err);
     }
 
@@ -16400,7 +16413,7 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected arity error for Map.insert with 1 arg");
-        assert!(result.unwrap_err().contains("expects 2 arguments"), "Error should mention arity");
+        assert!(result.unwrap_err().join("; ").contains("expects 2 arguments"), "Error should mention arity");
     }
 
     #[test]
@@ -16420,7 +16433,7 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected arity error for Set.contains with 0 args");
-        assert!(result.unwrap_err().contains("expects 1 argument"), "Error should mention arity");
+        assert!(result.unwrap_err().join("; ").contains("expects 1 argument"), "Error should mention arity");
     }
 
     #[test]
@@ -16442,7 +16455,7 @@ main() = {
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected arity error for List.length with arg");
         // Error comes from compiler type checking - may vary in format
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().join("; ");
         assert!(err.contains("argument") || err.contains("arity"), "Error should mention arguments: {}", err);
     }
 
@@ -16461,7 +16474,7 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected arity error for unknown type .contains with 2 args");
-        assert!(result.unwrap_err().contains("expects 1 argument"), "Error should mention arity");
+        assert!(result.unwrap_err().join("; ").contains("expects 1 argument"), "Error should mention arity");
     }
 
     #[test]
@@ -16504,7 +16517,7 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected arity error for status.contains with 2 args");
-        assert!(result.unwrap_err().contains("expects 1 argument"), "Error should mention arity");
+        assert!(result.unwrap_err().join("; ").contains("expects 1 argument"), "Error should mention arity");
     }
 
     #[test]
@@ -16582,7 +16595,7 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected arity error for status.contains(1,2)");
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().join("; ");
         println!("Error: {}", err);
         assert!(err.contains("contains") && err.contains("expects"), "Should catch arity error");
     }
@@ -16601,7 +16614,7 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for unknown method xxx");
-        assert!(result.unwrap_err().contains("unknown method"), "Error should mention unknown method");
+        assert!(result.unwrap_err().join("; ").contains("unknown method"), "Error should mention unknown method");
     }
 
     #[test]
@@ -16618,7 +16631,7 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for unknown constructor Noxxx");
-        assert!(result.unwrap_err().contains("unknown constructor"), "Error should mention unknown constructor");
+        assert!(result.unwrap_err().join("; ").contains("unknown constructor"), "Error should mention unknown constructor");
     }
 
     #[test]
@@ -16692,7 +16705,7 @@ main() = {
         println!("Result: {:?}", result);
         // Now we properly infer status as String and catch the type error
         assert!(result.is_err(), "String.contains(Int) should be a type error");
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().join("; ");
         assert!(err.contains("unify") || err.contains("Int") || err.contains("String"),
             "Error should mention type mismatch: {}", err);
     }
@@ -16816,7 +16829,7 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for Yess constructor");
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().join("; ");
         println!("Error: {}", err);
         assert!(err.contains("Yess") || err.contains("unknown constructor"), "Error should mention Yess");
     }
@@ -16834,7 +16847,7 @@ main() = 1 + "hello"
         println!("Result: {:?}", result);
         // The compiler should catch this type error
         assert!(result.is_err(), "Expected type error for Int + String");
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().join("; ");
         println!("Error: {}", err);
         assert!(err.contains("Cannot unify") || err.contains("type"), "Error should be about types");
     }
@@ -16856,7 +16869,7 @@ main() = {
         println!("Result: {:?}", result);
         // Now caught at compile time - Int doesn't unify with String
         assert!(result.is_err(), "Expected type error");
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().join("; ");
         assert!(err.contains("unify") || err.contains("Int") || err.contains("String"),
             "Error should mention type mismatch: {}", err);
     }
@@ -16879,7 +16892,7 @@ main() = {
         // This tests the deep type checking - status should be inferred as String
         // and String.contains(Int) should be a type error
         if result.is_err() {
-            println!("Got error: {}", result.unwrap_err());
+            println!("Got error: {:?}", result.unwrap_err());
         }
     }
 
@@ -16900,7 +16913,7 @@ main() = {
         println!("Result: {:?}", result);
         // Now with UFCS type checking, this should be a type error
         assert!(result.is_err(), "Expected type error for String.contains(Int)");
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().join("; ");
         println!("Error: {}", err);
         assert!(err.contains("unify") || err.contains("String") || err.contains("Int"),
             "Error should mention type mismatch: {}", err);
@@ -17128,7 +17141,7 @@ greet(name) = {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for undefined variable 'huff'");
-        assert!(result.unwrap_err().contains("huff"), "Error should mention 'huff'");
+        assert!(result.unwrap_err().join("; ").contains("huff"), "Error should mention 'huff'");
     }
 
     #[test]
@@ -17172,7 +17185,7 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for String.xxx");
-        assert!(result.unwrap_err().contains("xxx"), "Error should mention xxx");
+        assert!(result.unwrap_err().join("; ").contains("xxx"), "Error should mention xxx");
     }
 
     #[test]
@@ -17975,7 +17988,7 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Unknown function in extension should be detected");
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().join("; ");
         assert!(err.contains("unknownFunc") || err.contains("unknown"),
             "Error should mention unknownFunc: {}", err);
     }
@@ -18125,7 +18138,7 @@ broken_func() = {
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Expected error for unknown_var");
 
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().join("; ");
         println!("Error: {}", err);
         // The error should mention a valid line number (not 0, and within the content bounds)
         // The error is on line 5 of the function_with_error content
@@ -18427,7 +18440,7 @@ mod postgres_module_tests {
             let result = engine.check_module_compiles(name, content);
             match result {
                 Ok(()) => println!("{}: OK", name),
-                Err(e) => println!("{}: ERROR - {}", name, e),
+                Err(e) => println!("{}: ERROR - {:?}", name, e),
             }
         }
     }
@@ -18903,7 +18916,8 @@ mod nalgebra_debug_tests {
         println!("check_module_compiles result: {:?}", check_result);
 
         // Should have a type error
-        let err_msg = check_result.as_ref().err().unwrap();
+        let err_msgs = check_result.as_ref().err().unwrap();
+        let err_msg = err_msgs.join("; ");
         assert!(err_msg.contains("Int") && err_msg.contains("String"),
                 "Error should mention type mismatch between Int and String, got: {}", err_msg);
 
@@ -18933,7 +18947,7 @@ main() = {
         let result = engine.check_module_compiles("test", code);
         println!("Result: {:?}", result);
         assert!(result.is_err(), "Should be an error for add(1, \"a\") when add takes Int params");
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().join("; ");
         println!("Error: {}", err);
         assert!(err.contains("Int") || err.contains("String") || err.contains("type"),
             "Error should mention type mismatch: {}", err);
@@ -21470,7 +21484,7 @@ main() = {
         println!("check_module_compiles result: {:?}", check_result);
 
         assert!(check_result.is_err(), "Should have error for undefined 'asdf'");
-        let err_msg = check_result.unwrap_err();
+        let err_msg = check_result.unwrap_err().join("; ");
         println!("Error message: {}", err_msg);
 
         // The error should mention 'asdf' and NOT be on line 1
@@ -21547,7 +21561,7 @@ main() = {
         println!("check_module_compiles result: {:?}", check_result);
 
         assert!(check_result.is_err(), "Should have error for undefined variable");
-        let err_msg = check_result.unwrap_err();
+        let err_msg = check_result.unwrap_err().join("; ");
         println!("Error message: {}", err_msg);
 
         // The error should be about undefined_var_error, NOT about unknown type Person
@@ -21730,7 +21744,7 @@ main() = {
         let check_result = engine.check_module_compiles("main", typing_with_error);
         println!("Check with error: {:?}", check_result);
         assert!(check_result.is_err(), "Should detect undefined variable error");
-        let err = check_result.unwrap_err();
+        let err = check_result.unwrap_err().join("; ");
         assert!(err.contains("undefined_var"), "Error should mention undefined_var: {}", err);
 
         // Simulate typing - fix the error
@@ -24080,7 +24094,7 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("check_module_compiles result: {:?}", result);
         assert!(result.is_err(), "Expected arity error for gg.map()");
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().join("; ");
         println!("Error message: {}", err);
         // Should be line 5, not line 1
         assert!(err.contains("line 5:") || err.contains(":5:"),
@@ -24150,7 +24164,7 @@ main() = 0
         let result = engine.check_module_compiles("", code);
         println!("check_module_compiles result: {:?}", result);
         assert!(result.is_err(), "Should fail when supertrait not implemented");
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().join("; ");
         assert!(err.contains("supertrait") || err.contains("Base"),
             "Error should mention missing supertrait, got: {}", err);
     }
@@ -24369,7 +24383,7 @@ main() = {
         let engine = ReplEngine::new(ReplConfig::default());
         let result = engine.check_module_compiles("", "main() = [(1,2),(3,4)].map(p => p + 1)");
         assert!(result.is_err(), "Expected error for tuple + Int in map lambda");
-        assert!(result.unwrap_err().contains("does not implement Num"));
+        assert!(result.unwrap_err().join("; ").contains("does not implement Num"));
     }
 
     #[test]
@@ -24393,7 +24407,7 @@ main() = {
         let result = engine.check_module_compiles("", code);
         println!("Sort tuples result: {:?}", result);
         assert!(result.is_err(), "Expected error for sorting tuples");
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().join("; ");
         assert!(err.contains("Ord"), "Expected Ord error, got: {}", err);
     }
 
@@ -24402,7 +24416,7 @@ main() = {
         let engine = ReplEngine::new(ReplConfig::default());
         let result = engine.check_module_compiles("", r#"main() = if (1, 2) then "yes" else "no""#);
         assert!(result.is_err(), "Expected error for tuple in if condition");
-        assert!(result.unwrap_err().contains("Bool"));
+        assert!(result.unwrap_err().join("; ").contains("Bool"));
     }
 
     #[test]
@@ -24410,7 +24424,7 @@ main() = {
         let engine = ReplEngine::new(ReplConfig::default());
         let result = engine.check_module_compiles("", "main() = (1, 2) && (3, 4)");
         assert!(result.is_err(), "Expected error for tuple in && operator");
-        assert!(result.unwrap_err().contains("Bool"));
+        assert!(result.unwrap_err().join("; ").contains("Bool"));
     }
 
     #[test]
@@ -24418,7 +24432,7 @@ main() = {
         let engine = ReplEngine::new(ReplConfig::default());
         let result = engine.check_module_compiles("", "main() = [(1,2),(3,4)].filter(p => p)");
         assert!(result.is_err(), "Expected error for filter with tuple predicate");
-        assert!(result.unwrap_err().contains("Bool"));
+        assert!(result.unwrap_err().join("; ").contains("Bool"));
     }
 
     #[test]
@@ -24426,7 +24440,7 @@ main() = {
         let engine = ReplEngine::new(ReplConfig::default());
         let result = engine.check_module_compiles("", "main() = [true, false].sort()");
         assert!(result.is_err(), "Expected error for sorting bools");
-        assert!(result.unwrap_err().contains("Ord"));
+        assert!(result.unwrap_err().join("; ").contains("Ord"));
     }
 
     #[test]
@@ -24435,7 +24449,7 @@ main() = {
         let code = "type Shape = Circle(Int) | Square(Int)\nmain() = Circle(5) + Square(3)";
         let result = engine.check_module_compiles("", code);
         assert!(result.is_err(), "Expected error for variant arithmetic");
-        assert!(result.unwrap_err().contains("Num"), "Error should mention Num trait");
+        assert!(result.unwrap_err().join("; ").contains("Num"), "Error should mention Num trait");
     }
 
     #[test]
@@ -24444,7 +24458,7 @@ main() = {
         let code = "type Point = { x: Int, y: Int }\nmain() = Point(1, 2) + Point(3, 4)";
         let result = engine.check_module_compiles("", code);
         assert!(result.is_err(), "Expected error for record arithmetic without Num impl");
-        assert!(result.unwrap_err().contains("Num"), "Error should mention Num trait");
+        assert!(result.unwrap_err().join("; ").contains("Num"), "Error should mention Num trait");
     }
 
     #[test]
@@ -24453,7 +24467,7 @@ main() = {
         let code = "type Color = Red | Green | Blue\nmain() = [Red, Green, Blue].sort()";
         let result = engine.check_module_compiles("", code);
         assert!(result.is_err(), "Expected error for sorting variants without Ord");
-        assert!(result.unwrap_err().contains("Ord"), "Error should mention Ord trait");
+        assert!(result.unwrap_err().join("; ").contains("Ord"), "Error should mention Ord trait");
     }
 
     #[test]
@@ -24462,7 +24476,7 @@ main() = {
         let code = "main() = [true, false, true].maximum()";
         let result = engine.check_module_compiles("", code);
         assert!(result.is_err(), "Expected error for maximum on Bool list");
-        assert!(result.unwrap_err().contains("Ord"), "Error should mention Ord trait");
+        assert!(result.unwrap_err().join("; ").contains("Ord"), "Error should mention Ord trait");
     }
 
     #[test]
@@ -24471,7 +24485,7 @@ main() = {
         let code = "type Color = Red | Green | Blue\nmain() = [Red, Green, Blue].minimum()";
         let result = engine.check_module_compiles("", code);
         assert!(result.is_err(), "Expected error for minimum on variant list");
-        assert!(result.unwrap_err().contains("Ord"), "Error should mention Ord trait");
+        assert!(result.unwrap_err().join("; ").contains("Ord"), "Error should mention Ord trait");
     }
 
     #[test]
@@ -24480,7 +24494,7 @@ main() = {
         let code = "main() = [true, false, true].isSorted()";
         let result = engine.check_module_compiles("", code);
         assert!(result.is_err(), "Expected error for isSorted on Bool list");
-        assert!(result.unwrap_err().contains("Ord"), "Error should mention Ord trait");
+        assert!(result.unwrap_err().join("; ").contains("Ord"), "Error should mention Ord trait");
     }
 
     #[test]
@@ -24489,7 +24503,7 @@ main() = {
         let code = "main() = Ok(5) + 1";
         let result = engine.check_module_compiles("", code);
         assert!(result.is_err(), "Expected error for Result arithmetic");
-        assert!(result.unwrap_err().contains("Num"), "Error should mention Num trait");
+        assert!(result.unwrap_err().join("; ").contains("Num"), "Error should mention Num trait");
     }
 
     #[test]
@@ -24498,7 +24512,7 @@ main() = {
         let code = "main() = [1, 2, 3].unzip()";
         let result = engine.check_module_compiles("", code);
         assert!(result.is_err(), "Expected error for unzip on non-tuple list");
-        assert!(result.unwrap_err().contains("List of tuples"), "Error should mention List of tuples");
+        assert!(result.unwrap_err().join("; ").contains("List of tuples"), "Error should mention List of tuples");
     }
 
     #[test]
@@ -24507,7 +24521,7 @@ main() = {
         let code = "main() = sort([true, false, true])";
         let result = engine.check_module_compiles("", code);
         assert!(result.is_err(), "Expected error for sort(Bool list)");
-        assert!(result.unwrap_err().contains("Ord"), "Error should mention Ord trait");
+        assert!(result.unwrap_err().join("; ").contains("Ord"), "Error should mention Ord trait");
     }
 
     #[test]
@@ -24516,7 +24530,7 @@ main() = {
         let code = "type Color = Red | Green | Blue\nmain() = maximum([Red, Green, Blue])";
         let result = engine.check_module_compiles("", code);
         assert!(result.is_err(), "Expected error for maximum(variant list)");
-        assert!(result.unwrap_err().contains("Ord"), "Error should mention Ord trait");
+        assert!(result.unwrap_err().join("; ").contains("Ord"), "Error should mention Ord trait");
     }
 
     #[test]
@@ -24525,7 +24539,7 @@ main() = {
         let code = "main() = sum([\"a\", \"b\", \"c\"])";
         let result = engine.check_module_compiles("", code);
         assert!(result.is_err(), "Expected error for sum(String list)");
-        assert!(result.unwrap_err().contains("Num"), "Error should mention Num trait");
+        assert!(result.unwrap_err().join("; ").contains("Num"), "Error should mention Num trait");
     }
 
     #[test]
