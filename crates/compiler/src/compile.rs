@@ -14626,12 +14626,12 @@ impl Compiler {
                             nostos_types::Type::String => Some("String"),
                             nostos_types::Type::Map(_, _) => Some("Map"),
                             nostos_types::Type::Set(_) => Some("Set"),
-                            // List type is known — explicitly route to stdlib.list
-                            nostos_types::Type::List(_) if method.node == "contains" => Some("List"),
+                            nostos_types::Type::List(_) => Some("List"),
                             _ => None,
                         };
-                        if let Some("List") = hm_type_name.as_deref() {
-                            // List.contains → stdlib.list.contains via UFCS (don't qualify)
+                        if hm_type_name == Some("List") {
+                            // List methods are stdlib functions resolved via UFCS,
+                            // not native builtins — don't qualify, just pass through.
                             Expr::Var(method.clone())
                         } else if let Some(type_name) = hm_type_name {
                             let qualified = format!("{}.{}", type_name, method.node);
@@ -14646,44 +14646,9 @@ impl Compiler {
                             // For top-level functions (current_function_name is Some),
                             // monomorphization will create a typed version, so let the
                             // default UFCS resolution handle it.
-                            // Special case: for lambdas/closures (current_function_name is None),
-                            // 'contains' with a String argument must dispatch to String.contains,
-                            // not list.contains. Top-level functions get monomorphized, so they
-                            // don't need this disambiguation.
-                            if method.node == "contains" && self.current_function_name.is_none() {
-                                let first_arg_is_string = args.first().and_then(|arg| {
-                                    let expr = Self::call_arg_expr(arg);
-                                    self.inferred_expr_types.get(&expr.span())
-                                }).map(|ty| matches!(ty, nostos_types::Type::String)).unwrap_or(false);
-                                if first_arg_is_string {
-                                    let qualified = "String.contains".to_string();
-                                    return Ok({
-                                        let func_expr = Expr::Var(Ident { node: qualified, span: method.span });
-                                        let obj_reg = self.compile_expr_tail(obj, false)?;
-                                        let mut arg_regs = vec![obj_reg];
-                                        for arg in args {
-                                            let reg = self.compile_expr_tail(Self::call_arg_expr(arg), false)?;
-                                            arg_regs.push(reg);
-                                        }
-                                        let dst = self.alloc_reg();
-                                        match self.compile_call(&func_expr, &[], &all_args, is_tail) {
-                                            Ok(r) => r,
-                                            Err(_) => {
-                                                // Fallback: emit direct call
-                                                self.emit_call_native(dst, "String.contains", {
-                                                    let mut v = vec![obj_reg];
-                                                    v.extend(arg_regs.into_iter().skip(1));
-                                                    v.into()
-                                                }, line);
-                                                dst
-                                            }
-                                        }
-                                    });
-                                }
-                            }
                             let dispatch_name = if self.current_function_name.is_none() {
                                 match method.node.as_str() {
-                                    "take" | "drop" | "reverse" => {
+                                    "take" | "drop" | "reverse" | "contains" => {
                                         Some(format!("__dispatch_{}", method.node))
                                     }
                                     _ => None,

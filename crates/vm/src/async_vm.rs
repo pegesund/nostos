@@ -12914,7 +12914,20 @@ impl AsyncVM {
                     }
                     GcValue::List(list) => {
                         let needle = &args[1];
-                        let found = list.iter().any(|item| item == needle);
+                        // For string elements, compare by content (not pointer)
+                        // since GcValue::PartialEq for String only compares GcPtr
+                        let needle_str = if let GcValue::String(ptr) = needle {
+                            heap.get_string(*ptr).map(|s| s.data.clone())
+                        } else {
+                            None
+                        };
+                        let found = list.iter().any(|item| {
+                            if let (Some(ref ns), GcValue::String(item_ptr)) = (&needle_str, item) {
+                                heap.get_string(*item_ptr).map(|s| s.data == *ns).unwrap_or(false)
+                            } else {
+                                item == needle
+                            }
+                        });
                         Ok(GcValue::Bool(found))
                     }
                     GcValue::Int64List(list) => {

@@ -1,0 +1,13 @@
+# expect: (true, true, true, true)
+# Local function with .contains() must dispatch correctly
+# to both String and List implementations.
+main() = {
+  hasIt(s, v) = s.contains(v)
+
+  strYes = hasIt("hello", "ell")
+  strNo = hasIt("hello", "xyz")
+  listYes = hasIt([1,2,3], 2)
+  listNo = hasIt([1,2,3], 9)
+
+  (strYes, !strNo, listYes, !listNo)
+}

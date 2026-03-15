@@ -1,4 +1,4 @@
-# expect: [Alice!]
+# expect: ["Alice!"]
 # UFCS .contains() on List[String] from imported record should resolve
 # to stdlib.list.contains, not String.contains.
 
@@ -15,6 +15,5 @@ process(boxes, names) =
     })
 
 main() = {
-    result = process([Box(["Alice", "Bob"])], ["Alice"])
-    show(result)
+    process([Box(["Alice", "Bob"])], ["Alice"])
 }
