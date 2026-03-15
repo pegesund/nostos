@@ -2323,7 +2323,8 @@ impl Heap {
         match value {
             GcValue::String(ptr) => {
                 if let Some(s) = self.get_string(*ptr) {
-                    format!("\"{}\"", s.data)
+                    let escaped = s.data.replace('\\', "\\\\").replace('"', "\\\"");
+                    format!("\"{}\"", escaped)
                 } else {
                     "<invalid string>".to_string()
                 }
