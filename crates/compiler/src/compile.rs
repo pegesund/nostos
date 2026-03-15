@@ -31144,6 +31144,9 @@ impl Compiler {
                     }
 
                     // Check that the item actually exists in the module (skip stdlib - implicitly public)
+                    // Also resolve trait method names: `use mod.{printFoo}` where `printFoo` is a
+                    // trait method stored under `mod.Type.mod.Trait.printFoo/Type` in function_visibility.
+                    let mut resolved_qualified_name = qualified_name.clone();
                     if !is_stdlib_module {
                         let fn_prefix = format!("{}/", qualified_name);
                         let exists_as_function = self.function_visibility.keys().any(|k| {
@@ -31157,18 +31160,67 @@ impl Compiler {
                         // Also check if this is a known sub-module (e.g., `use stdlib.server` parses as
                         // a named import of "server" from "stdlib", but "server" is a sub-module)
                         let exists_as_module = self.known_modules.contains(&qualified_name);
+
+                        // Check if this is a trait method. Trait methods are defined in
+                        // `trait_defs` (available early, in pass 1.5b) and compiled into
+                        // function_visibility later (pass 5). We need to check both:
+                        // 1. trait_defs: for early passes before trait methods are compiled
+                        // 2. function_visibility: for late passes after compilation
+                        //
+                        // E.g., `use mymod.{printFoo}` where `printFoo` is a method in
+                        // trait `mymod.Printable`. The actual function key after compilation
+                        // is `mymod.Foo.mymod.Printable.printFoo/Foo`.
+                        let method_suffix = format!(".{}/", item.name.node);
+                        let module_prefix = format!("{}.", module_path);
+
+                        // Check trait_defs for the method name in any public trait in this module
+                        let is_trait_method_in_defs = !exists_as_function && !exists_as_type
+                            && !exists_as_trait && !exists_as_constant && !exists_as_binding
+                            && !exists_as_constructor && !exists_as_module
+                            && self.trait_defs.iter().any(|(trait_key, trait_info)| {
+                                trait_key.starts_with(&module_prefix)
+                                    && trait_info.visibility == Visibility::Public
+                                    && trait_info.methods.iter().any(|m| m.name == item.name.node)
+                            });
+
+                        // Also check function_visibility for already-compiled trait methods
+                        let trait_method_key: Option<String> = if !exists_as_function && !exists_as_type
+                            && !exists_as_trait && !exists_as_constant && !exists_as_binding
+                            && !exists_as_constructor && !exists_as_module
+                        {
+                            self.function_visibility.iter()
+                                .filter(|(k, vis)| {
+                                    k.starts_with(&module_prefix)
+                                        && k.contains(&method_suffix)
+                                        && **vis == Visibility::Public
+                                })
+                                .map(|(k, _)| {
+                                    // Return the base name (without /signature suffix)
+                                    k.split('/').next().unwrap_or(k).to_string()
+                                })
+                                .next()
+                        } else {
+                            None
+                        };
+
                         if !exists_as_function && !exists_as_type && !exists_as_trait
                             && !exists_as_constant && !exists_as_binding && !exists_as_constructor
-                            && !exists_as_module
+                            && !exists_as_module && trait_method_key.is_none()
+                            && !is_trait_method_in_defs
                         {
                             return Err(CompileError::TypeError {
                                 message: format!("`{}` is not defined in module `{}`", item.name.node, module_path),
                                 span: use_stmt.span,
                             });
                         }
+
+                        // If we found this as a compiled trait method, use the actual qualified key
+                        if let Some(trait_key) = trait_method_key {
+                            resolved_qualified_name = trait_key;
+                        }
                     }
 
-                    self.add_import_checked(local_name, qualified_name, &module_path, use_stmt.span)?;
+                    self.add_import_checked(local_name, resolved_qualified_name, &module_path, use_stmt.span)?;
                 }
             }
         }
