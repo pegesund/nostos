@@ -1,0 +1,9 @@
+# expect: [2, 4, 6]
+# Polymorphic function called at multiple types
+doubleAll(xs) = xs.map(x => x * 2)
+
+main() = {
+  a = doubleAll([1, 2, 3])
+  b = doubleAll([1.0, 2.0])
+  a
+}

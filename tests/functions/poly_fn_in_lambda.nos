@@ -1,0 +1,10 @@
+# expect: [[2, 4, 6], [20, 40, 60]]
+# Polymorphic function called at multiple sites
+doubleAll(xs) = xs.map(x => x * 2)
+tenX(xs) = xs.map(x => x * 10)
+
+main() = {
+  a = doubleAll([1, 2, 3])
+  b = tenX([2, 4, 6])
+  [a, b]
+}

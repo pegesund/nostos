@@ -2290,6 +2290,33 @@ impl Compiler {
                     _ => type_err.should_suppress(),
                 };
                 if suppress { continue; }
+                // For monomorphized variants ($), suppress numeric coercion errors.
+                // When a polymorphic function like `doubleAll(xs) = xs.map(x => x * 2)`
+                // is monomorphized with Float, HM sees `Float * Int` and errors.
+                // The VM handles mixed Float/Int arithmetic at runtime, so suppress.
+                if fn_name.contains('$') {
+                    let is_numeric_coercion = match &type_err {
+                        nostos_types::TypeError::UnificationFailed(t1, t2) |
+                        nostos_types::TypeError::StructuralMismatch(t1, t2) => {
+                            fn is_numeric(t: &nostos_types::Type) -> bool {
+                                matches!(t, nostos_types::Type::Int | nostos_types::Type::Int64 |
+                                    nostos_types::Type::Float | nostos_types::Type::Float64 |
+                                    nostos_types::Type::Float32 | nostos_types::Type::BigInt |
+                                    nostos_types::Type::Decimal)
+                            }
+                            is_numeric(t1) && is_numeric(t2)
+                        }
+                        nostos_types::TypeError::Mismatch { expected, found } => {
+                            fn is_numeric_str(s: &str) -> bool {
+                                matches!(s, "Int" | "Int64" | "Float" | "Float64" |
+                                    "Float32" | "BigInt" | "Decimal")
+                            }
+                            is_numeric_str(expected) && is_numeric_str(found)
+                        }
+                        _ => false,
+                    };
+                    if is_numeric_coercion { continue; }
+                }
                 let base_name = fn_name.split('/').next().unwrap_or(&fn_name).to_string();
                 if !reported_fns.insert(base_name.clone()) { continue; }
                 use super::clean_type_vars;

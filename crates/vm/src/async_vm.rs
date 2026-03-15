@@ -1425,6 +1425,9 @@ impl AsyncProcess {
                         GcValue::BigInt(result_ptr)
                     }
                     (GcValue::Decimal(x), GcValue::Decimal(y)) => GcValue::Decimal(*x + *y),
+                    // Mixed Float64/Int64: coerce Int to Float (for polymorphic functions)
+                    (GcValue::Float64(x), GcValue::Int64(y)) => GcValue::Float64(x + *y as f64),
+                    (GcValue::Int64(x), GcValue::Float64(y)) => GcValue::Float64(*x as f64 + y),
                     _ => return Err(RuntimeError::TypeError {
                         expected: "matching numeric types".to_string(),
                         found: format!("{:?}", va),
@@ -1453,6 +1456,8 @@ impl AsyncProcess {
                         GcValue::BigInt(result_ptr)
                     }
                     (GcValue::Decimal(x), GcValue::Decimal(y)) => GcValue::Decimal(*x - *y),
+                    (GcValue::Float64(x), GcValue::Int64(y)) => GcValue::Float64(x - *y as f64),
+                    (GcValue::Int64(x), GcValue::Float64(y)) => GcValue::Float64(*x as f64 - y),
                     _ => return Err(RuntimeError::TypeError {
                         expected: "matching numeric types".to_string(),
                         found: format!("{:?}", va),
@@ -1481,6 +1486,8 @@ impl AsyncProcess {
                         GcValue::BigInt(result_ptr)
                     }
                     (GcValue::Decimal(x), GcValue::Decimal(y)) => GcValue::Decimal(*x * *y),
+                    (GcValue::Float64(x), GcValue::Int64(y)) => GcValue::Float64(x * *y as f64),
+                    (GcValue::Int64(x), GcValue::Float64(y)) => GcValue::Float64(*x as f64 * y),
                     _ => return Err(RuntimeError::TypeError {
                         expected: "matching numeric types".to_string(),
                         found: format!("{:?}", va),
@@ -1536,6 +1543,14 @@ impl AsyncProcess {
                     (GcValue::Decimal(x), GcValue::Decimal(y)) => {
                         if *y == rust_decimal::Decimal::ZERO { self.throw_exception("DivisionByZero", "Division by zero".to_string())?; continue 'instruction_loop; }
                         GcValue::Decimal(*x / *y)
+                    }
+                    (GcValue::Float64(x), GcValue::Int64(y)) => {
+                        if *y == 0 { self.throw_exception("DivisionByZero", "Division by zero".to_string())?; continue 'instruction_loop; }
+                        GcValue::Float64(x / *y as f64)
+                    }
+                    (GcValue::Int64(x), GcValue::Float64(y)) => {
+                        if *y == 0.0 { self.throw_exception("DivisionByZero", "Division by zero".to_string())?; continue 'instruction_loop; }
+                        GcValue::Float64(*x as f64 / y)
                     }
                     _ => return Err(RuntimeError::TypeError {
                         expected: "matching numeric types".to_string(),
