@@ -12888,6 +12888,49 @@ impl AsyncVM {
             }),
         }));
 
+        // __dispatch_contains - check if string contains substring or list contains element
+        self.register_native("__dispatch_contains", Arc::new(GcNativeFn {
+            name: "__dispatch_contains".to_string(),
+            arity: 2,
+            func: Box::new(|args, heap| {
+                match &args[0] {
+                    GcValue::String(ptr) => {
+                        let s = heap.get_string(*ptr).map(|s| s.data.clone());
+                        match s {
+                            Some(s) => {
+                                match &args[1] {
+                                    GcValue::String(needle_ptr) => {
+                                        let needle = heap.get_string(*needle_ptr).map(|s| s.data.clone());
+                                        match needle {
+                                            Some(needle) => Ok(GcValue::Bool(s.contains(needle.as_str()))),
+                                            _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                                        }
+                                    }
+                                    _ => Err(RuntimeError::TypeError { expected: "String (as needle for String.contains)".to_string(), found: "other".to_string() })
+                                }
+                            },
+                            _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    GcValue::List(list) => {
+                        let needle = &args[1];
+                        let found = list.iter().any(|item| item == needle);
+                        Ok(GcValue::Bool(found))
+                    }
+                    GcValue::Int64List(list) => {
+                        match &args[1] {
+                            GcValue::Int64(n) => {
+                                let found = list.data.iter().skip(list.offset).take(list.len()).any(|x| x == n);
+                                Ok(GcValue::Bool(found))
+                            }
+                            _ => Ok(GcValue::Bool(false))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String or List".to_string(), found: "other".to_string() })
+                }
+            }),
+        }));
+
         // === Time functions ===
 
         // Time.now - returns milliseconds since Unix epoch
