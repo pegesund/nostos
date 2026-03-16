@@ -1,0 +1,40 @@
+# expect: 0
+# jsonStringify should write whole-number floats as integers (1 not 1.0)
+
+use stdlib.json.{Json, Null, Bool, Number, String, Array, Object, jsonStringify}
+
+main() = {
+    var errors = 0
+
+    # Whole-number floats should stringify without decimal point
+    r1 = jsonStringify(Number(1.0))
+    errors = if r1 != "1" then { println("FAIL: Number(1.0) -> " ++ r1 ++ ", expected 1"), errors + 1 } else errors
+
+    r2 = jsonStringify(Number(0.0))
+    errors = if r2 != "0" then { println("FAIL: Number(0.0) -> " ++ r2 ++ ", expected 0"), errors + 1 } else errors
+
+    r3 = jsonStringify(Number(-5.0))
+    errors = if r3 != "-5" then { println("FAIL: Number(-5.0) -> " ++ r3 ++ ", expected -5"), errors + 1 } else errors
+
+    r4 = jsonStringify(Number(42.0))
+    errors = if r4 != "42" then { println("FAIL: Number(42.0) -> " ++ r4 ++ ", expected 42"), errors + 1 } else errors
+
+    # Non-whole floats should keep their decimal
+    r5 = jsonStringify(Number(3.14))
+    errors = if r5 != "3.14" then { println("FAIL: Number(3.14) -> " ++ r5 ++ ", expected 3.14"), errors + 1 } else errors
+
+    r6 = jsonStringify(Number(-0.5))
+    errors = if r6 != "-0.5" then { println("FAIL: Number(-0.5) -> " ++ r6 ++ ", expected -0.5"), errors + 1 } else errors
+
+    # In context: object with integer field
+    json = Object([("count", Number(1.0)), ("name", String("test"))])
+    r7 = jsonStringify(json)
+    errors = if r7 != "{\"count\":1,\"name\":\"test\"}" then { println("FAIL: object -> " ++ r7), errors + 1 } else errors
+
+    # Array of integer numbers
+    arr = Array([Number(3.0), Number(5.0), Number(2.0)])
+    r8 = jsonStringify(arr)
+    errors = if r8 != "[3,5,2]" then { println("FAIL: array -> " ++ r8), errors + 1 } else errors
+
+    errors
+}

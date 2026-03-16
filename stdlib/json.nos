@@ -210,7 +210,7 @@ pub stringify(json) -> String = match json {
     Null -> "null"
     Bool(true) -> "true"
     Bool(false) -> "false"
-    Number(n) -> show(n)
+    Number(n) -> if n == n.toInt().toFloat() then show(n.toInt()) else show(n)
     String(s) -> "\"" ++ s ++ "\""
     Array(items) -> "[" ++ stringify_array(items, "") ++ "]"
     Object(pairs) -> "{" ++ stringify_object(pairs, "") ++ "}"
