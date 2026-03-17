@@ -21594,6 +21594,77 @@ impl Compiler {
         let saved_closure_mutated = std::mem::take(&mut self.closure_mutated_vars);
         self.closure_mutated_vars.extend(block_closure_mutated);
 
+        // Pre-register mutually recursive local lambdas as mutable cells.
+        // When two local lambdas call each other (e.g., isE calls isO and isO calls isE),
+        // the first one compiled would fail with "unknown variable" for the second.
+        // We detect this by checking if any lambda in the block references another lambda
+        // defined in the same block, and pre-register ALL involved lambdas as cells.
+        {
+            // Collect all lambda binding names in this block
+            let local_lambda_names: Vec<String> = stmts.iter().filter_map(|stmt| {
+                if let Stmt::Let(binding) = stmt {
+                    if !binding.mutable {
+                        if let Pattern::Var(ident) = &binding.pattern {
+                            if matches!(binding.value, Expr::Lambda(..)) {
+                                return Some(ident.node.clone());
+                            }
+                        }
+                    }
+                }
+                None
+            }).collect();
+
+            if local_lambda_names.len() > 1 {
+                // Find lambdas that reference other local lambdas (mutual recursion candidates)
+                let mut needs_pre_register: std::collections::HashSet<String> = std::collections::HashSet::new();
+                for stmt in stmts.iter() {
+                    if let Stmt::Let(binding) = stmt {
+                        if !binding.mutable {
+                            if let Pattern::Var(ident) = &binding.pattern {
+                                if matches!(binding.value, Expr::Lambda(..)) {
+                                    // Check if this lambda references any OTHER local lambda
+                                    for other_name in &local_lambda_names {
+                                        if other_name != &ident.node
+                                            && self.expr_references_name(&binding.value, other_name)
+                                        {
+                                            // This lambda references another local lambda - both need cells
+                                            needs_pre_register.insert(ident.node.clone());
+                                            needs_pre_register.insert(other_name.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Pre-register all mutually recursive lambdas as mutable cells
+                for stmt in stmts.iter() {
+                    if let Stmt::Let(binding) = stmt {
+                        if !binding.mutable {
+                            if let Pattern::Var(ident) = &binding.pattern {
+                                if needs_pre_register.contains(&ident.node)
+                                    && !self.locals.contains_key(&ident.node)
+                                {
+                                    let unit_reg = self.alloc_reg();
+                                    self.chunk.emit(Instruction::LoadUnit(unit_reg), 0);
+                                    let cell_reg = self.alloc_reg();
+                                    self.chunk.emit(Instruction::MakeCell(cell_reg, unit_reg), 0);
+                                    self.locals.insert(ident.node.clone(), LocalInfo {
+                                        reg: cell_reg,
+                                        is_float: false,
+                                        mutable: true,
+                                        is_cell: true,
+                                    });
+                                    self.closure_mutated_vars.insert(ident.node.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let mut last_reg = 0;
         if stmts.is_empty() {
             let dst = self.alloc_reg();
