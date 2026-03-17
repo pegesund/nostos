@@ -1,7 +1,7 @@
 # expect: true
 # Tests JSON parsing module
 
-use stdlib.json.{jsonParse, Null, Bool, Number, String, Array, Object}
+use stdlib.json.{jsonParse, Null, Bool, Number, Integer, String, Array, Object}
 
 main() = {
     # Simple values
@@ -9,14 +9,14 @@ main() = {
     assert_eq(j1, Null)
 
     j2 = jsonParse("123")
-    assert_eq(j2, Number(123.0))
+    assert_eq(j2, Integer(123))
 
     # Negative numbers
     j2a = jsonParse("-42")
-    assert_eq(j2a, Number(-42.0))
+    assert_eq(j2a, Integer(-42))
 
     j2b = jsonParse("-1")
-    assert_eq(j2b, Number(-1.0))
+    assert_eq(j2b, Integer(-1))
 
     # Float numbers
     j2c = jsonParse("3.14")
@@ -39,11 +39,11 @@ main() = {
 
     # Array
     j6 = jsonParse("[1, 2, 3]")
-    assert_eq(j6, Array([Number(1.0), Number(2.0), Number(3.0)]))
+    assert_eq(j6, Array([Integer(1), Integer(2), Integer(3)]))
 
     # Array with negative numbers
     j6a = jsonParse("[-1, 0, -99]")
-    assert_eq(j6a, Array([Number(-1.0), Number(0.0), Number(-99.0)]))
+    assert_eq(j6a, Array([Integer(-1), Integer(0), Integer(-99)]))
 
     # Array with floats
     j6b = jsonParse("[1.5, 2.25, 3.0]")
@@ -51,7 +51,7 @@ main() = {
 
     # Object
     j7 = jsonParse("{\"key\": \"value\", \"num\": 42}")
-    assert_eq(j7, Object([("key", String("value")), ("num", Number(42.0))]))
+    assert_eq(j7, Object([("key", String("value")), ("num", Integer(42))]))
 
     # Object with float
     j7a = jsonParse("{\"pi\": 3.14159}")
@@ -60,7 +60,7 @@ main() = {
     # Nested
     j8 = jsonParse("{\"list\": [1, 2], \"flag\": true}")
     expected = Object([
-        ("list", Array([Number(1.0), Number(2.0)])),
+        ("list", Array([Integer(1), Integer(2)])),
         ("flag", Bool(true))
     ])
     assert_eq(j8, expected)

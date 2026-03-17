@@ -5,7 +5,7 @@ type Person = { name: String, age: Int }
 main() = {
     fields = %{
         "name": String("Alice"),
-        "age": Number(30.0)
+        "age": Integer(30)
     }
 
     person = makeRecord[Person](fields)

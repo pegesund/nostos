@@ -4,7 +4,7 @@ type Status = Success(Int) | Failure(String)
 
 main() = {
     # Unit variant with positional field
-    ok_fields = %{"_0": Number(42.0)}
+    ok_fields = %{"_0": Integer(42)}
     result_ok = makeVariant[Status]("Success", ok_fields)
 
     err_fields = %{"_0": String("error message")}

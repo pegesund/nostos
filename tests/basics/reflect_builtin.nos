@@ -23,7 +23,7 @@ main() = {
     listJson = reflect([1, 2, 3])
     listType = tagOf(listJson)
 
-    if intType == "Number" &&
+    if intType == "Integer" &&
        strType == "String" &&
        boolType == "Bool" &&
        personType == "Object" &&
