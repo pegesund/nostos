@@ -21581,6 +21581,13 @@ impl Compiler {
         let saved_locals = self.locals.clone();
         let saved_local_types = self.local_types.clone();
 
+        // Pre-process: merge consecutive local function definitions with the same name
+        // into a single pattern-dispatching lambda.
+        // e.g., `go([], acc) = acc; go([x|rest], acc) = go(rest, acc+x)` becomes
+        // a single `go = (__p0, __p1) => match (__p0, __p1) { ([], acc) -> acc, ... }`
+        let merged_stmts = Self::merge_local_fn_overloads(stmts);
+        let stmts = merged_stmts.as_slice();
+
         // Pre-scan: find `var` bindings that are captured and mutated by lambdas
         // These need to be boxed as mutable cells for shared closure capture
         let block_closure_mutated = find_closure_mutated_vars(stmts);
@@ -21605,6 +21612,159 @@ impl Compiler {
         self.closure_mutated_vars = saved_closure_mutated;
 
         Ok(last_reg)
+    }
+
+    /// Merge consecutive immutable local function definitions with the same name into a single
+    /// pattern-dispatching lambda. This handles the case where a user writes:
+    ///
+    ///   go([], acc) = acc
+    ///   go([x|rest], acc) = go(rest, acc + x)
+    ///
+    /// inside a block. The parser desugars each clause to a separate `Stmt::Let`, but the
+    /// second one would fail with "cannot reassign immutable variable". We merge them first
+    /// into a single lambda with a match dispatch.
+    fn merge_local_fn_overloads(stmts: &[Stmt]) -> Vec<Stmt> {
+        // Check if any merging is needed at all
+        let needs_merge = {
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            stmts.iter().any(|stmt| {
+                if let Stmt::Let(binding) = stmt {
+                    if !binding.mutable {
+                        if let Pattern::Var(ident) = &binding.pattern {
+                            if matches!(binding.value, Expr::Lambda(..)) {
+                                if !seen.insert(ident.node.clone()) {
+                                    return true; // Duplicate name found
+                                }
+                            }
+                        }
+                    }
+                }
+                false
+            })
+        };
+
+        if !needs_merge {
+            return stmts.to_vec();
+        }
+
+        // Find groups of consecutive (or same-block) lambda bindings with the same name
+        // Strategy: collect all lambda bindings by name, then rebuild the statement list
+        // replacing first occurrence of each duplicated name with the merged version,
+        // and removing subsequent occurrences.
+
+        // First pass: collect all lambda clauses per name (in order)
+        let mut lambda_clauses: std::collections::HashMap<String, Vec<(Vec<Pattern>, Box<Expr>, Span)>> = std::collections::HashMap::new();
+        let mut clause_arities: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+        for stmt in stmts {
+            if let Stmt::Let(binding) = stmt {
+                if !binding.mutable {
+                    if let Pattern::Var(ident) = &binding.pattern {
+                        if let Expr::Lambda(params, body, span) = &binding.value {
+                            let name = &ident.node;
+                            let arity = params.len();
+                            // Only merge if arities are consistent
+                            let existing_arity = clause_arities.get(name).copied();
+                            if existing_arity.is_none() || existing_arity == Some(arity) {
+                                clause_arities.insert(name.clone(), arity);
+                                lambda_clauses.entry(name.clone())
+                                    .or_default()
+                                    .push((params.clone(), body.clone(), *span));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Only care about names that appear more than once
+        let multi_clause_names: std::collections::HashSet<String> = lambda_clauses.iter()
+            .filter(|(_, clauses)| clauses.len() > 1)
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        if multi_clause_names.is_empty() {
+            return stmts.to_vec();
+        }
+
+        // Build merged lambdas for each multi-clause name
+        let mut merged_lambdas: std::collections::HashMap<String, Expr> = std::collections::HashMap::new();
+        for name in &multi_clause_names {
+            let clauses = &lambda_clauses[name];
+            let arity = clause_arities[name];
+
+            // Create fresh parameter names __p0, __p1, ...
+            let fresh_params: Vec<Pattern> = (0..arity)
+                .map(|i| Pattern::Var(Spanned::new(format!("__p{}", i), Span::default())))
+                .collect();
+
+            // Create match arms from each clause
+            let arms: Vec<MatchArm> = clauses.iter().map(|(params, body, span)| {
+                let arm_pattern = if arity == 1 {
+                    // Single param: match directly on __p0
+                    params[0].clone()
+                } else {
+                    // Multiple params: match on tuple (__p0, __p1, ...)
+                    Pattern::Tuple(params.clone(), Span::default())
+                };
+                MatchArm {
+                    pattern: arm_pattern,
+                    guard: None,
+                    body: *body.clone(),
+                    span: *span,
+                }
+            }).collect();
+
+            // Create the scrutinee expression
+            let scrutinee = if arity == 1 {
+                // Match directly on __p0
+                Expr::Var(Spanned::new("__p0".to_string(), Span::default()))
+            } else {
+                // Match on tuple of all params
+                let param_exprs: Vec<Expr> = (0..arity)
+                    .map(|i| Expr::Var(Spanned::new(format!("__p{}", i), Span::default())))
+                    .collect();
+                Expr::Tuple(param_exprs, Span::default())
+            };
+
+            let match_span = clauses.last().map(|(_, _, s)| *s).unwrap_or(Span::default());
+            let body = Expr::Match(Box::new(scrutinee), arms, match_span);
+            let merged_lambda = Expr::Lambda(fresh_params, Box::new(body), match_span);
+            merged_lambdas.insert(name.clone(), merged_lambda);
+        }
+
+        // Second pass: rebuild statement list, replacing first occurrence of each
+        // multi-clause name with the merged version, dropping subsequent occurrences.
+        let mut first_occurrence: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut result = Vec::with_capacity(stmts.len());
+
+        for stmt in stmts {
+            if let Stmt::Let(binding) = stmt {
+                if !binding.mutable {
+                    if let Pattern::Var(ident) = &binding.pattern {
+                        if multi_clause_names.contains(&ident.node) {
+                            if first_occurrence.insert(ident.node.clone()) {
+                                // First occurrence: replace with merged lambda
+                                let merged_value = merged_lambdas[&ident.node].clone();
+                                result.push(Stmt::Let(Binding {
+                                    visibility: binding.visibility,
+                                    mutable: false,
+                                    pattern: binding.pattern.clone(),
+                                    ty: binding.ty.clone(),
+                                    value: merged_value,
+                                    span: binding.span,
+                                }));
+                            }
+                            // Subsequent occurrences: skip (already merged)
+                            continue;
+                        }
+                    }
+                }
+            }
+            result.push(stmt.clone());
+        }
+
+        result
     }
 
     /// Compile a statement.

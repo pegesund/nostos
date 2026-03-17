@@ -871,6 +871,10 @@ impl Compiler {
                             for binding in &mut sub_bindings {
                                 binding.2 = is_float;
                             }
+                            // Add bindings to self.locals so subsequent sub-patterns can pin against them
+                            for (name, reg, is_float) in &sub_bindings {
+                                self.locals.insert(name.clone(), LocalInfo { reg: *reg, is_float: *is_float, mutable: false, is_cell: false });
+                            }
                             bindings.append(&mut sub_bindings);
                         }
 
@@ -988,6 +992,10 @@ impl Compiler {
                             let (head_success, mut head_bindings) = self.compile_pattern_test(head_pat, head_reg)?;
                             // AND the head pattern's success with our overall success
                             self.chunk.emit(Instruction::And(success_reg, success_reg, head_success), 0);
+                            // Add bindings to self.locals so subsequent patterns can pin against them
+                            for (name, reg, is_float) in &head_bindings {
+                                self.locals.insert(name.clone(), LocalInfo { reg: *reg, is_float: *is_float, mutable: false, is_cell: false });
+                            }
                             bindings.append(&mut head_bindings);
 
                             // If this is the last head pattern and there's a tail pattern
@@ -996,6 +1004,10 @@ impl Compiler {
                                     let (tail_success, mut tail_bindings) = self.compile_pattern_test(tail_pat, tail_reg)?;
                                     // AND the tail pattern's success with our overall success
                                     self.chunk.emit(Instruction::And(success_reg, success_reg, tail_success), 0);
+                                    // Add tail bindings to self.locals too
+                                    for (name, reg, is_float) in &tail_bindings {
+                                        self.locals.insert(name.clone(), LocalInfo { reg: *reg, is_float: *is_float, mutable: false, is_cell: false });
+                                    }
                                     bindings.append(&mut tail_bindings);
                                 }
                             } else {
@@ -1057,11 +1069,19 @@ impl Compiler {
                     }
                 }
 
-                // Now compile sub-patterns
+                // Now compile sub-patterns.
+                // After each sub-pattern, add its bindings to self.locals so that subsequent
+                // sub-patterns in the same tuple can see them for variable pinning.
+                // e.g., `(x, x)` should test equality: second `x` sees first `x` as bound.
+                // (self.locals is restored by compile_match after the whole arm is done.)
                 for (i, pat) in patterns.iter().enumerate() {
                     let (sub_success, mut sub_bindings) = self.compile_pattern_test(pat, elem_regs[i])?;
                     // AND the sub-pattern's success with our overall success
                     self.chunk.emit(Instruction::And(success_reg, success_reg, sub_success), 0);
+                    // Add bindings to self.locals so subsequent sub-patterns can use them as pins
+                    for (name, reg, is_float) in &sub_bindings {
+                        self.locals.insert(name.clone(), LocalInfo { reg: *reg, is_float: *is_float, mutable: false, is_cell: false });
+                    }
                     bindings.append(&mut sub_bindings);
                 }
             }
