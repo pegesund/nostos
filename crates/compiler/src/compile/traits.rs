@@ -37,6 +37,8 @@ impl Compiler {
                 ("Logger", "log") |
                 ("Logger", "flush")
             )
+            // toString is a common trait method name (alias for show) - allow it in any trait
+            || method_name == "toString"
         };
 
         for method in &def.methods {

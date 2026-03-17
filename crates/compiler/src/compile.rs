@@ -59,7 +59,9 @@ static BUILTIN_METHODS: LazyLock<HashMap<(&str, &str), &str>> = LazyLock::new(||
         ("String", "length", "String.length"),
         ("String", "chars", "String.chars"),
         ("String", "toInt", "String.toInt"),
+        ("String", "parseInt", "String.toInt"),
         ("String", "toFloat", "String.toFloat"),
+        ("String", "parseFloat", "String.toFloat"),
         ("String", "trim", "String.trim"),
         ("String", "trimStart", "String.trimStart"),
         ("String", "trimEnd", "String.trimEnd"),
@@ -356,6 +358,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "flushStdout", signature: "() -> ()", doc: "Flush stdout buffer" },
     BuiltinInfo { name: "flushStderr", signature: "() -> ()", doc: "Flush stderr buffer" },
     BuiltinInfo { name: "show", signature: "a -> String", doc: "Convert any value to its string representation" },
+    BuiltinInfo { name: "toString", signature: "a -> String", doc: "Convert any value to its string representation (alias for show)" },
     BuiltinInfo { name: "copy", signature: "a -> a", doc: "Create a deep copy of a value" },
     BuiltinInfo { name: "hash", signature: "a -> Int", doc: "Compute hash code for a value" },
     BuiltinInfo { name: "inspect", signature: "a -> String -> ()", doc: "Send a value to the inspector panel with a label" },
@@ -623,7 +626,9 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "String.chars", signature: "String -> [Char]", doc: "Convert string to list of characters" },
     BuiltinInfo { name: "String.from_chars", signature: "[Char] -> String", doc: "Create string from list of characters" },
     BuiltinInfo { name: "String.toInt", signature: "String -> Option[Int]", doc: "Parse string as integer, returns Option[Int] (Some(n) or None)" },
+    BuiltinInfo { name: "String.parseInt", signature: "String -> Option[Int]", doc: "Parse string as integer (alias for toInt), returns Option[Int] (Some(n) or None)" },
     BuiltinInfo { name: "String.toFloat", signature: "String -> Option[Float]", doc: "Parse string as float, returns Option[Float] (Some(n) or None)" },
+    BuiltinInfo { name: "String.parseFloat", signature: "String -> Option[Float]", doc: "Parse string as float (alias for toFloat), returns Option[Float] (Some(n) or None)" },
     BuiltinInfo { name: "String.trim", signature: "String -> String", doc: "Remove leading and trailing whitespace" },
     BuiltinInfo { name: "String.trimStart", signature: "String -> String", doc: "Remove leading whitespace" },
     BuiltinInfo { name: "String.trimEnd", signature: "String -> String", doc: "Remove trailing whitespace" },
@@ -718,6 +723,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Map.values", signature: "Map k v -> [v]", doc: "Get list of all values" },
     BuiltinInfo { name: "Map.size", signature: "Map k v -> Int", doc: "Get number of entries in map" },
     BuiltinInfo { name: "Map.isEmpty", signature: "Map k v -> Bool", doc: "Check if map is empty" },
+    BuiltinInfo { name: "Map.empty", signature: "() -> Map k v", doc: "Create an empty map (alias for %{})" },
     BuiltinInfo { name: "Map.union", signature: "Map k v -> Map k v -> Map k v", doc: "Union of two maps (second wins on conflict)" },
     BuiltinInfo { name: "Map.intersection", signature: "Map k v -> Map k v -> Map k v", doc: "Intersection of two maps (keys in both)" },
     BuiltinInfo { name: "Map.difference", signature: "Map k v -> Map k v -> Map k v", doc: "Keys in first map but not second" },
@@ -8997,7 +9003,7 @@ impl Compiler {
                     // For built-in derivable traits, we know the method names
                     let has_method = if self.is_builtin_derivable_trait(trait_name) {
                         match (trait_name.as_str(), method_name) {
-                            ("Show", "show") => true,
+                            ("Show", "show") | ("Show", "toString") => true,
                             ("Hash", "hash") => true,
                             ("Copy", "copy") => true,
                             ("Eq", "==") | ("Eq", "eq") | ("Eq", "neq") => true,
@@ -9204,7 +9210,7 @@ impl Compiler {
     /// Check if a method is a generic builtin that works on any type.
     /// These methods don't require type information to dispatch - they work universally.
     fn is_generic_builtin_method(method_name: &str) -> bool {
-        matches!(method_name, "show" | "hash" | "copy")
+        matches!(method_name, "show" | "toString" | "hash" | "copy")
     }
 
     /// Find a builtin method that is unique to exactly one type.
@@ -9219,8 +9225,8 @@ impl Compiler {
         match method_name {
             // String-only builtins (no List equivalent)
             "chars" => Some("String.chars"),
-            "toInt" => Some("String.toInt"),
-            "toFloat" => Some("String.toFloat"),
+            "toInt" | "parseInt" => Some("String.toInt"),
+            "toFloat" | "parseFloat" => Some("String.toFloat"),
             "trim" => Some("String.trim"),
             "trimStart" => Some("String.trimStart"),
             "trimEnd" => Some("String.trimEnd"),
@@ -11194,7 +11200,7 @@ impl Compiler {
                     // being used as a first-class function reference (e.g., xs.map(show)).
                     // These builtins work on any type via native dispatch, so we can
                     // create a small wrapper function on the fly.
-                    if matches!(name.as_str(), "show" | "hash" | "copy"
+                    if matches!(name.as_str(), "show" | "toString" | "hash" | "copy"
                         | "toFloat" | "toFloat32" | "toFloat64"
                         | "toInt" | "toInt8" | "toInt16" | "toInt32" | "toInt64"
                         | "toUInt8" | "toUInt16" | "toUInt32" | "toUInt64"
@@ -12373,12 +12379,19 @@ impl Compiler {
                         }
                         // String functions (1 arg)
                         "String.length" | "String.chars" | "String.from_chars" | "String.toInt" | "String.to_int"
-                        | "String.toFloat" | "String.trim" | "String.trimStart" | "String.trimEnd"
+                        | "String.parseInt" | "String.toFloat" | "String.parseFloat"
+                        | "String.trim" | "String.trimStart" | "String.trimEnd"
                         | "String.toUpper" | "String.toLower" | "String.reverse" | "String.lines"
                         | "String.words" | "String.isEmpty" if args.len() == 1 => {
                             let arg_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
-                            self.emit_call_native(dst, &qualified_name, vec![arg_reg].into(), line);
+                            // parseInt/parseFloat are aliases - dispatch to toInt/toFloat native
+                            let dispatch_name = match qualified_name.as_str() {
+                                "String.parseInt" => "String.toInt",
+                                "String.parseFloat" => "String.toFloat",
+                                other => other,
+                            };
+                            self.emit_call_native(dst, dispatch_name, vec![arg_reg].into(), line);
                             return Ok(dst);
                         }
                         // String functions (2 args)
@@ -12540,6 +12553,12 @@ impl Compiler {
                             return Ok(dst);
                         }
                         // Map functions (1 arg)
+                        // Map.empty() - create an empty map (0 args, can also be called with Unit arg)
+                        "Map.empty" if args.len() <= 1 => {
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::MakeMap(dst, vec![].into()), line);
+                            return Ok(dst);
+                        }
                         "Map.keys" | "Map.values" | "Map.size" | "Map.isEmpty" | "Map.toList" | "Map.fromList" if args.len() == 1 => {
                             let arg_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
@@ -16907,7 +16926,7 @@ impl Compiler {
                     }
                     // === Trait-based builtins (show, copy, hash) ===
                     // First try trait dispatch, then fall back to native
-                    builtin @ ("show" | "copy" | "hash") if arg_regs.len() == 1 => {
+                    builtin @ ("show" | "toString" | "copy" | "hash") if arg_regs.len() == 1 => {
                         // Try to dispatch to trait method if type is known
                         let arg_type = self.expr_type_info(Self::call_arg_expr(&args[0])).display_name();
 
@@ -16951,7 +16970,7 @@ impl Compiler {
                             // that have the matching trait bound (Hash for hash, Show for show, Copy for copy)
                             let required_trait = match builtin {
                                 "hash" => "Hash",
-                                "show" => "Show",
+                                "show" | "toString" => "Show",
                                 "copy" => "Copy",
                                 _ => "",
                             };
@@ -16970,8 +16989,10 @@ impl Compiler {
                         }
 
                         // Fall back to native call
+                        // toString is an alias for show - dispatch to show native
+                        let native_call_name = if builtin == "toString" { "show" } else { &qualified_name };
                         let dst = self.alloc_reg();
-                        self.emit_call_native(dst, &qualified_name, arg_regs.into(), line);
+                        self.emit_call_native(dst, native_call_name, arg_regs.into(), line);
                         return Ok(dst);
                     }
                     _ => {} // Fall through to normal function lookup
@@ -18309,7 +18330,7 @@ impl Compiler {
                         "hash" if args.len() == 1 => {
                             return Some("Int".to_string());
                         }
-                        "show" if args.len() == 1 => {
+                        "show" | "toString" if args.len() == 1 => {
                             return Some("String".to_string());
                         }
                         // Handle __native__ extension function calls
