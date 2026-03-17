@@ -7032,7 +7032,8 @@ impl<'a> InferCtx<'a> {
                                         let ty = self.infer_expr(expr)?;
                                         if let Some((_, fty, _)) = def_fields.iter().find(|(n, _, _)| n == &fname.node) {
                                             let substituted_fty = Self::substitute_type_params(fty, &substitution);
-                                            self.unify(ty, substituted_fty);
+                                            // unify(expected, actual) so error says "expected field_type, found arg_type"
+                                            self.unify(substituted_fty, ty);
                                         } else {
                                             return Err(TypeError::NoSuchField {
                                                 ty: resolved_type_name.clone(),
@@ -7099,7 +7100,8 @@ impl<'a> InferCtx<'a> {
                                     let (fname, fty, _) = &def_fields[idx];
                                     // Apply type parameter substitution to field type
                                     let substituted_fty = Self::substitute_type_params(fty, &substitution);
-                                    self.unify(ty, substituted_fty);
+                                    // unify(expected, actual) so error says "expected field_type, found arg_type"
+                                    self.unify(substituted_fty, ty);
                                     provided.insert(fname.clone(), ());
                                 } else {
                                     // Too many positional arguments
@@ -7116,7 +7118,8 @@ impl<'a> InferCtx<'a> {
                                 {
                                     // Apply type parameter substitution to field type
                                     let substituted_fty = Self::substitute_type_params(fty, &substitution);
-                                    self.unify(ty, substituted_fty);
+                                    // unify(expected, actual) so error says "expected field_type, found arg_type"
+                                    self.unify(substituted_fty, ty);
                                     provided.insert(fname.node.clone(), ());
                                 } else {
                                     return Err(TypeError::NoSuchField {
@@ -7566,8 +7569,9 @@ impl<'a> InferCtx<'a> {
                                     });
                                 }
                                 // Use unify_at with call span for precise error reporting
+                                // unify_at(expected=param, actual=arg) so error says "expected param_type, found arg_type"
                                 for (i, (param_ty, arg_ty)) in ft.params.iter().zip(arg_types.iter()).enumerate() {
-                                    self.unify_at(arg_ty.clone(), param_ty.clone(), *call_span);
+                                    self.unify_at(param_ty.clone(), arg_ty.clone(), *call_span);
                                     // Record for post-solve structural mismatch checking
                                     self.deferred_fn_call_checks.push((param_ty.clone(), arg_ty.clone(), *call_span));
                                     // Pre-check: if param expects List[Tuple(...)], verify the arg
