@@ -30963,24 +30963,56 @@ impl Compiler {
         // mismatches aren't caught because HM inference can't resolve function calls.
         self.register_function_signatures(items)?;
 
+        // Pre-merge TraitImpl items: multiple separate `Type: Trait method(...) = ... end`
+        // blocks for the SAME (type, trait) pair should be treated as one impl block.
+        // Without this, the second block's compile_fn_def call overwrites the first,
+        // causing "No clause matched" at runtime for pattern-dispatching trait methods.
+        // Strategy: collect all TraitImpl items, group by (type_str, trait_str), merge
+        // same-method clauses, then use the merged set for pre-registration and compilation.
+        let merged_trait_impls: Vec<TraitImpl> = {
+            // Group TraitImpl items by (type_str, trait_str) key while preserving order
+            let mut groups: Vec<(String, String, TraitImpl)> = Vec::new();
+            for item in items.iter() {
+                if let Item::TraitImpl(ti) = item {
+                    let type_str = self.type_expr_to_string(&ti.ty);
+                    let trait_str = ti.trait_name.node.clone();
+                    let key = (type_str.clone(), trait_str.clone());
+                    if let Some(existing) = groups.iter_mut().find(|(ts, tr, _)| ts == &key.0 && tr == &key.1) {
+                        // Merge methods: same-named methods get their clauses combined
+                        for method in &ti.methods {
+                            let mname = method.name.node.clone();
+                            if let Some(existing_method) = existing.2.methods.iter_mut().find(|m| m.name.node == mname) {
+                                // Append clauses from this block to the existing method
+                                existing_method.clauses.extend(method.clauses.clone());
+                                existing_method.span = Span::new(existing_method.span.start, method.span.end);
+                            } else {
+                                existing.2.methods.push(method.clone());
+                            }
+                        }
+                        // Extend the span
+                        existing.2.span = Span::new(existing.2.span.start, ti.span.end);
+                    } else {
+                        groups.push((type_str, trait_str, ti.clone()));
+                    }
+                }
+            }
+            groups.into_iter().map(|(_, _, ti)| ti).collect()
+        };
+
         // Fifth pass (a): Pre-register ALL trait impl methods before compiling any bodies.
         // This ensures trait methods defined later in the file are visible from earlier
         // trait impls' bodies (e.g., Showable.display can call self.value() even when
         // Numeric.value is defined after Showable).
-        for item in items.iter() {
-            if let Item::TraitImpl(trait_impl) = item {
-                self.pre_register_trait_impl(trait_impl)?;
-            }
+        for trait_impl in &merged_trait_impls {
+            self.pre_register_trait_impl(trait_impl)?;
         }
 
         // Check trait impl completeness now that all impl blocks have been pre-registered
         self.check_trait_impl_completeness()?;
 
         // Fifth pass (b): compile trait implementation bodies (all methods now visible!)
-        for item in items {
-            if let Item::TraitImpl(trait_impl) = item {
-                self.compile_trait_impl(trait_impl)?;
-            }
+        for trait_impl in &merged_trait_impls {
+            self.compile_trait_impl(trait_impl)?;
         }
 
         // Fifth pass (b): compile generated items from type decorators
