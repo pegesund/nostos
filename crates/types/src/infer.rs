@@ -9733,10 +9733,12 @@ impl<'a> InferCtx<'a> {
         // Infer body
         let body_ty = self.infer_expr(&clause.body)?;
 
-        // If there's a return type annotation, unify with it
+        // If there's a return type annotation, unify with it.
+        // Order: unify(annotated, body_ty) so errors say "expected <annotated>, found <body_type>"
+        // which is the natural reading: the annotation is what's expected, the body is what was found.
         let ret_ty = if let Some(ret_expr) = &clause.return_type {
             let annotated = self.type_from_ast(ret_expr);
-            self.unify(body_ty, annotated.clone());
+            self.unify(annotated.clone(), body_ty);
             annotated
         } else {
             body_ty

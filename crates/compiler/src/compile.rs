@@ -1266,12 +1266,12 @@ impl CompileError {
                 if type1 != type2 {
                     // Check for common patterns
 
-                    // Int vs String - common beginner mistake (often trying x + "string")
+                    // Int vs String - type mismatch (could be wrong + operator use, or return type annotation)
                     if (type1 == "Int" && type2 == "String") || (type1 == "String" && type2 == "Int") {
                         return SourceError::compile(
                             format!("type mismatch: expected `{}`, found `{}`", type1, type2),
                             span,
-                        ).with_hint("cannot use `+` with mixed Int and String types")
+                        ).with_hint("`Int` and `String` are incompatible types")
                          .with_note("to concatenate strings, use `++`: show(42) ++ \" items\"");
                     }
 
@@ -1284,12 +1284,12 @@ impl CompileError {
                          .with_note("use `toFloat(x)` to convert Int to Float, or `round(x)` for Float to Int");
                     }
 
-                    // Float vs String - similar to Int vs String
+                    // Float vs String - type mismatch (could be wrong + operator use, or return type annotation)
                     if (type1 == "Float" && type2 == "String") || (type1 == "String" && type2 == "Float") {
                         return SourceError::compile(
                             format!("type mismatch: expected `{}`, found `{}`", type1, type2),
                             span,
-                        ).with_hint("cannot use `+` with mixed Float and String types")
+                        ).with_hint("`Float` and `String` are incompatible types")
                          .with_note("to concatenate strings, use `++`: show(3.14) ++ \" value\"");
                     }
 
