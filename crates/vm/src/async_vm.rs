@@ -1260,7 +1260,12 @@ impl AsyncProcess {
 
             // Stack overflow protection
             if self.frames.len() > 10000 {
-                return Err(RuntimeError::StackOverflow);
+                let overflow_err = RuntimeError::StackOverflow;
+                if !self.handle_exception(&overflow_err) {
+                    let stack_trace = crate::process::format_stack_trace(&self.frames);
+                    return Err(overflow_err.with_stack_trace(stack_trace));
+                }
+                continue;
             }
 
             // Execute one instruction

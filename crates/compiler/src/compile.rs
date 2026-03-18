@@ -39,6 +39,7 @@ static BUILTIN_METHODS: LazyLock<HashMap<(&str, &str), &str>> = LazyLock::new(||
         ("Map", "size", "Map.size"),
         ("Map", "isEmpty", "Map.isEmpty"),
         ("Map", "union", "Map.union"),
+        ("Map", "merge", "Map.union"),
         ("Map", "intersection", "Map.intersection"),
         ("Map", "difference", "Map.difference"),
         ("Map", "toList", "Map.toList"),
