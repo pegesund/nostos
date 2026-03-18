@@ -28306,6 +28306,15 @@ impl Compiler {
                 }
                 is_top_level_unresolved(t1) || is_top_level_unresolved(t2)
                     || (same_top_constructor(t1, t2) && (t1.has_any_type_var() || t2.has_any_type_var()))
+            } else if let nostos_types::TypeError::OccursCheck(ref var, ref ty_str) = e {
+                // OccursCheck in type_check_fn (per-function inference) is reliable.
+                // Unlike batch inference, here we infer a single function body in isolation,
+                // so cyclic types like `f = (x) => f` (producing `?0 = ?1 -> ?0`) are real.
+                // Only suppress if the cycle involves TypeParam names (uppercase letters),
+                // which can appear spuriously in multi-clause generic functions.
+                // Real cycles involve type variables (?N) cycling through function arrows.
+                let is_type_param_only = !var.contains('?') && !ty_str.contains('?');
+                is_type_param_only
             } else if e.should_suppress() {
                 true
             } else if let nostos_types::TypeError::NoSuchField { ref ty, ref field, ref resolved_type } = e {
