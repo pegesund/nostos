@@ -21165,6 +21165,12 @@ impl Compiler {
     fn extract_module_path(&self, expr: &Expr) -> Option<String> {
         match expr {
             Expr::Var(ident) => {
+                // If the identifier is a local variable (parameter, let-binding, etc.),
+                // it is NOT a module reference, regardless of module names.
+                // Local variables shadow module names in UFCS dispatch.
+                if self.locals.contains_key(&ident.node) {
+                    return None;
+                }
                 // Check if the identifier is a known module OR if there are functions/mvars with this prefix
                 // Use O(1) function_prefixes index instead of O(n) iteration
                 let prefix = format!("{}.", ident.node);
