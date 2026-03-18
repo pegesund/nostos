@@ -15681,6 +15681,18 @@ impl Compiler {
         let is_bigint = left_is_bigint || right_is_bigint;
         let is_string = self.is_string_expr(left) || self.is_string_expr(right);
 
+        // Check if either operand is a Char - Char comparisons must use generic Lt/Gt/Le/Ge
+        // (not LtInt/GtInt which expect Int64)
+        let is_char = {
+            let char_from_hm = |expr: &Expr| self.inferred_expr_types.get(&expr.span())
+                .map_or(false, |ty| matches!(ty, nostos_types::Type::Char));
+            let char_from_expr = |expr: &Expr| matches!(expr, Expr::Char(_, _));
+            let char_from_type_info = |expr: &Expr| self.expr_type_info(expr).display_name()
+                .as_ref().map_or(false, |t| t == "Char");
+            (char_from_hm(left) || char_from_expr(left) || char_from_type_info(left))
+                || (char_from_hm(right) || char_from_expr(right) || char_from_type_info(right))
+        };
+
         // Check if either operand is a type parameter or polymorphic (unknown concrete type at compile time)
         let is_type_param = {
             let lt = self.expr_type_info(left).display_name();
@@ -15857,7 +15869,7 @@ impl Compiler {
                 return Ok(dst);
             }
             BinOp::Lt => {
-                if is_type_param || is_custom_type {
+                if is_type_param || is_custom_type || is_char {
                     Instruction::Lt(dst, left_reg, right_reg)
                 } else if is_string {
                     Instruction::LtStr(dst, left_reg, right_reg)
@@ -15868,7 +15880,7 @@ impl Compiler {
                 }
             }
             BinOp::LtEq => {
-                if is_type_param || is_custom_type {
+                if is_type_param || is_custom_type || is_char {
                     Instruction::Le(dst, left_reg, right_reg)
                 } else if is_string {
                     Instruction::LeStr(dst, left_reg, right_reg)
@@ -15879,7 +15891,7 @@ impl Compiler {
                 }
             }
             BinOp::Gt => {
-                if is_type_param || is_custom_type {
+                if is_type_param || is_custom_type || is_char {
                     Instruction::Gt(dst, left_reg, right_reg)
                 } else if is_string {
                     Instruction::GtStr(dst, left_reg, right_reg)
@@ -15891,7 +15903,7 @@ impl Compiler {
                 }
             }
             BinOp::GtEq => {
-                if is_type_param || is_custom_type {
+                if is_type_param || is_custom_type || is_char {
                     Instruction::Ge(dst, left_reg, right_reg)
                 } else if is_string {
                     Instruction::GeStr(dst, left_reg, right_reg)
