@@ -1,5 +1,5 @@
-# expect: true
-# Variants auto-derive Ord (alphabetical by constructor name)
-# Red > Green because "Red" > "Green" alphabetically
+# expect: false
+# Variants auto-derive Ord by declaration order (not alphabetical)
+# Red(0) < Green(1) < Blue(2), so Red > Green is false
 type Color = Red | Green | Blue
 main() = Red > Green

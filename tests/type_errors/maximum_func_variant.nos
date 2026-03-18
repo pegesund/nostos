@@ -1,4 +1,4 @@
-# expect: Red
-# Variants auto-derive Ord (alphabetical by constructor name)
+# expect: Blue
+# Variants auto-derive Ord by declaration order: Red=0, Green=1, Blue=2
 type Color = Red | Green | Blue
 main() = maximum([Red, Green, Blue])

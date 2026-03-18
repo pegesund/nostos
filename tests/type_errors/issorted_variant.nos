@@ -1,4 +1,5 @@
-# expect: false
-# Variants auto-derive Ord (alphabetical by constructor name)
+# expect: true
+# Variants auto-derive Ord by declaration order: Red=0, Green=1, Blue=2
+# [Red, Green, Blue] is already in declaration order, so isSorted() is true
 type Color = Red | Green | Blue
 main() = [Red, Green, Blue].isSorted()

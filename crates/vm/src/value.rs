@@ -748,6 +748,8 @@ pub struct VariantTemplate {
     pub type_name: Arc<str>,
     pub constructor: Arc<str>,
     pub discriminant: u16,
+    /// Declaration order index of this constructor within its type (0-based).
+    pub tag_index: u16,
 }
 
 /// Global counter for generating unique reactive record IDs.

@@ -50,6 +50,8 @@ pub enum CachedValue {
         type_name: String,
         constructor: String,
         discriminant: u16,
+        #[serde(default)]
+        tag_index: u16,
     },
 }
 
@@ -267,6 +269,7 @@ impl CachedValue {
                 type_name: t.type_name.to_string(),
                 constructor: t.constructor.to_string(),
                 discriminant: t.discriminant,
+                tag_index: t.tag_index,
             }),
             // Other types (closures, records, variants) are not stored in constant pools
             _ => None,
@@ -324,11 +327,12 @@ impl CachedValue {
                     discriminant: *discriminant,
                 }))
             }
-            CachedValue::VariantTemplate { type_name, constructor, discriminant } => {
+            CachedValue::VariantTemplate { type_name, constructor, discriminant, tag_index } => {
                 Value::VariantTemplate(Arc::new(crate::value::VariantTemplate {
                     type_name: Arc::from(type_name.as_str()),
                     constructor: Arc::from(constructor.as_str()),
                     discriminant: *discriminant,
+                    tag_index: *tag_index,
                 }))
             }
         }

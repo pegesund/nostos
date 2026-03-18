@@ -16104,6 +16104,7 @@ impl Compiler {
                     type_name: Arc::from("stdlib.rhtml.RNode"),
                     constructor: Arc::from("Component"),
                     discriminant: constructor_discriminant("Component"),
+                    tag_index: 0, // ordering of stdlib.rhtml.RNode constructors not critical
                 };
                 let tmpl_idx = self.chunk.add_constant(Value::VariantTemplate(Arc::new(template)));
                 self.chunk.emit(Instruction::MakeVariantCached(dst, tmpl_idx, vec![name_reg].into()), line);
@@ -23630,10 +23631,20 @@ impl Compiler {
                 self.chunk.emit(Instruction::MakeReactiveVariant(dst, type_idx, ctor_idx, field_regs.into()), 0);
             } else {
                 // Use cached variant template for fast allocation
+                // Look up the constructor's declaration order index for correct Ord comparison
+                let tag_index = self.lookup_type_def(&parent_type)
+                    .and_then(|td| match &td.body {
+                        nostos_syntax::ast::TypeBody::Variant(ctors) => {
+                            ctors.iter().position(|c| c.name.node.as_str() == local_ctor)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(0) as u16;
                 let template = VariantTemplate {
                     type_name: Arc::from(parent_type.as_str()),
                     constructor: Arc::from(local_ctor),
                     discriminant: constructor_discriminant(local_ctor),
+                    tag_index,
                 };
                 let tmpl_idx = self.chunk.add_constant(Value::VariantTemplate(Arc::new(template)));
                 self.chunk.emit(Instruction::MakeVariantCached(dst, tmpl_idx, field_regs.into()), 0);

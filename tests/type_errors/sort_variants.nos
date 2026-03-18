@@ -1,4 +1,4 @@
-# expect: [Blue, Green, Red]
-# Variants auto-derive Ord (alphabetical by constructor name)
+# expect: [Red, Green, Blue]
+# Variants auto-derive Ord by declaration order (not alphabetical)
 type Color = Red | Green | Blue
 main() = [Red, Green, Blue].sort()

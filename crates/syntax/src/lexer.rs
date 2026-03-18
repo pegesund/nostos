@@ -218,11 +218,9 @@ pub enum Token {
     #[regex(r"[0-9][0-9_]*\.[0-9][0-9_]*([eE][+-]?[0-9]+)?", |lex| lex.slice().replace('_', ""))]
     Float(String),
 
-    // String literal (double-quoted)
-    #[regex(r#""([^"\\]|\\.)*""#, |lex| {
-        let s = lex.slice();
-        Some(parse_string_escapes(&s[1..s.len()-1]))
-    })]
+    // String literal (double-quoted), with support for ${...} interpolations
+    // that may contain inner double-quoted strings.
+    #[regex(r#"""#, lex_string_with_interpolation)]
     String(String),
 
     // String literal (single-quoted) - allows embedding double quotes without escaping
@@ -346,6 +344,92 @@ pub enum Token {
     Underscore,
     #[regex(r"#", hash_callback)]
     Hash,
+}
+
+/// Callback for double-quoted strings that handles `${...}` interpolations.
+/// Allows double-quoted strings inside `${...}` blocks, e.g.:
+///   "x is ${if x > 3 then "big" else "small"}"
+fn lex_string_with_interpolation(lex: &mut logos::Lexer<Token>) -> Option<String> {
+    // The opening `"` has already been consumed by the regex match.
+    // We need to scan the remainder until we find the closing `"` that ends
+    // this string, properly handling:
+    //   - escape sequences: \", \\, \n, etc.
+    //   - interpolation blocks: ${...} which may contain nested strings and braces
+    let remainder = lex.remainder();
+    let mut chars = remainder.char_indices().peekable();
+    // raw_content: the bytes between the opening `"` and the closing `"`
+    let content_end;
+
+    loop {
+        match chars.next() {
+            None => return None, // unterminated string
+            Some((i, '"')) => {
+                // Closing quote found
+                content_end = i;
+                // Bump lexer past the content and the closing quote
+                lex.bump(i + 1);
+                break;
+            }
+            Some((_, '\\')) => {
+                // Skip the next character (escape sequence)
+                chars.next();
+            }
+            Some((_, '$')) => {
+                // Peek at next char: only enter interpolation mode if it's `{`
+                // Do NOT consume the peeked char here — let the outer loop handle it.
+                match chars.peek() {
+                    Some((_, '{')) => {
+                        // Consume the `{`
+                        chars.next();
+                        // Scan until matching `}`, handling nested `{` and `"..."` inside
+                        let mut depth = 1usize;
+                        loop {
+                            match chars.next() {
+                                None => return None, // unterminated interpolation
+                                Some((_, '{')) => depth += 1,
+                                Some((_, '}')) => {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        break;
+                                    }
+                                }
+                                Some((_, '"')) => {
+                                    // Inner double-quoted string inside interpolation
+                                    loop {
+                                        match chars.next() {
+                                            None => return None,
+                                            Some((_, '"')) => break, // end of inner string
+                                            Some((_, '\\')) => { chars.next(); } // skip escape
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                Some((_, '\'')) => {
+                                    // Inner single-quoted string inside interpolation
+                                    loop {
+                                        match chars.next() {
+                                            None => return None,
+                                            Some((_, '\'')) => break,
+                                            Some((_, '\\')) => { chars.next(); }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    // `$` not followed by `{`: treat as a normal `$` character.
+                    // Do NOT consume the peeked char — the outer loop will handle it next.
+                    _ => {}
+                }
+            }
+            _ => {} // Normal character
+        }
+    }
+
+    let raw = &remainder[..content_end];
+    Some(parse_string_escapes(raw))
 }
 
 /// Callback for Hash token - only match if followed by '{' (for set literals)

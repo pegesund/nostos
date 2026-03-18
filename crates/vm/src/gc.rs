@@ -728,6 +728,10 @@ pub struct GcVariant {
     pub fields: Vec<GcValue>,
     /// Cached discriminant for fast pattern matching (hash of constructor name)
     pub discriminant: u16,
+    /// Declaration order index of this constructor within its type (0-based).
+    /// Used for Ord comparison so that constructors compare by declaration order,
+    /// not alphabetically. Falls back to 0 when not available (e.g. runtime-built variants).
+    pub tag_index: u16,
 }
 
 /// Compute discriminant from constructor name (fast hash for pattern matching)
@@ -1762,6 +1766,7 @@ impl Heap {
             constructor: Arc::from(constructor.as_str()),
             fields,
             discriminant,
+            tag_index: 0, // unknown at this call site; use constructor name for ordering
         });
         GcPtr::from_raw(self.alloc(data))
     }
@@ -1774,11 +1779,24 @@ impl Heap {
         fields: Vec<GcValue>,
         discriminant: u16,
     ) -> GcPtr<GcVariant> {
+        self.alloc_variant_shared_with_tag(type_name, constructor, fields, discriminant, 0)
+    }
+
+    /// Allocate a variant reusing shared Arc metadata, with explicit tag_index.
+    pub fn alloc_variant_shared_with_tag(
+        &mut self,
+        type_name: Arc<str>,
+        constructor: Arc<str>,
+        fields: Vec<GcValue>,
+        discriminant: u16,
+        tag_index: u16,
+    ) -> GcPtr<GcVariant> {
         let data = HeapData::Variant(GcVariant {
             type_name,
             constructor,
             fields,
             discriminant,
+            tag_index,
         });
         GcPtr::from_raw(self.alloc(data))
     }
@@ -1802,6 +1820,7 @@ impl Heap {
                 constructor: Arc::clone(&template.constructor),
                 fields,
                 discriminant: template.discriminant,
+                tag_index: template.tag_index,
             });
             let ptr = GcPtr::from_raw(self.alloc(data));
             // Mark as root so GC never collects cached unit variants
@@ -1814,6 +1833,7 @@ impl Heap {
             constructor: Arc::clone(&template.constructor),
             fields,
             discriminant: template.discriminant,
+            tag_index: template.tag_index,
         });
         GcPtr::from_raw(self.alloc(data))
     }
@@ -2288,15 +2308,27 @@ impl Heap {
                     _ => None,
                 }
             }
-            // Variants - compare by constructor name, then field values
+            // Variants - compare by declaration order (tag_index), then field values
             (GcValue::Variant(a), GcValue::Variant(b)) => {
                 match (self.get_variant(*a), self.get_variant(*b)) {
                     (Some(va), Some(vb)) => {
                         if va.type_name != vb.type_name {
                             return None;
                         }
-                        // Compare constructors first
-                        match va.constructor.cmp(&vb.constructor) {
+                        // Compare constructors by declaration order first, fall back to
+                        // alphabetical constructor name only when both tag_index values are 0
+                        // AND constructors differ (i.e., tag_index is unknown/unavailable).
+                        let ctor_ord = if va.constructor == vb.constructor {
+                            std::cmp::Ordering::Equal
+                        } else if va.tag_index != 0 || vb.tag_index != 0 {
+                            va.tag_index.cmp(&vb.tag_index)
+                        } else {
+                            // Both are 0 and constructors differ: fall back to constructor name
+                            // (this should only happen for builtins like Option/Result where
+                            // None/Some order is by name anyway)
+                            va.constructor.cmp(&vb.constructor)
+                        };
+                        match ctor_ord {
                             std::cmp::Ordering::Equal => {
                                 // Same constructor - compare fields
                                 for (fa, fb) in va.fields.iter().zip(vb.fields.iter()) {
@@ -3074,11 +3106,12 @@ impl Heap {
                         .iter()
                         .map(|v| self.deep_copy(v, source))
                         .collect();
-                    GcValue::Variant(self.alloc_variant_shared(
+                    GcValue::Variant(self.alloc_variant_shared_with_tag(
                         Arc::clone(&var.type_name),
                         Arc::clone(&var.constructor),
                         fields,
                         var.discriminant,
+                        var.tag_index,
                     ))
                 } else {
                     GcValue::Unit
@@ -3337,12 +3370,12 @@ impl Heap {
             }
             GcValue::Variant(ptr) => {
                 let var_data = self.get_variant(*ptr).map(|v| {
-                    (Arc::clone(&v.type_name), Arc::clone(&v.constructor), v.fields.clone(), v.discriminant)
+                    (Arc::clone(&v.type_name), Arc::clone(&v.constructor), v.fields.clone(), v.discriminant, v.tag_index)
                 });
-                if let Some((type_name, constructor, fields, discriminant)) = var_data {
+                if let Some((type_name, constructor, fields, discriminant, tag_index)) = var_data {
                     let cloned: Vec<GcValue> = fields.iter().map(|v| self.clone_value(v)).collect();
-                    GcValue::Variant(self.alloc_variant_shared(
-                        type_name, constructor, cloned, discriminant,
+                    GcValue::Variant(self.alloc_variant_shared_with_tag(
+                        type_name, constructor, cloned, discriminant, tag_index,
                     ))
                 } else {
                     GcValue::Unit

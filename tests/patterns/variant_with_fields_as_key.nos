@@ -1,4 +1,4 @@
-# expect: found
+# expect: "found"
 
 # Test that variants with fields can be used as map keys
 
