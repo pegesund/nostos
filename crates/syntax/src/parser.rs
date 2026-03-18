@@ -785,14 +785,14 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
             .then(just(Token::Colon).ignore_then(type_expr()).or_not())
             .then_ignore(just(Token::Eq))
             .then(expr.clone())
-            .map(|((pat, ty), value)| {
+            .map_with_span(|((pat, ty), value), span| {
                 Stmt::Let(Binding {
                     visibility: Visibility::Private,
                     mutable: true,
                     pattern: pat,
                     ty,
                     value,
-                    span: Span::default(),
+                    span: to_span(span),
                 })
             });
 
@@ -802,14 +802,14 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
             .then(type_expr())
             .then_ignore(just(Token::Eq))
             .then(expr.clone())
-            .map(|((pat, ty), value)| {
+            .map_with_span(|((pat, ty), value), span| {
                 Stmt::Let(Binding {
                     visibility: Visibility::Private,
                     mutable: false,
                     pattern: pat,
                     ty: Some(ty),
                     value,
-                    span: Span::default(),
+                    span: to_span(span),
                 })
             });
 
@@ -843,7 +843,7 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                                 pattern: pat,
                                 ty: None,
                                 value: rhs,
-                                span: Span::default(),
+                                span: to_span(span.clone()),
                             })
                         } else {
                             // Can't be a pattern - try to convert to AssignTarget
@@ -873,13 +873,15 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                                         // `if c then { x = expr }` parses x=expr as Stmt::Let
                                         // when x is a simple variable (expr_to_pattern succeeds).
                                         let assign_stmt = if let Some(pat) = expr_to_pattern((*then_branch).clone()) {
+                                            let rhs_span = get_span(&rhs);
+                                            let then_start = get_span(then_branch.as_ref()).start;
                                             Some(Stmt::Let(Binding {
                                                 visibility: Visibility::Private,
                                                 mutable: false,
                                                 pattern: pat,
                                                 ty: None,
                                                 value: rhs.clone(),
-                                                span: Span::default(),
+                                                span: Span::new(then_start, rhs_span.end),
                                             }))
                                         } else {
                                             // Try AssignTarget for field/index assignment
@@ -926,14 +928,14 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                                                     }
                                                 }).collect();
                                                 if let Some(param_patterns) = params {
-                                                    let lambda = Expr::Lambda(param_patterns, Box::new(rhs), call_span);
+                                                    let lambda = Expr::Lambda(param_patterns, Box::new(rhs), call_span.clone());
                                                     Stmt::Let(Binding {
                                                         visibility: Visibility::Private,
                                                         mutable: false,
                                                         pattern: Pattern::Var(fn_name),
                                                         ty: None,
                                                         value: lambda,
-                                                        span: Span::default(),
+                                                        span: to_span(span.clone()),
                                                     })
                                                 } else {
                                                     Stmt::Expr(lhs)
