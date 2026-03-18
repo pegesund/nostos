@@ -14005,6 +14005,44 @@ impl Compiler {
                     }
                 }
 
+                // Handle qualified UFCS sugar: val.Map.insert(k, v) → Map.insert(val, k, v)
+                // This pattern occurs when users chain namespace-qualified calls like
+                // Map.empty().Map.insert("key", val).Map.insert("key2", val2)
+                // The parser sees .Map as a FieldAccess and .insert(...) as a MethodCall.
+                if let Expr::FieldAccess(real_receiver, module_ident, _) = obj.as_ref() {
+                    let module_name = &module_ident.node;
+                    // Only handle if first char is uppercase (module/namespace name)
+                    if module_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                        // Check if (module_name, method) is a known builtin UFCS method
+                        if let Some(native_name) = resolve_builtin_method(module_name, &method.node) {
+                            let obj_reg = self.compile_expr_tail(real_receiver.as_ref(), false)?;
+                            let mut arg_regs = vec![obj_reg];
+                            for arg in args {
+                                let reg = self.compile_expr_tail(Self::call_arg_expr(arg), false)?;
+                                arg_regs.push(reg);
+                            }
+                            let dst = self.alloc_reg();
+                            self.emit_call_native(dst, native_name, arg_regs.into(), line);
+                            return Ok(dst);
+                        }
+                        // Check if module_name.method is a known user-defined function
+                        let qualified_name = format!("{}.{}", module_name, method.node);
+                        let module_prefix = format!("{}.", module_name);
+                        if self.function_prefixes.contains(&module_prefix)
+                            || self.known_modules.contains(module_name.as_str())
+                        {
+                            // Build args with real_receiver as first arg
+                            let mut all_args: Vec<CallArg> = vec![CallArg::Positional(real_receiver.as_ref().clone())];
+                            all_args.extend(args.iter().cloned());
+                            let func_expr = Expr::Var(nostos_syntax::Spanned {
+                                node: qualified_name,
+                                span: method.span.clone(),
+                            });
+                            return self.compile_call(&func_expr, &[], &all_args, is_tail);
+                        }
+                    }
+                }
+
                 // Type-based builtin method dispatch for receiver-style calls
                 // Handles m.get(k) where m is a Map, s.toUpper() where s is a String, etc.
                 let obj_type_info = self.expr_type_info(obj);
@@ -28470,8 +28508,14 @@ impl Compiler {
                         | Type::Unit => false,
                         // Functions can't have fields - report error
                         Type::Function(_) => false,
-                        // Collections can't have fields - report error
-                        Type::List(_) | Type::Map(_, _) | Type::Set(_) => false,
+                        // Collections can't have fields - UNLESS the field is an uppercase
+                        // builtin namespace name used in chaining like val.Map.insert(k,v).
+                        // In that case suppress so codegen can handle the pattern.
+                        Type::List(_) | Type::Map(_, _) | Type::Set(_) => {
+                            // Suppress if field is a known builtin namespace (Map, Set, String, etc.)
+                            field.chars().next().is_some_and(|c| c.is_uppercase())
+                                && BUILTIN_METHODS.keys().any(|(base, _)| *base == field)
+                        }
                         // Tuples: check if field index is in bounds
                         Type::Tuple(elems) => {
                             field.parse::<usize>().map_or(true, |idx| idx < elems.len())
@@ -28504,8 +28548,12 @@ impl Compiler {
                     let is_collection_type = ty.starts_with("Map[")
                         || ty.starts_with("Set[")
                         || ty.starts_with("List[");
+                    // When field is an uppercase builtin namespace (e.g., "Map" in val.Map.insert()),
+                    // suppress so codegen can handle the chained module-qualified UFCS pattern.
+                    let is_namespace_sugar = field.chars().next().is_some_and(|c| c.is_uppercase())
+                        && BUILTIN_METHODS.keys().any(|(base, _)| *base == field);
                     !(primitives.contains(&ty) || is_function_type || is_tuple_oob
-                        || is_no_field_type || is_collection_type)
+                        || is_no_field_type || (is_collection_type && !is_namespace_sugar))
                 }
             }
         }

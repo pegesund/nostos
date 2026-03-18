@@ -613,8 +613,9 @@ impl Compiler {
         for (i, arm) in catch_arms.iter().enumerate() {
             let is_last = i == catch_arms.len() - 1;
 
-            // Save locals before processing arm (pattern bindings should be scoped to this arm)
+            // Save locals and local_types before processing arm (pattern bindings should be scoped to this arm)
             let saved_locals = self.locals.clone();
+            let saved_local_types = self.local_types.clone();
 
             // Try to match the pattern
             let (match_success, bindings) = self.compile_pattern_test(&arm.pattern, exc_reg)?;
@@ -622,9 +623,13 @@ impl Compiler {
             // Always emit JumpIfFalse, even for last arm (to handle no-match case)
             let next_arm_jump = self.chunk.emit(Instruction::JumpIfFalse(match_success, 0), 0);
 
-            // Bind pattern variables with type info from pattern
+            // Bind pattern variables with type info from pattern.
+            // Exception variables are always String (throw() always takes a String message),
+            // so register them in local_types as String to enable method dispatch like .split().
             for (name, reg, is_float) in bindings {
-                self.locals.insert(name, LocalInfo { reg, is_float, mutable: false, is_cell: false });
+                self.locals.insert(name.clone(), LocalInfo { reg, is_float, mutable: false, is_cell: false });
+                // Register exception variable as String type for UFCS method resolution
+                self.local_types.insert(name, nostos_types::Type::String);
             }
 
             // Compile guard if present
@@ -655,8 +660,9 @@ impl Compiler {
                 self.chunk.patch_jump(next_arm_jump, next_target);
             }
 
-            // Restore locals after arm (pattern bindings shouldn't leak to next arm or subsequent code)
+            // Restore locals and local_types after arm (pattern bindings shouldn't leak to next arm or subsequent code)
             self.locals = saved_locals;
+            self.local_types = saved_local_types;
         }
 
         // 7.5 Re-throw block: if no pattern matched, handle rethrow

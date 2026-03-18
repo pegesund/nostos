@@ -2624,6 +2624,15 @@ impl<'a> InferCtx<'a> {
                     }
                 }
                 Constraint::HasField(ty, field, expected_ty) => {
+                    // When the field name starts with uppercase, it's a namespace qualifier
+                    // used in chaining like `val.Map.insert(k, v)` which the compiler rewrites
+                    // to `Map.insert(val, k, v)`. Skip the HasField constraint silently so
+                    // type inference doesn't block compilation for this valid UFCS pattern.
+                    // The compiler's codegen handles the actual dispatch.
+                    if field.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                        // Namespace qualifier - suppress HasField constraint, don't error
+                        continue;
+                    }
                     let resolved = self.env.apply_subst(&ty);
                     match &resolved {
                         Type::Record(rec) => {
