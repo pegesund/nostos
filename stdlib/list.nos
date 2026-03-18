@@ -422,14 +422,15 @@ intersperse[T](list: List[T], sep: T) -> List[T] = match list {
 
 # Split list at first element not satisfying predicate
 # Returns (takeWhile(pred), dropWhile(pred))
-# Named spanList to avoid conflict with Html.span
-spanList[T](list: List[T], pred: (T) -> Bool) -> (List[T], List[T]) = match list {
+# Also available as spanList (legacy alias)
+span[T](list: List[T], pred: (T) -> Bool) -> (List[T], List[T]) = match list {
     [] -> ([], [])
     [x | xs] -> if pred(x) then {
-        (ys, zs) = spanList(xs, pred)
+        (ys, zs) = span(xs, pred)
         ([x | ys], zs)
     } else ([], [x | xs])
 }
+spanList[T](list: List[T], pred: (T) -> Bool) -> (List[T], List[T]) = span(list, pred)
 
 # Group consecutive elements by key function
 groupBy[T, K](list: List[T], keyFn: (T) -> K) -> List[List[T]] = match list {
@@ -456,6 +457,13 @@ transpose[T](rows: List[List[T]]) -> List[List[T]] = match rows {
             tails = map(rows, r => tail(r))
             [heads | transpose(tails)]
         }
+}
+
+# Pair each element with its index (0-based): [a, b, c] -> [(0, a), (1, b), (2, c)]
+enumerate[T](list: List[T]) -> List[(Int, T)] = enumerateFrom(list, 0)
+enumerateFrom[T](list: List[T], i: Int) -> List[(Int, T)] = match list {
+    [] -> []
+    [x | xs] -> [(i, x) | enumerateFrom(xs, i + 1)]
 }
 
 # Apply function to pairs of adjacent elements
