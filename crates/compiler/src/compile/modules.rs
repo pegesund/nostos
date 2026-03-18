@@ -2740,6 +2740,19 @@ impl Compiler {
                     }
                 } else if let nostos_syntax::ast::TypeBody::Record(_) = &type_def.body {
                     self.known_constructors.insert(qualified_name.clone());
+                } else if let nostos_syntax::ast::TypeBody::Alias(target_ty) = &type_def.body {
+                    // Detect self-referential alias: `type Foo = Foo`
+                    // The parser treats single-constructor unit variants with the same name
+                    // as the type as type aliases. Detect and register them as constructors.
+                    let target_name_str = match target_ty {
+                        nostos_syntax::TypeExpr::Name(ident) => ident.node.as_str(),
+                        _ => "",
+                    };
+                    if target_name_str == type_def.name.node.as_str() {
+                        // Self-referential alias = single unit-variant constructor
+                        self.known_constructors.insert(qualified_name.clone());
+                        self.known_constructors.insert(type_def.name.node.clone());
+                    }
                 }
                 // Also register in function_visibility if public (for use stmt resolution)
                 if matches!(type_def.visibility, Visibility::Public) {
@@ -2775,6 +2788,16 @@ impl Compiler {
                     }
                 } else if let nostos_syntax::ast::TypeBody::Record(_) = &type_def.body {
                     self.known_constructors.insert(qualified_name.clone());
+                } else if let nostos_syntax::ast::TypeBody::Alias(target_ty) = &type_def.body {
+                    // Detect self-referential alias: `type Foo = Foo`
+                    let target_name_str = match target_ty {
+                        nostos_syntax::TypeExpr::Name(ident) => ident.node.as_str(),
+                        _ => "",
+                    };
+                    if target_name_str == type_def.name.node.as_str() {
+                        self.known_constructors.insert(qualified_name.clone());
+                        self.known_constructors.insert(type_def.name.node.clone());
+                    }
                 }
                 if matches!(type_def.visibility, Visibility::Public) {
                     self.function_visibility.insert(qualified_name, type_def.visibility);

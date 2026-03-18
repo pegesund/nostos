@@ -7918,13 +7918,32 @@ impl Compiler {
                 }
             }
             TypeBody::Alias(target_ty) => {
-                // Store the alias target for resolving references in other types
+                // Detect self-referential alias: `type Foo = Foo`
+                // The parser cannot distinguish a type alias from a single unit-variant
+                // constructor with the same name as the type. When the alias target's
+                // local name matches the type's own local name, treat it as a unit variant.
+                // e.g. `type Singleton = Singleton` → variant with one constructor "Singleton"
                 let target_name = self.type_expr_name(target_ty);
-                // Resolve transitively: if target is itself an alias, follow the chain
-                let resolved_target = self.resolve_type_alias_name(&target_name);
-                self.type_alias_targets.insert(name.clone(), resolved_target);
-                // Type aliases don't need runtime representation
-                return Ok(());
+                let local_type_name = def.name.node.as_str();
+                let local_target_name = target_name.rsplit('.').next().unwrap_or(&target_name);
+                let is_self_referential = local_target_name == local_type_name;
+
+                if is_self_referential {
+                    // Treat as a single unit-variant constructor
+                    let qualified_ctor = self.qualify_name(local_type_name);
+                    self.known_constructors.insert(qualified_ctor.clone());
+                    self.known_constructors.insert(local_type_name.to_string());
+                    TypeInfoKind::Variant {
+                        constructors: vec![(local_type_name.to_string(), VariantFieldsInfo::Unit)],
+                    }
+                } else {
+                    // Store the alias target for resolving references in other types
+                    // Resolve transitively: if target is itself an alias, follow the chain
+                    let resolved_target = self.resolve_type_alias_name(&target_name);
+                    self.type_alias_targets.insert(name.clone(), resolved_target);
+                    // Type aliases don't need runtime representation
+                    return Ok(());
+                }
             }
             TypeBody::Empty => {
                 // Never type
