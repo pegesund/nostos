@@ -11691,6 +11691,36 @@ impl Compiler {
                         self.check_const_visibility(&const_name, &const_info, *span)?;
                         return self.emit_const_value(&const_info.value, self.span_line(*span));
                     }
+
+                    // Check if this is a variant constructor used as a first-class function
+                    // e.g., [1,2,3].map(Some) should work like [1,2,3].map(x => Some(x))
+                    let local_ctor_name = type_name.node.rsplit('.').next().unwrap_or(&type_name.node);
+                    let field_count = self.get_constructor_field_types(local_ctor_name).len();
+                    if field_count > 0 && self.known_constructors.contains(&self.resolve_name(&type_name.node)) {
+                        // Synthesize a lambda: (x0, x1, ...) => TypeName(x0, x1, ...)
+                        let syn_span = *span;
+                        let param_names: Vec<String> = (0..field_count).map(|i| format!("__ctor_arg{}", i)).collect();
+                        let params: Vec<nostos_syntax::ast::Pattern> = param_names.iter()
+                            .map(|name| nostos_syntax::ast::Pattern::Var(
+                                nostos_syntax::ast::Ident { node: name.clone(), span: syn_span }
+                            ))
+                            .collect();
+                        // Use Record(ctor, positional_args) as the body to avoid re-triggering this path
+                        let record_fields: Vec<nostos_syntax::ast::RecordField> = param_names.iter()
+                            .map(|name| nostos_syntax::ast::RecordField::Positional(
+                                nostos_syntax::ast::Expr::Var(
+                                    nostos_syntax::ast::Ident { node: name.clone(), span: syn_span }
+                                )
+                            ))
+                            .collect();
+                        let body = nostos_syntax::ast::Expr::Record(
+                            type_name.clone(),
+                            record_fields,
+                            syn_span,
+                        );
+                        let lambda = nostos_syntax::ast::Expr::Lambda(params, Box::new(body), syn_span);
+                        return self.compile_expr_tail(&lambda, is_tail);
+                    }
                 }
 
                 // Resolve type name (check imports)
