@@ -314,6 +314,37 @@ pub enum SendableMapKey {
     Tuple(Vec<SendableMapKey>),
 }
 
+impl SendableMapKey {
+    pub fn display(&self) -> String {
+        match self {
+            SendableMapKey::Unit => "()".to_string(),
+            SendableMapKey::Bool(b) => b.to_string(),
+            SendableMapKey::Char(c) => format!("'{}'", c),
+            SendableMapKey::Int64(i) => i.to_string(),
+            SendableMapKey::String(s) => format!("\"{}\"", s),
+            SendableMapKey::Record { type_name, field_names, fields } => {
+                let fields_str: Vec<_> = field_names.iter().zip(fields.iter())
+                    .map(|(n, v)| format!("{}: {}", n, v.display()))
+                    .collect();
+                let display_name = type_name.rsplit('.').next().unwrap_or(type_name);
+                format!("{}{{{}}}", display_name, fields_str.join(", "))
+            }
+            SendableMapKey::Variant { type_name: _, constructor, fields } => {
+                if fields.is_empty() {
+                    constructor.clone()
+                } else {
+                    let fields_str: Vec<_> = fields.iter().map(|v| v.display()).collect();
+                    format!("{}({})", constructor, fields_str.join(", "))
+                }
+            }
+            SendableMapKey::Tuple(items) => {
+                let items_str: Vec<_> = items.iter().map(|v| v.display()).collect();
+                format!("({})", items_str.join(", "))
+            }
+        }
+    }
+}
+
 impl PartialEq for SendableMapKey {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -901,7 +932,17 @@ impl SendableValue {
                 }
             }
             SendableValue::Map(entries) => {
-                format!("%{{...{} entries}}", entries.len())
+                let mut result = "%{".to_string();
+                for (i, (k, v)) in entries.iter().enumerate() {
+                    if i > 0 {
+                        result.push_str(", ");
+                    }
+                    result.push_str(&k.display());
+                    result.push_str(": ");
+                    result.push_str(&v.display());
+                }
+                result.push('}');
+                result
             }
             SendableValue::Set(items) => {
                 format!("#{{...{} items}}", items.len())

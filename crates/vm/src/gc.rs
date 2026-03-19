@@ -638,6 +638,42 @@ impl GcMapKey {
         }
     }
 
+    /// Display the key with proper quoting (strings are quoted).
+    pub fn show(&self) -> String {
+        match self {
+            GcMapKey::Unit => "()".to_string(),
+            GcMapKey::Bool(b) => b.to_string(),
+            GcMapKey::Char(c) => format!("'{}'", c),
+            GcMapKey::Int8(i) => i.to_string(),
+            GcMapKey::Int16(i) => i.to_string(),
+            GcMapKey::Int32(i) => i.to_string(),
+            GcMapKey::Int64(i) => i.to_string(),
+            GcMapKey::UInt8(i) => i.to_string(),
+            GcMapKey::UInt16(i) => i.to_string(),
+            GcMapKey::UInt32(i) => i.to_string(),
+            GcMapKey::UInt64(i) => i.to_string(),
+            GcMapKey::String(s) => format!("\"{}\"", s),
+            GcMapKey::Record { type_name, field_names, fields } => {
+                let fields_str: Vec<_> = field_names.iter().zip(fields.iter())
+                    .map(|(n, v)| format!("{}: {}", n, v.show()))
+                    .collect();
+                format!("{}{{{}}}", type_name, fields_str.join(", "))
+            }
+            GcMapKey::Variant { type_name: _, constructor, fields } => {
+                if fields.is_empty() {
+                    constructor.clone()
+                } else {
+                    let fields_str: Vec<_> = fields.iter().map(|v| v.show()).collect();
+                    format!("{}({})", constructor, fields_str.join(", "))
+                }
+            }
+            GcMapKey::Tuple(items) => {
+                let items_str: Vec<_> = items.iter().map(|v| v.show()).collect();
+                format!("({})", items_str.join(", "))
+            }
+        }
+    }
+
     /// Convert to a SharedMapKey for cross-thread sharing.
     pub fn to_shared_key(&self) -> SharedMapKey {
         match self {
@@ -2423,6 +2459,36 @@ impl Heap {
                     "<invalid variant>".to_string()
                 }
             }
+            GcValue::Map(ptr) => {
+                if let Some(map) = self.get_map(*ptr) {
+                    let mut result = "%{".to_string();
+                    for (i, (k, v)) in map.entries.iter().enumerate() {
+                        if i > 0 {
+                            result.push_str(", ");
+                        }
+                        result.push_str(&k.show());
+                        result.push_str(": ");
+                        result.push_str(&self.show_value(v));
+                    }
+                    result.push('}');
+                    result
+                } else {
+                    "<invalid map>".to_string()
+                }
+            }
+            GcValue::SharedMap(map) => {
+                let mut result = "%{".to_string();
+                for (i, (k, v)) in map.iter().enumerate() {
+                    if i > 0 {
+                        result.push_str(", ");
+                    }
+                    result.push_str(&k.display());
+                    result.push_str(": ");
+                    result.push_str(&v.display());
+                }
+                result.push('}');
+                result
+            }
             // For all other types, delegate to display_value (they don't need special quoting)
             other => self.display_value(other),
         }
@@ -2534,13 +2600,33 @@ impl Heap {
             }
             GcValue::Map(ptr) => {
                 if let Some(map) = self.get_map(*ptr) {
-                    format!("%{{...{} entries}}", map.entries.len())
+                    let mut result = "%{".to_string();
+                    for (i, (k, v)) in map.entries.iter().enumerate() {
+                        if i > 0 {
+                            result.push_str(", ");
+                        }
+                        result.push_str(&k.show());
+                        result.push_str(": ");
+                        result.push_str(&self.display_value(v));
+                    }
+                    result.push('}');
+                    result
                 } else {
                     "<invalid map>".to_string()
                 }
             }
             GcValue::SharedMap(map) => {
-                format!("%{{...{} entries}}", map.len())
+                let mut result = "%{".to_string();
+                for (i, (k, v)) in map.iter().enumerate() {
+                    if i > 0 {
+                        result.push_str(", ");
+                    }
+                    result.push_str(&k.display());
+                    result.push_str(": ");
+                    result.push_str(&v.display());
+                }
+                result.push('}');
+                result
             }
             GcValue::Set(ptr) => {
                 if let Some(set) = self.get_set(*ptr) {
