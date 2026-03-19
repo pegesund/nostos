@@ -4483,9 +4483,14 @@ impl<'a> InferCtx<'a> {
                                     Type::Bool | Type::Unit | Type::Never |
                                     Type::Tuple(_) | Type::List(_) | Type::Map(_, _) | Type::Set(_) |
                                     Type::Array(_) | Type::Record(_) | Type::Function(_) => true,
-                                    Type::Named { name, args } => {
-                                        !(args.is_empty() && name.len() == 1
-                                          && name.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false))
+                                    Type::Named { .. } => {
+                                        // Use the type environment to check if this Named type
+                                        // implements Ord. User-defined variants/records auto-derive
+                                        // Ord as long as their type args also implement Ord.
+                                        // (Single-lowercase-letter names are type params that also
+                                        // pass through implements() returning false conservatively,
+                                        // but they are caught by the Var branch below.)
+                                        !self.env.implements(&resolved_elem, "Ord")
                                     }
                                     _ => false,
                                 };
