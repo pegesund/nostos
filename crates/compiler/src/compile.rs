@@ -22277,6 +22277,27 @@ impl Compiler {
             Expr::Index(e, idx, _) => {
                 self.expr_references_name(e, name) || self.expr_references_name(idx, name)
             }
+            Expr::MethodCall(obj, _, args, _) => {
+                self.expr_references_name(obj, name)
+                    || args.iter().any(|a| match a {
+                        CallArg::Positional(e) | CallArg::Named(_, e) => self.expr_references_name(e, name),
+                    })
+            }
+            Expr::Try_(e, _) => self.expr_references_name(e, name),
+            Expr::Try(try_expr, catch_arms, finally_expr, _) => {
+                self.expr_references_name(try_expr, name)
+                    || catch_arms.iter().any(|arm| self.expr_references_name(&arm.body, name))
+                    || finally_expr.as_ref().map_or(false, |e| self.expr_references_name(e, name))
+            }
+            Expr::Spawn(_, func, args, _) => {
+                self.expr_references_name(func, name)
+                    || args.iter().any(|a| self.expr_references_name(a, name))
+            }
+            Expr::Record(_, fields, _) | Expr::RecordUpdate(_, _, fields, _) => {
+                fields.iter().any(|f| match f {
+                    RecordField::Positional(e) | RecordField::Named(_, e) => self.expr_references_name(e, name),
+                })
+            }
             _ => false,
         }
     }
