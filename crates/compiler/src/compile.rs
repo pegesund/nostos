@@ -1249,15 +1249,17 @@ impl CompileError {
                 let type2 = parts[1].trim();
 
                 // Case 1: Unit type in unexpected context
-                // This can happen in two scenarios:
-                // a) Missing else branch: `if x { 5 }` returns () when false, but Int when true
-                // b) Unit value used where a value is expected: `f() + 1` where f() returns ()
-                // We can't distinguish them without more context, so use a generic message.
+                // Respect t1/t2 ordering: t1 is "expected", t2 is "found"
                 if type1 == "()" || type2 == "()" {
-                    let non_unit = if type1 == "()" { type2 } else { type1 };
-                    // Don't assume it's a missing else branch - could be using Unit in arithmetic
+                    let (expected, found) = if type2 == "()" {
+                        // Expected non-unit, found unit: e.g. function supposed to return Int but returned ()
+                        (type1, "()")
+                    } else {
+                        // Expected unit, found non-unit: e.g. passing non-unit where unit expected
+                        ("()", type2)
+                    };
                     return SourceError::compile(
-                        format!("type mismatch: expected `{}`, found `()`", non_unit),
+                        format!("type mismatch: expected `{}`, found `{}`", expected, found),
                         span,
                     ).with_hint("a `()` (unit) value cannot be used where a value is expected")
                      .with_note("this can happen when: (1) an `if` lacks an `else` branch, (2) a function returns `()` but a value was expected, or (3) a statement was used where an expression was expected");
