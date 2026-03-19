@@ -1276,6 +1276,23 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                     .ignore_then(type_name())
                     .then(record_field_args.clone())
                     .map_with_span(|(name, fields), span| (PostfixOp::QualifiedRecord(name, fields), to_span(span))),
+                // Chained tuple index: .0.1 — lexer greedily tokenizes this as Dot + Float("0.1")
+                // We detect this and produce a ChainedTupleAccess so both indices are applied.
+                skip_newlines()
+                    .ignore_then(just(Token::Dot))
+                    .ignore_then(
+                        select! { Token::Float(s) => s }
+                            .try_map(|s, span| {
+                                // Only treat as chained tuple access if both parts are non-negative integers
+                                let parts: Vec<&str> = s.splitn(2, '.').collect();
+                                if parts.len() == 2 && parts[0].parse::<u64>().is_ok() && parts[1].parse::<u64>().is_ok() {
+                                    Ok((parts[0].to_string(), parts[1].to_string()))
+                                } else {
+                                    Err(Simple::custom(span, "not a chained tuple access"))
+                                }
+                            })
+                    )
+                    .map_with_span(|(a, b), span| (PostfixOp::ChainedTupleAccess(a, b), to_span(span))),
                 // Method call or field access: .foo or .foo(args) or tuple index .0 .1
                 // Allow newlines before . for multi-line method chaining
                 skip_newlines()
@@ -1332,6 +1349,14 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                 let qualified_name = extract_qualified_path(&lhs, &type_name.node);
                 let qualified_ident = Ident { node: qualified_name, span: full_span };
                 Expr::Record(qualified_ident, fields, full_span)
+            }
+            PostfixOp::ChainedTupleAccess(outer_idx, inner_idx) => {
+                // t.0.1 was lexed as t . Float("0.1") — apply two FieldAccess ops
+                let full_span = get_span(&lhs).merge(span);
+                let outer_ident = Ident { node: outer_idx, span: full_span };
+                let inner_ident = Ident { node: inner_idx, span: full_span };
+                let outer_access = Expr::FieldAccess(Box::new(lhs), outer_ident, full_span);
+                Expr::FieldAccess(Box::new(outer_access), inner_ident, full_span)
             }
         });
 
@@ -1508,6 +1533,9 @@ enum PostfixOp {
     /// Qualified record construction: .TypeName(base, field: value)
     /// The Ident is the type name (uppercase), Vec<RecordField> are the fields
     QualifiedRecord(Ident, Vec<RecordField>),
+    /// Chained tuple access that the lexer ate as a float: .0.1 becomes Float("0.1")
+    /// Stores (outer_index, inner_index) as strings
+    ChainedTupleAccess(String, String),
 }
 
 /// Extract a qualified path from an expression chain and append a type name.
