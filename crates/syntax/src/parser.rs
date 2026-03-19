@@ -104,7 +104,7 @@ fn ident() -> impl Parser<Token, Ident, Error = Simple<Token>> + Clone {
         Token::Finally | Token::Do | Token::While | Token::For | Token::To |
         Token::Break | Token::Continue | Token::Return | Token::Spawn | Token::SpawnLink |
         Token::SpawnMonitor | Token::Receive | Token::After |
-        Token::Extern | Token::From | Token::Quote =>
+        Token::Extern | Token::From | Token::Quote | Token::Template =>
             Err(Simple::custom(span, format!("'{}' is a reserved keyword", tok))),
         _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
     })
