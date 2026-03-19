@@ -7655,8 +7655,9 @@ impl<'a> InferCtx<'a> {
                                 });
                             }
                             // Use unify_at with call span for precise error reporting
+                            // NOTE: param_ty FIRST, arg_ty SECOND so errors say "expected param, found arg"
                             for (param_ty, arg_ty) in ft.params.iter().zip(arg_types.iter()) {
-                                self.unify_at(arg_ty.clone(), param_ty.clone(), *call_span);
+                                self.unify_at(param_ty.clone(), arg_ty.clone(), *call_span);
                                 // Record for post-solve structural mismatch checking
                                 self.deferred_fn_call_checks.push((param_ty.clone(), arg_ty.clone(), *call_span));
                             }
@@ -7692,8 +7693,9 @@ impl<'a> InferCtx<'a> {
                                     found: arg_types.len(),
                                 });
                             }
+                            // NOTE: param_ty FIRST, arg_ty SECOND so errors say "expected param, found arg"
                             for (param_ty, arg_ty) in ft.params.iter().zip(arg_types.iter()) {
-                                self.unify_at(arg_ty.clone(), param_ty.clone(), *call_span);
+                                self.unify_at(param_ty.clone(), arg_ty.clone(), *call_span);
                                 self.deferred_fn_call_checks.push((param_ty.clone(), arg_ty.clone(), *call_span));
                             }
                             self.deferred_collection_ret_checks.push(((*ft.ret).clone(), *call_span));
@@ -7747,8 +7749,9 @@ impl<'a> InferCtx<'a> {
                                 });
                             }
                             // Unify argument types with parameter types (with call span)
+                            // NOTE: param_ty FIRST, arg_ty SECOND so errors say "expected param, found arg"
                             for (param_ty, arg_ty) in ft.params.iter().zip(arg_types.iter()) {
-                                self.unify_at(arg_ty.clone(), param_ty.clone(), *call_span);
+                                self.unify_at(param_ty.clone(), arg_ty.clone(), *call_span);
                             }
                             // Unify return type
                             self.unify_at(ret_ty.clone(), *ft.ret, *call_span);
