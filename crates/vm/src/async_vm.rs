@@ -12483,6 +12483,9 @@ impl AsyncVM {
             name: "String.substring".to_string(),
             arity: 3,
             func: Box::new(|args, heap| {
+                if args.len() < 3 {
+                    return Err(RuntimeError::Panic(format!("String.substring requires 3 arguments (string, start, end), got {}", args.len())));
+                }
                 let s = match &args[0] {
                     GcValue::String(ptr) => heap.get_string(*ptr).map(|s| s.data.clone()),
                     _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
