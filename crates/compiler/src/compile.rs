@@ -14899,6 +14899,13 @@ impl Compiler {
                     }
                     Err(CompileError::UnknownVariable { name, span, .. }) |
                     Err(CompileError::UnknownFunction { name, span, .. }) => {
+                        // Only re-interpret as UFCS error if the failed name matches the method
+                        // being called. If the name doesn't match, the error is a nested error
+                        // from inside a lambda body (e.g., describe(c) inside sorted.map(c => describe(c)))
+                        // and should be propagated as-is to avoid confusing error messages.
+                        if name != method.node {
+                            return Err(CompileError::UnknownFunction { name, suggestions: vec![], span });
+                        }
                         // Improve error message: this was a method call, not a plain variable
                         let receiver_type = self.expr_type_info(obj).display_name()
                             .unwrap_or_else(|| "unknown".to_string());
@@ -17962,6 +17969,17 @@ impl Compiler {
                                     return Ok(dst);
                                 }
                             }
+                        } else if self.is_known_trait_method(&qualified_name)
+                            && !Self::is_generic_builtin_method(&qualified_name)
+                            && !self.is_type_concrete(arg_type)
+                        {
+                            // Arg type is known but no trait impl was found for it - the type
+                            // may be a generic/type-param (e.g., "a" or "T") that will be
+                            // resolved during monomorphization.
+                            return Err(CompileError::UnresolvedTraitMethod {
+                                method: qualified_name.clone(),
+                                span: func.span(),
+                            });
                         }
                     } else if self.is_known_trait_method(&qualified_name)
                         && !Self::is_generic_builtin_method(&qualified_name)
@@ -26840,11 +26858,50 @@ impl Compiler {
             }
         }
 
-        // Infer the function type
-        let func_ty = match ctx.infer_function(def) {
-            Ok(ft) => ft,
-            Err(_e) => {
-                return (None, None);
+        // Infer the function type.
+        // If we get UnknownIdent (e.g., a function name not yet defined or intentionally
+        // erroneous), register it as a generic function and retry. This allows type info
+        // for other expressions in the function to still be collected (e.g., knowing the
+        // concrete type of arguments passed to polymorphic callee functions, which enables
+        // monomorphization even when the function body has unknown-function errors).
+        let func_ty = {
+            let mut max_retries = 10;
+            let mut result = ctx.infer_function(def);
+            let mut retried_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+            while let Err(nostos_types::TypeError::UnknownIdent(ref unknown_name)) = result {
+                if max_retries == 0 { break; }
+                max_retries -= 1;
+                // Don't retry for throw/panic (intentionally excluded from env to prevent false positives)
+                if matches!(unknown_name.as_str(), "throw" | "panic" | "assert" | "unreachable") {
+                    break;
+                }
+                if retried_names.contains(unknown_name) { break; }
+                retried_names.insert(unknown_name.clone());
+                // Register the unknown name as a fresh type variable so inference
+                // can continue past it. Using a variable (not a function) avoids
+                // false "type mismatch" errors when the name is used as a value
+                // (e.g., `x + undefinedVar` should remain "unknown variable", not
+                // "Int vs (a)->b"). HM will unify the fresh var appropriately based
+                // on how it's used (called as function, added, etc.).
+                let fresh_ty = env.fresh_var();
+                env.bind(unknown_name.clone(), fresh_ty, false);
+                // Recreate context with updated env (InferCtx borrows env mutably)
+                ctx = InferCtx::new(&mut env);
+                // Re-register top-level lambda bindings
+                for (_, (binding, _, _)) in &self.top_level_bindings {
+                    if let Pattern::Var(_) = &binding.pattern {
+                        if matches!(&binding.value, nostos_syntax::Expr::Lambda(_, _, _)) {
+                            let _ = ctx.infer_binding(binding);
+                        }
+                    }
+                }
+                result = ctx.infer_function(def);
+            }
+            match result {
+                Ok(ft) => ft,
+                Err(_e) => {
+                    return (None, None);
+                }
             }
         };
 
@@ -28331,9 +28388,41 @@ impl Compiler {
             }
         }
 
-        // Infer the function type - this generates constraints
+        // Infer the function type - this generates constraints.
+        // Retry loop: if inference fails with UnknownIdent (e.g., for a function that is
+        // intentionally erroneous), register the unknown name as a fresh type variable and retry.
+        // This allows type info for other expressions (e.g., local variable types for
+        // monomorphization) to still be collected.
+        // EXCEPTION: throw/panic are intentionally excluded from type_check_fn's env to prevent
+        // false positive type errors from heterogeneous maps. Don't retry for them.
         let span = def.name.span;
-        if let Err(e) = ctx.infer_function(def) {
+        let mut did_retry = false;
+        {
+            let mut result = ctx.infer_function(def);
+            let mut max_retries = 10usize;
+            let mut retried_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+            while let Err(nostos_types::TypeError::UnknownIdent(ref unknown_name)) = result {
+                if max_retries == 0 { break; }
+                max_retries -= 1;
+                // Don't retry for intentionally excluded names (throw/panic etc. cause false positives)
+                if matches!(unknown_name.as_str(), "throw" | "panic" | "assert" | "unreachable"
+                    | "self" | "spawn" | "receive" | "assert_eq" | "assert_ne") {
+                    break;
+                }
+                if retried_names.contains(unknown_name) { break; }
+                retried_names.insert(unknown_name.clone());
+                let unknown_name_clone = unknown_name.clone();
+                drop(ctx);
+                let fresh_ty = env.fresh_var();
+                env.bind(unknown_name_clone, fresh_ty, false);
+                ctx = InferCtx::new(&mut env);
+                for binding in &lambda_bindings_to_infer {
+                    let _ = ctx.infer_binding(binding);
+                }
+                did_retry = true;
+                result = ctx.infer_function(def);
+            }
+            if let Err(e) = result {
             // Apply the same suppression logic as for solve() errors.
             // HM inference doesn't know about all identifiers (e.g., throw, panic,
             // stdlib functions) or types (e.g., RHtml), so UnknownIdent/UnknownType
@@ -28353,10 +28442,24 @@ impl Compiler {
             // so skip solve() and return empty resolved types.
             return Ok(vec![]);
         }
+        } // close retry block
 
         // Solve constraints - this is where type mismatches are detected
         let solve_result = ctx.solve();
-        if let Err(e) = solve_result {
+        if let Err(_e) = solve_result {
+            // When we did a retry (registered unknown names as fresh vars), the solve
+            // may produce false positive type errors because the fresh vars interact with
+            // real types in unexpected ways. The code is already known to be erroneous
+            // (it has unknown functions), so suppress ALL solve errors after a retry.
+            // The actual error (unknown function) will be reported during body compilation.
+            if did_retry {
+                // Extract whatever partial type info was collected before the error
+                let resolved_expr_types: Vec<(nostos_syntax::Span, nostos_types::Type)> = ctx.take_expr_types()
+                    .into_iter()
+                    .collect();
+                return Ok(resolved_expr_types);
+            }
+            let e = _e;
             // Before returning the solve error, check for more specific errors that
             // bypass string-based error filters. These produce Mismatch errors.
             if let Some(mismatch_err) = ctx.check_fn_call_mismatches() {
