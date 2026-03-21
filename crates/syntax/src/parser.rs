@@ -98,10 +98,13 @@ fn ident() -> impl Parser<Token, Ident, Error = Simple<Token>> + Clone {
         Token::SelfKw => Ok(make_ident("self".to_string(), to_span(span))),
         // panic is a builtin function, not a reserved keyword
         Token::Panic => Ok(make_ident("panic".to_string(), to_span(span))),
+        // 'to' is used as a separator in for-loops (for x = 1 to 10) but is not truly
+        // reserved as an identifier - allow it as a variable/pattern name
+        Token::To => Ok(make_ident("to".to_string(), to_span(span))),
         Token::Test | Token::Type | Token::Var | Token::Mvar | Token::If | Token::Then | Token::Else |
         Token::Match | Token::When | Token::Trait | Token::Module | Token::End |
         Token::Use | Token::Private | Token::Pub | Token::Try | Token::Catch |
-        Token::Finally | Token::Do | Token::While | Token::For | Token::To |
+        Token::Finally | Token::Do | Token::While | Token::For |
         Token::Break | Token::Continue | Token::Return | Token::Spawn | Token::SpawnLink |
         Token::SpawnMonitor | Token::Receive | Token::After |
         Token::Extern | Token::From | Token::Quote | Token::Template =>
