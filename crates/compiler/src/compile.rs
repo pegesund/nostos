@@ -27218,7 +27218,7 @@ impl Compiler {
         // Trait constraints (e.g., Eq from x == y) are stored in deferred_has_trait
         // as (TypeParam("T"), "Eq") rather than in trait_bounds (which is keyed by Var ID).
         let deferred_traits = ctx.get_deferred_has_trait().to_vec();
-        for (ty, trait_name) in &deferred_traits {
+        for (ty, trait_name, _span) in &deferred_traits {
             if trait_name.starts_with("HasField(") || trait_name.starts_with("HasMethod(") {
                 continue;
             }

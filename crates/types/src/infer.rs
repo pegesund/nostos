@@ -233,8 +233,8 @@ fn type_has_external_anchor(ty: &Type, vars_before: u32) -> bool {
 pub enum Constraint {
     /// Two types must be equal (with optional span for error reporting)
     Equal(Type, Type, Option<Span>),
-    /// A type must implement a trait
-    HasTrait(Type, String),
+    /// A type must implement a trait (with optional span for error reporting)
+    HasTrait(Type, String, Option<Span>),
     /// A type must have a field
     HasField(Type, String, Type),
 }
@@ -298,11 +298,12 @@ pub struct InferCtx<'a> {
     /// False if solve() hit MAX_ITERATIONS limit.
     solve_completed: bool,
     /// Deferred HasTrait constraints: the ORIGINAL type from the constraint
-    /// (before substitution) and the trait name. Used in post-solve to retry
-    /// constraints that were deferred because the type was still a Var.
+    /// (before substitution), the trait name, and optional span for error reporting.
+    /// Used in post-solve to retry constraints that were deferred because the type
+    /// was still a Var.
     /// Unlike trait_bounds (which includes merged bounds from variable unification),
     /// this tracks only direct HasTrait constraints, avoiding false positives.
-    deferred_has_trait: Vec<(Type, String)>,
+    deferred_has_trait: Vec<(Type, String, Option<Span>)>,
     /// Deferred HasField constraints: type, field name, expected field type.
     /// These are saved when the type is still unresolved (Var) so they can be
     /// re-checked after check_pending_method_calls resolves more types.
@@ -606,10 +607,10 @@ impl<'a> InferCtx<'a> {
         self.type_param_mappings.get(name).cloned()
     }
 
-    /// Get deferred HasTrait constraints (type, trait_name pairs).
+    /// Get deferred HasTrait constraints (type, trait_name, span triples).
     /// Used by try_hm_inference to discover trait bounds on TypeParams
     /// that were deferred during solve() rather than stored in trait_bounds.
-    pub fn get_deferred_has_trait(&self) -> &[(Type, String)] {
+    pub fn get_deferred_has_trait(&self) -> &[(Type, String, Option<Span>)] {
         &self.deferred_has_trait
     }
 
@@ -733,7 +734,13 @@ impl<'a> InferCtx<'a> {
     /// Add a trait constraint.
     pub fn require_trait(&mut self, ty: Type, trait_name: &str) {
         self.constraints
-            .push(Constraint::HasTrait(ty, trait_name.to_string()));
+            .push(Constraint::HasTrait(ty, trait_name.to_string(), None));
+    }
+
+    /// Add a trait constraint with span information for precise error reporting.
+    pub fn require_trait_at(&mut self, ty: Type, trait_name: &str, span: Span) {
+        self.constraints
+            .push(Constraint::HasTrait(ty, trait_name.to_string(), Some(span)));
     }
 
     /// Add a field constraint.
@@ -1089,6 +1096,7 @@ impl<'a> InferCtx<'a> {
                 self.constraints.push(Constraint::HasTrait(
                     Type::Var(*new_id),
                     bound.clone(),
+                    None,
                 ));
             }
         }
@@ -1289,6 +1297,7 @@ impl<'a> InferCtx<'a> {
                             self.constraints.push(Constraint::HasTrait(
                                 fresh_var.clone(),
                                 constraint.clone(),
+                                None,
                             ));
                         }
                     }
@@ -1416,6 +1425,7 @@ impl<'a> InferCtx<'a> {
                                         self.constraints.push(Constraint::HasTrait(
                                             var_subst_var.clone(),
                                             bound.clone(),
+                                            None,
                                         ));
                                     }
                                 }
@@ -1530,6 +1540,7 @@ impl<'a> InferCtx<'a> {
                             self.constraints.push(Constraint::HasTrait(
                                 Type::Var(fresh_id),
                                 bound.clone(),
+                                None,
                             ));
                         }
                     }
@@ -1591,6 +1602,7 @@ impl<'a> InferCtx<'a> {
                                 self.constraints.push(Constraint::HasTrait(
                                     Type::Var(fresh_id),
                                     bound.clone(),
+                                    None,
                                 ));
                             }
                         }
@@ -2533,10 +2545,15 @@ impl<'a> InferCtx<'a> {
                     }
                     deferred_count = 0; // Made progress
                 }
-                Constraint::HasTrait(ty, trait_name) => {
+                Constraint::HasTrait(ty, trait_name, span) => {
                     let resolved = self.env.apply_subst(&ty);
                     // Expand type aliases so e.g. `type Score = Int` makes Score implement Num
                     let resolved = self.expand_type_alias(&resolved).unwrap_or(resolved);
+                    // Update span tracking when a span is present, for precise error reporting
+                    if let Some(s) = span {
+                        self.current_constraint_span = Some(s);
+                        self.last_error_span = Some(s);
+                    }
                     match &resolved {
                         Type::Var(var_id) => {
                             // Track trait bound on the type variable
@@ -2545,7 +2562,7 @@ impl<'a> InferCtx<'a> {
                             // Unlike trait_bounds (which get merged during variable
                             // unification), this preserves the original type so we can
                             // re-check after all substitutions are finalized.
-                            self.deferred_has_trait.push((ty, trait_name));
+                            self.deferred_has_trait.push((ty, trait_name, span));
                             deferred_count = 0; // Made progress (recorded the bound)
                         }
                         Type::TypeParam(_) => {
@@ -2563,7 +2580,7 @@ impl<'a> InferCtx<'a> {
                             if let Type::Var(orig_var_id) = &ty {
                                 self.add_trait_bound(*orig_var_id, trait_name.clone());
                             }
-                            self.deferred_has_trait.push((ty, trait_name));
+                            self.deferred_has_trait.push((ty, trait_name, span));
                             deferred_count = 0; // Made progress (recorded the bound)
                         }
                         _ => {
@@ -2584,7 +2601,7 @@ impl<'a> InferCtx<'a> {
                                     // constraint from one function landing on a callback type
                                     // from another). Deferring gives more time for types to
                                     // resolve and avoids these false positives.
-                                    self.deferred_has_trait.push((ty, trait_name));
+                                    self.deferred_has_trait.push((ty, trait_name, span));
                                     deferred_count = 0;
                                 } else {
                                     // Fully concrete function type - definitely an error.
@@ -2610,7 +2627,7 @@ impl<'a> InferCtx<'a> {
                                     });
                                 }
                                 // Save for post-solve retry - type vars may resolve later
-                                self.deferred_has_trait.push((ty, trait_name));
+                                self.deferred_has_trait.push((ty, trait_name, span));
                                 deferred_count = 0;
                             } else {
                                 // Fully concrete type that doesn't implement the trait
@@ -2792,10 +2809,14 @@ impl<'a> InferCtx<'a> {
         // We use deferred_has_trait (which tracks the ORIGINAL constraint types)
         // rather than trait_bounds (which includes merged bounds from variable
         // unification that may create false positives).
-        for (ty, trait_name) in &self.deferred_has_trait.clone() {
+        for (ty, trait_name, span) in &self.deferred_has_trait.clone() {
             let resolved = self.env.apply_subst(ty);
             // Expand type aliases so e.g. `type Score = Int` makes Score implement Num
             let resolved = self.expand_type_alias(&resolved).unwrap_or(resolved);
+            // Update span tracking if this constraint has a span
+            if let Some(s) = span {
+                self.last_error_span = Some(*s);
+            }
             match &resolved {
                 Type::Var(_) | Type::TypeParam(_) => {} // Still unresolved or polymorphic, skip
                 // Named types with single lowercase letter and no args are type params
@@ -2827,8 +2848,7 @@ impl<'a> InferCtx<'a> {
                             // Fall through to report the definitive error
                         }
                         // Type is fully concrete (or definitely doesn't implement).
-
-                        self.last_error_span = None;
+                        // last_error_span is already set above from the stored span if available.
                         let display_ty = if let Type::Named { name, args, .. } = &resolved {
                             if args.iter().any(|a| a.has_any_type_var()) {
                                 name.rsplit('.').next().unwrap_or(name).to_string()
@@ -2967,10 +2987,14 @@ impl<'a> InferCtx<'a> {
         // Method call resolution (above) may have resolved type variables that were
         // Vars during the first deferred_has_trait pass. For example, fold's lambda
         // params get unified with List element types during check_pending_method_calls.
-        for (ty, trait_name) in &self.deferred_has_trait.clone() {
+        for (ty, trait_name, span) in &self.deferred_has_trait.clone() {
             let resolved = self.env.apply_subst(ty);
             // Expand type aliases
             let resolved = self.expand_type_alias(&resolved).unwrap_or(resolved);
+            // Update span tracking if this constraint has a span
+            if let Some(s) = span {
+                self.last_error_span = Some(*s);
+            }
             match &resolved {
                 Type::Var(_) | Type::TypeParam(_) => {} // Still unresolved or polymorphic, skip
                 // Named type params leaked through apply_subst — skip
@@ -2989,7 +3013,7 @@ impl<'a> InferCtx<'a> {
                             && !self.env.definitely_not_implements(&resolved, trait_name) {
                             continue;
                         }
-                        self.last_error_span = None;
+                        // last_error_span is already set above from the stored span if available.
                         let display_ty = if let Type::Named { name, args, .. } = &resolved {
                             if args.iter().any(|a| a.has_any_type_var()) {
                                 name.rsplit('.').next().unwrap_or(name).to_string()
@@ -3170,10 +3194,14 @@ impl<'a> InferCtx<'a> {
         // The signature encodes HasField(0,b) on list element type and Concat on b.
         // After deferred_has_field resolves pair.0 → Int, the Concat bound on b (now Int)
         // becomes checkable. Without this third pass, the error goes undetected.
-        for (ty, trait_name) in &self.deferred_has_trait.clone() {
+        for (ty, trait_name, span) in &self.deferred_has_trait.clone() {
             let resolved = self.env.apply_subst(ty);
             // Expand type aliases
             let resolved = self.expand_type_alias(&resolved).unwrap_or(resolved);
+            // Update span tracking if this constraint has a span
+            if let Some(s) = span {
+                self.last_error_span = Some(*s);
+            }
             match &resolved {
                 Type::Var(_) | Type::TypeParam(_) => {} // Still unresolved or polymorphic, skip
                 // Named type params leaked through apply_subst — skip
@@ -3192,7 +3220,7 @@ impl<'a> InferCtx<'a> {
                             && !self.env.definitely_not_implements(&resolved, trait_name) {
                             continue;
                         }
-                        self.last_error_span = None;
+                        // last_error_span is already set above from the stored span if available.
                         let display_ty = if let Type::Named { name, args, .. } = &resolved {
                             if args.iter().any(|a| a.has_any_type_var()) {
                                 name.rsplit('.').next().unwrap_or(name).to_string()
@@ -4403,8 +4431,8 @@ impl<'a> InferCtx<'a> {
                             // already finished, so self.constraints won't be processed again.
                             let remaining = std::mem::take(&mut self.constraints);
                             for constraint in remaining {
-                                if let Constraint::HasTrait(ty, trait_name) = constraint {
-                                    self.deferred_has_trait.push((ty, trait_name));
+                                if let Constraint::HasTrait(ty, trait_name, span) = constraint {
+                                    self.deferred_has_trait.push((ty, trait_name, span));
                                 } else {
                                     // Put back non-HasTrait constraints
                                     self.constraints.push(constraint);
@@ -8076,7 +8104,7 @@ impl<'a> InferCtx<'a> {
             // Comparison: both operands same type with Ord, result Bool
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
                 self.unify(left_ty.clone(), right_ty);
-                self.require_trait(left_ty, "Ord");
+                self.require_trait_at(left_ty, "Ord", span);
                 Ok(Type::Bool)
             }
 
@@ -9031,7 +9059,7 @@ impl<'a> InferCtx<'a> {
                         Constraint::Equal(a, b, _) => {
                             analyze_constraint_pair(a, b, &mut constrained_vars, &mut internal_equals);
                         }
-                        Constraint::HasTrait(ty, trait_name) => {
+                        Constraint::HasTrait(ty, trait_name, _span) => {
                             // HasTrait constrains only if it involves external types/vars.
                             // A HasTrait(?X, "Num") where ?X is internal to the lambda
                             // should NOT prevent generalization - the trait bound gets
@@ -9554,7 +9582,7 @@ impl<'a> InferCtx<'a> {
                     // Collect HasTrait bounds grouped by equivalence class root
                     let mut root_bounds: std::collections::HashMap<u32, Vec<String>> = std::collections::HashMap::new();
                     for constraint in &self.constraints {
-                        if let Constraint::HasTrait(Type::Var(var_id), trait_name) = constraint {
+                        if let Constraint::HasTrait(Type::Var(var_id), trait_name, _span) = constraint {
                             let root = uf_find2(&mut parent, *var_id);
                             let bounds = root_bounds.entry(root).or_default();
                             if !bounds.contains(trait_name) {
@@ -9582,12 +9610,13 @@ impl<'a> InferCtx<'a> {
                                 }
                                 // Only push if this exact constraint isn't already queued
                                 let already_exists = self.constraints.iter().any(|c| {
-                                    matches!(c, Constraint::HasTrait(Type::Var(vid), tn) if *vid == var_id && tn == bound)
+                                    matches!(c, Constraint::HasTrait(Type::Var(vid), tn, _) if *vid == var_id && tn == bound)
                                 });
                                 if !already_exists {
                                     self.constraints.push(Constraint::HasTrait(
                                         Type::Var(var_id),
                                         bound.clone(),
+                                        None,
                                     ));
                                 }
                             }
@@ -9613,7 +9642,7 @@ impl<'a> InferCtx<'a> {
                 }
                 // Also check constraints pushed by the union-find propagation above
                 for constraint in &self.constraints {
-                    if let Constraint::HasTrait(Type::Var(vid), tn) = constraint {
+                    if let Constraint::HasTrait(Type::Var(vid), tn, _) = constraint {
                         if *vid == var_id && !tn.starts_with("HasMethod(") && !tn.starts_with("HasField(")
                             && !discovered_bounds.iter().any(|(id, b)| *id == var_id && b == tn)
                         {
