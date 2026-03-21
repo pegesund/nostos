@@ -1,0 +1,14 @@
+# expect: "number:42"
+# Implementing a trait on a type alias should dispatch correctly
+type Num99 = Int
+
+trait Describable99 describe99(x) -> String end
+
+Num99: Describable99
+  describe99(n) = "number:" ++ n.show()
+end
+
+main() = {
+  n: Num99 = 42
+  describe99(n)
+}
