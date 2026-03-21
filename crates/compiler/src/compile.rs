@@ -20986,6 +20986,20 @@ impl Compiler {
     fn expr_type_info(&self, expr: &Expr) -> ExprTypeInfo {
         // Try structural type first (most reliable)
         if let Some(ty) = self.expr_type(expr) {
+            // If the HM type is a Named type that is a type alias, resolve it to its target
+            // so that UFCS method dispatch works correctly. E.g., if `type Token = String`
+            // is defined in another module, a value of type `types.Token` should dispatch
+            // String methods.
+            if let nostos_types::Type::Named { ref name, ref args } = ty {
+                if args.is_empty() {
+                    if let Some(target_name) = self.resolve_type_alias_chain(name) {
+                        let target_type = self.type_name_to_type(&target_name);
+                        if !matches!(target_type, nostos_types::Type::Named { .. }) {
+                            return ExprTypeInfo::Resolved(target_type);
+                        }
+                    }
+                }
+            }
             return ExprTypeInfo::Resolved(ty.clone());
         }
         // Fall back to string-based type name
@@ -20993,6 +21007,30 @@ impl Compiler {
             return ExprTypeInfo::NameOnly(name);
         }
         ExprTypeInfo::Unknown
+    }
+
+    /// Resolve a type alias chain, returning the final non-alias type name.
+    /// E.g., "types.Token" -> "String", or "types.MyAlias" -> "MyBase" if it's another alias.
+    /// Returns None if the name is not a type alias.
+    fn resolve_type_alias_chain(&self, name: &str) -> Option<String> {
+        let mut current = name.to_string();
+        let mut steps = 0;
+        loop {
+            if steps > 10 { break; } // Prevent infinite loops in cyclic aliases
+            steps += 1;
+            if let Some(target) = self.type_alias_targets.get(&current) {
+                let next = target.clone();
+                if next == current { break; }
+                current = next;
+            } else {
+                break;
+            }
+        }
+        if current != name {
+            Some(current)
+        } else {
+            None
+        }
     }
 
     /// Ensure the BUILTINS signature cache is populated.

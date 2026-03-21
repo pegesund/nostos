@@ -21,7 +21,7 @@ impl Compiler {
         }
         // 2. Try resolving through imports (e.g., "use Types.*" maps IntBox -> Types.IntBox)
         if let Some(imported) = self.imports.get(name) {
-            if self.types.contains_key(imported) {
+            if self.types.contains_key(imported) || self.type_alias_targets.contains_key(imported) {
                 return imported.clone();
             }
         }

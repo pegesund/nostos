@@ -6273,6 +6273,13 @@ impl<'a> InferCtx<'a> {
             (Type::Named { name, args }, other) | (other, Type::Named { name, args })
                 if args.is_empty() =>
             {
+                // First try to expand type aliases (e.g., types.Token -> String for cross-module aliases)
+                let named_ty = Type::Named { name: name.clone(), args: args.clone() };
+                if let Some(expanded) = self.expand_type_alias(&named_ty) {
+                    if expanded != named_ty {
+                        return self.unify_types(&expanded, other);
+                    }
+                }
                 // Try to resolve the Named type to a primitive and re-unify
                 let resolved_name = self.env.resolve_type_name(name);
                 let primitive = match resolved_name.as_str() {
@@ -7246,6 +7253,17 @@ impl<'a> InferCtx<'a> {
                                 RecordField::Named(_, e) => e,
                             };
                             arg_types.push(self.infer_expr(expr)?);
+                        }
+
+                        // Check arity explicitly to produce correct "expected N, found M" message
+                        if let Type::Function(ref ctor_fn) = ctor_ty {
+                            let expected_params = ctor_fn.required_params.unwrap_or(ctor_fn.params.len());
+                            if arg_types.len() != expected_params {
+                                return Err(TypeError::ArityMismatch {
+                                    expected: expected_params,
+                                    found: arg_types.len(),
+                                });
+                            }
                         }
 
                         let ret_ty = self.fresh();
