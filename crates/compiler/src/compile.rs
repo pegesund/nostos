@@ -9000,6 +9000,27 @@ impl Compiler {
                     names.push(imported.clone());
                 }
             }
+            // Also try type aliases that point to this type (reverse alias lookup).
+            // When `type Num99 = Int` and `Num99: MyTrait`, the trait is registered on
+            // "Num99" but the call site may have resolved the alias to "Int" or "String".
+            // We need to also check aliases whose target matches the type we're looking for.
+            for (alias_name, target_name) in &self.type_alias_targets {
+                let target_base = if let Some(b) = target_name.find('[') {
+                    &target_name[..b]
+                } else {
+                    target_name.as_str()
+                };
+                if target_base == base_type_name || target_name == base_type_name {
+                    let alias_base = if let Some(b) = alias_name.find('[') {
+                        alias_name[..b].to_string()
+                    } else {
+                        alias_name.clone()
+                    };
+                    if !names.contains(&alias_base) {
+                        names.push(alias_base);
+                    }
+                }
+            }
             names
         };
 

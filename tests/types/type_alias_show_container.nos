@@ -1,4 +1,4 @@
-# expect: [1, 2, 3]
+# expect: "[1, 2, 3]"
 # Type alias for container with show function
 type Values = [Int]
 display(vs: Values) = show(vs)
