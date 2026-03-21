@@ -119,7 +119,7 @@ init[T](list: List[T]) -> List[T] = match list {
 }
 
 # Get element at index (0-based)
-nth[T](list: List[T], idx: Int) -> T = if idx == 0 then head(list) else nth(tail(list), idx - 1)
+nth[T](list: List[T], idx: Int) -> T = if idx < 0 then throw("Index out of bounds: " ++ show(idx) ++ " (negative index not allowed)") else if idx == 0 then head(list) else nth(tail(list), idx - 1)
 
 # Alias for nth
 get[T](list: List[T], idx: Int) -> T = nth(list, idx)
