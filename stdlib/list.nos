@@ -98,6 +98,13 @@ optIsNone[T](opt: Option[T]) -> Bool = match opt {
     None() -> true
 }
 
+# Tuple helpers
+# Get first element of a 2-tuple
+fst[A, B](pair: (A, B)) -> A = { (a, _) = pair; a }
+
+# Get second element of a 2-tuple
+snd[A, B](pair: (A, B)) -> B = { (_, b) = pair; b }
+
 # Get last element of a list
 last[T](list: List[T]) -> T = match list {
     [] -> panic("last: empty list")
