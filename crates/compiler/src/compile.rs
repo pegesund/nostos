@@ -20998,12 +20998,41 @@ impl Compiler {
                             return ExprTypeInfo::Resolved(target_type);
                         }
                     }
+                    // Also try the short name (unqualified) if the full name didn't resolve
+                    let short_name = name.rsplit('.').next().unwrap_or(name);
+                    if short_name != name.as_str() {
+                        if let Some(target_name) = self.resolve_type_alias_chain(short_name) {
+                            let target_type = self.type_name_to_type(&target_name);
+                            if !matches!(target_type, nostos_types::Type::Named { .. }) {
+                                return ExprTypeInfo::Resolved(target_type);
+                            }
+                        }
+                    }
                 }
             }
             return ExprTypeInfo::Resolved(ty.clone());
         }
         // Fall back to string-based type name
         if let Some(name) = self.expr_type_name(expr) {
+            // If the name is a type alias, resolve it to its target for proper method dispatch
+            if let Some(target_name) = self.resolve_type_alias_chain(&name) {
+                let target_type = self.type_name_to_type(&target_name);
+                if !matches!(target_type, nostos_types::Type::Named { .. }) {
+                    return ExprTypeInfo::Resolved(target_type);
+                }
+            }
+            // Also try with module prefix
+            if !name.contains('.') {
+                for (alias, target) in &self.type_alias_targets {
+                    if alias.ends_with(&format!(".{}", name)) {
+                        let target_type = self.type_name_to_type(target);
+                        if !matches!(target_type, nostos_types::Type::Named { .. }) {
+                            return ExprTypeInfo::Resolved(target_type);
+                        }
+                        break;
+                    }
+                }
+            }
             return ExprTypeInfo::NameOnly(name);
         }
         ExprTypeInfo::Unknown
@@ -26635,6 +26664,24 @@ impl Compiler {
         };
 
         // === Per-call additions (volatile, depend on current module or self.functions) ===
+
+        // Register any type alias definitions that were added AFTER the cache was built.
+        // This handles the case where stdlib is compiled first (building the cache), then
+        // user type aliases are registered (e.g., `type Env = Map[String, Int]` in mymod),
+        // but the cache doesn't know about them. Without this, `env.lookup()` fails for
+        // `lookupVar(env: Env, ...) = env.lookup(...)` because Env isn't in env.types.
+        for (alias_name, target_name) in &self.type_alias_targets {
+            if !env.types.contains_key(alias_name) {
+                let target_type = self.type_name_to_type(target_name);
+                env.define_type(
+                    alias_name.clone(),
+                    nostos_types::TypeDef::Alias {
+                        params: vec![],
+                        target: target_type,
+                    },
+                );
+            }
+        }
 
         // Register type aliases from imports (module-specific)
         for (short_name, qualified_name) in &self.imports {
