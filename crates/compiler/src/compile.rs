@@ -1585,6 +1585,8 @@ pub struct Compiler {
     locals: HashMap<String, LocalInfo>,
     /// Next available register
     next_reg: Reg,
+    /// Set to true when register limit is exceeded (too many locals in a function)
+    register_limit_exceeded: bool,
     /// Captured variables for the current closure: name -> capture index
     capture_indices: HashMap<String, u8>,
     /// Captured variables that are mutable cells (shared with outer scope)
@@ -1995,6 +1997,7 @@ impl Compiler {
             chunk: Chunk::new(),
             locals: HashMap::new(),
             next_reg: 0,
+            register_limit_exceeded: false,
             capture_indices: HashMap::new(),
             capture_cells: HashSet::new(),
             closure_mutated_vars: HashSet::new(),
@@ -2613,6 +2616,7 @@ impl Compiler {
             chunk: Chunk::new(),
             locals: HashMap::new(),
             next_reg: 0,
+            register_limit_exceeded: false,
             capture_indices: HashMap::new(),
             capture_cells: HashSet::new(),
             closure_mutated_vars: HashSet::new(),
@@ -10002,6 +10006,7 @@ impl Compiler {
             HashMap::new()
         };
         self.next_reg = 0;
+        self.register_limit_exceeded = false;
 
         // Use qualified name with type signature to support function overloading
         // Format: name/type1,type2,... where untyped params use "_"
@@ -10653,6 +10658,25 @@ impl Compiler {
         }
 
         self.chunk.register_count = self.next_reg as usize;
+
+        // Check if we exceeded the register limit during compilation
+        if self.register_limit_exceeded {
+            // Restore compiler state before returning error
+            self.chunk = saved_chunk;
+            self.locals = saved_locals;
+            self.local_types = saved_local_types;
+            self.next_reg = saved_next_reg;
+            self.current_function_name = saved_function_name;
+            self.register_limit_exceeded = false;
+            return Err(CompileError::DefinitionError {
+                message: format!(
+                    "Function '{}' has too many local variables (register limit exceeded). \
+                     Consider breaking it into smaller functions.",
+                    def.name.node
+                ),
+                span: def.span,
+            });
+        }
 
         // Use accumulated debug symbols (not affected by block scope restoration)
         let debug_symbols = std::mem::take(&mut self.current_fn_debug_symbols);
@@ -24303,10 +24327,14 @@ impl Compiler {
     }
 
     /// Allocate a new register.
+    /// If the register limit (255) is exceeded, sets register_limit_exceeded = true
+    /// and returns register 254 (saturation). The caller should check for this flag
+    /// and return a proper compile error instead of panicking.
     fn alloc_reg(&mut self) -> Reg {
         let reg = self.next_reg;
-        if reg == 255 {
-            panic!("Register limit exceeded: function has too many local variables (max ~120). Consider breaking into smaller functions.");
+        if reg >= 254 {
+            self.register_limit_exceeded = true;
+            return 254;
         }
         self.next_reg += 1;
         reg
