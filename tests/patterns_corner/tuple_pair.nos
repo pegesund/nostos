@@ -2,11 +2,14 @@
 # Tuple pair patterns
 
 swap((a, b)) = (b, a)
-fst((a, _)) = a
-snd((_, b)) = b
+myFst((a, _)) = a
+mySnd((_, b)) = b
 
 main() = {
     assert_eq((2, 1), swap((1, 2)))
+    assert_eq(10, myFst((10, 20)))
+    assert_eq(20, mySnd((10, 20)))
+    # Also verify stdlib fst/snd work
     assert_eq(10, fst((10, 20)))
     assert_eq(20, snd((10, 20)))
     42
