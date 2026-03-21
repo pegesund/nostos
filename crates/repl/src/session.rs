@@ -852,6 +852,9 @@ fn extract_dependencies_from_stmt(stmt: &Stmt, deps: &mut HashSet<String>, local
         Stmt::Assign(_, e, _) => {
             extract_dependencies_from_expr(e, deps, local_vars);
         }
+        Stmt::LocalFnDef(fn_def) => {
+            local_vars.insert(fn_def.name.node.clone());
+        }
     }
 }
 

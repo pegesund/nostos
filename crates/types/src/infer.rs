@@ -107,6 +107,7 @@ fn stmt_references_name(stmt: &Stmt, name: &str) -> bool {
         Stmt::Expr(e) => expr_references_name(e, name),
         Stmt::Let(b) => expr_references_name(&b.value, name),
         Stmt::Assign(_, e, _) => expr_references_name(e, name),
+        Stmt::LocalFnDef(fn_def) => fn_def.clauses.iter().any(|c| expr_references_name(&c.body, name)),
     }
 }
 use std::collections::{HashMap, HashSet};
@@ -7583,6 +7584,37 @@ impl<'a> InferCtx<'a> {
                                         }
                                     }
                                 }
+                            }
+                        }
+                        Stmt::LocalFnDef(fn_def) => {
+                            // Local function definition with default params.
+                            // Infer the function type and bind the name to it.
+                            if let Some(clause) = fn_def.clauses.first() {
+                                let mut param_tys = Vec::new();
+                                for param in &clause.params {
+                                    let ty = self.fresh();
+                                    if let nostos_syntax::ast::Pattern::Var(ident) = &param.pattern {
+                                        self.env.bind(ident.node.clone(), ty.clone(), false);
+                                    }
+                                    param_tys.push(ty);
+                                }
+                                let body_ty = self.infer_expr(&clause.body).unwrap_or_else(|_| self.fresh());
+                                let required_count = clause.params.iter()
+                                    .filter(|p| p.default.is_none())
+                                    .count();
+                                let required_params = if required_count < clause.params.len() {
+                                    Some(required_count)
+                                } else {
+                                    None
+                                };
+                                let fn_ty = Type::Function(FunctionType {
+                                    params: param_tys,
+                                    ret: Box::new(body_ty),
+                                    type_params: vec![],
+                                    required_params,
+                                    var_bounds: vec![],
+                                });
+                                self.env.bind(fn_def.name.node.clone(), fn_ty, false);
                             }
                         }
                     }

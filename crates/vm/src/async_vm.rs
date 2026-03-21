@@ -1405,7 +1405,25 @@ impl AsyncProcess {
                 // Look up function by name at runtime (for forward references)
                 let name_value = get_const!(name_idx);
                 if let Value::String(name) = name_value {
-                    if let Some(func) = self.shared.functions.read().unwrap().get(&*name).cloned() {
+                    let funcs = self.shared.functions.read().unwrap();
+                    let func_opt = funcs.get(&*name).cloned();
+                    // If found but has empty code (placeholder/stale), try to find a concrete variant
+                    let func = if func_opt.as_ref().map(|f| f.code.code.is_empty()).unwrap_or(false) {
+                        // Search for a non-empty variant with the same base name
+                        let base = name.split('/').next().unwrap_or(&*name);
+                        let prefix = format!("{}/", base);
+                        let concrete: Vec<_> = funcs.iter()
+                            .filter(|(k, v)| k.starts_with(&prefix) && !v.code.code.is_empty() && !v.name.starts_with("__stale__"))
+                            .collect();
+                        if concrete.len() == 1 {
+                            concrete.into_iter().next().map(|(_, v)| v.clone())
+                        } else {
+                            func_opt
+                        }
+                    } else {
+                        func_opt
+                    };
+                    if let Some(func) = func {
                         set_reg!(dst, GcValue::Function(func));
                     } else {
                         return Err(RuntimeError::Panic(format!("Function not found: {}", name)));

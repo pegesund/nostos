@@ -2043,6 +2043,86 @@ impl Compiler {
             }
         }
 
+        // Stranded polymorphic function pass: functions that were marked polymorphic
+        // (UnresolvedTraitMethod during compilation) but have ZERO concrete monomorphized
+        // variants. This can happen when a function like total(p) = p.price * p.qty.toFloat()
+        // is only referenced first-class (passed to .map()) and never called directly.
+        // These functions are never monomorphized, so they remain as empty-code placeholders
+        // and cause "Instruction pointer out of bounds" at runtime.
+        //
+        // After all compilation passes, pending_fn_signatures may have been updated with
+        // concrete types (e.g., model.total's param resolved to model.Product via HM inference).
+        // Re-run compile_fn_def for stranded functions with their updated signature, which
+        // will now have has_generic_hm_signature=false and compile successfully.
+        {
+            let stranded: Vec<String> = self.polymorphic_fns.iter()
+                .filter(|fn_name| {
+                    // Check if this function has empty code (placeholder)
+                    let has_empty_code = self.functions.get(*fn_name)
+                        .map(|f| f.code.code.is_empty())
+                        .unwrap_or(false);
+                    if !has_empty_code {
+                        return false;
+                    }
+                    // Check if no concrete variants exist
+                    let fn_base = fn_name.split('/').next().unwrap_or(fn_name);
+                    let has_variants = self.function_variants.get(fn_base)
+                        .map(|s| !s.is_empty())
+                        .unwrap_or(false);
+                    !has_variants
+                })
+                .cloned()
+                .collect();
+
+            for fn_name in &stranded {
+                // Find in fn_compile_info by base name
+                let fn_base = fn_name.split('/').next().unwrap_or(fn_name);
+                // Get last component (the actual function name without module prefix)
+                let fn_local = fn_base.rsplit('.').next().unwrap_or(fn_base);
+
+                for (fn_def, module_path, imports, line_starts, source, source_name) in &fn_compile_info {
+                    let compiled_name = if module_path.is_empty() {
+                        fn_def.name.node.clone()
+                    } else {
+                        format!("{}.{}", module_path.join("."), fn_def.name.node)
+                    };
+                    if fn_def.name.node != fn_local && compiled_name != fn_base {
+                        continue;
+                    }
+                    // Also verify the module path matches
+                    let expected_module = fn_base.trim_end_matches(&format!(".{}", fn_local));
+                    let actual_module = module_path.join(".");
+                    if expected_module != actual_module && !fn_base.is_empty() && fn_base.contains('.') && expected_module != fn_base {
+                        continue;
+                    }
+
+                    let saved_path = std::mem::replace(&mut self.module_path, module_path.clone());
+                    let saved_imports = self.imports.clone();
+                    self.imports.extend(imports.clone());
+                    let saved_line_starts = std::mem::replace(&mut self.line_starts, line_starts.clone());
+                    let saved_source = std::mem::replace(&mut self.current_source, Some(source.clone()));
+                    let saved_source_name = std::mem::replace(&mut self.current_source_name, Some(source_name.clone()));
+
+                    // Set the stranded flag so the compiler uses best-effort dispatch
+                    // (e.g., generic numeric toFloat instead of triggering monomorphization)
+                    let saved_stranded = self.compiling_stranded_fn;
+                    self.compiling_stranded_fn = true;
+
+                    // Try recompilation - if it succeeds, the function now has real code
+                    let _ = self.compile_fn_def(fn_def);
+
+                    self.compiling_stranded_fn = saved_stranded;
+
+                    self.module_path = saved_path;
+                    self.imports = saved_imports;
+                    self.line_starts = saved_line_starts;
+                    self.current_source = saved_source;
+                    self.current_source_name = saved_source_name;
+                    break;
+                }
+            }
+        }
+
         // Clear pending_functions now that we've processed them
         // Note: pending_fn_signatures is kept until after the third pass type-check
         self.pending_functions.clear();

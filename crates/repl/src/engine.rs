@@ -7542,6 +7542,7 @@ impl ReplEngine {
                     collect_calls(&binding.value, calls, local_types, variant_constructors, known_modules);
                 }
                 Stmt::Assign(_, expr, _) => collect_calls(expr, calls, local_types, variant_constructors, known_modules),
+                Stmt::LocalFnDef(_) => {}
             }
         }
 

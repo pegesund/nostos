@@ -699,6 +699,10 @@ pub enum Stmt {
     Let(Binding),
     /// Assignment: `x = expr`
     Assign(AssignTarget, Expr, Span),
+    /// Local function definition with potential default parameters.
+    /// Syntax: `f(a, b = default) = body` inside a block.
+    /// Used when the local function has default parameter values (which lambdas can't represent).
+    LocalFnDef(FnDef),
 }
 
 /// A binding.
@@ -1032,6 +1036,11 @@ impl FnDef {
                             Stmt::Expr(e) => collect_constraints(e, parent),
                             Stmt::Let(binding) => collect_constraints(&binding.value, parent),
                             Stmt::Assign(_, e, _) => collect_constraints(e, parent),
+                            Stmt::LocalFnDef(fn_def) => {
+                                for clause in &fn_def.clauses {
+                                    collect_constraints(&clause.body, parent);
+                                }
+                            }
                         }
                     }
                 }
@@ -1953,6 +1962,20 @@ impl Stmt {
                 s.file_id = file_id;
                 target.set_file_id(file_id);
                 expr.set_file_id(file_id);
+            }
+            Stmt::LocalFnDef(fn_def) => {
+                fn_def.span.file_id = file_id;
+                for clause in &mut fn_def.clauses {
+                    clause.body.set_file_id(file_id);
+                    if let Some(guard) = &mut clause.guard {
+                        guard.set_file_id(file_id);
+                    }
+                    for param in &mut clause.params {
+                        if let Some(default) = &mut param.default {
+                            default.set_file_id(file_id);
+                        }
+                    }
+                }
             }
         }
     }

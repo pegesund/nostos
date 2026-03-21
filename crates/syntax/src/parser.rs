@@ -917,31 +917,97 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                                         // Desugar to: f = (a, b) => body
                                         if type_args.is_empty() {
                                             if let Expr::Var(fn_name) = *func_expr {
-                                                // All args must be simple param names, optionally with type annotations.
-                                                // Positional: f(a, b) = body
-                                                // Named: f(a: Int, b: String) = body (type annotation, NOT named arg)
-                                                // Since we're in the `= body` branch, this must be a function def.
-                                                let params: Option<Vec<Pattern>> = call_args.into_iter().map(|arg| {
-                                                    match arg {
-                                                        CallArg::Positional(expr) => expr_to_pattern(expr),
-                                                        // Named args in a `f(...) = body` context are type-annotated params
-                                                        // e.g., helper(i: Int, acc: Int) = ...
-                                                        // Extract the param name, ignore the type (HM infers it)
-                                                        CallArg::Named(param_name, _type_expr) => Some(Pattern::Var(param_name)),
+                                                // Check if any arg has a default value (Named arg in local fn context).
+                                                // Named args here are either:
+                                                // - Type annotations: f(a: Int) = body → Named("a", Var("Int"))
+                                                // - Default values: f(a, b = 5) = body → Named("b", Lit(5))
+                                                // We detect default params by checking if Named value is NOT an uppercase var
+                                                // (which would indicate a type annotation).
+                                                let has_defaults = call_args.iter().any(|arg| {
+                                                    if let CallArg::Named(_, expr) = arg {
+                                                        // If it's NOT a type name (uppercase var or record with no fields), treat as default value.
+                                                        // Type annotations: f(a: Int) → Named("a", Record("Int", [], _)) or Named("a", Var("Int"))
+                                                        // Default values: f(a, b = 5) → Named("b", Lit(5))
+                                                        let is_type_annotation = matches!(expr,
+                                                            Expr::Var(id) if id.node.starts_with(|c: char| c.is_uppercase()))
+                                                        || matches!(expr,
+                                                            Expr::Record(id, fields, _) if fields.is_empty() && id.node.starts_with(|c: char| c.is_uppercase()));
+                                                        !is_type_annotation
+                                                    } else {
+                                                        false
                                                     }
-                                                }).collect();
-                                                if let Some(param_patterns) = params {
-                                                    let lambda = Expr::Lambda(param_patterns, Box::new(rhs), call_span.clone());
-                                                    Stmt::Let(Binding {
-                                                        visibility: Visibility::Private,
-                                                        mutable: false,
-                                                        pattern: Pattern::Var(fn_name),
-                                                        ty: None,
-                                                        value: lambda,
-                                                        span: to_span(span.clone()),
-                                                    })
+                                                });
+
+                                                if has_defaults {
+                                                    // Has default params: create a LocalFnDef so the compiler
+                                                    // can properly handle default parameter values.
+                                                    let fn_params: Option<Vec<FnParam>> = call_args.into_iter().map(|arg| {
+                                                        match arg {
+                                                            CallArg::Positional(expr) => {
+                                                                expr_to_pattern(expr).map(|pat| FnParam { pattern: pat, ty: None, default: None })
+                                                            }
+                                                            CallArg::Named(param_name, value_expr) => {
+                                                                // Check if this looks like a type annotation (uppercase var or empty record like `Int`)
+                                                                let is_type_annotation = matches!(&value_expr,
+                                                                    Expr::Var(id) if id.node.starts_with(|c: char| c.is_uppercase()))
+                                                                    || matches!(&value_expr,
+                                                                    Expr::Record(id, fields, _) if fields.is_empty() && id.node.starts_with(|c: char| c.is_uppercase()));
+                                                                if is_type_annotation {
+                                                                    // Type annotation: `f(a: Int)` → param with no default
+                                                                    Some(FnParam { pattern: Pattern::Var(param_name), ty: None, default: None })
+                                                                } else {
+                                                                    // Default value: `f(a, b = 5)` → param with default
+                                                                    Some(FnParam { pattern: Pattern::Var(param_name), ty: None, default: Some(value_expr) })
+                                                                }
+                                                            }
+                                                        }
+                                                    }).collect();
+
+                                                    if let Some(params) = fn_params {
+                                                        let clause = FnClause {
+                                                            params,
+                                                            guard: None,
+                                                            return_type: None,
+                                                            body: rhs,
+                                                            span: call_span,
+                                                        };
+                                                        let fn_def = FnDef {
+                                                            visibility: Visibility::Private,
+                                                            doc: None,
+                                                            decorators: vec![],
+                                                            span: to_span(span.clone()),
+                                                            name: fn_name,
+                                                            type_params: vec![],
+                                                            clauses: vec![clause],
+                                                            is_template: false,
+                                                        };
+                                                        Stmt::LocalFnDef(fn_def)
+                                                    } else {
+                                                        Stmt::Expr(lhs)
+                                                    }
                                                 } else {
-                                                    Stmt::Expr(lhs)
+                                                    // No defaults: desugar to lambda (original behavior)
+                                                    let params: Option<Vec<Pattern>> = call_args.into_iter().map(|arg| {
+                                                        match arg {
+                                                            CallArg::Positional(expr) => expr_to_pattern(expr),
+                                                            // Named args in `f(...) = body` are type-annotated params
+                                                            // e.g., helper(i: Int, acc: Int) = ...
+                                                            CallArg::Named(param_name, _type_expr) => Some(Pattern::Var(param_name)),
+                                                        }
+                                                    }).collect();
+                                                    if let Some(param_patterns) = params {
+                                                        let lambda = Expr::Lambda(param_patterns, Box::new(rhs), call_span.clone());
+                                                        Stmt::Let(Binding {
+                                                            visibility: Visibility::Private,
+                                                            mutable: false,
+                                                            pattern: Pattern::Var(fn_name),
+                                                            ty: None,
+                                                            value: lambda,
+                                                            span: to_span(span.clone()),
+                                                        })
+                                                    } else {
+                                                        Stmt::Expr(lhs)
+                                                    }
                                                 }
                                             } else {
                                                 // LHS can't be a pattern or assignment target - syntax error
@@ -1229,10 +1295,15 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         let call_nl = just(Token::Newline).repeated();
         let call_comma = call_nl.clone().ignore_then(just(Token::Comma)).then_ignore(call_nl.clone());
 
-        // Call argument: either `name: expr` (named) or just `expr` (positional)
+        // Call argument: either `name: expr` (named), `name = expr` (default param syntax), or just `expr` (positional)
+        // Note: `name = expr` is used in local function definitions with defaults: add(a, b = 5) = body
         let call_arg = call_nl.clone().ignore_then(choice((
             ident()
                 .then_ignore(just(Token::Colon))
+                .then(call_nl.clone().ignore_then(expr.clone()))
+                .map(|(name, val)| CallArg::Named(name, val)),
+            ident()
+                .then_ignore(just(Token::Eq))
                 .then(call_nl.clone().ignore_then(expr.clone()))
                 .map(|(name, val)| CallArg::Named(name, val)),
             expr.clone().map(CallArg::Positional),

@@ -1661,6 +1661,13 @@ pub struct Compiler {
     /// Used to detect polymorphic functions that need monomorphization even without explicit
     /// type params. For example, process(xs) where xs: List[a] has type vars but no trait bounds.
     current_fn_generic_hm: bool,
+    /// Set to true during the stranded polymorphic function pass (compile/modules.rs).
+    /// When true, functions that were never monomorphized are compiled with best-effort types,
+    /// using the generic numeric toFloat/toInt dispatch instead of triggering monomorphization.
+    compiling_stranded_fn: bool,
+    /// Maps local function name (user-visible) → internal qualified name (used for default lookup).
+    /// Populated by compile_local_fn_def so callers can find param defaults for local fns.
+    local_fn_internal_names: HashMap<String, String>,
     /// Type parameter bindings for current monomorphization: T -> Sum
     /// Used to substitute type parameters with concrete types in expressions
     current_type_bindings: HashMap<String, nostos_types::Type>,
@@ -2020,6 +2027,8 @@ impl Compiler {
             fn_name_already_qualified: false,
             current_fn_type_params: Vec::new(),
             current_fn_generic_hm: false,
+            compiling_stranded_fn: false,
+            local_fn_internal_names: HashMap::new(),
             current_type_bindings: HashMap::new(),
             loop_stack: Vec::new(),
             line_starts: vec![0],
@@ -2636,6 +2645,8 @@ impl Compiler {
             fn_name_already_qualified: false,
             current_fn_type_params: Vec::new(),
             current_fn_generic_hm: false,
+            compiling_stranded_fn: false,
+            local_fn_internal_names: HashMap::new(),
             current_type_bindings: HashMap::new(),
             loop_stack: Vec::new(),
             line_starts,
@@ -2970,6 +2981,7 @@ impl Compiler {
                     value: Box::new(self.expr_to_ast_value(value)),
                 })
             }
+            Stmt::LocalFnDef(_) => AstValue::new(AstKind::Unit),
         }
     }
 
@@ -7782,6 +7794,11 @@ impl Compiler {
                 }
                 self.collect_mvar_access(value, reads, writes);
             }
+            Stmt::LocalFnDef(fn_def) => {
+                for clause in &fn_def.clauses {
+                    self.collect_mvar_access(&clause.body, reads, writes);
+                }
+            }
         }
     }
 
@@ -11203,8 +11220,31 @@ impl Compiler {
                             }
 
                             // Fallback: load by name at runtime
+                            // But first: if the key is a placeholder (wildcard or stale), try to
+                            // find a non-empty concrete variant from function_variants.
+                            // This avoids "Instruction pointer out of bounds" when a cross-module
+                            // function (e.g., model.total) is referenced from a polymorphic
+                            // context where monomorphization didn't resolve the concrete key.
+                            let fn_base = key.split('/').next().unwrap_or(&key);
+                            let resolved_key = {
+                                let variants = self.function_variants.get(fn_base)
+                                    .map(|s| s.iter().cloned().collect::<Vec<_>>())
+                                    .unwrap_or_default();
+                                let concrete: Vec<String> = variants.into_iter()
+                                    .filter(|v| {
+                                        self.functions.get(v)
+                                            .map(|f| !f.code.code.is_empty() && !f.name.starts_with("__stale__"))
+                                            .unwrap_or(false)
+                                    })
+                                    .collect();
+                                if concrete.len() == 1 {
+                                    concrete.into_iter().next().unwrap()
+                                } else {
+                                    key.clone()
+                                }
+                            };
                             let dst = self.alloc_reg();
-                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(key)));
+                            let name_idx = self.chunk.add_constant(Value::String(Arc::new(resolved_key)));
                             self.chunk.emit(Instruction::LoadFunctionByName(dst, name_idx), line);
                             return Ok(dst);
                         }
@@ -14599,6 +14639,40 @@ impl Compiler {
                         let skip_for_generic = Self::has_generic_builtin_version(&method.node)
                             && (self.current_fn_generic_hm || !self.current_fn_type_params.is_empty());
                         if skip_for_generic {
+                            // Check if HM inference resolved the receiver to a concrete numeric type.
+                            // This happens when a field access like `p.qty` where `p` is polymorphic
+                            // but `qty` is known as Int via HasField constraints. In that case, we
+                            // can use the generic numeric toFloat/toInt native instead of monomorphizing.
+                            let hm_receiver_is_numeric = self.inferred_expr_types.get(&obj.span())
+                                .map(|ty| {
+                                    let name = match ty {
+                                        nostos_types::Type::Named { name, .. } => name.as_str(),
+                                        _ => "",
+                                    };
+                                    matches!(name, "Int" | "Float" | "Float32" | "Float64"
+                                        | "Int8" | "Int16" | "Int32" | "Int64"
+                                        | "UInt8" | "UInt16" | "UInt32" | "UInt64")
+                                })
+                                .unwrap_or(false);
+                            // Also allow generic numeric dispatch when compiling a stranded
+                            // polymorphic function (one that was never monomorphized because it's
+                            // only referenced first-class). These functions must be compiled
+                            // best-effort; we use the generic numeric native which handles all
+                            // numeric types at runtime (fails gracefully for non-numeric inputs).
+                            if hm_receiver_is_numeric || self.compiling_stranded_fn {
+                                // Use generic numeric conversion - receiver is known/expected to be numeric.
+                                // Dispatch directly to the generic "toFloat"/"toInt" native, which
+                                // handles Int/Float/Int32/etc. (not String.toFloat which returns Option).
+                                let generic_native = match method.node.as_str() {
+                                    "toFloat" | "toFloat64" => "toFloat",
+                                    "toInt" | "toInt64" => "toInt",
+                                    other => other,
+                                };
+                                let obj_reg = self.compile_expr_tail(obj, false)?;
+                                let dst = self.alloc_reg();
+                                self.emit_call_native(dst, generic_native, vec![obj_reg].into(), line);
+                                return Ok(dst);
+                            }
                             // In generic context, toFloat/toInt can't be resolved without
                             // knowing the receiver type. Trigger monomorphization.
                             return Err(CompileError::UnresolvedTraitMethod {
@@ -16277,9 +16351,14 @@ impl Compiler {
         };
 
         // Get parameter names and defaults from the function definition
+        // For local function variables, look up via the internal name mapping.
         let (param_names, param_defaults): (Vec<Option<String>>, Vec<Option<Expr>>) =
             if let Some(ref qname) = maybe_qualified_name {
-                (self.get_function_param_names(qname), self.get_function_param_defaults(qname))
+                // Check if this is a local function variable with defaults
+                let effective_name = self.local_fn_internal_names.get(qname.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| qname.clone());
+                (self.get_function_param_names(&effective_name), self.get_function_param_defaults(&effective_name))
             } else {
                 (vec![], vec![])
             };
@@ -22099,7 +22178,80 @@ impl Compiler {
             Stmt::Expr(expr) => self.compile_expr_tail(expr, is_tail),
             Stmt::Let(binding) => self.compile_binding(binding),
             Stmt::Assign(target, value, _) => self.compile_assign(target, value),
+            Stmt::LocalFnDef(fn_def) => self.compile_local_fn_def(fn_def),
         }
+    }
+
+    /// Compile a local function definition with default parameters.
+    /// This is emitted by the parser for `f(a, b = default) = body` inside blocks.
+    /// The function is compiled as a named function and stored as a local variable.
+    fn compile_local_fn_def(&mut self, fn_def: &FnDef) -> Result<Reg, CompileError> {
+        // Generate a unique name for this local function to avoid collisions
+        // with other local functions of the same name in other scopes.
+        let local_fn_name = {
+            let module_prefix = if self.module_path.is_empty() {
+                String::new()
+            } else {
+                format!("{}.", self.module_path.join("."))
+            };
+            let current_fn = self.current_function_name.as_deref().unwrap_or("__top__");
+            let arity = fn_def.clauses.first().map(|c| c.params.len()).unwrap_or(0);
+            format!("{}{}.__local_{}_{}", module_prefix, current_fn, fn_def.name.node, arity)
+        };
+
+        // Compile the function definition under this unique name
+        let saved_fn_name_qualified = self.fn_name_already_qualified;
+        self.fn_name_already_qualified = true;
+
+        // Save context and set up for local function compilation
+        let saved_module_path = self.module_path.clone();
+        // (module_path stays the same for local functions)
+
+        // Register a forward declaration so the function can call itself (recursion)
+        // Use the user-visible name as well as the unique internal name
+        let arity = fn_def.clauses.first().map(|c| c.params.len()).unwrap_or(0);
+        let wildcard_key = format!("{}/{}", local_fn_name, vec!["_"; arity].join(","));
+
+        // Use a synthetic FnDef with the unique name
+        let mut local_def = fn_def.clone();
+        local_def.name = Spanned::new(local_fn_name.clone(), fn_def.name.span);
+
+        // Compile the function using compile_fn_def
+        // This registers it in self.functions under the unique name
+        let prev_locals = self.locals.clone();
+        let _ = self.compile_fn_def(&local_def);
+        self.fn_name_already_qualified = saved_fn_name_qualified;
+        self.locals = prev_locals;
+
+        // Now bind the user-visible name as a local variable pointing to this function
+        // We load the function by name at runtime
+        let fn_reg = self.alloc_reg();
+        let wildcard_key_used = if self.functions.contains_key(&wildcard_key) {
+            wildcard_key
+        } else {
+            // Try to find the actual registered key
+            let prefix = format!("{}/", local_fn_name);
+            self.functions.keys()
+                .find(|k| k.starts_with(&prefix))
+                .cloned()
+                .unwrap_or_else(|| format!("{}/{}", local_fn_name, vec!["_"; arity].join(",")))
+        };
+        let fn_name_const = self.chunk.add_constant(Value::String(Arc::new(wildcard_key_used)));
+        self.chunk.emit(Instruction::LoadFunctionByName(fn_reg, fn_name_const), 0);
+
+        // Store as local variable with the user's chosen name
+        self.locals.insert(fn_def.name.node.clone(), LocalInfo {
+            reg: fn_reg,
+            is_float: false,
+            mutable: false,
+            is_cell: false,
+        });
+
+        // Register the mapping from user-visible name to internal qualified name
+        // so that compile_call can look up param names/defaults when calling this local fn.
+        self.local_fn_internal_names.insert(fn_def.name.node.clone(), local_fn_name);
+
+        Ok(fn_reg)
     }
 
     /// Compile a let binding.
@@ -22504,6 +22656,7 @@ impl Compiler {
                             }
                             self.collect_mvar_writes_inner(value, writes);
                         }
+                        Stmt::LocalFnDef(fn_def) => { for c in &fn_def.clauses { self.collect_mvar_writes_inner(&c.body, writes); } }
                     }
                 }
             }
@@ -22590,6 +22743,7 @@ impl Compiler {
                         Stmt::Expr(e) => self.collect_mvar_refs_inner(e, refs),
                         Stmt::Let(binding) => self.collect_mvar_refs_inner(&binding.value, refs),
                         Stmt::Assign(_, e, _) => self.collect_mvar_refs_inner(e, refs),
+                        Stmt::LocalFnDef(fn_def) => { for c in &fn_def.clauses { self.collect_mvar_refs_inner(&c.body, refs); } }
                     }
                 }
             }
@@ -22703,6 +22857,13 @@ impl Compiler {
                                 return Some(m);
                             }
                         }
+                        Stmt::LocalFnDef(fn_def) => {
+                            for c in &fn_def.clauses {
+                                if let Some(m) = self.detect_compare_and_set_pattern(&c.body, fn_locals) {
+                                    return Some(m);
+                                }
+                            }
+                        }
                     }
                 }
                 None
@@ -22760,6 +22921,7 @@ impl Compiler {
                         Stmt::Expr(e) => self.collect_mvar_refs_with_locals_inner(e, refs, fn_locals),
                         Stmt::Let(binding) => self.collect_mvar_refs_with_locals_inner(&binding.value, refs, fn_locals),
                         Stmt::Assign(_, e, _) => self.collect_mvar_refs_with_locals_inner(e, refs, fn_locals),
+                        Stmt::LocalFnDef(fn_def) => { for c in &fn_def.clauses { self.collect_mvar_refs_with_locals_inner(&c.body, refs, fn_locals); } }
                     }
                 }
             }
@@ -22841,6 +23003,7 @@ impl Compiler {
                             }
                             self.collect_mvar_writes_with_locals_inner(value, writes, fn_locals);
                         }
+                        Stmt::LocalFnDef(fn_def) => { for c in &fn_def.clauses { self.collect_mvar_writes_with_locals_inner(&c.body, writes, fn_locals); } }
                     }
                 }
             }
@@ -22892,6 +23055,10 @@ impl Compiler {
                         }
                         Stmt::Assign(_, value, _) => {
                             self.collect_local_bindings_inner(value, locals);
+                        }
+                        Stmt::LocalFnDef(fn_def) => {
+                            locals.insert(fn_def.name.node.clone());
+                            for c in &fn_def.clauses { self.collect_local_bindings_inner(&c.body, locals); }
                         }
                     }
                 }
@@ -23054,6 +23221,7 @@ impl Compiler {
                             }
                             self.collect_non_self_updating_writes_inner(value, writes, fn_locals);
                         }
+                        Stmt::LocalFnDef(fn_def) => { for c in &fn_def.clauses { self.collect_non_self_updating_writes_inner(&c.body, writes, fn_locals); } }
                     }
                 }
             }
@@ -23182,6 +23350,7 @@ impl Compiler {
                             // Not an mvar assignment, recurse normally
                             self.collect_mvar_naked_reads_inner(value, naked_reads, None, fn_locals);
                         }
+                        Stmt::LocalFnDef(fn_def) => { for c in &fn_def.clauses { self.collect_mvar_naked_reads_inner(&c.body, naked_reads, None, fn_locals); } }
                     }
                 }
             }
@@ -23258,6 +23427,7 @@ impl Compiler {
                     Stmt::Expr(e) => self.expr_has_blocking(e),
                     Stmt::Let(binding) => self.expr_has_blocking(&binding.value),
                     Stmt::Assign(_, e, _) => self.expr_has_blocking(e),
+                    Stmt::LocalFnDef(fn_def) => fn_def.clauses.iter().any(|c| self.expr_has_blocking(&c.body)),
                 })
             }
             Expr::If(cond, then_branch, else_branch, _) => {
@@ -28989,6 +29159,11 @@ impl Compiler {
                                 return true;
                             }
                         }
+                        Stmt::LocalFnDef(fn_def) => {
+                            if fn_def.clauses.iter().any(|c| Self::expr_contains_call(&c.body, fn_name)) {
+                                return true;
+                            }
+                        }
                     }
                 }
                 false
@@ -29126,6 +29301,7 @@ impl Compiler {
                     Stmt::Let(binding) => self.expr_calls_function_with_untyped_params(&binding.value),
                     Stmt::Expr(e) => self.expr_calls_function_with_untyped_params(e),
                     Stmt::Assign(_, e, _) => self.expr_calls_function_with_untyped_params(e),
+                    Stmt::LocalFnDef(fn_def) => fn_def.clauses.iter().any(|c| self.expr_calls_function_with_untyped_params(&c.body)),
                 })
             }
             Expr::Lambda(_, body, _) => self.expr_calls_function_with_untyped_params(body),
@@ -29775,6 +29951,7 @@ impl Compiler {
                         Stmt::Assign(target, val, s) => {
                             Stmt::Assign(target.clone(), self.transform_html_expr(val), *s)
                         }
+                        Stmt::LocalFnDef(fn_def) => Stmt::LocalFnDef(fn_def.clone()),
                     }
                 }).collect();
                 Expr::Block(new_stmts, *span)
@@ -30092,6 +30269,7 @@ impl Compiler {
                         Stmt::Assign(target, val, s) => {
                             Stmt::Assign(target.clone(), self.transform_rhtml_expr(val), *s)
                         }
+                        Stmt::LocalFnDef(fn_def) => Stmt::LocalFnDef(fn_def.clone()),
                     }
                 }).collect();
                 Expr::Block(new_stmts, *span)
@@ -30238,6 +30416,12 @@ fn free_vars(expr: &Expr, bound: &std::collections::HashSet<String>) -> std::col
                                 free.extend(free_vars(idx, &local_bound));
                             }
                         }
+                    }
+                    Stmt::LocalFnDef(fn_def) => {
+                        for clause in &fn_def.clauses {
+                            free.extend(free_vars(&clause.body, &local_bound));
+                        }
+                        local_bound.insert(fn_def.name.node.clone());
                     }
                 }
             }
@@ -30394,6 +30578,7 @@ fn find_closure_mutated_vars(stmts: &[Stmt]) -> std::collections::HashSet<String
                     }
                 }
             }
+            Stmt::LocalFnDef(_) => {}
         }
     }
 
@@ -30471,7 +30656,7 @@ fn find_reassignments_in_stmt(
         Stmt::Expr(e) => find_reassignments_in_expr(e, mutable_vars, reassigned),
         Stmt::Let(binding) => {
             // A non-mutable Let binding with Pattern::Var that matches a mutable_var
-            // is a reassignment (parser creates Let instead of Assign for `x = expr` 
+            // is a reassignment (parser creates Let instead of Assign for `x = expr`
             // when x is already in scope as a var).
             if !binding.mutable {
                 if let Pattern::Var(ident) = &binding.pattern {
@@ -30482,6 +30667,7 @@ fn find_reassignments_in_stmt(
             }
             find_reassignments_in_expr(&binding.value, mutable_vars, reassigned);
         }
+        Stmt::LocalFnDef(_) => {}
     }
 }
 
@@ -30515,6 +30701,11 @@ fn find_lambda_captures_in_expr(
                     Stmt::Let(binding) => find_lambda_captures_in_expr(&binding.value, mutable_vars, captured),
                     Stmt::Expr(e) => find_lambda_captures_in_expr(e, mutable_vars, captured),
                     Stmt::Assign(_, val, _) => find_lambda_captures_in_expr(val, mutable_vars, captured),
+                    Stmt::LocalFnDef(fn_def) => {
+                        for clause in &fn_def.clauses {
+                            find_lambda_captures_in_expr(&clause.body, mutable_vars, captured);
+                        }
+                    }
                 }
             }
         }
@@ -30602,6 +30793,11 @@ fn find_lambda_mutations_in_stmt(
         Stmt::Expr(e) => find_lambda_mutations_in_expr(e, mutable_vars, mutated),
         Stmt::Let(binding) => find_lambda_mutations_in_expr(&binding.value, mutable_vars, mutated),
         Stmt::Assign(_, val, _) => find_lambda_mutations_in_expr(val, mutable_vars, mutated),
+        Stmt::LocalFnDef(fn_def) => {
+            for clause in &fn_def.clauses {
+                find_lambda_mutations_in_expr(&clause.body, mutable_vars, mutated);
+            }
+        }
     }
 }
 
@@ -30746,6 +30942,11 @@ fn find_mutations_inside_lambda(
                     }
                     Stmt::Expr(e) => {
                         find_mutations_inside_lambda(e, mutable_vars, mutated);
+                    }
+                    Stmt::LocalFnDef(fn_def) => {
+                        for clause in &fn_def.clauses {
+                            find_mutations_inside_lambda(&clause.body, mutable_vars, mutated);
+                        }
                     }
                 }
             }
