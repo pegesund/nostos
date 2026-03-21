@@ -6826,6 +6826,32 @@ impl Compiler {
         vec![]
     }
 
+    /// Get the number of type parameters for the type that contains a given constructor.
+    /// Returns None if the constructor's parent type is not found.
+    fn get_constructor_type_param_count(&self, ctor_name: &str) -> Option<usize> {
+        let mut type_names: Vec<_> = self.types.keys().collect();
+        type_names.sort();
+        for type_name in type_names {
+            if let Some(info) = self.types.get(type_name) {
+                if let TypeInfoKind::Record { .. } = &info.kind {
+                    if type_name == ctor_name || type_name.ends_with(&format!(".{}", ctor_name)) {
+                        // Use type_param_names from TypeInfo (works for stdlib and user types)
+                        return Some(info.type_param_names.len());
+                    }
+                }
+                if let TypeInfoKind::Variant { constructors } = &info.kind {
+                    for (name, _) in constructors {
+                        if name == ctor_name {
+                            // Use type_param_names from TypeInfo (works for stdlib and user types)
+                            return Some(info.type_param_names.len());
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Get the field names for a variant constructor (from the original type definition).
     /// Returns an empty Vec if the constructor is not found or doesn't have named fields.
     fn get_constructor_field_names(&self, ctor_name: &str) -> Vec<String> {
@@ -17227,6 +17253,20 @@ impl Compiler {
             // Constructors are not in self.functions, so resolve_function_call would fail.
             // Instead, redirect to compile_record which handles variant/record construction.
             if self.known_constructors.contains(&resolved_name) {
+                // Validate type argument count if explicit type args were provided
+                if !type_args.is_empty() {
+                    if let Some(expected_count) = self.get_constructor_type_param_count(&resolved_name) {
+                        if type_args.len() != expected_count {
+                            return Err(CompileError::TypeError {
+                                message: format!(
+                                    "wrong number of type arguments for `{}`: expected {}, got {}",
+                                    resolved_name, expected_count, type_args.len()
+                                ),
+                                span: func.span(),
+                            });
+                        }
+                    }
+                }
                 let record_fields: Vec<RecordField> = args.iter()
                     .map(|a| match a {
                         CallArg::Positional(expr) => RecordField::Positional(expr.clone()),
