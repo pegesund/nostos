@@ -18949,7 +18949,11 @@ impl Compiler {
                         if let Some(rhs_type) = self.expr_type_name(rhs) {
                             return Some(rhs_type);
                         }
-                        Some("String".to_string()) // Default to String
+                        // When both operands have unknown types (e.g., generic function parameters),
+                        // return None instead of defaulting to String. This prevents incorrect
+                        // dispatch of .length() (and other methods) to String.length when the
+                        // operands might be lists. The generic Instruction::Length handles both.
+                        None
                     }
                     // List cons - returns a list
                     BinOp::Cons => {
