@@ -7036,7 +7036,7 @@ impl<'a> InferCtx<'a> {
             }
 
             // Record construction
-            Expr::Record(name, fields, _) => {
+            Expr::Record(name, fields, record_span) => {
                 let type_name = &name.node;
                 // Resolve type name through aliases to get qualified name
                 let resolved_type_name = self.env.resolve_type_name(type_name);
@@ -7155,6 +7155,7 @@ impl<'a> InferCtx<'a> {
                                     provided.insert(fname.clone(), ());
                                 } else {
                                     // Too many positional arguments
+                                    self.last_error_span = Some(*record_span);
                                     return Err(TypeError::ArityMismatch {
                                         expected: def_fields.len(),
                                         found: positional_count,
@@ -7260,6 +7261,8 @@ impl<'a> InferCtx<'a> {
                         if let Type::Function(ref ctor_fn) = ctor_ty {
                             let expected_params = ctor_fn.required_params.unwrap_or(ctor_fn.params.len());
                             if arg_types.len() != expected_params {
+                                // Set error span to the constructor call site, not the outer function definition
+                                self.last_error_span = Some(*record_span);
                                 return Err(TypeError::ArityMismatch {
                                     expected: expected_params,
                                     found: arg_types.len(),
