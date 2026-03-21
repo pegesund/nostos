@@ -17346,8 +17346,16 @@ impl Compiler {
                 // Fall through to generic call path at the end of compile_call
             } else {
 
-            // Resolve the name (handles imports and module path) with ambiguity checking
-            let resolved_name = self.resolve_name_checked(&qualified_name, func.span())?;
+            // Check if this is a recursive call to a local function with defaults.
+            // Local fn names map to internal qualified names (e.g., "go" -> "main/.__local_go_2").
+            // By resolving to the internal name, the self-recursion check (CallSelf) will work.
+            let resolved_name = if let Some(internal_base) = self.local_fn_internal_names.get(&qualified_name).cloned() {
+                // Use the internal name directly - it's already fully qualified
+                internal_base
+            } else {
+                // Resolve the name (handles imports and module path) with ambiguity checking
+                self.resolve_name_checked(&qualified_name, func.span())?
+            };
 
             // Check if the resolved name is a known constructor (e.g., Trees.Leaf, Trees.Branch)
             // Constructors are not in self.functions, so resolve_function_call would fail.
@@ -22216,6 +22224,11 @@ impl Compiler {
         let mut local_def = fn_def.clone();
         local_def.name = Spanned::new(local_fn_name.clone(), fn_def.name.span);
 
+        // Register the mapping from user-visible name to internal qualified name BEFORE
+        // compiling the function body, so that recursive calls inside the body can
+        // resolve the local fn name to its internal name and use CallSelf.
+        self.local_fn_internal_names.insert(fn_def.name.node.clone(), local_fn_name.clone());
+
         // Compile the function using compile_fn_def
         // This registers it in self.functions under the unique name
         let prev_locals = self.locals.clone();
@@ -22247,9 +22260,8 @@ impl Compiler {
             is_cell: false,
         });
 
-        // Register the mapping from user-visible name to internal qualified name
-        // so that compile_call can look up param names/defaults when calling this local fn.
-        self.local_fn_internal_names.insert(fn_def.name.node.clone(), local_fn_name);
+        // Note: local_fn_internal_names mapping was already inserted before compile_fn_def
+        // (needed for recursive calls inside the function body to resolve correctly).
 
         Ok(fn_reg)
     }
