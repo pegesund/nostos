@@ -123,17 +123,43 @@ fn expr_to_pattern(expr: Expr) -> Option<Pattern> {
             }
         }
         Expr::Record(name, fields, span) => {
-            // Convert record expression to variant pattern
-            let pat_fields: Option<Vec<Pattern>> = fields
-                .into_iter()
-                .map(|f| match f {
-                    RecordField::Positional(e) => expr_to_pattern(e),
-                    RecordField::Named(_, _) => None, // Named fields need different handling
+            // If there are no fields, this is a unit variant pattern: None, Circle, etc.
+            if fields.is_empty() {
+                return Some(Pattern::Variant(name, VariantPatternFields::Unit, span));
+            }
+            // Check if all fields are Named (e.g., from Point(x: a, y: b) in call arg context)
+            let all_named = fields.iter().all(|f| matches!(f, RecordField::Named(_, _)));
+            if all_named {
+                let pat_fields: Option<Vec<RecordPatternField>> = fields
+                    .into_iter()
+                    .map(|f| match f {
+                        RecordField::Named(field_ident, value_expr) => {
+                            // If the value is Var with the same name, it's a pun: {x} means {x: x}
+                            if let Expr::Var(ref var_name) = value_expr {
+                                if var_name.node == field_ident.node {
+                                    return Some(RecordPatternField::Punned(field_ident));
+                                }
+                            }
+                            // Otherwise Named(ident, pattern)
+                            expr_to_pattern(value_expr).map(|pat| RecordPatternField::Named(field_ident, pat))
+                        }
+                        _ => unreachable!(),
+                    })
+                    .collect();
+                pat_fields.map(|pf| Pattern::Variant(name, VariantPatternFields::Named(pf), span))
+            } else {
+                // All positional fields
+                let pat_fields: Option<Vec<Pattern>> = fields
+                    .into_iter()
+                    .map(|f| match f {
+                        RecordField::Positional(e) => expr_to_pattern(e),
+                        RecordField::Named(_, _) => None, // Mixed named/positional not supported
+                    })
+                    .collect();
+                pat_fields.map(|pf| {
+                    Pattern::Variant(name, VariantPatternFields::Positional(pf), span)
                 })
-                .collect();
-            pat_fields.map(|pf| {
-                Pattern::Variant(name, VariantPatternFields::Positional(pf), span)
-            })
+            }
         }
         // Complex expressions (with operators, calls, etc.) cannot be patterns
         _ => None,
