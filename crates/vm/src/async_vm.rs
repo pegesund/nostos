@@ -12764,9 +12764,16 @@ impl AsyncVM {
                 };
                 match (s, delim) {
                     (Some(s), Some(delim)) => {
-                        let parts: Vec<GcValue> = s.split(&delim)
-                            .map(|part| GcValue::String(heap.alloc_string(part.to_string())))
-                            .collect();
+                        let parts: Vec<GcValue> = if delim.is_empty() {
+                            // Split into individual characters (no empty strings at edges)
+                            s.chars()
+                                .map(|c| GcValue::String(heap.alloc_string(c.to_string())))
+                                .collect()
+                        } else {
+                            s.split(&delim)
+                                .map(|part| GcValue::String(heap.alloc_string(part.to_string())))
+                                .collect()
+                        };
                         Ok(GcValue::List(heap.make_list(parts)))
                     },
                     _ => Err(RuntimeError::Panic("Invalid string pointer".to_string()))
