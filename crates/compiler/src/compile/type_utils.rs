@@ -231,7 +231,7 @@ impl Compiler {
             "String" => nostos_types::Type::String,
             "Pid" => nostos_types::Type::Pid,
             "Ref" => nostos_types::Type::Ref,
-            "()" | "Unit" => nostos_types::Type::Unit,
+            "()" => nostos_types::Type::Unit,
             "?" | "_" => nostos_types::Type::Var(u32::MAX), // Unknown/untyped param
             _ => {
                 // "Self" is always a type parameter (from trait definitions)
@@ -278,6 +278,20 @@ impl Compiler {
                         }
                     }
                 } else {
+                    // "Unit" is the built-in unit type ONLY when there is no user-defined
+                    // "Unit" is the built-in unit type ONLY when there is no user-defined
+                    // type named "Unit". If a user defines `type Unit = ...`, their type
+                    // takes priority. Check the type registry first.
+                    if ty == "Unit" {
+                        // Check if user has defined a type called "Unit" (with or without module prefix)
+                        let has_user_unit = self.types.contains_key("Unit")
+                            || self.types.keys().any(|k| k.ends_with(".Unit"));
+                        if has_user_unit {
+                            let resolved_name = self.resolve_user_type_name(ty);
+                            return nostos_types::Type::Named { name: resolved_name, args: vec![] };
+                        }
+                        return nostos_types::Type::Unit;
+                    }
                     // Resolve using module context and imports
                     let resolved_name = self.resolve_user_type_name(ty);
                     nostos_types::Type::Named { name: resolved_name, args: vec![] }

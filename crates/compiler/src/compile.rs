@@ -6910,6 +6910,16 @@ impl Compiler {
     /// Get the full name of a type expression including type parameters.
     /// Check if a type name is a built-in type (primitives, collections, etc.)
     fn is_builtin_type_name(&self, name: &str) -> bool {
+        // "Unit" is a special case: it's the built-in unit type ONLY when there is no
+        // user-defined type named "Unit" (e.g., `type Unit = Grams | Ml`). If a user
+        // defines their own `Unit` type, it should shadow the built-in.
+        if name == "Unit" {
+            // Check if any user-defined type is named "Unit" (qualified or unqualified)
+            let has_user_unit = self.types.keys().any(|k| {
+                k == "Unit" || k.ends_with(".Unit")
+            });
+            return !has_user_unit;
+        }
         matches!(name,
             "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
             "UInt8" | "UInt16" | "UInt32" | "UInt64" |
@@ -6917,7 +6927,7 @@ impl Compiler {
             "Bool" | "Char" | "String" | "BigInt" | "Decimal" |
             "List" | "Array" | "Set" | "Map" | "IO" | "Pid" | "Ref" |
             "Int64Array" | "Float64Array" | "Float32Array" | "Buffer" |
-            "()" | "Unit" | "Never"
+            "()" | "Never"
         )
     }
 

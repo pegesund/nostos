@@ -1374,7 +1374,13 @@ impl TypeEnv {
                         "Decimal" => return Type::Decimal,
                         "Pid" => return Type::Pid,
                         "Ref" => return Type::Ref,
-                        "()" | "Unit" => return Type::Unit,
+                        // Only "()" is unconditionally the built-in unit type.
+                        // "Unit" is NOT normalized here because it can be a user-defined type name
+                        // (e.g., `type Unit = Grams | Ml`). The HM system should preserve
+                        // Type::Named{name:"Unit"} as-is so it can be matched against the
+                        // user's type. The compiler is responsible for resolving "Unit" to
+                        // the appropriate type (built-in or user-defined) when building signatures.
+                        "()" => return Type::Unit,
                         _ => {}
                     }
                 }
