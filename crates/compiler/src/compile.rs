@@ -26708,16 +26708,13 @@ impl Compiler {
             }
         }
 
-        // Register mvars as bindings
+        // Register mvars as bindings (qualified names only).
+        // Short local names are registered per-function-call in try_hm_inference,
+        // only for mvars belonging to the current module. This prevents stdlib mvars
+        // (e.g. rhtml_session.sessions) from polluting user code's type environment.
         for (mvar_name, mvar_info) in &self.mvars {
             let mvar_type = self.type_name_to_type(&mvar_info.type_name);
             env.bindings.insert(mvar_name.clone(), (mvar_type.clone(), true));
-            if let Some(dot_pos) = mvar_name.rfind('.') {
-                let local_name = &mvar_name[dot_pos + 1..];
-                if !env.bindings.contains_key(local_name) {
-                    env.bindings.insert(local_name.to_string(), (mvar_type, true));
-                }
-            }
         }
 
         // Register top-level bindings (expensive: involves InferCtx)
@@ -26925,6 +26922,37 @@ impl Compiler {
                         target: target_type,
                     },
                 );
+            }
+        }
+
+        // Register short local names for mvars belonging to the current module only.
+        // This lets code in rhtml_session.nos use `sessions` directly, while preventing
+        // the name from leaking into unrelated user modules.
+        {
+            let current_prefix = if self.module_path.is_empty() {
+                String::new()
+            } else {
+                format!("{}.", self.module_path.join("."))
+            };
+            for (mvar_name, mvar_info) in &self.mvars {
+                let is_current_module = if current_prefix.is_empty() {
+                    // Top-level: only register mvars with no module prefix
+                    !mvar_name.contains('.')
+                } else {
+                    mvar_name.starts_with(&current_prefix)
+                };
+                if is_current_module {
+                    if let Some(dot_pos) = mvar_name.rfind('.') {
+                        let local_name = &mvar_name[dot_pos + 1..];
+                        if !env.bindings.contains_key(local_name) {
+                            let mvar_type = self.type_name_to_type(&mvar_info.type_name);
+                            env.bindings.insert(local_name.to_string(), (mvar_type, true));
+                        }
+                    } else {
+                        // mvar with no dots - it's a top-level mvar, already registered with full name
+                        // (but full name == local_name in this case, already handled above)
+                    }
+                }
             }
         }
 
@@ -28612,6 +28640,17 @@ impl Compiler {
         // Register mvars with fully concrete types. Skip bare collection types like `Map`
         // (without type params) as they cause false positives from HM unification.
         // Also remove functions that shadow mvar names to prevent misresolution.
+        // Only register short local names for mvars belonging to the current module,
+        // to avoid stdlib mvars (e.g. rhtml_session.sessions) polluting user namespaces.
+        let current_module_prefix = {
+            // Derive the module prefix from qualified_name (e.g. "mymod.main" -> "mymod.")
+            let fn_mod = if let Some(dot) = qualified_name.rfind('.') {
+                format!("{}.", &qualified_name[..dot])
+            } else {
+                String::new()
+            };
+            fn_mod
+        };
         for (mvar_name, mvar_info) in &self.mvars {
             let mvar_type = self.type_name_to_type(&mvar_info.type_name);
             let local_name = mvar_name.rfind('.').map(|p| &mvar_name[p+1..]).unwrap_or(mvar_name);
@@ -28624,7 +28663,15 @@ impl Compiler {
             );
             if mvar_type.is_concrete() && !is_bare_collection {
                 env.bind(mvar_name.clone(), mvar_type.clone(), true);
-                if !env.bindings.contains_key(local_name) {
+                // Only register short name if this mvar belongs to the current module.
+                // For top-level (empty prefix), only register mvars with no module prefix
+                // (i.e., direct top-level mvars, not stdlib module mvars).
+                let is_current_module = if current_module_prefix.is_empty() {
+                    !mvar_name.contains('.')
+                } else {
+                    mvar_name.starts_with(&current_module_prefix)
+                };
+                if is_current_module && !env.bindings.contains_key(local_name) {
                     env.bind(local_name.to_string(), mvar_type, true);
                 }
             }
