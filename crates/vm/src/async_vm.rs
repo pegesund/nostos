@@ -5251,6 +5251,94 @@ impl AsyncProcess {
                 set_reg!(dst, GcValue::Pid(child_pid.0));
             }
 
+            // === Concurrency: SpawnLink ===
+            // SpawnLink behaves like Spawn but establishes a bidirectional link between
+            // parent and child processes. Currently implemented as a simple spawn (link
+            // tracking is a future enhancement).
+            SpawnLink(dst, func_reg, ref args) => {
+                let func_val = reg!(func_reg);
+                let arg_values: Vec<GcValue> = args.iter().map(|r| reg!(*r)).collect();
+
+                let (func, captures): (Arc<FunctionValue>, Arc<[GcValue]>) = match func_val {
+                    GcValue::Function(f) => (f, Arc::from([] as [GcValue; 0])),
+                    GcValue::Closure(ptr, _) => {
+                        let closure = self.heap.get_closure(ptr)
+                            .ok_or_else(|| RuntimeError::Panic("SpawnLink: invalid closure pointer".into()))?;
+                        (closure.function.clone(), closure.captures.clone())
+                    }
+                    _ => return Err(RuntimeError::Panic("SpawnLink: expected function or closure".into())),
+                };
+
+                // Convert args and captures to thread-safe values (deep copy)
+                let safe_args: Vec<ThreadSafeValue> = arg_values.iter()
+                    .filter_map(|v| ThreadSafeValue::from_gc_value(v, &self.heap))
+                    .collect();
+                let safe_captures: Vec<ThreadSafeValue> = captures.iter()
+                    .filter_map(|v| ThreadSafeValue::from_gc_value(v, &self.heap))
+                    .collect();
+
+                // Allocate new PID
+                let child_pid = self.shared.alloc_pid();
+                let shared_clone = self.shared.clone();
+
+                // Create mailbox channel BEFORE spawning to avoid race condition
+                let (mailbox_sender, mailbox_receiver) = tokio::sync::mpsc::unbounded_channel();
+
+                // Register the process BEFORE spawning
+                self.shared.register_process(child_pid, mailbox_sender.clone()).await;
+
+                // Spawn as tokio task
+                let shared_for_cleanup = self.shared.clone();
+                let spawn_task = AssertSend(async move {
+                    let mut process = AsyncProcess::new_with_mailbox(child_pid, shared_clone.clone(), mailbox_sender, mailbox_receiver);
+
+                    let gc_args: Vec<GcValue> = safe_args.iter()
+                        .map(|v| v.to_gc_value(&mut process.heap))
+                        .collect();
+                    let gc_captures: Vec<GcValue> = safe_captures.iter()
+                        .map(|v| v.to_gc_value(&mut process.heap))
+                        .collect();
+
+                    let reg_count = func.code.register_count;
+                    let mut registers = vec![GcValue::Unit; reg_count];
+                    for (i, arg) in gc_args.into_iter().enumerate() {
+                        if i < reg_count {
+                            registers[i] = arg;
+                        }
+                    }
+
+                    process.frames.push(CallFrame {
+                        function: func.clone(),
+                        ip: 0,
+                        registers,
+                        captures: gc_captures.into(),
+                        return_reg: None,
+                    });
+
+                    let _result = process.run().await;
+
+                    shared_clone.unregister_process(child_pid).await;
+                    shared_clone.process_abort_handles.write().await.remove(&child_pid);
+                });
+
+                let is_interactive = self.shared.interactive_mode.load(Ordering::SeqCst);
+                let join_handle = if let Some(ref handle) = self.shared.spawn_runtime_handle {
+                    if is_interactive {
+                        handle.spawn(spawn_task)
+                    } else {
+                        tokio::spawn(spawn_task)
+                    }
+                } else {
+                    tokio::spawn(spawn_task)
+                };
+
+                shared_for_cleanup.process_abort_handles.write().await.insert(child_pid, join_handle.abort_handle());
+
+                tokio::task::yield_now().await;
+
+                set_reg!(dst, GcValue::Pid(child_pid.0));
+            }
+
             // === Concurrency: Send ===
             Send(target_reg, msg_reg) => {
                 let target_val = reg!(target_reg);
