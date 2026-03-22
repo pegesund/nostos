@@ -22085,6 +22085,18 @@ impl Compiler {
         let saved_local_types = self.local_types.clone();
         self.block_depth += 1;
 
+        // Pre-process: merge multiple Stmt::LocalFnDef with the same name into one
+        // multi-clause LocalFnDef. Without this, the second clause would overwrite the
+        // first when compile_local_fn_def is called (re-registering the function with
+        // only the last clause), causing infinite recursion for pattern-matching local fns.
+        //
+        // Example:
+        //   myFn(0, acc = 0) = acc          → LocalFnDef (clause 1)
+        //   myFn(n, acc = 0) = myFn(n-1, ..) → LocalFnDef (clause 2)
+        // These must be merged into a single LocalFnDef with both clauses.
+        let merged_local_fn_stmts: Vec<Stmt> = Self::merge_local_fn_def_stmts(stmts);
+        let stmts = merged_local_fn_stmts.as_slice();
+
         // Pre-process: merge consecutive local function definitions with the same name
         // into a single pattern-dispatching lambda.
         // e.g., `go([], acc) = acc; go([x|rest], acc) = go(rest, acc+x)` becomes
@@ -22211,6 +22223,48 @@ scope_depth: self.block_depth,
     /// `combine(x) = x * 2` and `combine(x, y) = x + y`), the function creates separate
     /// arity-specific lambdas named `{name}__arity_{n}` AND tracks the overload arities.
     ///
+    /// Merge multiple Stmt::LocalFnDef statements with the same name into a single
+    /// multi-clause LocalFnDef. This is needed because the parser emits one LocalFnDef
+    /// per clause (when the clause has default params), but compile_local_fn_def would
+    /// overwrite earlier clauses if called multiple times for the same function name.
+    ///
+    /// Example: `myFn(0, acc = 0) = acc` and `myFn(n, acc = 0) = myFn(n-1, acc+n)`
+    /// produce two separate Stmt::LocalFnDef entries that must be merged into one.
+    fn merge_local_fn_def_stmts(stmts: &[Stmt]) -> Vec<Stmt> {
+        // Fast path: check if any merging is needed
+        let has_duplicates = {
+            let mut seen = std::collections::HashSet::new();
+            stmts.iter().any(|stmt| {
+                if let Stmt::LocalFnDef(fn_def) = stmt {
+                    !seen.insert(fn_def.name.node.as_str())
+                } else { false }
+            })
+        };
+        if !has_duplicates {
+            return stmts.to_vec();
+        }
+        // Merge: collect all clauses per name, preserving order of first occurrence
+        let mut merged: Vec<Stmt> = Vec::with_capacity(stmts.len());
+        let mut local_fn_positions: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for stmt in stmts {
+            if let Stmt::LocalFnDef(fn_def) = stmt {
+                let name = fn_def.name.node.clone();
+                if let Some(&first_idx) = local_fn_positions.get(&name) {
+                    // Append clauses to the existing LocalFnDef at first_idx
+                    if let Stmt::LocalFnDef(existing) = &mut merged[first_idx] {
+                        existing.clauses.extend(fn_def.clauses.iter().cloned());
+                    }
+                } else {
+                    local_fn_positions.insert(name, merged.len());
+                    merged.push(stmt.clone());
+                }
+            } else {
+                merged.push(stmt.clone());
+            }
+        }
+        merged
+    }
+
     /// Returns (merged_stmts, arity_overloads) where arity_overloads maps base names to
     /// their available arities (only populated for names with genuinely different arities
     /// that need call-site dispatch).
