@@ -1,0 +1,12 @@
+# expect: (6, 9)
+# Test local functions with truly different arities called independently
+# combine(x) is called with 1 arg and combine(x,y) is called with 2 args
+
+main() = {
+  combine(x) = x * 2
+  combine(x, y) = x + y
+
+  r1 = combine(3)
+  r2 = combine(4, 5)
+  (r1, r2)
+}

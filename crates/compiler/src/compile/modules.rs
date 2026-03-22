@@ -2296,8 +2296,21 @@ impl Compiler {
                 .collect();
             let saved_path = std::mem::replace(&mut self.module_path, module_path);
 
+            // Pre-process the function AST to apply arity-overload rewriting.
+            // This mirrors the preprocessing done in compile_fn_def before type_check_fn.
+            // Without this, functions with different-arity local function overloads (like
+            // `combine(x) = x*2` and `combine(x,y) = x+y`) would fail here with
+            // "Wrong number of arguments" because fn_asts stores the original unprocessed AST.
+            let preprocessed_fn_ast;
+            let fn_ast_for_check = if let Some(p) = Self::preprocess_fn_def_for_arity_overloads(fn_ast) {
+                preprocessed_fn_ast = p;
+                &preprocessed_fn_ast
+            } else {
+                fn_ast
+            };
+
             // Run type checking with full knowledge of all function signatures
-            match self.type_check_fn(fn_ast, fn_name) {
+            match self.type_check_fn(fn_ast_for_check, fn_name) {
             Ok(resolved_types) => {
                 // Collect resolved types from per-function inference
                 additional_expr_types.extend(resolved_types);

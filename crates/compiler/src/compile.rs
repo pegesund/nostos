@@ -1670,6 +1670,10 @@ pub struct Compiler {
     /// Maps local function name (user-visible) → internal qualified name (used for default lookup).
     /// Populated by compile_local_fn_def so callers can find param defaults for local fns.
     local_fn_internal_names: HashMap<String, String>,
+    /// Tracks local functions that have multiple arity overloads.
+    /// Maps base name → list of arities that have separate lambdas stored as `{name}__arity_{n}`.
+    /// e.g., if `combine(x) = ...` and `combine(x,y) = ...` both exist, stores "combine" → [1, 2].
+    local_arity_overloads: HashMap<String, Vec<usize>>,
     /// Type parameter bindings for current monomorphization: T -> Sum
     /// Used to substitute type parameters with concrete types in expressions
     current_type_bindings: HashMap<String, nostos_types::Type>,
@@ -2032,6 +2036,7 @@ impl Compiler {
             current_fn_generic_hm: false,
             compiling_stranded_fn: false,
             local_fn_internal_names: HashMap::new(),
+            local_arity_overloads: HashMap::new(),
             current_type_bindings: HashMap::new(),
             loop_stack: Vec::new(),
             line_starts: vec![0],
@@ -2651,6 +2656,7 @@ impl Compiler {
             current_fn_generic_hm: false,
             compiling_stranded_fn: false,
             local_fn_internal_names: HashMap::new(),
+            local_arity_overloads: HashMap::new(),
             current_type_bindings: HashMap::new(),
             loop_stack: Vec::new(),
             line_starts,
@@ -9907,7 +9913,12 @@ impl Compiler {
                 }
             }
         } else {
-        match self.type_check_fn(def, &def.name.node) {
+        // Pre-process the function body to apply arity-overload rewriting.
+        // This ensures HM inference sees `combine__arity_1` and `combine__arity_2`
+        // instead of two lambda definitions of `combine`, preventing false arity errors.
+        let preprocessed_def = Self::preprocess_fn_def_for_arity_overloads(def);
+        let def_for_inference = preprocessed_def.as_ref().unwrap_or(def);
+        match self.type_check_fn(def_for_inference, &def.name.node) {
         Ok(resolved_types) => {
             // Merge resolved types from per-function inference.
             // Overwrite entries that contain ANY unresolved type variables.
@@ -22069,8 +22080,13 @@ impl Compiler {
         // into a single pattern-dispatching lambda.
         // e.g., `go([], acc) = acc; go([x|rest], acc) = go(rest, acc+x)` becomes
         // a single `go = (__p0, __p1) => match (__p0, __p1) { ([], acc) -> acc, ... }`
-        let merged_stmts = Self::merge_local_fn_overloads(stmts);
+        let (merged_stmts, new_arity_overloads) = Self::merge_local_fn_overloads(stmts);
         let stmts = merged_stmts.as_slice();
+        // Register arity overloads so call sites can dispatch to the right lambda
+        let saved_arity_overloads = self.local_arity_overloads.clone();
+        for (name, arities) in new_arity_overloads {
+            self.local_arity_overloads.insert(name, arities);
+        }
 
         // Pre-scan: find `var` bindings that are captured and mutated by lambdas
         // These need to be boxed as mutable cells for shared closure capture
@@ -22165,6 +22181,7 @@ impl Compiler {
         self.locals = saved_locals;
         self.local_types = saved_local_types;
         self.closure_mutated_vars = saved_closure_mutated;
+        self.local_arity_overloads = saved_arity_overloads;
 
         Ok(last_reg)
     }
@@ -22178,7 +22195,15 @@ impl Compiler {
     /// inside a block. The parser desugars each clause to a separate `Stmt::Let`, but the
     /// second one would fail with "cannot reassign immutable variable". We merge them first
     /// into a single lambda with a match dispatch.
-    fn merge_local_fn_overloads(stmts: &[Stmt]) -> Vec<Stmt> {
+    ///
+    /// When a name has clauses with genuinely different arities (true overloads like
+    /// `combine(x) = x * 2` and `combine(x, y) = x + y`), the function creates separate
+    /// arity-specific lambdas named `{name}__arity_{n}` AND tracks the overload arities.
+    ///
+    /// Returns (merged_stmts, arity_overloads) where arity_overloads maps base names to
+    /// their available arities (only populated for names with genuinely different arities
+    /// that need call-site dispatch).
+    fn merge_local_fn_overloads(stmts: &[Stmt]) -> (Vec<Stmt>, HashMap<String, Vec<usize>>) {
         // Check if any merging is needed at all
         let needs_merge = {
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -22199,7 +22224,7 @@ impl Compiler {
         };
 
         if !needs_merge {
-            return stmts.to_vec();
+            return (stmts.to_vec(), HashMap::new());
         }
 
         // Find groups of consecutive (or same-block) lambda bindings with the same name
@@ -22207,8 +22232,9 @@ impl Compiler {
         // replacing first occurrence of each duplicated name with the merged version,
         // and removing subsequent occurrences.
 
-        // First pass: collect all lambda clauses per name (in order)
-        let mut lambda_clauses: std::collections::HashMap<String, Vec<(Vec<Pattern>, Box<Expr>, Span)>> = std::collections::HashMap::new();
+        // First pass: collect all lambda clauses per name (in order), grouped by arity
+        // lambda_by_arity: name -> arity -> Vec<(params, body, span)>
+        let mut lambda_by_arity: std::collections::HashMap<String, std::collections::BTreeMap<usize, Vec<(Vec<Pattern>, Box<Expr>, Span)>>> = std::collections::HashMap::new();
         let mut clause_max_arities: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
         for stmt in stmts {
@@ -22218,13 +22244,13 @@ impl Compiler {
                         if let Expr::Lambda(params, body, span) = &binding.value {
                             let name = &ident.node;
                             let arity = params.len();
-                            // Collect all clauses regardless of arity mismatch;
-                            // track the maximum arity seen for this name.
                             let max_arity = clause_max_arities.entry(name.clone()).or_insert(0);
                             if arity > *max_arity {
                                 *max_arity = arity;
                             }
-                            lambda_clauses.entry(name.clone())
+                            lambda_by_arity.entry(name.clone())
+                                .or_default()
+                                .entry(arity)
                                 .or_default()
                                 .push((params.clone(), body.clone(), *span));
                         }
@@ -22233,40 +22259,118 @@ impl Compiler {
             }
         }
 
-        // Only care about names that appear more than once
-        let multi_clause_names: std::collections::HashSet<String> = lambda_clauses.iter()
-            .filter(|(_, clauses)| clauses.len() > 1)
+        // Collect multi-clause names (appear more than once total)
+        let multi_clause_names: std::collections::HashSet<String> = lambda_by_arity.iter()
+            .filter(|(_, by_arity)| by_arity.values().map(|v| v.len()).sum::<usize>() > 1)
             .map(|(name, _)| name.clone())
             .collect();
 
         if multi_clause_names.is_empty() {
-            return stmts.to_vec();
+            return (stmts.to_vec(), HashMap::new());
         }
 
-        // Build merged lambdas for each multi-clause name
-        let mut merged_lambdas: std::collections::HashMap<String, Expr> = std::collections::HashMap::new();
-        for name in &multi_clause_names {
-            let clauses = &lambda_clauses[name];
-            let arity = clause_max_arities[name];
+        // Determine which names have genuinely different arities (true arity overloads)
+        // vs. which just have multiple clauses of the same arity (pattern matching) or
+        // are zipWith-style where shorter clauses are base cases of a max-arity function.
+        //
+        // A name is a "true arity overload" ONLY if:
+        // 1. It has clauses with more than one distinct arity, AND
+        // 2. It is CALLED with multiple different arities in the same block
+        //
+        // For example:
+        // - `combine(x) = x*2; combine(x,y) = x+y` where both `combine(1)` and `combine(2,3)` appear
+        //   → true arity overload (called with arities 1 and 2)
+        // - `go([]) = []; go([x|xs], [y|ys]) = ...` where only `go(xs, ys)` appears as call
+        //   → NOT a true arity overload (only called with arity 2), use wildcard padding
+        fn collect_call_arities_in_stmts(stmts: &[Stmt], name: &str) -> std::collections::HashSet<usize> {
+            fn collect_in_expr(expr: &Expr, name: &str, arities: &mut std::collections::HashSet<usize>) {
+                match expr {
+                    Expr::Call(func, _, args, _) => {
+                        if let Expr::Var(ident) = func.as_ref() {
+                            if ident.node == name {
+                                arities.insert(args.len());
+                            }
+                        }
+                        // Recurse into func and args
+                        collect_in_expr(func, name, arities);
+                        for arg in args {
+                            match arg {
+                                CallArg::Positional(e) | CallArg::Named(_, e) => collect_in_expr(e, name, arities),
+                            }
+                        }
+                    }
+                    Expr::Lambda(_, body, _) => collect_in_expr(body, name, arities),
+                    Expr::Block(inner_stmts, _) => collect_call_arities_in_stmts(inner_stmts, name, arities),
+                    Expr::If(cond, then_br, else_br, _) => {
+                        collect_in_expr(cond, name, arities);
+                        collect_in_expr(then_br, name, arities);
+                        collect_in_expr(else_br, name, arities);
+                    }
+                    Expr::BinOp(l, _, r, _) => {
+                        collect_in_expr(l, name, arities);
+                        collect_in_expr(r, name, arities);
+                    }
+                    Expr::Match(scrut, arms, _) => {
+                        collect_in_expr(scrut, name, arities);
+                        for arm in arms {
+                            collect_in_expr(&arm.body, name, arities);
+                        }
+                    }
+                    Expr::Tuple(exprs, _) => {
+                        for e in exprs { collect_in_expr(e, name, arities); }
+                    }
+                    Expr::List(exprs, tail, _) => {
+                        for e in exprs { collect_in_expr(e, name, arities); }
+                        if let Some(t) = tail { collect_in_expr(t, name, arities); }
+                    }
+                    _ => {}
+                }
+            }
+            fn collect_call_arities_in_stmts(stmts: &[Stmt], name: &str, arities: &mut std::collections::HashSet<usize>) {
+                for stmt in stmts {
+                    match stmt {
+                        Stmt::Let(b) => collect_in_expr(&b.value, name, arities),
+                        Stmt::Expr(e) => collect_in_expr(e, name, arities),
+                        Stmt::Assign(_, e, _) => collect_in_expr(e, name, arities),
+                        Stmt::LocalFnDef(fn_def) => {
+                            for clause in &fn_def.clauses {
+                                collect_in_expr(&clause.body, name, arities);
+                            }
+                        }
+                    }
+                }
+            }
+            let mut arities = std::collections::HashSet::new();
+            collect_call_arities_in_stmts(stmts, name, &mut arities);
+            arities
+        }
 
-            // Create fresh parameter names __p0, __p1, ...
+        let mut arity_overload_info: HashMap<String, Vec<usize>> = HashMap::new();
+        for name in &multi_clause_names {
+            let by_arity = &lambda_by_arity[name];
+            if by_arity.len() > 1 {
+                // Has clauses with different arities - check if CALLED with multiple arities
+                let call_arities = collect_call_arities_in_stmts(stmts, name);
+                // Only a "true arity overload" if called at multiple distinct arities
+                if call_arities.len() > 1 {
+                    let arities: Vec<usize> = by_arity.keys().copied().collect();
+                    arity_overload_info.insert(name.clone(), arities);
+                }
+                // Otherwise: treat as zipWith-style with wildcard padding (handled below)
+            }
+        }
+
+        // Helper: build a merged lambda from clauses of the SAME arity
+        let build_merged_lambda = |clauses: &[(Vec<Pattern>, Box<Expr>, Span)], arity: usize| -> Expr {
             let fresh_params: Vec<Pattern> = (0..arity)
                 .map(|i| Pattern::Var(Spanned::new(format!("__p{}", i), Span::default())))
                 .collect();
 
-            // Create match arms from each clause
             let arms: Vec<MatchArm> = clauses.iter().map(|(params, body, span)| {
-                // If this clause has fewer params than max arity, pad with wildcards
-                let mut padded_params = params.clone();
-                while padded_params.len() < arity {
-                    padded_params.push(Pattern::Wildcard(Span::default()));
-                }
                 let arm_pattern = if arity == 1 {
-                    // Single param: match directly on __p0
-                    padded_params[0].clone()
+                    params[0].clone()
                 } else {
-                    // Multiple params: match on tuple (__p0, __p1, ...)
-                    Pattern::Tuple(padded_params, Span::default())
+                    Pattern::Tuple(params.clone(), Span::default())
                 };
                 MatchArm {
                     pattern: arm_pattern,
@@ -22276,12 +22380,9 @@ impl Compiler {
                 }
             }).collect();
 
-            // Create the scrutinee expression
             let scrutinee = if arity == 1 {
-                // Match directly on __p0
                 Expr::Var(Spanned::new("__p0".to_string(), Span::default()))
             } else {
-                // Match on tuple of all params
                 let param_exprs: Vec<Expr> = (0..arity)
                     .map(|i| Expr::Var(Spanned::new(format!("__p{}", i), Span::default())))
                     .collect();
@@ -22290,14 +22391,74 @@ impl Compiler {
 
             let match_span = clauses.last().map(|(_, _, s)| *s).unwrap_or(Span::default());
             let body = Expr::Match(Box::new(scrutinee), arms, match_span);
-            let merged_lambda = Expr::Lambda(fresh_params, Box::new(body), match_span);
-            merged_lambdas.insert(name.clone(), merged_lambda);
+            Expr::Lambda(fresh_params, Box::new(body), match_span)
+        };
+
+        // Build merged lambdas:
+        // - For same-arity multi-clause names: one merged lambda (existing behavior)
+        // - For different-arity names: one merged lambda per arity group, stored as {name}__arity_{n}
+        //   Plus the base name also stores the MAX arity version (for the zipWith pattern)
+        let mut merged_lambdas: std::collections::HashMap<String, Expr> = std::collections::HashMap::new();
+        // arity-specific lambdas for true overloads: (binding_name, lambda_expr, span)
+        let mut arity_specific_stmts: std::collections::HashMap<String, Vec<(String, Expr, Span)>> = std::collections::HashMap::new();
+
+        for name in &multi_clause_names {
+            let by_arity = &lambda_by_arity[name];
+
+            if by_arity.len() == 1 {
+                // Single arity, multiple clauses - merge with wildcard padding (existing behavior)
+                let arity = clause_max_arities[name];
+                // Collect all clauses in order, padding as needed
+                let all_clauses: Vec<(Vec<Pattern>, Box<Expr>, Span)> = by_arity.values()
+                    .flat_map(|v| v.iter().map(|(params, body, span)| {
+                        let mut padded = params.clone();
+                        while padded.len() < arity {
+                            padded.push(Pattern::Wildcard(Span::default()));
+                        }
+                        (padded, body.clone(), *span)
+                    }))
+                    .collect();
+                merged_lambdas.insert(name.clone(), build_merged_lambda(&all_clauses, arity));
+            } else {
+                // Multiple arities - true arity overloads
+                // Build a separate lambda for each arity group
+                let max_arity = clause_max_arities[name];
+                let mut per_arity_stmts = Vec::new();
+                let first_span = by_arity.values().next()
+                    .and_then(|v| v.first())
+                    .map(|(_, _, s)| *s)
+                    .unwrap_or(Span::default());
+
+                for (arity, clauses) in by_arity {
+                    let merged = build_merged_lambda(clauses, *arity);
+                    let arity_name = format!("{}__arity_{}", name, arity);
+                    per_arity_stmts.push((arity_name, merged, first_span));
+                }
+
+                arity_specific_stmts.insert(name.clone(), per_arity_stmts);
+
+                // Also create the max-arity version for the base name,
+                // with shorter-arity clauses padded with wildcards.
+                // This supports the zipWith-style pattern where the shorter clause is a base case.
+                let all_clauses_padded: Vec<(Vec<Pattern>, Box<Expr>, Span)> = by_arity.values()
+                    .flat_map(|v| v.iter().map(|(params, body, span)| {
+                        let mut padded = params.clone();
+                        while padded.len() < max_arity {
+                            padded.push(Pattern::Wildcard(Span::default()));
+                        }
+                        (padded, body.clone(), *span)
+                    }))
+                    .collect();
+                merged_lambdas.insert(name.clone(), build_merged_lambda(&all_clauses_padded, max_arity));
+            }
         }
 
-        // Second pass: rebuild statement list, replacing first occurrence of each
-        // multi-clause name with the merged version, dropping subsequent occurrences.
+        // Second pass: rebuild statement list.
+        // For true arity overloads, we DON'T emit the base name binding anymore.
+        // Instead, only the arity-specific lambdas are emitted (combine__arity_1, combine__arity_2).
+        // Calls to `combine(args)` in subsequent statements are rewritten by rewrite_arity_calls.
         let mut first_occurrence: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut result = Vec::with_capacity(stmts.len());
+        let mut result = Vec::with_capacity(stmts.len() + 4);
 
         for stmt in stmts {
             if let Stmt::Let(binding) = stmt {
@@ -22305,16 +22466,35 @@ impl Compiler {
                     if let Pattern::Var(ident) = &binding.pattern {
                         if multi_clause_names.contains(&ident.node) {
                             if first_occurrence.insert(ident.node.clone()) {
-                                // First occurrence: replace with merged lambda
-                                let merged_value = merged_lambdas[&ident.node].clone();
-                                result.push(Stmt::Let(Binding {
-                                    visibility: binding.visibility,
-                                    mutable: false,
-                                    pattern: binding.pattern.clone(),
-                                    ty: binding.ty.clone(),
-                                    value: merged_value,
-                                    span: binding.span,
-                                }));
+                                let is_true_arity_overload = arity_overload_info.contains_key(&ident.node);
+                                if is_true_arity_overload {
+                                    // True arity overload: emit only arity-specific lambdas
+                                    // (no base name binding - calls will be rewritten)
+                                    if let Some(per_arity) = arity_specific_stmts.get(&ident.node) {
+                                        for (arity_name, lambda, span) in per_arity {
+                                            result.push(Stmt::Let(Binding {
+                                                visibility: binding.visibility,
+                                                mutable: false,
+                                                pattern: Pattern::Var(Spanned::new(arity_name.clone(), *span)),
+                                                ty: None,
+                                                value: lambda.clone(),
+                                                span: *span,
+                                            }));
+                                        }
+                                    }
+                                    // Don't emit the base name binding
+                                } else {
+                                    // Same-arity multi-clause: emit base name with merged lambda
+                                    let merged_value = merged_lambdas[&ident.node].clone();
+                                    result.push(Stmt::Let(Binding {
+                                        visibility: binding.visibility,
+                                        mutable: false,
+                                        pattern: binding.pattern.clone(),
+                                        ty: binding.ty.clone(),
+                                        value: merged_value,
+                                        span: binding.span,
+                                    }));
+                                }
                             }
                             // Subsequent occurrences: skip (already merged)
                             continue;
@@ -22325,7 +22505,165 @@ impl Compiler {
             result.push(stmt.clone());
         }
 
-        result
+        // Third pass: for true arity overloads, rewrite calls in all statements
+        // so that `f(args)` becomes `f__arity_N(args)` where N = number of args
+        if !arity_overload_info.is_empty() {
+            let result = Self::rewrite_arity_calls_in_stmts(result, &arity_overload_info);
+            return (result, arity_overload_info);
+        }
+
+        (result, arity_overload_info)
+    }
+
+    /// Pre-process a function definition to rewrite arity-overloaded local function calls.
+    /// This ensures HM type inference sees the rewritten AST (with `f__arity_N` names)
+    /// instead of multiple bindings of the same name with different arities.
+    /// Returns None if no transformation was needed.
+    fn preprocess_fn_def_for_arity_overloads(def: &FnDef) -> Option<FnDef> {
+        let mut changed = false;
+        let new_clauses: Vec<FnClause> = def.clauses.iter().map(|clause| {
+            if let Expr::Block(stmts, span) = &clause.body {
+                let (new_stmts, overloads) = Self::merge_local_fn_overloads(stmts);
+                if !overloads.is_empty() {
+                    changed = true;
+                    FnClause {
+                        body: Expr::Block(new_stmts, *span),
+                        ..clause.clone()
+                    }
+                } else {
+                    clause.clone()
+                }
+            } else {
+                clause.clone()
+            }
+        }).collect();
+        if changed {
+            Some(FnDef {
+                clauses: new_clauses,
+                ..def.clone()
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Rewrite all calls to arity-overloaded local functions in a list of statements.
+    /// For each name in `overloads`, replaces `f(a1, ..., aN)` with `f__arity_N(a1, ..., aN)`.
+    fn rewrite_arity_calls_in_stmts(stmts: Vec<Stmt>, overloads: &HashMap<String, Vec<usize>>) -> Vec<Stmt> {
+        stmts.into_iter().map(|stmt| Self::rewrite_arity_calls_in_stmt(stmt, overloads)).collect()
+    }
+
+    fn rewrite_arity_calls_in_stmt(stmt: Stmt, overloads: &HashMap<String, Vec<usize>>) -> Stmt {
+        match stmt {
+            Stmt::Expr(expr) => Stmt::Expr(Self::rewrite_arity_calls_in_expr(expr, overloads)),
+            Stmt::Let(binding) => Stmt::Let(Binding {
+                value: Self::rewrite_arity_calls_in_expr(binding.value, overloads),
+                ..binding
+            }),
+            Stmt::Assign(target, value, span) => {
+                Stmt::Assign(target, Self::rewrite_arity_calls_in_expr(value, overloads), span)
+            }
+            Stmt::LocalFnDef(mut fn_def) => {
+                for clause in &mut fn_def.clauses {
+                    clause.body = Self::rewrite_arity_calls_in_expr(clause.body.clone(), overloads);
+                }
+                Stmt::LocalFnDef(fn_def)
+            }
+        }
+    }
+
+    fn rewrite_arity_calls_in_expr(expr: Expr, overloads: &HashMap<String, Vec<usize>>) -> Expr {
+        match expr {
+            Expr::Call(func, type_args, args, span) => {
+                // Check if func is a Var that is in our overload map
+                if let Expr::Var(ref ident) = *func {
+                    if overloads.contains_key(&ident.node) {
+                        let call_arity = args.len();
+                        let arity_name = format!("{}__arity_{}", ident.node, call_arity);
+                        let rewritten_args: Vec<CallArg> = args.into_iter().map(|a| match a {
+                            CallArg::Positional(e) => CallArg::Positional(Self::rewrite_arity_calls_in_expr(e, overloads)),
+                            CallArg::Named(n, e) => CallArg::Named(n, Self::rewrite_arity_calls_in_expr(e, overloads)),
+                        }).collect();
+                        return Expr::Call(
+                            Box::new(Expr::Var(Spanned::new(arity_name, ident.span))),
+                            type_args,
+                            rewritten_args,
+                            span
+                        );
+                    }
+                }
+                // Not an overload - recurse into subexpressions
+                let rewritten_func = Box::new(Self::rewrite_arity_calls_in_expr(*func, overloads));
+                let rewritten_args: Vec<CallArg> = args.into_iter().map(|a| match a {
+                    CallArg::Positional(e) => CallArg::Positional(Self::rewrite_arity_calls_in_expr(e, overloads)),
+                    CallArg::Named(n, e) => CallArg::Named(n, Self::rewrite_arity_calls_in_expr(e, overloads)),
+                }).collect();
+                Expr::Call(rewritten_func, type_args, rewritten_args, span)
+            }
+            Expr::Lambda(params, body, span) => {
+                Expr::Lambda(params, Box::new(Self::rewrite_arity_calls_in_expr(*body, overloads)), span)
+            }
+            Expr::Block(stmts, span) => {
+                Expr::Block(Self::rewrite_arity_calls_in_stmts(stmts, overloads), span)
+            }
+            Expr::If(cond, then_br, else_br, span) => {
+                Expr::If(
+                    Box::new(Self::rewrite_arity_calls_in_expr(*cond, overloads)),
+                    Box::new(Self::rewrite_arity_calls_in_expr(*then_br, overloads)),
+                    Box::new(Self::rewrite_arity_calls_in_expr(*else_br, overloads)),
+                    span
+                )
+            }
+            Expr::BinOp(l, op, r, span) => {
+                Expr::BinOp(
+                    Box::new(Self::rewrite_arity_calls_in_expr(*l, overloads)),
+                    op,
+                    Box::new(Self::rewrite_arity_calls_in_expr(*r, overloads)),
+                    span
+                )
+            }
+            Expr::UnaryOp(op, e, span) => {
+                Expr::UnaryOp(op, Box::new(Self::rewrite_arity_calls_in_expr(*e, overloads)), span)
+            }
+            Expr::Tuple(exprs, span) => {
+                Expr::Tuple(exprs.into_iter().map(|e| Self::rewrite_arity_calls_in_expr(e, overloads)).collect(), span)
+            }
+            Expr::List(exprs, tail, span) => {
+                Expr::List(
+                    exprs.into_iter().map(|e| Self::rewrite_arity_calls_in_expr(e, overloads)).collect(),
+                    tail.map(|t| Box::new(Self::rewrite_arity_calls_in_expr(*t, overloads))),
+                    span
+                )
+            }
+            Expr::Match(scrut, arms, span) => {
+                let rewritten_scrut = Box::new(Self::rewrite_arity_calls_in_expr(*scrut, overloads));
+                let rewritten_arms: Vec<MatchArm> = arms.into_iter().map(|arm| MatchArm {
+                    body: Self::rewrite_arity_calls_in_expr(arm.body, overloads),
+                    ..arm
+                }).collect();
+                Expr::Match(rewritten_scrut, rewritten_arms, span)
+            }
+            Expr::FieldAccess(e, field, span) => {
+                Expr::FieldAccess(Box::new(Self::rewrite_arity_calls_in_expr(*e, overloads)), field, span)
+            }
+            Expr::Index(e, idx, span) => {
+                Expr::Index(
+                    Box::new(Self::rewrite_arity_calls_in_expr(*e, overloads)),
+                    Box::new(Self::rewrite_arity_calls_in_expr(*idx, overloads)),
+                    span
+                )
+            }
+            Expr::MethodCall(obj, method, args, span) => {
+                let rewritten_obj = Box::new(Self::rewrite_arity_calls_in_expr(*obj, overloads));
+                let rewritten_args: Vec<CallArg> = args.into_iter().map(|a| match a {
+                    CallArg::Positional(e) => CallArg::Positional(Self::rewrite_arity_calls_in_expr(e, overloads)),
+                    CallArg::Named(n, e) => CallArg::Named(n, Self::rewrite_arity_calls_in_expr(e, overloads)),
+                }).collect();
+                Expr::MethodCall(rewritten_obj, method, rewritten_args, span)
+            }
+            // Most other expressions don't contain calls (literals, vars, etc.)
+            other => other,
+        }
     }
 
     /// Compile a statement.
