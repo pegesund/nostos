@@ -6356,6 +6356,21 @@ impl<'a> InferCtx<'a> {
                 }
             }
 
+            // Named type with args that might be a type alias (e.g., Queue[Int] -> ([Int], [Int]))
+            // Try expanding the Named type alias before giving up
+            (Type::Named { .. }, other) | (other, Type::Named { .. }) => {
+                let (named, non_named) = match (&t1, &t2) {
+                    (Type::Named { .. }, _) => (&t1, &t2),
+                    _ => (&t2, &t1),
+                };
+                if let Some(expanded) = self.expand_type_alias(named) {
+                    if &expanded != named {
+                        return self.unify_types(&expanded, non_named);
+                    }
+                }
+                Err(TypeError::UnificationFailed(t1.clone(), t2.clone()))
+            }
+
             // Mismatch
             _ => {
                 Err(TypeError::UnificationFailed(t1.clone(), t2.clone()))
