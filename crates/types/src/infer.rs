@@ -2449,6 +2449,19 @@ impl<'a> InferCtx<'a> {
                             continue;
                         }
 
+                        // Different-arity tuple types in pattern matching: allow match arms to
+                        // have tuples of different lengths (e.g., (a, b) in one arm, (a, b, c)
+                        // in another). This is valid in Nostos - the arms are mutually exclusive
+                        // at runtime. Skip this constraint instead of failing.
+                        if matches!(&e, TypeError::ArityMismatch { .. }) {
+                            let t1r_full = self.apply_full_subst(&t1);
+                            let t2r_full = self.apply_full_subst(&t2);
+                            if matches!((&t1r_full, &t2r_full), (Type::Tuple(_), Type::Tuple(_))) {
+                                deferred_count = 0;
+                                continue; // Different-arity tuples coexist in match arms
+                            }
+                        }
+
                         // Check for implicit conversion before reporting error.
                         // If one side is a Named type (e.g., Tensor) and the other is List,
                         // look for a conversion function like tensorFromList.
