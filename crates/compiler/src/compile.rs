@@ -31092,6 +31092,22 @@ fn free_vars(expr: &Expr, bound: &std::collections::HashSet<String>) -> std::col
             free.extend(free_vars(pid, bound));
             free.extend(free_vars(msg, bound));
         }
+        Expr::Receive(arms, timeout, _) => {
+            // Receive arms bind pattern variables, similar to Match arms
+            for arm in arms {
+                let mut arm_bound = bound.clone();
+                collect_pattern_vars(&arm.pattern, &mut arm_bound);
+                if let Some(guard) = &arm.guard {
+                    free.extend(free_vars(guard, &arm_bound));
+                }
+                free.extend(free_vars(&arm.body, &arm_bound));
+            }
+            // Also check timeout expressions if present
+            if let Some((timeout_expr, after_body)) = timeout {
+                free.extend(free_vars(timeout_expr, bound));
+                free.extend(free_vars(after_body, bound));
+            }
+        }
         Expr::Map(pairs, _) => {
             for (k, v) in pairs {
                 free.extend(free_vars(k, bound));
