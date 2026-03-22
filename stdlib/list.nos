@@ -172,9 +172,10 @@ sort[T](list: List[T]) -> List[T] = match list {
 }
 
 # Apply function to each element, return new list
-map[T, U](list: List[T], f: (T) -> U) -> List[U] = match list {
-    [] -> []
-    [x | xs] -> [f(x) | map(xs, f)]
+map[T, U](list: List[T], f: (T) -> U) -> List[U] = mapAcc(list, f, [])
+mapAcc[T, U](list: List[T], f: (T) -> U, acc: List[U]) -> List[U] = match list {
+    [] -> reverseAcc(acc, [])
+    [x | xs] -> mapAcc(xs, f, [f(x) | acc])
 }
 
 # Apply function to each element for side effects only, returns unit
@@ -184,9 +185,10 @@ each[T](list: List[T], f: (T) -> Unit) -> Unit = match list {
 }
 
 # Keep elements that satisfy predicate
-filter[T](list: List[T], pred: (T) -> Bool) -> List[T] = match list {
-    [] -> []
-    [x | xs] -> if pred(x) then [x | filter(xs, pred)] else filter(xs, pred)
+filter[T](list: List[T], pred: (T) -> Bool) -> List[T] = filterAcc(list, pred, [])
+filterAcc[T](list: List[T], pred: (T) -> Bool, acc: List[T]) -> List[T] = match list {
+    [] -> reverseAcc(acc, [])
+    [x | xs] -> if pred(x) then filterAcc(xs, pred, [x | acc]) else filterAcc(xs, pred, acc)
 }
 
 # Reduce list to single value (left fold)
