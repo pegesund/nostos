@@ -137,6 +137,21 @@ static EXCLUSIVE_MAP_METHODS: LazyLock<HashSet<&str>> = LazyLock::new(|| {
     HashSet::from(["lookup", "keys", "values", "getOrThrow", "toList"])
 });
 
+/// String methods that uniquely identify the receiver as a String type.
+/// These methods exist ONLY on String (not on List/Map/Set/Int/Float), so when an
+/// unresolved receiver calls one of these methods, we can infer the receiver is String
+/// and properly constrain the return type (e.g., chars() -> [Char]).
+/// NOTE: toInt/toFloat/parseInt/parseFloat are NOT included because they also exist
+/// on Int/Float as numeric conversion methods.
+static EXCLUSIVE_STRING_METHODS: LazyLock<HashSet<&str>> = LazyLock::new(|| {
+    HashSet::from([
+        "chars", "toUpper", "toLower", "trim", "trimStart", "trimEnd",
+        "startsWith", "endsWith", "replace", "replaceAll",
+        "repeat", "padStart", "padEnd", "lines", "words",
+        "lastIndexOf", "substring",
+    ])
+});
+
 /// Option method aliasing: short method name → stdlib function name.
 /// Supports both shorthand (.map) and direct (.optMap) names.
 static OPTION_METHOD_ALIASES: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
@@ -171,6 +186,10 @@ fn is_exclusive_list_method(name: &str) -> bool {
 
 fn is_exclusive_map_method(name: &str) -> bool {
     EXCLUSIVE_MAP_METHODS.contains(name)
+}
+
+fn is_exclusive_string_method(name: &str) -> bool {
+    EXCLUSIVE_STRING_METHODS.contains(name)
 }
 
 fn resolve_option_method_alias(name: &str) -> Option<&'static str> {
@@ -4199,7 +4218,9 @@ impl<'a> InferCtx<'a> {
                     // insert with 3 arg_types (receiver + key + value) → Map; 2 arg_types (receiver + elem) → Set
                     let is_map_method = is_exclusive_map_method(&call.method_name)
                         || (call.method_name == "insert" && call.arg_types.len() == 3);
-                    let can_infer_from_method = is_list_method || is_map_method;
+                    // String-exclusive methods: can infer receiver is String
+                    let is_string_method = is_exclusive_string_method(&call.method_name);
+                    let can_infer_from_method = is_list_method || is_map_method || is_string_method;
                     if !can_infer_from_method {
                         // Before deferring, try to constrain the return type from known
                         // method signatures. This catches errors like `f(x) = x.isEmpty() + 1`
@@ -4236,6 +4257,7 @@ impl<'a> InferCtx<'a> {
                     let is_list_method = is_list || assume_list_for_shared;
                     let is_map_method = is_exclusive_map_method(&call.method_name)
                         || (call.method_name == "insert" && call.arg_types.len() == 3);
+                    let is_string_method = is_exclusive_string_method(&call.method_name);
                     if is_list_method {
                         // Unify receiver with List[?X] so type info flows properly
                         let elem = self.fresh();
@@ -4249,6 +4271,11 @@ impl<'a> InferCtx<'a> {
                         let map_ty = Type::Map(Box::new(key), Box::new(val));
                         let _ = self.unify_types(&resolved_receiver, &map_ty);
                         Some("Map".to_string())
+                    } else if is_string_method {
+                        // Unify receiver with String so type info flows properly
+                        // (e.g., s.chars() must return [Char], not be free to match [String])
+                        let _ = self.unify_types(&resolved_receiver, &Type::String);
+                        Some("String".to_string())
                     } else {
                         type_name_opt
                     }
