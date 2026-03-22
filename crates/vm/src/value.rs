@@ -1546,6 +1546,8 @@ pub enum Instruction {
     DestructurePair(Reg, Reg, Reg),
     /// Batch destructure triple: (dst0, dst1, dst2) = tuple - single heap lookup
     DestructureTriple(Reg, Reg, Reg, Reg),
+    /// Check tuple arity: dst = (tuple.len() == expected_len), no panic
+    CheckTupleArity(Reg, Reg, u8),
 
     // === Records ===
     /// Create record: dst = TypeName{fields...}

@@ -1059,6 +1059,15 @@ impl Compiler {
             Pattern::Tuple(patterns, _) => {
                 self.chunk.emit(Instruction::LoadTrue(success_reg), 0);
 
+                // Check that the tuple has the exact expected arity before destructuring.
+                // This is required for match arms with different tuple arities.
+                let arity_ok_reg = self.alloc_reg();
+                self.chunk.emit(Instruction::CheckTupleArity(arity_ok_reg, scrut_reg, patterns.len() as u8), 0);
+                self.chunk.emit(Instruction::And(success_reg, success_reg, arity_ok_reg), 0);
+
+                // Guard: skip destructure and sub-pattern tests if arity doesn't match
+                let skip_destructure_jump = self.chunk.emit(Instruction::JumpIfFalse(arity_ok_reg, 0), 0);
+
                 // Use batch destructure for common cases (pairs and triples)
                 let elem_regs: Vec<Reg> = (0..patterns.len()).map(|_| self.alloc_reg()).collect();
 
@@ -1090,6 +1099,9 @@ impl Compiler {
                     }
                     bindings.append(&mut sub_bindings);
                 }
+
+                // Patch the arity-check skip jump to here
+                self.chunk.patch_jump(skip_destructure_jump, self.chunk.code.len());
             }
             Pattern::Map(entries, _) => {
                 // 1. Check if it is a map

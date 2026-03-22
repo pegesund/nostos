@@ -3712,6 +3712,19 @@ impl AsyncProcess {
                 }
             }
 
+            CheckTupleArity(dst, tuple_reg, expected_len) => {
+                let ok = if let GcValue::Tuple(ptr) = reg_ref!(tuple_reg) {
+                    if let Some(t) = self.heap.get_tuple(*ptr) {
+                        t.items.len() == *expected_len as usize
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                set_reg!(dst, GcValue::Bool(ok));
+            }
+
             GetField(dst, record, field_idx) => {
                 let rec_val = reg!(record);
                 // Fast path for simple types - borrow field name to avoid clone

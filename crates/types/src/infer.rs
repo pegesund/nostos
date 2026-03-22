@@ -6650,8 +6650,11 @@ impl<'a> InferCtx<'a> {
                             .into_iter().cloned().collect();
 
                         // Also check for type-qualified versions (e.g., String.length for length(s) where s: String)
-                        // This enables UFCS-style resolution for bare function calls
-                        if args.len() == 1 && !arg_types.is_empty() {
+                        // This enables UFCS-style resolution for bare function calls.
+                        // BUT: only add UFCS overloads if there are NO existing direct overloads.
+                        // If the user has defined `parseInt`, `String.parseInt` should NOT be added
+                        // as a competing overload — user-defined functions always shadow builtin methods.
+                        if args.len() == 1 && !arg_types.is_empty() && overloads.is_empty() {
                             let resolved_arg_ty = self.env.apply_subst(&arg_types[0]);
                             if let Some(type_name) = self.get_type_name(&resolved_arg_ty) {
                                 let qualified_name = format!("{}.{}", type_name, name);
@@ -7009,8 +7012,37 @@ impl<'a> InferCtx<'a> {
                 let scrutinee_ty = self.infer_expr(scrutinee)?;
                 let result_ty = self.fresh();
 
+                // Detect conflicting tuple arities in arms. If present, we use an unbound
+                // fresh type variable as the "effective scrutinee type" for pattern inference
+                // in those arms. This prevents the scrutinee from being bound to any specific
+                // tuple arity, allowing dispatch functions that match different-arity tuples.
+                let tuple_arities: Vec<Option<usize>> = arms.iter().map(|arm| {
+                    if let Pattern::Tuple(elems, _) = &arm.pattern {
+                        Some(elems.len())
+                    } else {
+                        None
+                    }
+                }).collect();
+                let has_conflicting_tuple_arities = {
+                    let defined_arities: Vec<usize> = tuple_arities.iter().flatten().copied().collect();
+                    let first = defined_arities.first().copied();
+                    first.is_some() && defined_arities.iter().any(|&a| Some(a) != first)
+                };
+
                 for arm in arms {
-                    self.infer_match_arm(arm, &scrutinee_ty, &result_ty)?;
+                    // If this arm is a tuple pattern and there are conflicting arities,
+                    // infer the pattern against a fresh variable (not the scrutinee_ty),
+                    // so the scrutinee is not constrained to a specific arity.
+                    let arm_scrutinee_ty = if has_conflicting_tuple_arities {
+                        if let Pattern::Tuple(_, _) = &arm.pattern {
+                            self.fresh()
+                        } else {
+                            scrutinee_ty.clone()
+                        }
+                    } else {
+                        scrutinee_ty.clone()
+                    };
+                    self.infer_match_arm(arm, &arm_scrutinee_ty, &result_ty)?;
                 }
 
                 Ok(result_ty)

@@ -3723,6 +3723,10 @@ impl JitCompiler {
                     has_tuple_op = true;
                     max_tuple_arity = max_tuple_arity.max(3);
                 }
+                Instruction::CheckTupleArity(_, _, _) => {
+                    // CheckTupleArity is used in pattern matching - not JIT-able
+                    return Err(JitError::NotSuitable("CheckTupleArity not JIT-able".to_string()));
+                }
                 // Numeric operations - all allowed
                 Instruction::LoadConst(_, idx) => {
                     // Skip error path constants (string loaded then Panic/Throw)
