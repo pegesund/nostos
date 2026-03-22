@@ -16716,20 +16716,47 @@ impl Compiler {
                 // Check if first arg is a numeric type (for numeric conversion builtin guards).
                 // When user defines their own function with the same name as a numeric builtin
                 // (e.g., toFloat(c: Celsius)), the builtin should only be used for numeric args.
+
+                // First check: if there's a user-defined function with this name, the builtin
+                // should only be used when the type is DEFINITELY numeric (not unknown/polymorphic).
+                // This prevents the builtin from shadowing user functions for unknown-typed args.
+                let has_user_defined_fn = self.fn_asts_by_base.contains_key(qualified_name.as_str())
+                    || {
+                        let module_qualified = if self.module_path.is_empty() {
+                            qualified_name.clone()
+                        } else {
+                            format!("{}.{}", self.module_path.join("."), qualified_name)
+                        };
+                        self.fn_asts_by_base.contains_key(module_qualified.as_str())
+                    }
+                    || self.imports.get(qualified_name.as_str())
+                        .map(|q| self.fn_asts_by_base.contains_key(q.as_str()))
+                        .unwrap_or(false);
+
                 let first_arg_is_numeric = if arg_regs.len() == 1 {
                     arg_exprs.first()
                         .and_then(|e| self.expr_type_info(e).display_name())
                         .map(|t| {
-                            t.starts_with('?')
-                            || t.contains("polymorphic")
-                            || (t.len() == 1 && t.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false))
-                            || matches!(t.as_str(),
+                            // If a user-defined function exists, only treat as numeric when
+                            // the type is definitively numeric (not an unresolved variable).
+                            // This prevents the builtin from overriding user functions with
+                            // unknown-typed arguments (e.g., polymorphic church numerals).
+                            let is_unresolved = t.starts_with('?')
+                                || t.contains("polymorphic")
+                                || (t.len() == 1 && t.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false));
+                            let is_numeric = matches!(t.as_str(),
                                 "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
                                 "UInt8" | "UInt16" | "UInt32" | "UInt64" |
                                 "Float" | "Float32" | "Float64" | "BigInt"
-                            )
+                            );
+                            if has_user_defined_fn {
+                                // Only use builtin for definitively numeric types; not for unresolved/polymorphic
+                                is_numeric && !is_unresolved
+                            } else {
+                                is_unresolved || is_numeric
+                            }
                         })
-                        .unwrap_or(true) // Unknown type → assume numeric (safe fallback)
+                        .unwrap_or(!has_user_defined_fn) // Unknown type: assume numeric only if no user fn
                 } else {
                     false
                 };
