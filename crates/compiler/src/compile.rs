@@ -22344,10 +22344,35 @@ impl Compiler {
         // resolve the local fn name to its internal name and use CallSelf.
         self.local_fn_internal_names.insert(fn_def.name.node.clone(), local_fn_name.clone());
 
+        // Temporarily remove this local function's HM signature from pending_fn_signatures.
+        // This prevents the inner function from being treated as a polymorphic generic function
+        // just because its parameters reference outer generic type params (like 'a' from the
+        // enclosing generic function). Without this, local recursive functions inside generic
+        // functions fail at runtime with "Function not found" because they are marked as
+        // polymorphic and never registered in self.functions.
+        // Example: applyN[a](f: a -> a, x: a, n: Int) = { go(curr: a, rem: Int) = ... }
+        // Without this fix, go is never registered and LoadFunctionByName fails.
+        let saved_local_pending_sigs: Vec<_> = {
+            let wildcard_local_key = format!("{}/{}", local_fn_name, vec!["_"; arity].join(","));
+            let keys_to_remove: Vec<String> = self.pending_fn_signatures.keys()
+                .filter(|k| k.starts_with(&format!("{}/", local_fn_name)) || *k == &wildcard_local_key)
+                .cloned()
+                .collect();
+            keys_to_remove.into_iter().map(|k| {
+                let v = self.pending_fn_signatures.remove(&k).unwrap();
+                (k, v)
+            }).collect()
+        };
+
         // Compile the function using compile_fn_def
         // This registers it in self.functions under the unique name
         let prev_locals = self.locals.clone();
         let _ = self.compile_fn_def(&local_def);
+
+        // Restore the removed pending signatures
+        for (k, v) in saved_local_pending_sigs {
+            self.pending_fn_signatures.insert(k, v);
+        }
         self.fn_name_already_qualified = saved_fn_name_qualified;
         self.locals = prev_locals;
 
