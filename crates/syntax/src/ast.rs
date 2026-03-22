@@ -947,7 +947,15 @@ impl FnDef {
                     .map(|p| Self::subst_type_params_in_type_expr(p, map))
                     .collect();
                 let ret_str = Self::subst_type_params_in_type_expr(ret, map);
-                format!("({}) -> {}", params_str.join(", "), ret_str)
+                // Wrap in parens like to_string_pretty does, so that function types used
+                // as parameter types don't get confused with the outer curried signature.
+                // E.g., wrap[s](f: (s) -> s) should produce "((a) -> a) -> ..." not "(a) -> a -> ..."
+                let param_part = if params_str.len() == 1 {
+                    params_str[0].clone()
+                } else {
+                    format!("({})", params_str.join(", "))
+                };
+                format!("({} -> {})", param_part, ret_str)
             }
             _ => ty.to_string_pretty(),
         }
