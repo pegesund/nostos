@@ -1567,7 +1567,7 @@ enum InferredType {
 }
 
 /// Information about a local variable.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct LocalInfo {
     reg: Reg,
     is_float: bool,
@@ -1575,6 +1575,9 @@ struct LocalInfo {
     /// True if this var is boxed in a mutable cell (for closure capture).
     /// Reads emit CellGet, writes emit CellSet.
     is_cell: bool,
+    /// Block scope depth at which this local was created.
+    /// Used to allow inner-scope shadowing of outer-scope immutable bindings.
+    scope_depth: usize,
 }
 
 /// Compilation context.
@@ -1679,6 +1682,9 @@ pub struct Compiler {
     current_type_bindings: HashMap<String, nostos_types::Type>,
     /// Loop context stack for break/continue
     loop_stack: Vec<LoopContext>,
+    /// Current block nesting depth (incremented on entering compile_block, decremented on exit).
+    /// Used to allow inner-scope shadowing of outer-scope immutable bindings.
+    block_depth: usize,
     /// Line starts: byte offsets where each line begins (line 1 is at index 0)
     line_starts: Vec<usize>,
     /// Pending functions to compile (second pass)
@@ -2039,6 +2045,7 @@ impl Compiler {
             local_arity_overloads: HashMap::new(),
             current_type_bindings: HashMap::new(),
             loop_stack: Vec::new(),
+            block_depth: 0,
             line_starts: vec![0],
             pending_functions: Vec::new(),
             pending_fn_signatures: HashMap::new(),
@@ -2659,6 +2666,7 @@ impl Compiler {
             local_arity_overloads: HashMap::new(),
             current_type_bindings: HashMap::new(),
             loop_stack: Vec::new(),
+            block_depth: 0,
             line_starts,
             pending_functions: Vec::new(),
             pending_fn_signatures: HashMap::new(),
@@ -10285,15 +10293,15 @@ impl Compiler {
                 self.locals.clear();
                 // Bind head and tail
                 if let Some(ref h) = head_binding {
-                    self.locals.insert(h.clone(), LocalInfo { reg: head_reg, is_float: false, mutable: false, is_cell: false });
+                    self.locals.insert(h.clone(), LocalInfo { reg: head_reg, is_float: false, mutable: false, is_cell: false, scope_depth: self.block_depth });
                 }
                 if let Some(ref t) = tail_binding {
-                    self.locals.insert(t.clone(), LocalInfo { reg: tail_reg, is_float: false, mutable: false, is_cell: false });
+                    self.locals.insert(t.clone(), LocalInfo { reg: tail_reg, is_float: false, mutable: false, is_cell: false, scope_depth: self.block_depth });
                 }
                 // Bind other params from clause 1 (cons case)
                 for (i, param) in def.clauses[1].params.iter().skip(1).enumerate() {
                     if let Some(n) = self.pattern_binding_name(&param.pattern) {
-                        self.locals.insert(n, LocalInfo { reg: (i + 1) as Reg, is_float: false, mutable: false, is_cell: false });
+                        self.locals.insert(n, LocalInfo { reg: (i + 1) as Reg, is_float: false, mutable: false, is_cell: false, scope_depth: self.block_depth });
                     }
                 }
                 // Compile cons case body
@@ -10331,7 +10339,7 @@ impl Compiler {
                 // Bind other params from clause 0 (empty case)
                 for (i, param) in def.clauses[0].params.iter().skip(1).enumerate() {
                     if let Some(n) = self.pattern_binding_name(&param.pattern) {
-                        self.locals.insert(n, LocalInfo { reg: (i + 1) as Reg, is_float: false, mutable: false, is_cell: false });
+                        self.locals.insert(n, LocalInfo { reg: (i + 1) as Reg, is_float: false, mutable: false, is_cell: false, scope_depth: self.block_depth });
                     }
                 }
                 // Compile empty case body
@@ -10395,7 +10403,7 @@ impl Compiler {
                                     _ => false,
                                 }
                             }).unwrap_or(false);
-                            self.locals.insert(n.clone(), LocalInfo { reg: i as Reg, is_float, mutable: false, is_cell: false });
+                            self.locals.insert(n.clone(), LocalInfo { reg: i as Reg, is_float, mutable: false, is_cell: false, scope_depth: self.block_depth + 1 });
                         }
                     }
 
@@ -10468,7 +10476,7 @@ impl Compiler {
 
                     // Add bindings to locals with type info from pattern
                     for (name, reg, is_float) in bindings {
-                        self.locals.insert(name, LocalInfo { reg, is_float, mutable: false, is_cell: false });
+                        self.locals.insert(name, LocalInfo { reg, is_float, mutable: false, is_cell: false, scope_depth: self.block_depth });
                     }
                 }
 
@@ -10583,7 +10591,7 @@ impl Compiler {
                             _ => false,
                         }
                     }).unwrap_or(false);
-                    self.locals.insert(n.clone(), LocalInfo { reg: i as Reg, is_float, mutable: false, is_cell: false });
+                    self.locals.insert(n.clone(), LocalInfo { reg: i as Reg, is_float, mutable: false, is_cell: false, scope_depth: self.block_depth + 1 });
                     // Record parameter as debug symbol
                     self.current_fn_debug_symbols.push(LocalVarSymbol {
                         name: n,
@@ -15459,7 +15467,7 @@ impl Compiler {
 
                     // Bind pattern variables with type info from pattern
                     for (name, reg, is_float) in bindings {
-                        self.locals.insert(name, LocalInfo { reg, is_float, mutable: false, is_cell: false });
+                        self.locals.insert(name, LocalInfo { reg, is_float, mutable: false, is_cell: false, scope_depth: self.block_depth });
                     }
 
                     // Compile guard if present
@@ -15628,7 +15636,7 @@ impl Compiler {
 
         // Bind loop variable to counter register (for loop counter is always int)
         let saved_var = self.locals.get(&var.node).cloned();
-        self.locals.insert(var.node.clone(), LocalInfo { reg: counter_reg, is_float: false, mutable: false, is_cell: false });
+        self.locals.insert(var.node.clone(), LocalInfo { reg: counter_reg, is_float: false, mutable: false, is_cell: false, scope_depth: self.block_depth });
 
         // Record loop start
         let loop_start = self.chunk.code.len();
@@ -16691,7 +16699,7 @@ impl Compiler {
                 for j in 0..i {
                     if let Some(Some(name)) = param_names.get(j) {
                         self.locals.insert(name.clone(), LocalInfo {
-                            reg: arg_regs[j], is_float: false, mutable: false, is_cell: false
+                            reg: arg_regs[j], is_float: false, mutable: false, is_cell: false, scope_depth: self.block_depth
                         });
                     }
                 }
@@ -18109,7 +18117,7 @@ impl Compiler {
                                         if let Some(name) = self.pattern_binding_name(&param.pattern) {
                                             if j < arg_regs.len() {
                                                 self.locals.insert(name, LocalInfo {
-                                                    reg: arg_regs[j], is_float: false, mutable: false, is_cell: false
+                                                    reg: arg_regs[j], is_float: false, mutable: false, is_cell: false, scope_depth: self.block_depth
                                                 });
                                             }
                                         }
@@ -20855,7 +20863,7 @@ impl Compiler {
             let arg_reg = i as Reg;
             if let Some(name) = self.pattern_binding_name(param) {
                 // Simple variable pattern - bind directly to param register
-                self.locals.insert(name.clone(), LocalInfo { reg: arg_reg, is_float: false, mutable: false, is_cell: false });
+                self.locals.insert(name.clone(), LocalInfo { reg: arg_reg, is_float: false, mutable: false, is_cell: false, scope_depth: self.block_depth + 1 });
                 // Add type from param_types if available
                 if let Some((_, ty)) = param_types.iter().find(|(n, _)| n == &name) {
                     self.local_types.insert(name.clone(), self.type_name_to_type(ty));
@@ -20866,7 +20874,7 @@ impl Compiler {
                 param_names.push(format!("_arg{}", i));
                 let (_, bindings) = self.compile_pattern_test(param, arg_reg)?;
                 for (name, reg, is_float) in bindings {
-                    self.locals.insert(name, LocalInfo { reg, is_float, mutable: false, is_cell: false });
+                    self.locals.insert(name, LocalInfo { reg, is_float, mutable: false, is_cell: false, scope_depth: self.block_depth + 1 });
                 }
             }
         }
@@ -22075,6 +22083,7 @@ impl Compiler {
         // --- BEGIN SCOPE ---
         let saved_locals = self.locals.clone();
         let saved_local_types = self.local_types.clone();
+        self.block_depth += 1;
 
         // Pre-process: merge consecutive local function definitions with the same name
         // into a single pattern-dispatching lambda.
@@ -22155,6 +22164,7 @@ impl Compiler {
                                         is_float: false,
                                         mutable: true,
                                         is_cell: true,
+scope_depth: self.block_depth,
                                     });
                                     self.closure_mutated_vars.insert(ident.node.clone());
                                 }
@@ -22178,6 +22188,7 @@ impl Compiler {
         }
 
         // --- END SCOPE ---
+        self.block_depth -= 1;
         self.locals = saved_locals;
         self.local_types = saved_local_types;
         self.closure_mutated_vars = saved_closure_mutated;
@@ -22769,6 +22780,7 @@ impl Compiler {
             is_float: false,
             mutable: false,
             is_cell: false,
+scope_depth: self.block_depth,
         });
 
         // Note: local_fn_internal_names mapping was already inserted before compile_fn_def
@@ -22867,6 +22879,7 @@ impl Compiler {
                     is_float: false,
                     mutable: true,  // Must be mutable for cell capture
                     is_cell: true,
+scope_depth: self.block_depth,
                 });
                 // Mark as closure-mutated so lambda compilation captures the cell
                 self.closure_mutated_vars.insert(ident.node.clone());
@@ -22959,7 +22972,7 @@ impl Compiler {
                 if binding.mutable {
                     // New binding is mutable (var x = ...): create new mutable binding that shadows the old one
                     let is_float = self.is_float_type(&value_type) || self.is_float_expr(&binding.value);
-                    self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float, mutable: true, is_cell: false });
+                    self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float, mutable: true, is_cell: false, scope_depth: self.block_depth });
                     // Record explicit type if provided
                     if let Some(ty) = explicit_type {
                         self.local_types.insert(ident.node.clone(), self.type_name_to_type(&ty));
@@ -22975,8 +22988,17 @@ impl Compiler {
                             self.chunk.emit(Instruction::Move(existing_reg, value_reg), 0);
                         }
                     }
+                } else if self.block_depth > existing_info.scope_depth {
+                    // Both are immutable, but we are in a deeper nested block scope:
+                    // this is a shadowing (not a reassignment), which is allowed.
+                    // The outer binding will be restored when the inner block exits.
+                    let is_float = self.is_float_type(&value_type) || self.is_float_expr(&binding.value);
+                    self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float, mutable: false, is_cell: false, scope_depth: self.block_depth });
+                    if let Some(ty) = explicit_type {
+                        self.local_types.insert(ident.node.clone(), self.type_name_to_type(&ty));
+                    }
                 } else {
-                    // Both are immutable: this is an error - cannot reassign immutable variable
+                    // Both are immutable in the same scope: this is an error
                     return Err(CompileError::TypeError {
                         message: format!("cannot reassign immutable variable '{}'; use 'var' to declare a mutable variable", ident.node),
                         span: binding.span,
@@ -23016,7 +23038,7 @@ impl Compiler {
                     } else {
                         (value_reg, false)
                     };
-                    self.locals.insert(ident.node.clone(), LocalInfo { reg: final_reg, is_float, mutable: binding.mutable, is_cell });
+                    self.locals.insert(ident.node.clone(), LocalInfo { reg: final_reg, is_float, mutable: binding.mutable, is_cell, scope_depth: self.block_depth });
                     // Record debug symbol for this local variable
                     self.current_fn_debug_symbols.push(LocalVarSymbol {
                         name: ident.node.clone(),
@@ -23048,7 +23070,7 @@ impl Compiler {
             // For complex patterns, we need to deconstruct
             let (_, bindings) = self.compile_pattern_test(&binding.pattern, value_reg)?;
             for (name, reg, is_float) in bindings {
-                self.locals.insert(name.clone(), LocalInfo { reg, is_float, mutable: false, is_cell: false });
+                self.locals.insert(name.clone(), LocalInfo { reg, is_float, mutable: false, is_cell: false, scope_depth: self.block_depth });
                 // Record debug symbol for pattern binding
                 self.current_fn_debug_symbols.push(LocalVarSymbol {
                     name,
@@ -24356,7 +24378,7 @@ impl Compiler {
             let arg_reg = i as Reg;
             if let Some(name) = self.pattern_binding_name(param) {
                 // Simple variable pattern - bind directly to param register
-                self.locals.insert(name.clone(), LocalInfo { reg: arg_reg, is_float: false, mutable: false, is_cell: false });
+                self.locals.insert(name.clone(), LocalInfo { reg: arg_reg, is_float: false, mutable: false, is_cell: false, scope_depth: self.block_depth + 1 });
                 param_names.push(name);
             } else {
                 // Complex pattern (tuple, etc.) - need to destructure
@@ -24365,7 +24387,7 @@ impl Compiler {
                 // Note: we ignore the success_reg since lambda params always match structurally
                 let (_, bindings) = self.compile_pattern_test(param, arg_reg)?;
                 for (name, reg, is_float) in bindings {
-                    self.locals.insert(name, LocalInfo { reg, is_float, mutable: false, is_cell: false });
+                    self.locals.insert(name, LocalInfo { reg, is_float, mutable: false, is_cell: false, scope_depth: self.block_depth + 1 });
                 }
             }
         }

@@ -67,7 +67,7 @@ impl Compiler {
 
             // Bind pattern variables with type info from pattern
             for (name, reg, is_float) in bindings {
-                self.locals.insert(name, LocalInfo { reg, is_float, mutable: false, is_cell: false });
+                self.locals.insert(name, LocalInfo { reg, is_float, mutable: false, is_cell: false, scope_depth: self.block_depth });
             }
 
             // Set types for pattern variables based on scrutinee type
@@ -627,7 +627,7 @@ impl Compiler {
             // Exception variables are always String (throw() always takes a String message),
             // so register them in local_types as String to enable method dispatch like .split().
             for (name, reg, is_float) in bindings {
-                self.locals.insert(name.clone(), LocalInfo { reg, is_float, mutable: false, is_cell: false });
+                self.locals.insert(name.clone(), LocalInfo { reg, is_float, mutable: false, is_cell: false, scope_depth: self.block_depth });
                 // Register exception variable as String type for UFCS method resolution
                 self.local_types.insert(name, nostos_types::Type::String);
             }
@@ -879,7 +879,7 @@ impl Compiler {
                             }
                             // Add bindings to self.locals so subsequent sub-patterns can pin against them
                             for (name, reg, is_float) in &sub_bindings {
-                                self.locals.insert(name.clone(), LocalInfo { reg: *reg, is_float: *is_float, mutable: false, is_cell: false });
+                                self.locals.insert(name.clone(), LocalInfo { reg: *reg, is_float: *is_float, mutable: false, is_cell: false, scope_depth: self.block_depth });
                             }
                             bindings.append(&mut sub_bindings);
                         }
@@ -1000,7 +1000,7 @@ impl Compiler {
                             self.chunk.emit(Instruction::And(success_reg, success_reg, head_success), 0);
                             // Add bindings to self.locals so subsequent patterns can pin against them
                             for (name, reg, is_float) in &head_bindings {
-                                self.locals.insert(name.clone(), LocalInfo { reg: *reg, is_float: *is_float, mutable: false, is_cell: false });
+                                self.locals.insert(name.clone(), LocalInfo { reg: *reg, is_float: *is_float, mutable: false, is_cell: false, scope_depth: self.block_depth });
                             }
                             bindings.append(&mut head_bindings);
 
@@ -1012,7 +1012,7 @@ impl Compiler {
                                     self.chunk.emit(Instruction::And(success_reg, success_reg, tail_success), 0);
                                     // Add tail bindings to self.locals too
                                     for (name, reg, is_float) in &tail_bindings {
-                                        self.locals.insert(name.clone(), LocalInfo { reg: *reg, is_float: *is_float, mutable: false, is_cell: false });
+                                        self.locals.insert(name.clone(), LocalInfo { reg: *reg, is_float: *is_float, mutable: false, is_cell: false, scope_depth: self.block_depth });
                                     }
                                     bindings.append(&mut tail_bindings);
                                 }
@@ -1095,7 +1095,7 @@ impl Compiler {
                     self.chunk.emit(Instruction::And(success_reg, success_reg, sub_success), 0);
                     // Add bindings to self.locals so subsequent sub-patterns can use them as pins
                     for (name, reg, is_float) in &sub_bindings {
-                        self.locals.insert(name.clone(), LocalInfo { reg: *reg, is_float: *is_float, mutable: false, is_cell: false });
+                        self.locals.insert(name.clone(), LocalInfo { reg: *reg, is_float: *is_float, mutable: false, is_cell: false, scope_depth: self.block_depth });
                     }
                     bindings.append(&mut sub_bindings);
                 }
