@@ -3231,10 +3231,10 @@ impl AsyncProcess {
                     let mut saved_args: [std::mem::MaybeUninit<GcValue>; 8] =
                         unsafe { std::mem::MaybeUninit::uninit().assume_init() };
 
-                    // Save args to stack (take ownership, leave Unit behind)
+                    // Clone args to stack (must clone, not take - same reg may appear multiple times)
                     for (i, &r) in args.iter().enumerate() {
                         saved_args[i] = std::mem::MaybeUninit::new(
-                            std::mem::take(&mut self.frames.last_mut().unwrap().registers[r as usize])
+                            self.frames.last().unwrap().registers[r as usize].clone()
                         );
                     }
 
@@ -3412,10 +3412,10 @@ impl AsyncProcess {
                     let mut saved_args: [std::mem::MaybeUninit<GcValue>; 8] =
                         unsafe { std::mem::MaybeUninit::uninit().assume_init() };
 
-                    // Save args to stack (take ownership, leave Unit behind)
+                    // Clone args to stack (must clone, not take - same reg may appear multiple times)
                     for (i, &r) in args.iter().enumerate() {
                         saved_args[i] = std::mem::MaybeUninit::new(
-                            std::mem::take(&mut self.frames.last_mut().unwrap().registers[r as usize])
+                            self.frames.last().unwrap().registers[r as usize].clone()
                         );
                     }
 
@@ -9567,10 +9567,10 @@ impl AsyncProcess {
                     let mut saved_args: [std::mem::MaybeUninit<GcValue>; 8] =
                         unsafe { std::mem::MaybeUninit::uninit().assume_init() };
 
-                    // Save args to stack (take ownership, leave Unit behind)
+                    // Clone args to stack (must clone, not take - same reg may appear multiple times)
                     for (i, &r) in args.iter().enumerate() {
                         saved_args[i] = std::mem::MaybeUninit::new(
-                            std::mem::take(&mut self.frames.last_mut().unwrap().registers[r as usize])
+                            self.frames.last().unwrap().registers[r as usize].clone()
                         );
                     }
 
