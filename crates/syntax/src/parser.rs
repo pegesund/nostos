@@ -18,6 +18,48 @@ fn to_span(span: std::ops::Range<usize>) -> Span {
     Span::new(span.start, span.end)
 }
 
+/// Check if an expression looks like a type annotation rather than a default value.
+/// Used to disambiguate `f(a: Int)` (type annotation) from `f(a: someValue)` (default value).
+///
+/// Type annotations recognized:
+/// - Uppercase variable: `Int`, `String`, `MyType`
+/// - Empty record/constructor: `Int`, `Maybe` (already covered by Var)
+/// - List type: `[Int]`, `[String]` → Expr::List([Expr::Var("Int")], None, _)
+/// - Generic type: `Map[K, V]`, `Option[T]` → Expr::Call(Var("Map"), [Var("K"),...], ...)
+/// - Tuple type: `(Int, String)` → Expr::Tuple([...])
+/// - Unit type: `()` → Expr::Unit
+fn expr_looks_like_type(expr: &Expr) -> bool {
+    match expr {
+        // Simple uppercase type name: `Int`, `String`, `MyType`
+        Expr::Var(id) => id.node.starts_with(|c: char| c.is_uppercase()),
+        // Empty record/constructor call: `Int`, `Maybe` (same as Var in most cases)
+        Expr::Record(id, fields, _) => fields.is_empty() && id.node.starts_with(|c: char| c.is_uppercase()),
+        // List type: `[Int]`, `[String]` - a list with exactly one uppercase-type element and no tail
+        Expr::List(elems, tail, _) => {
+            tail.is_none() && elems.len() == 1 && expr_looks_like_type(&elems[0])
+        }
+        // Generic type: `Map[K, V]`, `Option[Int]` - call with type-like args
+        // Parses as Call(Var("Map"), [], [Positional(Var("K")), Positional(Var("V"))], _)
+        // But actually type args like `Map[K,V]` parse with type_args, not call_args
+        // Check if this is a subscript-style call: Map[K] → Call(Var("Map"), [Var("K")], [], _)
+        Expr::Call(func, type_args, call_args, _) => {
+            // If it's a call with type arguments (subscript form like Map[K,V])
+            // and no regular call args, it's a generic type
+            if !type_args.is_empty() && call_args.is_empty() {
+                if let Expr::Var(id) = func.as_ref() {
+                    return id.node.starts_with(|c: char| c.is_uppercase());
+                }
+            }
+            false
+        }
+        // Tuple type: `(Int, String)`
+        Expr::Tuple(elems, _) => !elems.is_empty() && elems.iter().all(expr_looks_like_type),
+        // Unit type: `()`
+        Expr::Unit(_) => true,
+        _ => false,
+    }
+}
+
 /// Convert an expression to a pattern (for when we parsed something as an expression
 /// but it turned out to be a let binding with `=`).
 fn expr_to_pattern(expr: Expr) -> Option<Pattern> {
@@ -925,13 +967,13 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                                                 // (which would indicate a type annotation).
                                                 let has_defaults = call_args.iter().any(|arg| {
                                                     if let CallArg::Named(_, expr) = arg {
-                                                        // If it's NOT a type name (uppercase var or record with no fields), treat as default value.
-                                                        // Type annotations: f(a: Int) → Named("a", Record("Int", [], _)) or Named("a", Var("Int"))
+                                                        // If it's NOT a type name, treat as default value.
+                                                        // Type annotations:
+                                                        //   f(a: Int) → Named("a", Var("Int"))  -- uppercase simple type
+                                                        //   f(a: [Int]) → Named("a", List([Var("Int")]))  -- list type
+                                                        //   f(a: Map[K,V]) → Named("a", Call(...))  -- generic type
                                                         // Default values: f(a, b = 5) → Named("b", Lit(5))
-                                                        let is_type_annotation = matches!(expr,
-                                                            Expr::Var(id) if id.node.starts_with(|c: char| c.is_uppercase()))
-                                                        || matches!(expr,
-                                                            Expr::Record(id, fields, _) if fields.is_empty() && id.node.starts_with(|c: char| c.is_uppercase()));
+                                                        let is_type_annotation = expr_looks_like_type(expr);
                                                         !is_type_annotation
                                                     } else {
                                                         false
@@ -947,11 +989,8 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                                                                 expr_to_pattern(expr).map(|pat| FnParam { pattern: pat, ty: None, default: None })
                                                             }
                                                             CallArg::Named(param_name, value_expr) => {
-                                                                // Check if this looks like a type annotation (uppercase var or empty record like `Int`)
-                                                                let is_type_annotation = matches!(&value_expr,
-                                                                    Expr::Var(id) if id.node.starts_with(|c: char| c.is_uppercase()))
-                                                                    || matches!(&value_expr,
-                                                                    Expr::Record(id, fields, _) if fields.is_empty() && id.node.starts_with(|c: char| c.is_uppercase()));
+                                                                // Check if this looks like a type annotation
+                                                                let is_type_annotation = expr_looks_like_type(&value_expr);
                                                                 if is_type_annotation {
                                                                     // Type annotation: `f(a: Int)` → param with no default
                                                                     Some(FnParam { pattern: Pattern::Var(param_name), ty: None, default: None })

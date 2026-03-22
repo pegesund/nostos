@@ -9887,7 +9887,13 @@ impl Compiler {
         // already-validated generic functions; HM inference can produce false
         // positives on specialized function types.
         let is_monomorphized = def.name.node.contains('$');
-        if is_stdlib || is_monomorphized {
+        // Local functions (inner definitions) contain ".__local_" in their name.
+        // They are compiled in-place and have access to outer scope variables,
+        // which HM inference cannot resolve (it doesn't have those bindings).
+        // Skip type_check_fn for local functions to avoid spurious errors that
+        // would prevent the function from being registered in self.functions.
+        let is_local_fn = def.name.node.contains(".__local_");
+        if is_stdlib || is_monomorphized || is_local_fn {
             // Skip full type checking for stdlib and monomorphized variants.
             // However, for monomorphized variants, still run HM inference to populate
             // inferred_expr_types - this is needed for UFCS method resolution on
