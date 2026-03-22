@@ -12622,6 +12622,7 @@ impl AsyncVM {
                         let chars: Vec<char> = s.chars().collect();
                         let start = start.min(chars.len());
                         let end = end.min(chars.len());
+                        let (start, end) = if start <= end { (start, end) } else { (start, start) };
                         let result: String = chars[start..end].iter().collect();
                         Ok(GcValue::String(heap.alloc_string(result)))
                     },
