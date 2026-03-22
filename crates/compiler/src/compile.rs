@@ -11697,6 +11697,77 @@ impl Compiler {
                             }
                             return Ok(dst);
                         }
+
+                    // Check if this is a module-qualified builtin used as a first-class value
+                    // e.g., String.trim used in xs.map(String.trim)
+                    // BUILTIN_METHODS maps (module, method) -> native_name
+                    if let Some(native_name) = resolve_builtin_method(&module_path, &field.node) {
+                        // Determine arity from BUILTINS table
+                        let arity = BUILTINS.iter()
+                            .find(|b| b.name == native_name)
+                            .map(|b| {
+                                // Count -> arrows in signature, stripping trait bounds first
+                                let sig = if let Some(idx) = b.signature.find("=>") {
+                                    b.signature[idx + 2..].trim()
+                                } else {
+                                    b.signature
+                                };
+                                // Count -> separators (each one introduces a param)
+                                // "String -> String" = 1 param, "String -> String -> Bool" = 2 params
+                                let mut depth = 0i32;
+                                let mut arrows = 0usize;
+                                let bytes = sig.as_bytes();
+                                let mut i = 0;
+                                while i < bytes.len() {
+                                    match bytes[i] {
+                                        b'(' | b'[' => { depth += 1; i += 1; }
+                                        b')' | b']' => { depth -= 1; i += 1; }
+                                        b'-' if depth == 0 && i + 1 < bytes.len() && bytes[i+1] == b'>' => {
+                                            arrows += 1;
+                                            i += 2;
+                                        }
+                                        _ => { i += 1; }
+                                    }
+                                }
+                                arrows // number of -> equals number of params
+                            })
+                            .unwrap_or(1);
+
+                        // Create a wrapper function that calls the native builtin
+                        let mut wrapper_chunk = Chunk::new();
+                        wrapper_chunk.register_count = arity + 1;
+                        let dst_reg = arity as u8;
+                        let arg_regs: Vec<Reg> = (0..arity as u8).collect();
+                        if let Some(&idx) = self.native_indices.get(native_name) {
+                            wrapper_chunk.emit(Instruction::CallNativeIdx(dst_reg, idx, arg_regs.into()), 0);
+                        } else {
+                            let name_idx = wrapper_chunk.add_constant(Value::String(Arc::new(native_name.to_string())));
+                            wrapper_chunk.emit(Instruction::CallNative(dst_reg, name_idx, arg_regs.into()), 0);
+                        }
+                        wrapper_chunk.emit(Instruction::Return(dst_reg), 0);
+                        let wrapper_fn = FunctionValue {
+                            name: format!("<{}_wrapper>", native_name),
+                            arity,
+                            param_names: (0..arity).map(|i| format!("arg{}", i)).collect(),
+                            code: Arc::new(wrapper_chunk),
+                            module: if self.module_path.is_empty() { None } else { Some(self.module_path.join(".")) },
+                            source_span: None,
+                            jit_code: None,
+                            call_count: std::sync::atomic::AtomicU32::new(0),
+                            debug_symbols: vec![],
+                            source_code: None,
+                            source_file: None,
+                            doc: None,
+                            signature: None,
+                            param_types: vec![],
+                            return_type: None,
+                            required_params: None,
+                        };
+                        let dst = self.alloc_reg();
+                        let fn_idx = self.chunk.add_constant(Value::Function(Arc::new(wrapper_fn)));
+                        self.chunk.emit(Instruction::LoadConst(dst, fn_idx), line);
+                        return Ok(dst);
+                    }
                     }
                 }
 
