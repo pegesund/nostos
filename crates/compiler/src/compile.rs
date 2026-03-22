@@ -820,7 +820,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "makeRecordByName", signature: "String -> Map[String, Json] -> a", doc: "Construct record by type name string: makeRecordByName(\"Person\", fields)" },
     BuiltinInfo { name: "makeVariantByName", signature: "String -> String -> Map[String, Json] -> a", doc: "Construct variant by type name: makeVariantByName(\"Result\", \"Ok\", fields)" },
     BuiltinInfo { name: "jsonToTypeByName", signature: "String -> Json -> a", doc: "Convert Json to typed value by type name: jsonToTypeByName(\"Person\", json)" },
-    BuiltinInfo { name: "typeNameOf", signature: "[T] -> String", doc: "Get string name of type parameter: typeNameOf[Int]() returns \"Int\"" },
+    BuiltinInfo { name: "typeNameOf", signature: "() -> String", doc: "Get string name of type parameter: typeNameOf[Int]() returns \"Int\"" },
     BuiltinInfo { name: "requestToType", signature: "HttpRequest -> String -> Result[a, String]", doc: "Parse HTTP request params to typed record: requestToType(req, \"UserParams\")" },
 
     // === Runtime Stats ===
