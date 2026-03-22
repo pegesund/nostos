@@ -532,6 +532,19 @@ pub fn parse_error_to_source_error<T: std::fmt::Display + std::hash::Hash + Eq>(
 ) -> SourceError {
     let span = Span::new(error.span().start, error.span().end);
 
+    // Handle custom errors (from try_map with explicit messages) first
+    // Use the custom message as the primary error message
+    if let chumsky::error::SimpleReason::Custom(custom_msg) = error.reason() {
+        // Split on first newline: first line is the main message, rest are notes
+        let mut lines = custom_msg.splitn(2, '\n');
+        let main_msg = lines.next().unwrap_or(custom_msg.as_str());
+        let mut err = SourceError::parse(main_msg, span);
+        if let Some(rest) = lines.next() {
+            err = err.with_note(rest.to_string());
+        }
+        return err;
+    }
+
     let message = if let Some(label) = error.label() {
         format!("expected {}", label)
     } else {
@@ -565,8 +578,8 @@ pub fn parse_error_to_source_error<T: std::fmt::Display + std::hash::Hash + Eq>(
             );
             err = err.with_hint("make sure all brackets and delimiters are properly closed");
         }
-        chumsky::error::SimpleReason::Custom(msg) => {
-            err = err.with_note(msg.clone());
+        chumsky::error::SimpleReason::Custom(_) => {
+            // Already handled above
         }
         _ => {}
     }
@@ -579,6 +592,34 @@ pub fn parse_errors_to_source_errors<T: std::fmt::Display + std::hash::Hash + Eq
     errors: &[chumsky::error::Simple<T>],
 ) -> Vec<SourceError> {
     errors.iter().map(parse_error_to_source_error).collect()
+}
+
+/// Convert multiple chumsky parse errors to SourceErrors, with source context for better diagnostics.
+/// When source is provided, the function can add context-aware hints based on surrounding code.
+pub fn parse_errors_to_source_errors_with_source<T: std::fmt::Display + std::hash::Hash + Eq>(
+    errors: &[chumsky::error::Simple<T>],
+    source: &str,
+) -> Vec<SourceError> {
+    errors.iter().map(|error| {
+        let mut err = parse_error_to_source_error(error);
+        // Check if we have an "unexpected `=>`" error - might be a lambda with receive(pid) inside
+        // Look at the source after the `=>` position to check for receive(...)
+        if err.message.contains("unexpected `=>`") || err.message.contains("found `=>`") {
+            let after_pos = error.span().end;
+            let rest_of_source = &source[after_pos.min(source.len())..];
+            let trimmed = rest_of_source.trim_start();
+            if trimmed.starts_with("receive(") || trimmed.contains(" receive(") {
+                err = err.with_note(
+                    "`receive` cannot be called as a function with parentheses.\n\
+                     Use block syntax: `receive { pattern -> expr }`\n\
+                     Example: `receive { msg -> msg }` receives any message.\n\
+                     If you need to receive from a specific pid, use a pattern guard or separate helper."
+                        .to_string(),
+                );
+            }
+        }
+        err
+    }).collect()
 }
 
 #[cfg(test)]

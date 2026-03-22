@@ -49,7 +49,7 @@ include!(concat!(env!("OUT_DIR"), "/embedded_stdlib.rs"));
 
 use nostos_compiler::compile::{Compiler, MvarInitValue};
 use nostos_jit::{JitCompiler, JitConfig};
-use nostos_syntax::{parse, parse_errors_to_source_errors};
+use nostos_syntax::{parse, parse_errors_to_source_errors_with_source};
 use nostos_vm::async_vm::{AsyncVM, AsyncConfig};
 use nostos_vm::cache::{BytecodeCache, CachedModule, CachedMvar, CachedMvarValue, function_to_cached_with_fn_list, compute_file_hash};
 use nostos_vm::process::ThreadSafeValue;
@@ -3287,7 +3287,7 @@ fn main() -> ExitCode {
 
             let (module_opt, errors) = parse(&source);
             if !errors.is_empty() {
-                let source_errors = parse_errors_to_source_errors(&errors);
+                let source_errors = parse_errors_to_source_errors_with_source(&errors, &source);
                 report_errors(&source_errors, path.to_str().unwrap_or("unknown"), &source, json_errors);
                 return ExitCode::FAILURE;
             }

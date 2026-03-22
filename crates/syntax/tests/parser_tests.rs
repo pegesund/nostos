@@ -945,3 +945,32 @@ mod decorator_tests {
         }
     }
 }
+
+#[test]
+fn test_receive_bad_syntax_gives_helpful_error() {
+    use nostos_syntax::errors::parse_errors_to_source_errors_with_source;
+    // receive(pid) inside a lambda should give a helpful error message
+    let source = "main() = [1,2,3].map(pp => receive(pp))";
+    let (_, errors) = parse(source);
+    assert!(!errors.is_empty(), "Expected parse errors");
+    let source_errors = parse_errors_to_source_errors_with_source(&errors, source);
+    // At least one error should mention receive syntax
+    let has_receive_hint = source_errors.iter().any(|e| {
+        e.notes.iter().any(|n| n.contains("receive"))
+    });
+    assert!(has_receive_hint, "Expected error hint about receive syntax, got: {:?}",
+        source_errors.iter().map(|e| &e.message).collect::<Vec<_>>());
+}
+
+#[test]
+fn test_receive_top_level_bad_syntax() {
+    use nostos_syntax::errors::parse_errors_to_source_errors_with_source;
+    // receive(42) at top level should give a clear primary error message
+    let source = "main() = receive(42)";
+    let (_, errors) = parse(source);
+    assert!(!errors.is_empty(), "Expected parse errors");
+    let source_errors = parse_errors_to_source_errors_with_source(&errors, source);
+    let first = &source_errors[0];
+    assert!(first.message.contains("receive"),
+        "Expected error message to mention receive, got: {}", first.message);
+}

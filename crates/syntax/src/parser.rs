@@ -1253,6 +1253,13 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
             .then_ignore(just(Token::End))
             .map_with_span(|stmts, span| Expr::Do(stmts, to_span(span)));
 
+        // Detect invalid receive(pid) syntax and give a clear error message
+        let receive_bad_syntax = just(Token::Receive)
+            .then(just(Token::LParen))
+            .try_map(|(_, _), span| -> Result<Expr, Simple<Token>> {
+                Err(Simple::custom(span, "`receive` requires a block with pattern arms: `receive { pattern -> expr }`\nDid you mean to use `receive { msg -> msg }` to receive any message?\nNote: `receive` is not a function — it cannot be called with parentheses."))
+            });
+
         // Receive expression (concurrency): receive { pattern -> expr, after timeout -> expr }
         let receive_expr = just(Token::Receive)
             .ignore_then(nl.clone())
@@ -1340,7 +1347,7 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
 
         // Primary expressions - split into groups to reduce type complexity
         // Skip newlines at the start of any primary expression
-        let control_flow = skip_newlines().ignore_then(choice((if_expr, match_expr, try_expr, do_block, receive_expr, while_expr, for_expr, break_expr, continue_expr, return_expr))).boxed();
+        let control_flow = skip_newlines().ignore_then(choice((if_expr, match_expr, try_expr, do_block, receive_bad_syntax, receive_expr, while_expr, for_expr, break_expr, continue_expr, return_expr))).boxed();
         // Note: splice_expr is added below after primary is defined
         let special_no_splice = skip_newlines().ignore_then(choice((spawn_expr, quote_expr, lambda))).boxed();
         let lit = skip_newlines().ignore_then(choice((bool_expr, int, float, string, char_expr))).boxed();
