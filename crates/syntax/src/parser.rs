@@ -41,8 +41,9 @@ fn expr_looks_like_type(expr: &Expr) -> bool {
         }
         // Generic type: `List[Int]`, `Map[String, Int]`, `Option[Int]`
         // In expression context, `List[Int]` parses as Expr::Index(base, idx, ...)
+        // `Map[String, Int]` parses as Expr::Index(base, Tuple([String, Int]))
         // where base and idx may be Expr::Var OR Expr::Record (uppercase names parse as Records).
-        // We detect this pattern: uppercase_name[type_expr]
+        // We detect this pattern: uppercase_name[type_expr] or uppercase_name[type1, type2, ...]
         Expr::Index(base, idx, _) => {
             let base_name = match base.as_ref() {
                 Expr::Var(id) => Some(&id.node),
@@ -50,7 +51,14 @@ fn expr_looks_like_type(expr: &Expr) -> bool {
                 _ => None,
             };
             if let Some(name) = base_name {
-                name.starts_with(|c: char| c.is_uppercase()) && expr_looks_like_type(idx)
+                if !name.starts_with(|c: char| c.is_uppercase()) {
+                    return false;
+                }
+                // Check if idx is a single type or a tuple of types (multi-param generic)
+                match idx.as_ref() {
+                    Expr::Tuple(elems, _) => elems.iter().all(expr_looks_like_type),
+                    _ => expr_looks_like_type(idx),
+                }
             } else {
                 false
             }
@@ -1437,10 +1445,24 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                         Some(args) => (PostfixOp::MethodCall(name, args), to_span(span)),
                         None => (PostfixOp::FieldAccess(name), to_span(span)),
                     }),
-                // Index: arr[i]
+                // Index: arr[i] or multi-type-param: Map[K, V]
+                // We allow comma-separated exprs to support generic types like Map[K, V] in
+                // local function parameter type annotations (e.g., go(m: Map[String, Int]) = ...)
                 expr.clone()
+                    .separated_by(just(Token::Comma))
+                    .at_least(1)
                     .delimited_by(just(Token::LBracket), just(Token::RBracket))
-                    .map_with_span(|idx, span| (PostfixOp::Index(idx), to_span(span))),
+                    .map_with_span(|items, span| {
+                        let s = to_span(span.clone());
+                        if items.len() == 1 {
+                            (PostfixOp::Index(items.into_iter().next().unwrap()), s)
+                        } else {
+                            // Multiple type params: represent as Tuple so expr_looks_like_type can detect it
+                            // e.g., Map[String, Int] -> Index(Map, Tuple([String, Int]))
+                            let tuple_span = to_span(span);
+                            (PostfixOp::Index(Expr::Tuple(items, tuple_span)), s)
+                        }
+                    }),
                 // Try operator: expr?
                 just(Token::Question)
                     .map_with_span(|_, span| (PostfixOp::Try, to_span(span))),
