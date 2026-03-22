@@ -30,18 +30,32 @@ fn to_span(span: std::ops::Range<usize>) -> Span {
 /// - Unit type: `()` → Expr::Unit
 fn expr_looks_like_type(expr: &Expr) -> bool {
     match expr {
-        // Simple uppercase type name: `Int`, `String`, `MyType`
+        // Simple uppercase type name: `Int`, `String`, `MyType` (lowercase ident form)
         Expr::Var(id) => id.node.starts_with(|c: char| c.is_uppercase()),
-        // Empty record/constructor call: `Int`, `Maybe` (same as Var in most cases)
+        // Uppercase names parsed as Expr::Record with no fields: `Int`, `Maybe`, `List`
+        // This happens for uppercase identifiers that the parser treats as record constructors.
         Expr::Record(id, fields, _) => fields.is_empty() && id.node.starts_with(|c: char| c.is_uppercase()),
         // List type: `[Int]`, `[String]` - a list with exactly one uppercase-type element and no tail
         Expr::List(elems, tail, _) => {
             tail.is_none() && elems.len() == 1 && expr_looks_like_type(&elems[0])
         }
-        // Generic type: `Map[K, V]`, `Option[Int]` - call with type-like args
-        // Parses as Call(Var("Map"), [], [Positional(Var("K")), Positional(Var("V"))], _)
-        // But actually type args like `Map[K,V]` parse with type_args, not call_args
-        // Check if this is a subscript-style call: Map[K] → Call(Var("Map"), [Var("K")], [], _)
+        // Generic type: `List[Int]`, `Map[String, Int]`, `Option[Int]`
+        // In expression context, `List[Int]` parses as Expr::Index(base, idx, ...)
+        // where base and idx may be Expr::Var OR Expr::Record (uppercase names parse as Records).
+        // We detect this pattern: uppercase_name[type_expr]
+        Expr::Index(base, idx, _) => {
+            let base_name = match base.as_ref() {
+                Expr::Var(id) => Some(&id.node),
+                Expr::Record(id, fields, _) if fields.is_empty() => Some(&id.node),
+                _ => None,
+            };
+            if let Some(name) = base_name {
+                name.starts_with(|c: char| c.is_uppercase()) && expr_looks_like_type(idx)
+            } else {
+                false
+            }
+        }
+        // Generic type with type_args: f[Type](args) form (rarely used for types)
         Expr::Call(func, type_args, call_args, _) => {
             // If it's a call with type arguments (subscript form like Map[K,V])
             // and no regular call args, it's a generic type
