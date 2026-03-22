@@ -22209,7 +22209,7 @@ impl Compiler {
 
         // First pass: collect all lambda clauses per name (in order)
         let mut lambda_clauses: std::collections::HashMap<String, Vec<(Vec<Pattern>, Box<Expr>, Span)>> = std::collections::HashMap::new();
-        let mut clause_arities: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut clause_max_arities: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
         for stmt in stmts {
             if let Stmt::Let(binding) = stmt {
@@ -22218,14 +22218,15 @@ impl Compiler {
                         if let Expr::Lambda(params, body, span) = &binding.value {
                             let name = &ident.node;
                             let arity = params.len();
-                            // Only merge if arities are consistent
-                            let existing_arity = clause_arities.get(name).copied();
-                            if existing_arity.is_none() || existing_arity == Some(arity) {
-                                clause_arities.insert(name.clone(), arity);
-                                lambda_clauses.entry(name.clone())
-                                    .or_default()
-                                    .push((params.clone(), body.clone(), *span));
+                            // Collect all clauses regardless of arity mismatch;
+                            // track the maximum arity seen for this name.
+                            let max_arity = clause_max_arities.entry(name.clone()).or_insert(0);
+                            if arity > *max_arity {
+                                *max_arity = arity;
                             }
+                            lambda_clauses.entry(name.clone())
+                                .or_default()
+                                .push((params.clone(), body.clone(), *span));
                         }
                     }
                 }
@@ -22246,7 +22247,7 @@ impl Compiler {
         let mut merged_lambdas: std::collections::HashMap<String, Expr> = std::collections::HashMap::new();
         for name in &multi_clause_names {
             let clauses = &lambda_clauses[name];
-            let arity = clause_arities[name];
+            let arity = clause_max_arities[name];
 
             // Create fresh parameter names __p0, __p1, ...
             let fresh_params: Vec<Pattern> = (0..arity)
@@ -22255,12 +22256,17 @@ impl Compiler {
 
             // Create match arms from each clause
             let arms: Vec<MatchArm> = clauses.iter().map(|(params, body, span)| {
+                // If this clause has fewer params than max arity, pad with wildcards
+                let mut padded_params = params.clone();
+                while padded_params.len() < arity {
+                    padded_params.push(Pattern::Wildcard(Span::default()));
+                }
                 let arm_pattern = if arity == 1 {
                     // Single param: match directly on __p0
-                    params[0].clone()
+                    padded_params[0].clone()
                 } else {
                     // Multiple params: match on tuple (__p0, __p1, ...)
-                    Pattern::Tuple(params.clone(), Span::default())
+                    Pattern::Tuple(padded_params, Span::default())
                 };
                 MatchArm {
                     pattern: arm_pattern,
