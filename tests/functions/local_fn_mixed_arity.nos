@@ -1,0 +1,18 @@
+# expect: "ok"
+# Test that local multi-clause functions with different arities work correctly
+# This was a bug: the second clause with different arity caused "cannot reassign immutable variable"
+
+main() = {
+  # zipWith: 1-arg base case, 2-arg recursive cases
+  f = (a, b) => a + b
+  go([]) = []
+  go([x|xt], [y|yt]) = [f(x, y)] ++ go(xt, yt)
+  go(_, []) = []
+
+  r1 = go([1,2,3], [4,5,6])
+  r2 = go([1,2], [10,20,30])
+  r3 = go([], [1,2,3])
+
+  if r1 == [5,7,9] && r2 == [11,22] && r3 == []
+  then "ok" else "fail"
+}
