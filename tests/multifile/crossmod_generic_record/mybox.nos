@@ -1,0 +1,8 @@
+pub type Box[a] = Box { val: a }
+pub mkBox(x) = Box(val: x)
+id(b) = b
+pub getVal(b) = {
+  r = id(b)
+  Box(val: v) = r
+  Some((v, r))
+}

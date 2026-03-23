@@ -1,0 +1,10 @@
+# expect: 1
+use mybox.{mkBox, getVal}
+main() = {
+  b = mkBox(1)
+  r = getVal(b)
+  match r {
+    None -> -1
+    Some((v, _)) -> v
+  }
+}
