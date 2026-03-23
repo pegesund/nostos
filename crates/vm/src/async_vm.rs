@@ -10703,12 +10703,29 @@ impl AsyncProcess {
         }
     }
 
+    /// Look up a type by name, trying exact match first, then suffix match for unqualified names
+    fn lookup_type_info(&self, type_name: &str) -> Option<Arc<TypeValue>> {
+        let suffix = format!(".{}", type_name);
+        self.shared.types.read().unwrap().get(type_name).cloned()
+            .or_else(|| self.shared.dynamic_types.read().unwrap().get(type_name).cloned())
+            .or_else(|| self.shared.stdlib_types.read().unwrap().get(type_name).cloned())
+            .or_else(|| {
+                // Fallback: search for a type whose key ends with ".TypeName"
+                self.shared.types.read().unwrap().iter()
+                    .find(|(k, _)| k.ends_with(&suffix))
+                    .map(|(_, v)| v.clone())
+            })
+            .or_else(|| {
+                self.shared.dynamic_types.read().unwrap().iter()
+                    .find(|(k, _)| k.ends_with(&suffix))
+                    .map(|(_, v)| v.clone())
+            })
+    }
+
     /// Get type info as a native Map (for typeInfo builtin)
     fn type_info_to_map(&mut self, type_name: &str) -> Result<GcValue, RuntimeError> {
-        // Look up type in static types, then dynamic types
-        let type_info = self.shared.types.read().unwrap().get(type_name).cloned()
-            .or_else(|| self.shared.dynamic_types.read().unwrap().get(type_name).cloned())
-            .or_else(|| self.shared.stdlib_types.read().unwrap().get(type_name).cloned());
+        // Look up type in static types, then dynamic types (with suffix fallback)
+        let type_info = self.lookup_type_info(type_name);
 
         let type_val = match type_info {
             Some(t) => t,
@@ -10794,10 +10811,8 @@ impl AsyncProcess {
 
     /// Construct a typed value from Json (for construct builtin)
     fn construct_from_json(&mut self, type_name: &str, json: GcValue) -> Result<GcValue, RuntimeError> {
-        // Look up type info
-        let type_info = self.shared.types.read().unwrap().get(type_name).cloned()
-            .or_else(|| self.shared.dynamic_types.read().unwrap().get(type_name).cloned())
-            .or_else(|| self.shared.stdlib_types.read().unwrap().get(type_name).cloned());
+        // Look up type info (with suffix fallback for cross-module unqualified names)
+        let type_info = self.lookup_type_info(type_name);
 
         let type_val = match type_info {
             Some(t) => t,
@@ -11088,10 +11103,8 @@ impl AsyncProcess {
     fn make_record_from_map(&mut self, type_name: &str, fields_map: GcValue) -> Result<GcValue, RuntimeError> {
         use crate::gc::GcMapKey;
 
-        // Look up type info
-        let type_info = self.shared.types.read().unwrap().get(type_name).cloned()
-            .or_else(|| self.shared.dynamic_types.read().unwrap().get(type_name).cloned())
-            .or_else(|| self.shared.stdlib_types.read().unwrap().get(type_name).cloned());
+        // Look up type info (with suffix fallback for cross-module unqualified names)
+        let type_info = self.lookup_type_info(type_name);
 
         let type_val = match type_info {
             Some(t) => t,
@@ -11146,10 +11159,8 @@ impl AsyncProcess {
     fn make_variant_from_map(&mut self, type_name: &str, ctor_name: &str, fields_map: GcValue) -> Result<GcValue, RuntimeError> {
         use crate::gc::GcMapKey;
 
-        // Look up type info
-        let type_info = self.shared.types.read().unwrap().get(type_name).cloned()
-            .or_else(|| self.shared.dynamic_types.read().unwrap().get(type_name).cloned())
-            .or_else(|| self.shared.stdlib_types.read().unwrap().get(type_name).cloned());
+        // Look up type info (with suffix fallback for cross-module unqualified names)
+        let type_info = self.lookup_type_info(type_name);
 
         let type_val = match type_info {
             Some(t) => t,
@@ -11214,10 +11225,8 @@ impl AsyncProcess {
             Err(e) => return self.make_err_variant(&e),
         };
 
-        // Look up type info
-        let type_info = self.shared.types.read().unwrap().get(type_name).cloned()
-            .or_else(|| self.shared.dynamic_types.read().unwrap().get(type_name).cloned())
-            .or_else(|| self.shared.stdlib_types.read().unwrap().get(type_name).cloned());
+        // Look up type info (with suffix fallback for cross-module unqualified names)
+        let type_info = self.lookup_type_info(type_name);
 
         let type_val = match type_info {
             Some(t) => t,

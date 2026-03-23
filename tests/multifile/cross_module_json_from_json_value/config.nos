@@ -1,0 +1,8 @@
+use stdlib.json.{jsonParse, fromJsonValue}
+
+pub type ServerConfig = { host: String, port: Int, debug: Bool }
+
+pub parseServerConfig(jsonStr: String) -> ServerConfig = {
+  json = jsonParse(jsonStr)
+  fromJsonValue("ServerConfig", json)
+}

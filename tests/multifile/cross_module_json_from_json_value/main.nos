@@ -1,0 +1,11 @@
+# expect: 0
+# Regression: fromJsonValue with unqualified type name must work cross-module
+use config.{ServerConfig, parseServerConfig}
+
+main() = {
+  cfg = parseServerConfig("{\"host\": \"localhost\", \"port\": 8080, \"debug\": true}")
+  assert_eq("localhost", cfg.host)
+  assert_eq(8080, cfg.port)
+  assert_eq(true, cfg.debug)
+  0
+}
