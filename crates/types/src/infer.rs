@@ -4913,6 +4913,26 @@ impl<'a> InferCtx<'a> {
                                         }
                                     }
                                 }
+
+                                // Case 3: Expected takes 1 unresolved type var and actual takes multiple
+                                // This handles: f(xs) = { xs.map((a, b) => ...) } where xs is polymorphic.
+                                // The receiver type isn't yet resolved to List[(T,U)], so the expected
+                                // callback param is a type var. Treat the multi-param lambda as if it
+                                // destructures a tuple, unifying the var with Tuple(params).
+                                if expected_fn.params.len() == 1 && actual_fn.params.len() > 1 {
+                                    let resolved_expected_param = self.env.apply_subst(&expected_fn.params[0]);
+                                    if matches!(resolved_expected_param, Type::Var(_) | Type::TypeParam(_)) {
+                                        // Unify the type var with a tuple of the actual lambda params
+                                        let actual_param_types: Vec<Type> = actual_fn.params.iter()
+                                            .map(|p| self.env.apply_subst(p))
+                                            .collect();
+                                        let tuple_ty = Type::Tuple(actual_param_types);
+                                        let _ = self.unify_types(&resolved_expected_param, &tuple_ty);
+                                        // Unify return types
+                                        let _ = self.unify_types(&actual_fn.ret, &expected_fn.ret);
+                                        continue; // Skip normal arity-check unification
+                                    }
+                                }
                             }
 
                             // Convert UnificationFailed to Mismatch so it passes through
