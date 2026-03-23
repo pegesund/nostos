@@ -1,0 +1,20 @@
+# expect: 0
+# round() returns Int, mixing with Float arithmetic should work via coercion
+
+main() = {
+  x = 3.14
+  r = x.round()           # Int: 3
+  result1 = r / 2.0       # Int / Float = Float: 1.5
+  result2 = r * 2.0       # Int * Float = Float: 6.0
+  result3 = r + 0.5       # Int + Float = Float: 3.5
+  result4 = r - 0.5       # Int - Float = Float: 2.5
+  assert_eq(1.5, result1)
+  assert_eq(6.0, result2)
+  assert_eq(3.5, result3)
+  assert_eq(2.5, result4)
+  
+  # Inline: round() result used directly in float arithmetic
+  y = (3.14159 * 100.0).round() / 100.0
+  assert_eq(3.14, y)
+  0
+}

@@ -16054,7 +16054,15 @@ impl Compiler {
             } else {
                 // Not a literal - compile normally and coerce at runtime
                 let reg = self.compile_expr_tail(left, false)?;
-                if self.is_int_expr(left) {
+                // Check is_int_expr first, then fall back to HM-inferred Int type
+                // (needed for method calls like round() which return Int but are not
+                // caught by is_int_expr's pattern matching on MethodCall nodes)
+                let left_is_int = self.is_int_expr(left) || self.inferred_expr_types.get(&left.span())
+                    .map_or(false, |ty| matches!(ty, nostos_types::Type::Int | nostos_types::Type::Int64
+                        | nostos_types::Type::Int32 | nostos_types::Type::Int16 | nostos_types::Type::Int8
+                        | nostos_types::Type::UInt8 | nostos_types::Type::UInt16 | nostos_types::Type::UInt32
+                        | nostos_types::Type::UInt64));
+                if left_is_int {
                     let coerced = self.alloc_reg();
                     self.chunk.emit(Instruction::IntToFloat(coerced, reg), self.span_line(left.span()));
                     coerced
@@ -16076,7 +16084,13 @@ impl Compiler {
             } else {
                 // Not a literal - compile normally and coerce at runtime
                 let reg = self.compile_expr_tail(right, false)?;
-                if self.is_int_expr(right) {
+                // Check is_int_expr first, then fall back to HM-inferred Int type
+                let right_is_int = self.is_int_expr(right) || self.inferred_expr_types.get(&right.span())
+                    .map_or(false, |ty| matches!(ty, nostos_types::Type::Int | nostos_types::Type::Int64
+                        | nostos_types::Type::Int32 | nostos_types::Type::Int16 | nostos_types::Type::Int8
+                        | nostos_types::Type::UInt8 | nostos_types::Type::UInt16 | nostos_types::Type::UInt32
+                        | nostos_types::Type::UInt64));
+                if right_is_int {
                     let coerced = self.alloc_reg();
                     self.chunk.emit(Instruction::IntToFloat(coerced, reg), self.span_line(right.span()));
                     coerced

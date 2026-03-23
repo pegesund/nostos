@@ -1701,6 +1701,10 @@ impl AsyncProcess {
                 let result = match (va, vb) {
                     (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x + y),
                     (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x + y),
+                    // Int64 coercion: when HM inference unifies Int result (e.g. round()) with Float
+                    (GcValue::Int64(x), GcValue::Float64(y)) => GcValue::Float64(*x as f64 + y),
+                    (GcValue::Float64(x), GcValue::Int64(y)) => GcValue::Float64(x + *y as f64),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Float64(*x as f64 + *y as f64),
                     _ => return Err(RuntimeError::Panic("AddFloat: expected Float".into())),
                 };
                 set_reg!(dst, result);
@@ -1711,6 +1715,10 @@ impl AsyncProcess {
                 let result = match (va, vb) {
                     (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x - y),
                     (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x - y),
+                    // Int64 coercion: when HM inference unifies Int result (e.g. round()) with Float
+                    (GcValue::Int64(x), GcValue::Float64(y)) => GcValue::Float64(*x as f64 - y),
+                    (GcValue::Float64(x), GcValue::Int64(y)) => GcValue::Float64(x - *y as f64),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Float64(*x as f64 - *y as f64),
                     _ => return Err(RuntimeError::Panic("SubFloat: expected Float".into())),
                 };
                 set_reg!(dst, result);
@@ -1721,6 +1729,10 @@ impl AsyncProcess {
                 let result = match (va, vb) {
                     (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x * y),
                     (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x * y),
+                    // Int64 coercion: when HM inference unifies Int result (e.g. round()) with Float
+                    (GcValue::Int64(x), GcValue::Float64(y)) => GcValue::Float64(*x as f64 * y),
+                    (GcValue::Float64(x), GcValue::Int64(y)) => GcValue::Float64(x * *y as f64),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Float64(*x as f64 * *y as f64),
                     _ => return Err(RuntimeError::Panic("MulFloat: expected Float".into())),
                 };
                 set_reg!(dst, result);
@@ -1731,6 +1743,10 @@ impl AsyncProcess {
                 let result = match (va, vb) {
                     (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x / y),
                     (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x / y),
+                    // Int64 coercion: when HM inference unifies Int result (e.g. round()) with Float
+                    (GcValue::Int64(x), GcValue::Float64(y)) => GcValue::Float64(*x as f64 / y),
+                    (GcValue::Float64(x), GcValue::Int64(y)) => GcValue::Float64(x / *y as f64),
+                    (GcValue::Int64(x), GcValue::Int64(y)) => GcValue::Float64(*x as f64 / *y as f64),
                     _ => return Err(RuntimeError::Panic("DivFloat: expected Float".into())),
                 };
                 set_reg!(dst, result);
