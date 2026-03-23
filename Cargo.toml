@@ -19,7 +19,7 @@ stacker = "0.1"
 # BigInt and Decimal support
 num-bigint = "0.4"
 num-traits = "0.2"
-rust_decimal = "1.36"
+rust_decimal = { version = "1.36", features = ["db-postgres"] }
 
 # Cranelift JIT
 cranelift-codegen = "0.116"

@@ -3054,6 +3054,24 @@ impl IoRuntime {
                     Err(_) => PgValue::Null,
                 }
             }
+            Type::NUMERIC => {
+                // NUMERIC/DECIMAL - decode via rust_decimal then convert to Float or Int
+                match row.try_get::<_, rust_decimal::Decimal>(idx) {
+                    Ok(v) => {
+                        // Try to represent as integer if possible, otherwise as float
+                        if v.fract().is_zero() {
+                            if let Ok(i) = i64::try_from(v) {
+                                PgValue::Int(i)
+                            } else {
+                                PgValue::Float(v.to_string().parse::<f64>().unwrap_or(0.0))
+                            }
+                        } else {
+                            PgValue::Float(v.to_string().parse::<f64>().unwrap_or(0.0))
+                        }
+                    }
+                    Err(_) => PgValue::Null,
+                }
+            }
             _ => {
                 // Check for vector type by name (pgvector extension)
                 if col_type.name() == "vector" {
