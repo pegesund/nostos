@@ -11945,6 +11945,29 @@ impl Compiler {
                 // Resolve type name (check imports)
                 let qualified_type = self.resolve_name(&type_name.node);
 
+                // Handle primitive type conversions: Float(x), Int(x), String(x), Bool(x)
+                // These are treated as explicit type casts, equivalent to toFloat(x), toInt(x), etc.
+                if fields.len() == 1 {
+                    if let RecordField::Positional(arg_expr) = &fields[0] {
+                        let line = self.span_line(*span);
+                        match qualified_type.as_str() {
+                            "Float" | "Float64" => {
+                                let arg_reg = self.compile_expr_tail(arg_expr, false)?;
+                                let dst = self.alloc_reg();
+                                self.chunk.emit(Instruction::IntToFloat(dst, arg_reg), line);
+                                return Ok(dst);
+                            }
+                            "Int" | "Int64" => {
+                                let arg_reg = self.compile_expr_tail(arg_expr, false)?;
+                                let dst = self.alloc_reg();
+                                self.chunk.emit(Instruction::FloatToInt(dst, arg_reg), line);
+                                return Ok(dst);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
                 // Check for record update pattern: first field is positional (base), rest have named fields
                 // E.g., Point(p, x: 10) means "update p with x = 10"
                 if fields.len() >= 2 {
