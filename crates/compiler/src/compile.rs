@@ -11383,6 +11383,37 @@ impl Compiler {
                                 span: ident.span,
                             });
                         }
+                        // For show/toString: check if HM inference gave us a concrete type
+                        // that has a user-defined Show impl. If so, use that instead of the native.
+                        if matches!(name.as_str(), "show" | "toString") {
+                            if let Some(inferred_ty) = self.inferred_expr_types.get(&ident.span).cloned() {
+                                if let nostos_types::Type::Function(ref ft) = inferred_ty {
+                                    if let Some(first_param) = ft.params.first() {
+                                        if first_param.is_concrete() {
+                                            let type_name = first_param.display();
+                                            if let Some(trait_fn) = self.find_trait_method(&type_name, "show") {
+                                                let arg_types: Vec<Option<String>> = ft.params.iter()
+                                                    .map(|t| Some(t.display()))
+                                                    .collect();
+                                                let call_name = self.resolve_function_call(&trait_fn, &arg_types)
+                                                    .unwrap_or(trait_fn);
+                                                if let Some(func) = self.functions.get(&call_name).cloned() {
+                                                    let dst = self.alloc_reg();
+                                                    let idx = self.chunk.add_constant(Value::Function(func));
+                                                    self.chunk.emit(Instruction::LoadConst(dst, idx), line);
+                                                    return Ok(dst);
+                                                }
+                                                // Try loading by name at runtime
+                                                let dst = self.alloc_reg();
+                                                let name_idx = self.chunk.add_constant(Value::String(Arc::new(call_name)));
+                                                self.chunk.emit(Instruction::LoadFunctionByName(dst, name_idx), line);
+                                                return Ok(dst);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         // In a concrete context, create a wrapper function that calls the native
                         let native_name = name.clone();
                         let mut wrapper_chunk = Chunk::new();

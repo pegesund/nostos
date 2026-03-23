@@ -193,6 +193,13 @@ pub struct AsyncSharedState {
     pub functions: RwLock<HashMap<String, Arc<FunctionValue>>>,
     /// Function list for indexed calls - uses RwLock for concurrent eval support.
     pub function_list: RwLock<Vec<Arc<FunctionValue>>>,
+    /// User-defined Show trait implementations: type_name -> function index in function_list.
+    /// Populated when function_list is set (set_function_list).
+    /// Used for dynamic show dispatch when the type is unknown at compile time.
+    pub show_impls: RwLock<HashMap<String, u32>>,
+    /// Index of the native "show" function in natives_vec.
+    /// Used in the execute loop to detect when show needs dynamic dispatch.
+    pub show_native_idx: std::sync::atomic::AtomicU16,
     /// Native functions (string-based lookup).
     pub natives: HashMap<String, Arc<GcNativeFn>>,
     /// Native functions indexed by u16 for fast CallNativeIdx lookup.
@@ -3515,6 +3522,44 @@ impl AsyncProcess {
                     Value::String(s) => s.to_string(),
                     _ => return Err(RuntimeError::Panic("CallNative: expected string constant".into())),
                 };
+                // Special dynamic dispatch for "show" and "toString": if arg is a variant/record
+                // with a user-defined Show impl, call that function instead of the native show.
+                if (name == "show" || name == "toString") && args.len() == 1 {
+                    let arg_val = reg!(args[0]);
+                    let type_name_opt: Option<String> = match &arg_val {
+                        GcValue::Variant(ptr) => {
+                            self.heap.get_variant(*ptr).map(|v| v.type_name.to_string())
+                        }
+                        GcValue::Record(ptr) => {
+                            self.heap.get_record(*ptr).map(|r| r.type_name.to_string())
+                        }
+                        _ => None,
+                    };
+                    if let Some(ref type_name) = type_name_opt {
+                        let short_name = type_name.rsplit('.').next().unwrap_or(type_name).to_string();
+                        let show_impls = self.shared.show_impls.read().unwrap();
+                        let fn_idx = show_impls.get(type_name.as_str())
+                            .or_else(|| show_impls.get(&short_name))
+                            .copied();
+                        drop(show_impls);
+                        if let Some(func_idx) = fn_idx {
+                            let func = self.shared.function_list.read().unwrap()
+                                .get(func_idx as usize).cloned();
+                            if let Some(func) = func {
+                                let mut registers = self.alloc_registers(func.code.register_count);
+                                registers[0] = arg_val;
+                                self.frames.push(crate::process::CallFrame {
+                                    function: func,
+                                    ip: 0,
+                                    registers,
+                                    captures: Arc::from([] as [GcValue; 0]),
+                                    return_reg: Some(*dst),
+                                });
+                                return Ok(StepResult::Continue);
+                            }
+                        }
+                    }
+                }
                 let native = self.shared.natives.get(&name)
                     .ok_or_else(|| RuntimeError::Panic(format!("Unknown native function: {}", name)))?
                     .clone();
@@ -3531,6 +3576,53 @@ impl AsyncProcess {
 
             // Fast path for native function calls - uses index instead of string lookup
             CallNativeIdx(dst, native_idx, ref args) => {
+                // Special dynamic dispatch for "show": if arg is a variant/record with a
+                // user-defined Show impl, call that function instead of the native show.
+                // This handles cases where the type is unknown at compile time (e.g., try/catch).
+                let show_native_idx = self.shared.show_native_idx.load(std::sync::atomic::Ordering::Relaxed);
+                if *native_idx == show_native_idx && show_native_idx != u16::MAX && args.len() == 1 {
+                    let arg_val = reg!(args[0]);
+                    let type_name_opt: Option<String> = match &arg_val {
+                        GcValue::Variant(ptr) => {
+                            self.heap.get_variant(*ptr).map(|v| v.type_name.to_string())
+                        }
+                        GcValue::Record(ptr) => {
+                            self.heap.get_record(*ptr).map(|r| {
+                                // Try full type_name first, then short name
+                                r.type_name.to_string()
+                            })
+                        }
+                        _ => None,
+                    };
+                    if let Some(type_name) = type_name_opt {
+                        // Check full name and short name (last component after '.')
+                        let short_name = type_name.rsplit('.').next().unwrap_or(&type_name).to_string();
+                        let show_impls = self.shared.show_impls.read().unwrap();
+                        let fn_idx = show_impls.get(&type_name)
+                            .or_else(|| show_impls.get(&short_name))
+                            .copied();
+                        drop(show_impls);
+                        if let Some(func_idx) = fn_idx {
+                            // Call the user-defined show function
+                            let func = self.shared.function_list.read().unwrap()
+                                .get(func_idx as usize).cloned();
+                            if let Some(func) = func {
+                                // Set up registers for the user show function
+                                let mut registers = self.alloc_registers(func.code.register_count);
+                                registers[0] = arg_val;
+                                self.frames.push(crate::process::CallFrame {
+                                    function: func,
+                                    ip: 0,
+                                    registers,
+                                    captures: Arc::from([] as [GcValue; 0]),
+                                    return_reg: Some(*dst),
+                                });
+                                // Don't fall through - we're calling the user function
+                                return Ok(StepResult::Continue);
+                            }
+                        }
+                    }
+                }
                 let native = self.shared.natives_vec.get(*native_idx as usize)
                     .ok_or_else(|| RuntimeError::Panic(format!("Invalid native index: {}", native_idx)))?
                     .clone();
@@ -11406,6 +11498,8 @@ impl AsyncVM {
         let shared = Arc::new(AsyncSharedState {
             functions: RwLock::new(HashMap::new()),
             function_list: RwLock::new(Vec::new()),
+            show_impls: RwLock::new(HashMap::new()),
+            show_native_idx: std::sync::atomic::AtomicU16::new(u16::MAX),
             natives: HashMap::new(),
             natives_vec: Vec::new(),
             native_name_to_idx: HashMap::new(),
@@ -11476,7 +11570,36 @@ impl AsyncVM {
     }
 
     /// Set the function list for indexed calls - safe during concurrent evals.
+    /// Also rebuilds the show_impls map for dynamic Show trait dispatch.
     pub fn set_function_list(&mut self, functions: Vec<Arc<FunctionValue>>) {
+        // Build show_impls map: type_name -> function index
+        // Show impl functions are named like "TypeName.Show.show/TypeName" or
+        // "TypeName.TraitName.show/TypeName" where TraitName contains "Show"
+        let mut show_map = HashMap::new();
+        for (idx, func) in functions.iter().enumerate() {
+            let name = &func.name;
+            // Match pattern: TypeName.*.show/TypeName where * includes "Show"
+            // Function key format: "TypeName.Show.show/TypeName"
+            // Also match user-defined Show impls with trait names like "Show"
+            if name.contains(".Show.show") {
+                // Extract type name: everything before ".Show.show"
+                let base = if let Some(slash_pos) = name.rfind('/') {
+                    &name[..slash_pos]
+                } else {
+                    name.as_str()
+                };
+                if let Some(type_end) = base.rfind(".Show.show") {
+                    let type_name = &base[..type_end];
+                    // Strip module prefix if any (take the last component)
+                    let short_name = type_name.rsplit('.').next().unwrap_or(type_name);
+                    show_map.insert(type_name.to_string(), idx as u32);
+                    if short_name != type_name {
+                        show_map.insert(short_name.to_string(), idx as u32);
+                    }
+                }
+            }
+        }
+        *self.shared.show_impls.write().unwrap() = show_map;
         *self.shared.function_list.write().unwrap() = functions;
     }
 
@@ -11489,6 +11612,10 @@ impl AsyncVM {
         shared.natives_vec.push(native.clone());
         shared.native_name_to_idx.insert(name.to_string(), idx);
         shared.natives.insert(name.to_string(), native);
+        // Track the show native index for dynamic dispatch
+        if name == "show" {
+            shared.show_native_idx.store(idx, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// Get all native function indices for the compiler.
