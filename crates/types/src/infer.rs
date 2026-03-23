@@ -436,6 +436,11 @@ pub struct InferCtx<'a> {
     /// After solve(), if original and fresh both resolve to concrete but different types,
     /// the freshening was incorrect (let-polymorphism was applied to a monomorphic binding).
     freshened_binding_vars: Vec<(u32, u32, Span)>,
+    /// The declared return type of the function currently being inferred.
+    /// Used to disambiguate constructor names when multiple types have the same constructor.
+    /// E.g., if both IntTree and StrTree have a `Node` constructor, and the function returns
+    /// `StrTree`, prefer `StrTree.Node` over `IntTree.Node`.
+    current_declared_return_type: Option<String>,
 }
 
 use crate::is_structural_mismatch;
@@ -482,6 +487,7 @@ impl<'a> InferCtx<'a> {
             polymorphic_body_method_calls: Vec::new(),
             polymorphic_body_deferred_overloads: Vec::new(),
             freshened_binding_vars: Vec::new(),
+            current_declared_return_type: None,
         }
     }
 
@@ -7064,6 +7070,49 @@ impl<'a> InferCtx<'a> {
                     first.is_some() && defined_arities.iter().any(|&a| Some(a) != first)
                 };
 
+                // Pre-scan: if the scrutinee type is unresolved, look for any pattern in
+                // the arms that uniquely identifies the variant type. This disambiguates
+                // constructors with the same name across types.
+                // E.g., if StrLeaf only belongs to StrTree, and we see a StrLeaf arm,
+                // we know Node patterns in other arms should use StrTree.Node.
+                let saved_match_declared_return = self.current_declared_return_type.clone();
+                {
+                    let resolved_scrutinee = self.env.apply_subst(&scrutinee_ty);
+                    if !matches!(&resolved_scrutinee, Type::Named { .. }) {
+                        // Scrutinee type is still unresolved - scan arm patterns for unique constructors
+                        let types_snap = self.env.types.clone();
+                        'prescan: for arm in arms.iter() {
+                            if let Pattern::Variant(pat_name, _, _) = &arm.pattern {
+                                let ctor_search = &pat_name.node;
+                                // Find all types that have this constructor
+                                let mut owning_types: Vec<String> = Vec::new();
+                                for (tn, def) in &types_snap {
+                                    if let crate::TypeDef::Variant { constructors, .. } = def {
+                                        for ctor in constructors {
+                                            let cn = match ctor {
+                                                crate::Constructor::Unit(n) => n.as_str(),
+                                                crate::Constructor::Positional(n, _) => n.as_str(),
+                                                crate::Constructor::Named(n, _) => n.as_str(),
+                                            };
+                                            if cn == ctor_search.as_str() {
+                                                owning_types.push(tn.clone());
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                // If exactly one type owns this constructor, use it to disambiguate
+                                if owning_types.len() == 1 {
+                                    let tn = &owning_types[0];
+                                    let base = tn.rsplit('.').next().unwrap_or(tn.as_str());
+                                    self.current_declared_return_type = Some(base.to_string());
+                                    break 'prescan;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 for arm in arms {
                     // If this arm is a tuple pattern and there are conflicting arities,
                     // infer the pattern against a fresh variable (not the scrutinee_ty),
@@ -7079,6 +7128,8 @@ impl<'a> InferCtx<'a> {
                     };
                     self.infer_match_arm(arm, &arm_scrutinee_ty, &result_ty)?;
                 }
+                // Restore the declared return type hint after processing all match arms.
+                self.current_declared_return_type = saved_match_declared_return;
 
                 Ok(result_ty)
             }
@@ -8607,8 +8658,25 @@ impl<'a> InferCtx<'a> {
             }
 
             Pattern::Variant(name, fields, _) => {
-                // Look up constructor
-                if let Some(ctor_ty) = self.lookup_constructor(&name.node) {
+                // Look up constructor, using the expected type (from the match scrutinee) to
+                // disambiguate when multiple types have the same constructor name.
+                // E.g., if expected = StrTree, prefer StrTree.Node over IntTree.Node.
+                // Apply substitution first to resolve Var types that may have been solved already.
+                let saved_declared_return_for_pat = self.current_declared_return_type.take();
+                let resolved_expected = self.env.apply_subst(expected);
+                if let Type::Named { name: expected_type_name, .. } = &resolved_expected {
+                    // Resolved expected type: use it to disambiguate the constructor.
+                    let base_name = expected_type_name.rsplit('.').next().unwrap_or(expected_type_name.as_str());
+                    self.current_declared_return_type = Some(base_name.to_string());
+                } else if saved_declared_return_for_pat.is_some() {
+                    // Expected type is still an unresolved variable, but we have a hint from
+                    // the surrounding context (e.g. infer_match_arm set it from the result type).
+                    // Keep using that hint so lookup_constructor can disambiguate.
+                    self.current_declared_return_type = saved_declared_return_for_pat.clone();
+                }
+                let ctor_ty_opt = self.lookup_constructor(&name.node);
+                self.current_declared_return_type = saved_declared_return_for_pat;
+                if let Some(ctor_ty) = ctor_ty_opt {
                     match fields {
                         VariantPatternFields::Unit => {
                             self.unify(expected.clone(), ctor_ty);
@@ -8822,23 +8890,99 @@ impl<'a> InferCtx<'a> {
     }
 
     fn lookup_constructor(&mut self, name: &str) -> Option<Type> {
-        // Search through all types for this constructor
-        // Sort type names to prioritize user-defined types over stdlib types
-        // User types (no dots or not starting with "stdlib.") come first
+        // Search through all types for this constructor.
+        // Sort type names to prioritize user-defined types over stdlib types,
+        // and types from the current module/declared return type over others.
         let types_clone = self.env.types.clone();
         let mut type_names: Vec<_> = types_clone.keys().collect();
+        let current_module = self.env.current_module.clone();
+        let declared_return = self.current_declared_return_type.clone();
+
+        // First pass: collect all type names that have a matching constructor.
+        // Use this to detect ambiguity and prefer based on declared return type.
+        fn ctor_name_matches_type(type_name: &str, ctor_name: &str, search_name: &str) -> bool {
+            if ctor_name != search_name {
+                // Also check qualified name matching
+                if let Some(dot_pos) = search_name.rfind('.') {
+                    let module_prefix = &search_name[..dot_pos];
+                    let local_name = &search_name[dot_pos + 1..];
+                    return local_name == ctor_name && type_name.starts_with(&format!("{}.", module_prefix));
+                }
+                return false;
+            }
+            true
+        }
+
+        let mut matching_type_names: Vec<String> = Vec::new();
+        for (tn, def) in &types_clone {
+            let local_tn = tn.rsplit('.').next().unwrap_or(tn);
+            // Record type with matching name (for record types)
+            let record_matches = if tn.as_str() == name {
+                true
+            } else if let Some(dot_pos) = tn.rfind('.') {
+                &tn[dot_pos + 1..] == name
+            } else {
+                false
+            };
+            if record_matches {
+                if matches!(def, TypeDef::Record { .. }) {
+                    matching_type_names.push(tn.clone());
+                }
+            }
+            // Check variant constructors
+            if let TypeDef::Variant { constructors, .. } = def {
+                for ctor in constructors {
+                    let ctor_name = match ctor {
+                        Constructor::Unit(n) => n.as_str(),
+                        Constructor::Positional(n, _) => n.as_str(),
+                        Constructor::Named(n, _) => n.as_str(),
+                    };
+                    if ctor_name_matches_type(tn, ctor_name, name) {
+                        matching_type_names.push(tn.clone());
+                        break;
+                    }
+                }
+            }
+        }
+
+        // If multiple types have this constructor and we have a declared return type,
+        // try to pick the one that matches the declared return type.
+        // This disambiguates when e.g. both `IntTree` and `StrTree` have `Node` constructors.
+        let preferred_type: Option<String> = if matching_type_names.len() > 1 {
+            if let Some(ref ret_ty_name) = declared_return {
+                // Normalize: strip module prefix for comparison
+                let ret_base = ret_ty_name.rsplit('.').next().unwrap_or(ret_ty_name.as_str());
+                let found = matching_type_names.iter()
+                    .find(|tn| {
+                        let tn_base = tn.rsplit('.').next().unwrap_or(tn.as_str());
+                        tn_base == ret_base || tn.as_str() == ret_ty_name.as_str()
+                    })
+                    .cloned();
+                found
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         type_names.sort_by(|a, b| {
-            // Priority: user types first, then built-in types, then stdlib types.
-            // Built-in types (List, Option, Result) are registered in standard_env()
-            // and should be lower priority than user-defined types so that user
-            // constructor names (e.g., Nil in a user-defined MyList) take precedence.
+            // Priority: preferred type (from declared return type) first,
+            // then current module's types, then other user types, then built-in types, then stdlib types.
+            // This ensures that within a single file, Node(v, StrLeaf, StrLeaf) in a function
+            // returning StrTree finds StrTree.Node, not IntTree.Node.
             let builtin_types = ["List", "Option", "Result"];
             let a_is_stdlib = a.starts_with("stdlib.");
             let b_is_stdlib = b.starts_with("stdlib.");
             let a_is_builtin = !a_is_stdlib && builtin_types.contains(&a.as_str());
             let b_is_builtin = !b_is_stdlib && builtin_types.contains(&b.as_str());
-            let a_priority = if a_is_stdlib { 2 } else if a_is_builtin { 1 } else { 0 };
-            let b_priority = if b_is_stdlib { 2 } else if b_is_builtin { 1 } else { 0 };
+            let a_is_current = current_module.as_ref().map(|m| a.starts_with(m.as_str())).unwrap_or(false);
+            let b_is_current = current_module.as_ref().map(|m| b.starts_with(m.as_str())).unwrap_or(false);
+            let a_is_preferred = preferred_type.as_ref().map(|p| a.as_str() == p.as_str()).unwrap_or(false);
+            let b_is_preferred = preferred_type.as_ref().map(|p| b.as_str() == p.as_str()).unwrap_or(false);
+            // Lower number = higher priority (sorted ascending)
+            let a_priority = if a_is_preferred { 0 } else if a_is_current { 1 } else if !a_is_stdlib && !a_is_builtin { 2 } else if a_is_builtin { 3 } else { 4 };
+            let b_priority = if b_is_preferred { 0 } else if b_is_current { 1 } else if !b_is_stdlib && !b_is_builtin { 2 } else if b_is_builtin { 3 } else { 4 };
             a_priority.cmp(&b_priority).then(a.cmp(b))
         });
         for type_name in type_names {
@@ -9093,6 +9237,24 @@ impl<'a> InferCtx<'a> {
         // Infer pattern against scrutinee
         self.infer_pattern(&arm.pattern, scrutinee_ty)?;
 
+        // After pattern inference, set current_declared_return_type so that constructor
+        // expressions in the arm body can be disambiguated when multiple variant types
+        // share the same constructor name (e.g., IntTree.Node vs StrTree.Node).
+        // Priority: use result_ty if resolved (it's the function return type), otherwise scrutinee_ty.
+        let saved_arm_declared_return = self.current_declared_return_type.take();
+        {
+            let resolved_result = self.env.apply_subst(result_ty);
+            let resolved_scrutinee = self.env.apply_subst(scrutinee_ty);
+            let hint_name = if let Type::Named { name: n, .. } = &resolved_result {
+                Some(n.rsplit('.').next().unwrap_or(n.as_str()).to_string())
+            } else if let Type::Named { name: n, .. } = &resolved_scrutinee {
+                Some(n.rsplit('.').next().unwrap_or(n.as_str()).to_string())
+            } else {
+                saved_arm_declared_return.clone()
+            };
+            self.current_declared_return_type = hint_name;
+        }
+
         // Check guard if present
         if let Some(guard) = &arm.guard {
             let guard_ty = self.infer_expr(guard)?;
@@ -9102,6 +9264,8 @@ impl<'a> InferCtx<'a> {
         // Infer body
         let body_ty = self.infer_expr(&arm.body)?;
         self.unify(body_ty.clone(), result_ty.clone());
+        // Restore the declared return type after body inference.
+        self.current_declared_return_type = saved_arm_declared_return;
 
         // Record branch type for post-solve structural container mismatch check
         let arm_span = arm.body.span();
@@ -9964,8 +10128,28 @@ impl<'a> InferCtx<'a> {
             self.unify(guard_ty, Type::Bool);
         }
 
+        // Set the declared return type hint before inferring the body.
+        // This allows lookup_constructor to prefer constructors from the declared return type
+        // when multiple types have constructors with the same name.
+        // E.g., if both IntTree and StrTree have `Node`, and the function returns StrTree,
+        // `Node(v, StrLeaf, StrLeaf)` in the body should resolve to StrTree.Node.
+        let saved_declared_return = self.current_declared_return_type.take();
+        if let Some(ret_expr) = &clause.return_type {
+            // Extract the base type name from the return type annotation.
+            // For TypeExpr::Name or TypeExpr::Generic, get the outermost type name.
+            let ret_type_name: Option<String> = match ret_expr {
+                TypeExpr::Name(ident) => Some(ident.node.clone()),
+                TypeExpr::Generic(ident, _) => Some(ident.node.clone()),
+                _ => None,
+            };
+            self.current_declared_return_type = ret_type_name;
+        }
+
         // Infer body
         let body_ty = self.infer_expr(&clause.body)?;
+
+        // Restore the declared return type after body inference.
+        self.current_declared_return_type = saved_declared_return;
 
         // If there's a return type annotation, unify with it.
         // Order: unify(annotated, body_ty) so errors say "expected <annotated>, found <body_type>"
