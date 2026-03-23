@@ -1085,6 +1085,16 @@ impl TypeEnv {
         None
     }
 
+    /// Given a type name, returns its Record field names in order.
+    /// Returns None if the type is not a Record or not found.
+    /// Used to map named pattern fields to instantiated constructor params.
+    pub fn lookup_record_field_names(&self, type_name: &str) -> Option<Vec<String>> {
+        if let Some(TypeDef::Record { fields, .. }) = self.types.get(type_name) {
+            return Some(fields.iter().map(|(name, _, _)| name.clone()).collect());
+        }
+        None
+    }
+
     /// Add a type definition.
     pub fn define_type(&mut self, name: String, def: TypeDef) {
         self.types.insert(name, def);

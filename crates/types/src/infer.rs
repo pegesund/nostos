@@ -8654,10 +8654,38 @@ impl<'a> InferCtx<'a> {
                                 // Unify expected with the constructor's return type
                                 self.unify(expected.clone(), (*f.ret).clone());
 
-                                // Try to get the constructor's named fields for validation
+                                // Try to get the constructor's named fields for validation.
+                                // IMPORTANT: f.params already contains INSTANTIATED types (fresh vars
+                                // from lookup_constructor). We must use those, not raw types from the
+                                // typedef, to correctly link field types to the constructor's type params.
+                                //
+                                // For Record types (e.g., `type Box[a] = Box { val: a }`):
+                                //   f.params = [Var(N)]  (the instantiated 'a')
+                                //   f.ret = Box[Var(N)]
+                                //   lookup_variant_named_fields returns None (it only handles Variants)
+                                //   -> We use record field names paired with f.params by index.
+                                //
+                                // For Variant Named constructors (e.g., `type T = Ctor { field: a }`):
+                                //   lookup_variant_named_fields returns raw TypeParam types (NOT fresh vars)
+                                //   -> We must use f.params by index too.
                                 let ctor_fields: Option<Vec<(String, Type)>> =
                                     if let Type::Named { name: type_name, .. } = &*f.ret {
-                                        self.env.lookup_variant_named_fields(type_name, &name.node)
+                                        // First try Variant named fields (for name lookup only)
+                                        let variant_fields = self.env.lookup_variant_named_fields(type_name, &name.node);
+                                        if let Some(variant_field_defs) = variant_fields {
+                                            // Variant: use field names from typedef, but types from f.params
+                                            Some(variant_field_defs.iter().zip(f.params.iter())
+                                                .map(|((fname, _), instantiated_ty)| (fname.clone(), instantiated_ty.clone()))
+                                                .collect())
+                                        } else {
+                                            // Record type: use record field names paired with f.params
+                                            self.env.lookup_record_field_names(type_name)
+                                                .map(|field_names| {
+                                                    field_names.iter().zip(f.params.iter())
+                                                        .map(|(fname, instantiated_ty)| (fname.clone(), instantiated_ty.clone()))
+                                                        .collect()
+                                                })
+                                        }
                                     } else {
                                         None
                                     };
