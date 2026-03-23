@@ -1,0 +1,14 @@
+pub type IntTree = Leaf | Node(Int, IntTree, IntTree)
+pub type StrTree = StrLeaf | Node(String, StrTree, StrTree)
+
+pub insertInt(t, v) =
+  match t {
+    Leaf -> Node(v, Leaf, Leaf)
+    Node(x, l, r) -> if v < x then Node(x, insertInt(l, v), r) else Node(x, l, insertInt(r, v))
+  }
+
+pub insertStr(t, v) =
+  match t {
+    StrLeaf -> Node(v, StrLeaf, StrLeaf)
+    Node(x, l, r) -> if v < x then Node(x, insertStr(l, v), r) else Node(x, l, insertStr(r, v))
+  }

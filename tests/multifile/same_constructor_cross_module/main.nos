@@ -1,0 +1,10 @@
+# expect: done
+# Test: Two exported variant types in the same module share a constructor name.
+# When imported, the compiler must disambiguate Node for IntTree vs StrTree.
+use trees.*
+
+main() = {
+  t1 = insertInt(Leaf, 5)
+  t2 = insertStr(StrLeaf, "hello")
+  "done"
+}
