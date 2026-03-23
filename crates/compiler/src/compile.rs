@@ -23117,17 +23117,11 @@ scope_depth: self.block_depth,
                             self.chunk.emit(Instruction::Move(existing_reg, value_reg), 0);
                         }
                     }
-                } else if self.block_depth > existing_info.scope_depth {
-                    // Both are immutable, but we are in a deeper nested block scope:
-                    // this is a shadowing (not a reassignment), which is allowed.
-                    // The outer binding will be restored when the inner block exits.
-                    let is_float = self.is_float_type(&value_type) || self.is_float_expr(&binding.value);
-                    self.locals.insert(ident.node.clone(), LocalInfo { reg: value_reg, is_float, mutable: false, is_cell: false, scope_depth: self.block_depth });
-                    if let Some(ty) = explicit_type {
-                        self.local_types.insert(ident.node.clone(), self.type_name_to_type(&ty));
-                    }
                 } else {
-                    // Both are immutable in the same scope: this is an error
+                    // Both are immutable: this is an error regardless of scope depth.
+                    // Silently shadowing an immutable variable in a deeper scope (e.g. a loop body)
+                    // causes confusing data loss where `list = list ++ [x]` appears to work
+                    // but the outer `list` is never updated. Always error instead.
                     return Err(CompileError::TypeError {
                         message: format!("cannot reassign immutable variable '{}'; use 'var' to declare a mutable variable", ident.node),
                         span: binding.span,
