@@ -796,6 +796,34 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
             .then_ignore(nl.clone())
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
+        // Range expression: [start..end] (inclusive) desugars to range(start, end + 1)
+        // Also supports [start..=end] (same as [start..end], both inclusive)
+        let range_expr = nl.clone()
+            .ignore_then(expr.clone())
+            .then_ignore(just(Token::DotDotEq).or(just(Token::DotDot)))
+            .then(expr.clone())
+            .then_ignore(nl.clone())
+            .delimited_by(just(Token::LBracket), just(Token::RBracket))
+            .map_with_span(|(start, end), span| {
+                let s = to_span(span);
+                // Desugar [start..end] to range(start, end + 1) for inclusive range
+                let end_plus_one = Expr::BinOp(
+                    Box::new(end),
+                    BinOp::Add,
+                    Box::new(Expr::Int(1, s.clone())),
+                    s.clone(),
+                );
+                Expr::Call(
+                    Box::new(Expr::Var(Ident { node: "range".to_string(), span: s.clone() })),
+                    vec![],
+                    vec![
+                        CallArg::Positional(start),
+                        CallArg::Positional(end_plus_one),
+                    ],
+                    s,
+                )
+            });
+
         // List: [a, b, c] or [h | t]
         let list = nl.clone()
             .ignore_then(expr.clone())
@@ -1377,7 +1405,7 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         // Note: splice_expr is added below after primary is defined
         let special_no_splice = skip_newlines().ignore_then(choice((spawn_expr, quote_expr, lambda))).boxed();
         let lit = skip_newlines().ignore_then(choice((bool_expr, int, float, string, char_expr))).boxed();
-        let collections = skip_newlines().ignore_then(choice((map, set, record, unit_variant, tuple, unit, list, block))).boxed();
+        let collections = skip_newlines().ignore_then(choice((map, set, record, unit_variant, tuple, unit, range_expr, list, block))).boxed();
         // Note: splice is now handled after postfix operations for proper precedence
 
         let simple = skip_newlines().ignore_then(choice((grouped, wildcard, var))).boxed();
