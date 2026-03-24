@@ -2113,6 +2113,7 @@ impl AsyncProcess {
                         let by = self.heap.get_bigint(*py).unwrap().value.clone();
                         bx < by
                     }
+                    (GcValue::Decimal(x), GcValue::Decimal(y)) => x < y,
                     _ => return Err(RuntimeError::Panic("LtInt: expected Int64".into())),
                 };
                 set_reg!(dst, GcValue::Bool(result));
@@ -2125,6 +2126,7 @@ impl AsyncProcess {
                         let by = self.heap.get_bigint(*py).unwrap().value.clone();
                         bx <= by
                     }
+                    (GcValue::Decimal(x), GcValue::Decimal(y)) => x <= y,
                     _ => return Err(RuntimeError::Panic("LeInt: expected Int64".into())),
                 };
                 set_reg!(dst, GcValue::Bool(result));
@@ -2137,6 +2139,7 @@ impl AsyncProcess {
                         let by = self.heap.get_bigint(*py).unwrap().value.clone();
                         bx > by
                     }
+                    (GcValue::Decimal(x), GcValue::Decimal(y)) => x > y,
                     _ => return Err(RuntimeError::Panic("GtInt: expected Int64".into())),
                 };
                 set_reg!(dst, GcValue::Bool(result));
@@ -3385,6 +3388,7 @@ impl AsyncProcess {
                         let by = self.heap.get_bigint(*py).unwrap().value.clone();
                         bx >= by
                     }
+                    (GcValue::Decimal(x), GcValue::Decimal(y)) => x >= y,
                     _ => return Err(RuntimeError::Panic("GeInt: expected Int64".into())),
                 };
                 set_reg!(dst, GcValue::Bool(result));
