@@ -2381,6 +2381,13 @@ impl Heap {
                     _ => None,
                 }
             }
+            // BigInt
+            (GcValue::BigInt(pa), GcValue::BigInt(pb)) => {
+                match (self.get_bigint(*pa), self.get_bigint(*pb)) {
+                    (Some(ba), Some(bb)) => Some(ba.value.cmp(&bb.value)),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }

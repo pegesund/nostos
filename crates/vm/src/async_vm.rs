@@ -2106,19 +2106,40 @@ impl AsyncProcess {
                 set_reg!(dst, GcValue::Bool(va == vb));
             }
             LtInt(dst, a, b) => {
-                let va = match reg_ref!(a) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("LtInt: expected Int64".into())) };
-                let vb = match reg_ref!(b) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("LtInt: expected Int64".into())) };
-                set_reg!(dst, GcValue::Bool(va < vb));
+                let result = match (reg_ref!(a), reg_ref!(b)) {
+                    (GcValue::Int64(x), GcValue::Int64(y)) => x < y,
+                    (GcValue::BigInt(px), GcValue::BigInt(py)) => {
+                        let bx = self.heap.get_bigint(*px).unwrap().value.clone();
+                        let by = self.heap.get_bigint(*py).unwrap().value.clone();
+                        bx < by
+                    }
+                    _ => return Err(RuntimeError::Panic("LtInt: expected Int64".into())),
+                };
+                set_reg!(dst, GcValue::Bool(result));
             }
             LeInt(dst, a, b) => {
-                let va = match reg_ref!(a) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("LeInt: expected Int64".into())) };
-                let vb = match reg_ref!(b) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("LeInt: expected Int64".into())) };
-                set_reg!(dst, GcValue::Bool(va <= vb));
+                let result = match (reg_ref!(a), reg_ref!(b)) {
+                    (GcValue::Int64(x), GcValue::Int64(y)) => x <= y,
+                    (GcValue::BigInt(px), GcValue::BigInt(py)) => {
+                        let bx = self.heap.get_bigint(*px).unwrap().value.clone();
+                        let by = self.heap.get_bigint(*py).unwrap().value.clone();
+                        bx <= by
+                    }
+                    _ => return Err(RuntimeError::Panic("LeInt: expected Int64".into())),
+                };
+                set_reg!(dst, GcValue::Bool(result));
             }
             GtInt(dst, a, b) => {
-                let va = match reg_ref!(a) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("GtInt: expected Int64".into())) };
-                let vb = match reg_ref!(b) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("GtInt: expected Int64".into())) };
-                set_reg!(dst, GcValue::Bool(va > vb));
+                let result = match (reg_ref!(a), reg_ref!(b)) {
+                    (GcValue::Int64(x), GcValue::Int64(y)) => x > y,
+                    (GcValue::BigInt(px), GcValue::BigInt(py)) => {
+                        let bx = self.heap.get_bigint(*px).unwrap().value.clone();
+                        let by = self.heap.get_bigint(*py).unwrap().value.clone();
+                        bx > by
+                    }
+                    _ => return Err(RuntimeError::Panic("GtInt: expected Int64".into())),
+                };
+                set_reg!(dst, GcValue::Bool(result));
             }
 
             // === Control flow ===
@@ -3357,9 +3378,16 @@ impl AsyncProcess {
             }
 
             GeInt(dst, a, b) => {
-                let va = match reg_ref!(a) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("GeInt: expected Int64".into())) };
-                let vb = match reg_ref!(b) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("GeInt: expected Int64".into())) };
-                set_reg!(dst, GcValue::Bool(va >= vb));
+                let result = match (reg_ref!(a), reg_ref!(b)) {
+                    (GcValue::Int64(x), GcValue::Int64(y)) => x >= y,
+                    (GcValue::BigInt(px), GcValue::BigInt(py)) => {
+                        let bx = self.heap.get_bigint(*px).unwrap().value.clone();
+                        let by = self.heap.get_bigint(*py).unwrap().value.clone();
+                        bx >= by
+                    }
+                    _ => return Err(RuntimeError::Panic("GeInt: expected Int64".into())),
+                };
+                set_reg!(dst, GcValue::Bool(result));
             }
 
             // === Boolean operations ===
@@ -15658,7 +15686,7 @@ impl AsyncVM {
                     GcValue::Float32Array(ptr) => {
                         let arr = heap.get_float32_array(*ptr)
                             .ok_or_else(|| RuntimeError::Panic("Invalid Float32Array pointer".to_string()))?;
-                        let values: Vec<GcValue> = arr.items.iter().map(|f| GcValue::Float32(*f)).collect();
+                        let values: Vec<GcValue> = arr.items.iter().map(|f| GcValue::Float64(*f as f64)).collect();
                         Ok(GcValue::List(GcList::from_vec(values)))
                     }
                     _ => Err(RuntimeError::TypeError {
