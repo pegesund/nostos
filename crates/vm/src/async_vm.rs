@@ -1699,40 +1699,107 @@ impl AsyncProcess {
                 set_reg!(dst, result);
             }
             MinInt(dst, a, b) => {
-                let va = match reg_ref!(a) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("MinInt: expected Int64".into())) };
-                let vb = match reg_ref!(b) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("MinInt: expected Int64".into())) };
-                set_reg!(dst, GcValue::Int64(va.min(vb)));
+                let va = reg_ref!(a).clone();
+                let vb = reg_ref!(b).clone();
+                let result = match (&va, &vb) {
+                    (GcValue::Int8(a), GcValue::Int8(b)) => GcValue::Int8((*a).min(*b)),
+                    (GcValue::Int16(a), GcValue::Int16(b)) => GcValue::Int16((*a).min(*b)),
+                    (GcValue::Int32(a), GcValue::Int32(b)) => GcValue::Int32((*a).min(*b)),
+                    (GcValue::Int64(a), GcValue::Int64(b)) => GcValue::Int64((*a).min(*b)),
+                    (GcValue::UInt8(a), GcValue::UInt8(b)) => GcValue::UInt8((*a).min(*b)),
+                    (GcValue::UInt16(a), GcValue::UInt16(b)) => GcValue::UInt16((*a).min(*b)),
+                    (GcValue::UInt32(a), GcValue::UInt32(b)) => GcValue::UInt32((*a).min(*b)),
+                    (GcValue::UInt64(a), GcValue::UInt64(b)) => GcValue::UInt64((*a).min(*b)),
+                    (GcValue::BigInt(pa), GcValue::BigInt(pb)) => {
+                        let ba = self.heap.get_bigint(*pa).unwrap().value.clone();
+                        let bb = self.heap.get_bigint(*pb).unwrap().value.clone();
+                        let result_val = if ba <= bb { ba } else { bb };
+                        GcValue::BigInt(self.heap.alloc_bigint(result_val))
+                    }
+                    (GcValue::Float64(a), GcValue::Float64(b)) => GcValue::Float64(a.min(*b)),
+                    (GcValue::Float32(a), GcValue::Float32(b)) => GcValue::Float32(a.min(*b)),
+                    (GcValue::Decimal(a), GcValue::Decimal(b)) => GcValue::Decimal(if a <= b { *a } else { *b }),
+                    _ => {
+                        // Fallback: try to unify as Int64
+                        let ia = match &va { GcValue::Int64(n) => *n, GcValue::Int8(n) => *n as i64, GcValue::Int16(n) => *n as i64, GcValue::Int32(n) => *n as i64, _ => return Err(RuntimeError::Panic(format!("MinInt: unsupported types {:?} and {:?}", va.type_name(&self.heap), vb.type_name(&self.heap)))) };
+                        let ib = match &vb { GcValue::Int64(n) => *n, GcValue::Int8(n) => *n as i64, GcValue::Int16(n) => *n as i64, GcValue::Int32(n) => *n as i64, _ => return Err(RuntimeError::Panic("MinInt: expected integer types".into())) };
+                        GcValue::Int64(ia.min(ib))
+                    }
+                };
+                set_reg!(dst, result);
             }
             MaxInt(dst, a, b) => {
-                let va = match reg_ref!(a) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("MaxInt: expected Int64".into())) };
-                let vb = match reg_ref!(b) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("MaxInt: expected Int64".into())) };
-                set_reg!(dst, GcValue::Int64(va.max(vb)));
+                let va = reg_ref!(a).clone();
+                let vb = reg_ref!(b).clone();
+                let result = match (&va, &vb) {
+                    (GcValue::Int8(a), GcValue::Int8(b)) => GcValue::Int8((*a).max(*b)),
+                    (GcValue::Int16(a), GcValue::Int16(b)) => GcValue::Int16((*a).max(*b)),
+                    (GcValue::Int32(a), GcValue::Int32(b)) => GcValue::Int32((*a).max(*b)),
+                    (GcValue::Int64(a), GcValue::Int64(b)) => GcValue::Int64((*a).max(*b)),
+                    (GcValue::UInt8(a), GcValue::UInt8(b)) => GcValue::UInt8((*a).max(*b)),
+                    (GcValue::UInt16(a), GcValue::UInt16(b)) => GcValue::UInt16((*a).max(*b)),
+                    (GcValue::UInt32(a), GcValue::UInt32(b)) => GcValue::UInt32((*a).max(*b)),
+                    (GcValue::UInt64(a), GcValue::UInt64(b)) => GcValue::UInt64((*a).max(*b)),
+                    (GcValue::BigInt(pa), GcValue::BigInt(pb)) => {
+                        let ba = self.heap.get_bigint(*pa).unwrap().value.clone();
+                        let bb = self.heap.get_bigint(*pb).unwrap().value.clone();
+                        let result_val = if ba >= bb { ba } else { bb };
+                        GcValue::BigInt(self.heap.alloc_bigint(result_val))
+                    }
+                    (GcValue::Float64(a), GcValue::Float64(b)) => GcValue::Float64(a.max(*b)),
+                    (GcValue::Float32(a), GcValue::Float32(b)) => GcValue::Float32(a.max(*b)),
+                    (GcValue::Decimal(a), GcValue::Decimal(b)) => GcValue::Decimal(if a >= b { *a } else { *b }),
+                    _ => {
+                        let ia = match &va { GcValue::Int64(n) => *n, GcValue::Int8(n) => *n as i64, GcValue::Int16(n) => *n as i64, GcValue::Int32(n) => *n as i64, _ => return Err(RuntimeError::Panic(format!("MaxInt: unsupported types {:?} and {:?}", va.type_name(&self.heap), vb.type_name(&self.heap)))) };
+                        let ib = match &vb { GcValue::Int64(n) => *n, GcValue::Int8(n) => *n as i64, GcValue::Int16(n) => *n as i64, GcValue::Int32(n) => *n as i64, _ => return Err(RuntimeError::Panic("MaxInt: expected integer types".into())) };
+                        GcValue::Int64(ia.max(ib))
+                    }
+                };
+                set_reg!(dst, result);
             }
             MinFloat(dst, a, b) => {
-                let va = match reg_ref!(a) {
-                    GcValue::Float64(x) => *x,
-                    GcValue::Int64(n) => *n as f64,
-                    _ => return Err(RuntimeError::Panic("MinFloat: expected Float64".into()))
-                };
-                let vb = match reg_ref!(b) {
-                    GcValue::Float64(x) => *x,
-                    GcValue::Int64(n) => *n as f64,
-                    _ => return Err(RuntimeError::Panic("MinFloat: expected Float64".into()))
-                };
-                set_reg!(dst, GcValue::Float64(va.min(vb)));
+                let va_val = reg_ref!(a).clone();
+                let vb_val = reg_ref!(b).clone();
+                // Preserve Float32 type if both operands are Float32
+                if let (GcValue::Float32(a32), GcValue::Float32(b32)) = (&va_val, &vb_val) {
+                    set_reg!(dst, GcValue::Float32(a32.min(*b32)));
+                } else {
+                    let va = match &va_val {
+                        GcValue::Float64(x) => *x,
+                        GcValue::Float32(x) => *x as f64,
+                        GcValue::Int64(n) => *n as f64,
+                        _ => return Err(RuntimeError::Panic("MinFloat: expected Float64".into()))
+                    };
+                    let vb = match &vb_val {
+                        GcValue::Float64(x) => *x,
+                        GcValue::Float32(x) => *x as f64,
+                        GcValue::Int64(n) => *n as f64,
+                        _ => return Err(RuntimeError::Panic("MinFloat: expected Float64".into()))
+                    };
+                    set_reg!(dst, GcValue::Float64(va.min(vb)));
+                }
             }
             MaxFloat(dst, a, b) => {
-                let va = match reg_ref!(a) {
-                    GcValue::Float64(x) => *x,
-                    GcValue::Int64(n) => *n as f64,
-                    _ => return Err(RuntimeError::Panic("MaxFloat: expected Float64".into()))
-                };
-                let vb = match reg_ref!(b) {
-                    GcValue::Float64(x) => *x,
-                    GcValue::Int64(n) => *n as f64,
-                    _ => return Err(RuntimeError::Panic("MaxFloat: expected Float64".into()))
-                };
-                set_reg!(dst, GcValue::Float64(va.max(vb)));
+                let va_val = reg_ref!(a).clone();
+                let vb_val = reg_ref!(b).clone();
+                // Preserve Float32 type if both operands are Float32
+                if let (GcValue::Float32(a32), GcValue::Float32(b32)) = (&va_val, &vb_val) {
+                    set_reg!(dst, GcValue::Float32(a32.max(*b32)));
+                } else {
+                    let va = match &va_val {
+                        GcValue::Float64(x) => *x,
+                        GcValue::Float32(x) => *x as f64,
+                        GcValue::Int64(n) => *n as f64,
+                        _ => return Err(RuntimeError::Panic("MaxFloat: expected Float64".into()))
+                    };
+                    let vb = match &vb_val {
+                        GcValue::Float64(x) => *x,
+                        GcValue::Float32(x) => *x as f64,
+                        GcValue::Int64(n) => *n as f64,
+                        _ => return Err(RuntimeError::Panic("MaxFloat: expected Float64".into()))
+                    };
+                    set_reg!(dst, GcValue::Float64(va.max(vb)));
+                }
             }
 
             // === Float arithmetic ===
@@ -1968,11 +2035,22 @@ impl AsyncProcess {
             // === Type conversions ===
             IntToFloat(dst, src) => {
                 let result = match reg_ref!(src) {
-                    GcValue::Int64(v) => GcValue::Float64(*v as f64),
+                    GcValue::Int8(v) => GcValue::Float64(*v as f64),
+                    GcValue::Int16(v) => GcValue::Float64(*v as f64),
                     GcValue::Int32(v) => GcValue::Float64(*v as f64),
+                    GcValue::Int64(v) => GcValue::Float64(*v as f64),
+                    GcValue::UInt8(v) => GcValue::Float64(*v as f64),
+                    GcValue::UInt16(v) => GcValue::Float64(*v as f64),
+                    GcValue::UInt32(v) => GcValue::Float64(*v as f64),
+                    GcValue::UInt64(v) => GcValue::Float64(*v as f64),
                     GcValue::Float64(v) => GcValue::Float64(*v),
                     GcValue::Float32(v) => GcValue::Float64(*v as f64),
                     GcValue::Decimal(d) => GcValue::Float64(rust_decimal::prelude::ToPrimitive::to_f64(d).unwrap_or(f64::NAN)),
+                    GcValue::BigInt(ptr) => {
+                        let bi = self.heap.get_bigint(*ptr).unwrap().value.clone();
+                        use num_traits::ToPrimitive;
+                        GcValue::Float64(bi.to_f64().unwrap_or(f64::NAN))
+                    }
                     _ => return Err(RuntimeError::Panic("IntToFloat: expected numeric".into())),
                 };
                 set_reg!(dst, result);
@@ -4878,6 +4956,19 @@ impl AsyncProcess {
                                     }
                                     set_reg!(dst, GcValue::Float64(sum));
                                 }
+                                GcValue::Float32(_) => {
+                                    let mut sum: f32 = 0.0;
+                                    for item in list.iter() {
+                                        if let GcValue::Float32(n) = item {
+                                            sum += n;
+                                        } else {
+                                            return Err(RuntimeError::Panic(
+                                                format!("listSum: mixed types, expected Float32, got {:?}", item.type_name(&self.heap))
+                                            ));
+                                        }
+                                    }
+                                    set_reg!(dst, GcValue::Float32(sum));
+                                }
                                 GcValue::BigInt(_) => {
                                     let mut sum = num_bigint::BigInt::from(0);
                                     for item in list.iter() {
@@ -4891,6 +4982,70 @@ impl AsyncProcess {
                                     }
                                     let result_ptr = self.heap.alloc_bigint(sum);
                                     set_reg!(dst, GcValue::BigInt(result_ptr));
+                                }
+                                GcValue::Int8(_) => {
+                                    let mut sum: i64 = 0;
+                                    for item in list.iter() {
+                                        if let GcValue::Int8(n) = item { sum += *n as i64; }
+                                        else { return Err(RuntimeError::Panic(format!("listSum: mixed types, expected Int8, got {:?}", item.type_name(&self.heap)))); }
+                                    }
+                                    set_reg!(dst, GcValue::Int64(sum));
+                                }
+                                GcValue::Int16(_) => {
+                                    let mut sum: i64 = 0;
+                                    for item in list.iter() {
+                                        if let GcValue::Int16(n) = item { sum += *n as i64; }
+                                        else { return Err(RuntimeError::Panic(format!("listSum: mixed types, expected Int16, got {:?}", item.type_name(&self.heap)))); }
+                                    }
+                                    set_reg!(dst, GcValue::Int64(sum));
+                                }
+                                GcValue::Int32(_) => {
+                                    let mut sum: i64 = 0;
+                                    for item in list.iter() {
+                                        if let GcValue::Int32(n) = item { sum += *n as i64; }
+                                        else { return Err(RuntimeError::Panic(format!("listSum: mixed types, expected Int32, got {:?}", item.type_name(&self.heap)))); }
+                                    }
+                                    set_reg!(dst, GcValue::Int64(sum));
+                                }
+                                GcValue::UInt8(_) => {
+                                    let mut sum: i64 = 0;
+                                    for item in list.iter() {
+                                        if let GcValue::UInt8(n) = item { sum += *n as i64; }
+                                        else { return Err(RuntimeError::Panic(format!("listSum: mixed types, expected UInt8, got {:?}", item.type_name(&self.heap)))); }
+                                    }
+                                    set_reg!(dst, GcValue::Int64(sum));
+                                }
+                                GcValue::UInt16(_) => {
+                                    let mut sum: i64 = 0;
+                                    for item in list.iter() {
+                                        if let GcValue::UInt16(n) = item { sum += *n as i64; }
+                                        else { return Err(RuntimeError::Panic(format!("listSum: mixed types, expected UInt16, got {:?}", item.type_name(&self.heap)))); }
+                                    }
+                                    set_reg!(dst, GcValue::Int64(sum));
+                                }
+                                GcValue::UInt32(_) => {
+                                    let mut sum: i64 = 0;
+                                    for item in list.iter() {
+                                        if let GcValue::UInt32(n) = item { sum += *n as i64; }
+                                        else { return Err(RuntimeError::Panic(format!("listSum: mixed types, expected UInt32, got {:?}", item.type_name(&self.heap)))); }
+                                    }
+                                    set_reg!(dst, GcValue::Int64(sum));
+                                }
+                                GcValue::UInt64(_) => {
+                                    let mut sum: u64 = 0;
+                                    for item in list.iter() {
+                                        if let GcValue::UInt64(n) = item { sum = sum.wrapping_add(*n); }
+                                        else { return Err(RuntimeError::Panic(format!("listSum: mixed types, expected UInt64, got {:?}", item.type_name(&self.heap)))); }
+                                    }
+                                    set_reg!(dst, GcValue::UInt64(sum));
+                                }
+                                GcValue::Decimal(_) => {
+                                    let mut sum = rust_decimal::Decimal::ZERO;
+                                    for item in list.iter() {
+                                        if let GcValue::Decimal(d) = item { sum += d; }
+                                        else { return Err(RuntimeError::Panic(format!("listSum: mixed types, expected Decimal, got {:?}", item.type_name(&self.heap)))); }
+                                    }
+                                    set_reg!(dst, GcValue::Decimal(sum));
                                 }
                                 _ => {
                                     let mut sum: i64 = 0;

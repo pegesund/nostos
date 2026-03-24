@@ -24949,6 +24949,11 @@ scope_depth: self.block_depth,
             // Literals have known types
             Expr::Int(_, _) => Some(InferredType::Int),
             Expr::Float(_, _) => Some(InferredType::Float),
+            // Typed int literals
+            Expr::Int8(_, _) | Expr::Int16(_, _) | Expr::Int32(_, _)
+            | Expr::UInt8(_, _) | Expr::UInt16(_, _) | Expr::UInt32(_, _) | Expr::UInt64(_, _) => Some(InferredType::Int),
+            // Float32 literals map to Float (both use fabs / AbsFloat)
+            Expr::Float32(_, _) => Some(InferredType::Float),
 
             // Negation preserves type
             Expr::UnaryOp(UnaryOp::Neg, inner, _) => self.infer_expr_type(inner),
@@ -24963,8 +24968,8 @@ scope_depth: self.block_depth,
                 self.local_types.get(&ident.node).and_then(|t| {
                     let s = t.display();
                     match s.as_str() {
-                        "Int" => Some(InferredType::Int),
-                        "Float" => Some(InferredType::Float),
+                        "Int" | "Int8" | "Int16" | "Int32" | "UInt8" | "UInt16" | "UInt32" | "UInt64" => Some(InferredType::Int),
+                        "Float" | "Float32" => Some(InferredType::Float),
                         _ => None,
                     }
                 })
