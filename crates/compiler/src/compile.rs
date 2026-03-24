@@ -23266,6 +23266,15 @@ scope_depth: self.block_depth,
                     RecordField::Positional(e) | RecordField::Named(_, e) => self.expr_references_name(e, name),
                 })
             }
+            Expr::Receive(arms, timeout, _) => {
+                arms.iter().any(|arm| {
+                    arm.guard.as_ref().map_or(false, |g| self.expr_references_name(g, name))
+                        || self.expr_references_name(&arm.body, name)
+                })
+                || timeout.as_ref().map_or(false, |(t, body)| {
+                    self.expr_references_name(t, name) || self.expr_references_name(body, name)
+                })
+            }
             _ => false,
         }
     }
