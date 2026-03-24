@@ -1646,6 +1646,10 @@ impl AsyncProcess {
                         let result_ptr = self.heap.alloc_bigint(&bx % &by);
                         GcValue::BigInt(result_ptr)
                     }
+                    (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x % y),
+                    (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x % y),
+                    (GcValue::Float64(x), GcValue::Int64(y)) => GcValue::Float64(x % (*y as f64)),
+                    (GcValue::Int64(x), GcValue::Float64(y)) => GcValue::Float64((*x as f64) % y),
                     _ => return Err(RuntimeError::TypeError {
                         expected: "matching numeric types".to_string(),
                         found: format!("{:?}", va),
@@ -1699,6 +1703,32 @@ impl AsyncProcess {
                 let va = match reg_ref!(a) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("MaxInt: expected Int64".into())) };
                 let vb = match reg_ref!(b) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("MaxInt: expected Int64".into())) };
                 set_reg!(dst, GcValue::Int64(va.max(vb)));
+            }
+            MinFloat(dst, a, b) => {
+                let va = match reg_ref!(a) {
+                    GcValue::Float64(x) => *x,
+                    GcValue::Int64(n) => *n as f64,
+                    _ => return Err(RuntimeError::Panic("MinFloat: expected Float64".into()))
+                };
+                let vb = match reg_ref!(b) {
+                    GcValue::Float64(x) => *x,
+                    GcValue::Int64(n) => *n as f64,
+                    _ => return Err(RuntimeError::Panic("MinFloat: expected Float64".into()))
+                };
+                set_reg!(dst, GcValue::Float64(va.min(vb)));
+            }
+            MaxFloat(dst, a, b) => {
+                let va = match reg_ref!(a) {
+                    GcValue::Float64(x) => *x,
+                    GcValue::Int64(n) => *n as f64,
+                    _ => return Err(RuntimeError::Panic("MaxFloat: expected Float64".into()))
+                };
+                let vb = match reg_ref!(b) {
+                    GcValue::Float64(x) => *x,
+                    GcValue::Int64(n) => *n as f64,
+                    _ => return Err(RuntimeError::Panic("MaxFloat: expected Float64".into()))
+                };
+                set_reg!(dst, GcValue::Float64(va.max(vb)));
             }
 
             // === Float arithmetic ===
