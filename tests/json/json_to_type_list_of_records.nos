@@ -1,0 +1,10 @@
+# expect: 2
+# jsonToType works with List[Record] as top-level type argument
+use stdlib.json.{jsonParse}
+type Item = { id: Int, name: String }
+
+main() = {
+  json = jsonParse("[{\"id\":1,\"name\":\"A\"},{\"id\":2,\"name\":\"B\"}]")
+  items = jsonToType[List[Item]](json)
+  items.length()
+}

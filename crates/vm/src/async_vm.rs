@@ -10811,6 +10811,40 @@ impl AsyncProcess {
 
     /// Construct a typed value from Json (for construct builtin)
     fn construct_from_json(&mut self, type_name: &str, json: GcValue) -> Result<GcValue, RuntimeError> {
+        // Handle builtin generic types that don't have typeInfo: List[T], Option[T]
+        if type_name.starts_with("List[") {
+            return self.json_to_primitive(&json, type_name);
+        }
+        if type_name.starts_with("Option[") {
+            let inner_type = type_name[7..type_name.len()-1].to_string();
+            // Null Json -> None, anything else -> Some(converted)
+            match &json {
+                GcValue::Variant(var_ptr) => {
+                    let ctor = {
+                        let variant = self.heap.get_variant(*var_ptr)
+                            .ok_or_else(|| RuntimeError::Panic("Invalid variant".to_string()))?;
+                        variant.constructor.clone()
+                    };
+                    if ctor.as_ref() == "Null" {
+                        let none_ptr = self.heap.alloc_variant(
+                            Arc::new("Option".to_string()),
+                            Arc::new("None".to_string()),
+                            vec![],
+                        );
+                        return Ok(GcValue::Variant(none_ptr));
+                    }
+                }
+                _ => {}
+            }
+            let converted = self.json_to_primitive(&json, &inner_type)?;
+            let some_ptr = self.heap.alloc_variant(
+                Arc::new("Option".to_string()),
+                Arc::new("Some".to_string()),
+                vec![converted],
+            );
+            return Ok(GcValue::Variant(some_ptr));
+        }
+
         // Look up type info (with suffix fallback for cross-module unqualified names)
         let type_info = self.lookup_type_info(type_name);
 

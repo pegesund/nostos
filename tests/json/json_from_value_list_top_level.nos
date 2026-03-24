@@ -1,0 +1,10 @@
+# expect: "A"
+# fromJsonValue with List[Record] as the top-level type name
+use stdlib.json.{jsonParse, fromJsonValue}
+type Item = { id: Int, name: String }
+
+main() = {
+  json = jsonParse("[{\"id\":1,\"name\":\"A\"},{\"id\":2,\"name\":\"B\"}]")
+  items = fromJsonValue("List[Item]", json)
+  head(items).name
+}
