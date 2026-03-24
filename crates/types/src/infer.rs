@@ -10043,6 +10043,29 @@ impl<'a> InferCtx<'a> {
             (clause_params, clause_ret, vec![])
         };
 
+        // Pre-scan: detect param positions where clauses have tuple patterns of different arities.
+        // For such positions, the function signature must use an unconstrained type variable
+        // (so any tuple arity can be passed), rather than a specific tuple type.
+        let arity = func.clauses[0].params.len();
+        let mut conflicting_tuple_arity_positions: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for i in 0..arity {
+            let first_tuple_len = if let Some(Pattern::Tuple(e, _)) = func.clauses[0].params.get(i).map(|p| &p.pattern) {
+                Some(e.len())
+            } else {
+                None
+            };
+            if let Some(first_len) = first_tuple_len {
+                for clause in func.clauses.iter().skip(1) {
+                    if let Some(Pattern::Tuple(e, _)) = clause.params.get(i).map(|p| &p.pattern) {
+                        if e.len() != first_len {
+                            conflicting_tuple_arity_positions.insert(i);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         // Infer remaining clauses and unify their types with the first
         for clause in func.clauses.iter().skip(1) {
             let (clause_params, clause_ret) = self.infer_clause(clause)?;
@@ -10055,7 +10078,12 @@ impl<'a> InferCtx<'a> {
                 });
             }
             for i in 0..param_types.len() {
-                self.unify(param_types[i].clone(), clause_params[i].clone());
+                // If this param position has conflicting tuple arities across clauses,
+                // do NOT unify them. Different-arity tuple dispatch is valid at runtime
+                // (mutually exclusive patterns), but unifying would force conflicting sizes.
+                if !conflicting_tuple_arity_positions.contains(&i) {
+                    self.unify(param_types[i].clone(), clause_params[i].clone());
+                }
             }
             // Update param_types with unified types
             for param_type in &mut param_types {
@@ -10065,6 +10093,16 @@ impl<'a> InferCtx<'a> {
             // Unify return types
             self.unify(ret_ty.clone(), clause_ret);
             ret_ty = self.env.apply_subst(&ret_ty);
+        }
+
+        // For param positions with conflicting tuple arities, replace the registered param type
+        // with a fresh unconstrained type variable. This allows the caller to pass any tuple
+        // (the runtime dispatch picks the right clause). Without this, the signature would
+        // be locked to one specific tuple arity and calls with other arities would fail type check.
+        for i in &conflicting_tuple_arity_positions {
+            if *i < param_types.len() {
+                param_types[*i] = self.fresh();
+            }
         }
 
         // Count required parameters (those without defaults)
