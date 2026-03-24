@@ -4731,6 +4731,9 @@ impl AsyncProcess {
                     GcValue::Float64Array(ptr) => {
                         self.heap.get_float64_array(ptr).map(|a| a.items.len() as i64).unwrap_or(0)
                     }
+                    GcValue::Float32Array(ptr) => {
+                        self.heap.get_float32_array(ptr).map(|a| a.items.len() as i64).unwrap_or(0)
+                    }
                     GcValue::Map(ptr) => {
                         self.heap.get_map(ptr).map(|m| m.entries.len() as i64).unwrap_or(0)
                     }
