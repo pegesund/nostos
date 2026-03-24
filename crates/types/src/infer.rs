@@ -3514,7 +3514,20 @@ impl<'a> InferCtx<'a> {
                     });
                 }
                 (Type::List(a), Type::List(b)) => {
-                    let _ = self.unify_types(a, b);
+                    // Apply same heterogeneous-list logic as in BinOp::Concat handler:
+                    // only unify element types when one is a Var (propagation) or same type.
+                    // Skip merging two independent Vars or two different concrete types.
+                    let ra = self.env.apply_subst(a);
+                    let rb = self.env.apply_subst(b);
+                    let should_unify = match (&ra, &rb) {
+                        _ if ra == rb => true,
+                        (Type::Var(_), Type::Var(_)) => false,
+                        (Type::Var(_), _) | (_, Type::Var(_)) => true,
+                        _ => false,
+                    };
+                    if should_unify {
+                        let _ = self.unify_types(a, b);
+                    }
                 }
                 (Type::String, Type::String) => {}
                 _ => {
@@ -8346,12 +8359,32 @@ impl<'a> InferCtx<'a> {
                 let resolved_right = self.expand_type_alias(&resolved_right).unwrap_or(resolved_right);
 
                 match (&resolved_left, &resolved_right) {
-                    // Both are concrete list types - try to unify element types
-                    // Nostos supports heterogeneous lists, so mismatched element types
-                    // are allowed (like Python). Unification is attempted to propagate
-                    // type info when one side has type vars.
+                    // Both are concrete list types.
+                    // Nostos supports heterogeneous lists (like Python), so mismatched
+                    // element types are allowed. We attempt unification only when both
+                    // element types are the SAME variable (already linked) or when one
+                    // of them is a type variable that can absorb the other's concrete type.
+                    // Critically, we must NOT merge two independent type variables here:
+                    // doing so causes `["hello"] ++ [1, 2, 3]` to fail because both element
+                    // vars get merged, then later one gets constrained to String and the
+                    // other to Int, producing a spurious "expected String, found Int" error.
                     (Type::List(elem_left), Type::List(elem_right)) => {
-                        let _ = self.unify_types(elem_left, elem_right);
+                        let resolved_el = self.env.apply_subst(elem_left);
+                        let resolved_er = self.env.apply_subst(elem_right);
+                        // Only unify element types when they would clearly benefit from it:
+                        // - Both are the same type (no-op, harmless)
+                        // - Exactly one is a type variable (propagate concrete type into var)
+                        // Do NOT unify two independent type variables or two different concrete
+                        // types, as that would prevent heterogeneous list concatenation.
+                        let should_unify = match (&resolved_el, &resolved_er) {
+                            _ if resolved_el == resolved_er => true,    // Same type - safe no-op
+                            (Type::Var(_), Type::Var(_)) => false,      // Two independent vars - skip
+                            (Type::Var(_), _) | (_, Type::Var(_)) => true, // One var - propagate
+                            _ => false,                                 // Two different concrete types - skip
+                        };
+                        if should_unify {
+                            let _ = self.unify_types(elem_left, elem_right);
+                        }
                         Ok(resolved_left.clone())
                     }
                     // Left is list, right is type variable - constrain right to be SOME list

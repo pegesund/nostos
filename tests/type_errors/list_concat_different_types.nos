@@ -1,3 +1,4 @@
-# expect_error: type mismatch
-# List ++ must have matching element types
+# expect: [1, 2, 3, a, b, c]
+# Nostos supports heterogeneous lists (like Python).
+# [Int] ++ [String] is valid, not a type error.
 main() = [1, 2, 3] ++ ["a", "b", "c"]
