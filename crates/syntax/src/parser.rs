@@ -1232,7 +1232,9 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         // Allows optional trailing comma after each arm for single-line style
         // The body is parsed as a stmt (not just expr) so that assignments like
         // `Some(x) -> total = total + x` work without requiring braces.
+        // Also allows | as arm separator for inline style: { A -> 1 | B -> 2 }
         let match_arm = nl.clone()
+            .ignore_then(just(Token::Pipe).or_not())  // Allow leading | as arm separator
             .ignore_then(pattern())
             .then(just(Token::When).ignore_then(expr.clone()).or_not())
             .then_ignore(just(Token::RightArrow))
