@@ -1279,27 +1279,31 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                 Expr::Match(Box::new(scrutinee), arms, to_span(span))
             });
 
-        // Try expression: try { stmts } catch { pattern -> expr } finally { expr }
+        // Try expression: try { stmts } catch? { pattern -> expr } finally? { expr }
+        // catch and finally are both optional, but at least one must be present
         // The body is parsed as a block expression (handles multiple statements)
+        let catch_block = nl.clone()
+            .ignore_then(just(Token::Catch))
+            .ignore_then(nl.clone())
+            .ignore_then(just(Token::LBrace))
+            .ignore_then(match_arm.clone().repeated())
+            .then_ignore(nl.clone())
+            .then_ignore(just(Token::RBrace))
+            .or_not();
+
+        let finally_block = nl.clone()
+            .ignore_then(just(Token::Finally))
+            .ignore_then(nl.clone())
+            .ignore_then(expr.clone())  // Parse block expression
+            .or_not();
+
         let try_expr = just(Token::Try)
             .ignore_then(nl.clone())
             .ignore_then(expr.clone())  // Parse block expression: { stmt1; stmt2; ... }
-            .then_ignore(nl.clone())
-            .then_ignore(just(Token::Catch))
-            .then_ignore(nl.clone())
-            .then_ignore(just(Token::LBrace))
-            .then(match_arm.clone().repeated())
-            .then_ignore(nl.clone())
-            .then_ignore(just(Token::RBrace))
-            .then(
-                nl.clone()
-                    .ignore_then(just(Token::Finally))
-                    .ignore_then(nl.clone())
-                    .ignore_then(expr.clone())  // Parse block expression
-                    .or_not()
-            )
+            .then(catch_block)
+            .then(finally_block)
             .map_with_span(|((body, catches), finally), span| {
-                Expr::Try(Box::new(body), catches, finally.map(Box::new), to_span(span))
+                Expr::Try(Box::new(body), catches.unwrap_or_default(), finally.map(Box::new), to_span(span))
             });
 
         // Do block: do stmt; stmt; ... end
