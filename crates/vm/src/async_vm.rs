@@ -1929,6 +1929,23 @@ impl AsyncProcess {
                         let result_ptr = self.heap.alloc_bigint(result_val);
                         GcValue::BigInt(result_ptr)
                     }
+                    (GcValue::Decimal(x), GcValue::Decimal(y)) => {
+                        use rust_decimal::prelude::ToPrimitive;
+                        let exp = y.to_i64().ok_or_else(|| RuntimeError::Panic("PowInt Decimal: exponent must be an integer value".into()))?;
+                        let base = *x;
+                        let result = if exp == 0 {
+                            rust_decimal::Decimal::ONE
+                        } else if exp > 0 {
+                            let mut acc = rust_decimal::Decimal::ONE;
+                            for _ in 0..exp { acc *= base; }
+                            acc
+                        } else {
+                            let mut acc = rust_decimal::Decimal::ONE;
+                            for _ in 0..(-exp) { acc *= base; }
+                            rust_decimal::Decimal::ONE / acc
+                        };
+                        GcValue::Decimal(result)
+                    }
                     _ => return Err(RuntimeError::Panic(format!("PowInt: unsupported types {:?} {:?}", va.type_name(&self.heap), vb.type_name(&self.heap)))),
                 };
                 set_reg!(dst, result);
@@ -5096,6 +5113,14 @@ impl AsyncProcess {
                                     }
                                     set_reg!(dst, GcValue::Float64(product));
                                 }
+                                GcValue::Float32(_) => {
+                                    let mut product: f32 = 1.0;
+                                    for item in list.iter() {
+                                        if let GcValue::Float32(n) = item { product *= n; }
+                                        else { return Err(RuntimeError::Panic(format!("listProduct: mixed types, expected Float32, got {:?}", item.type_name(&self.heap)))); }
+                                    }
+                                    set_reg!(dst, GcValue::Float32(product));
+                                }
                                 GcValue::BigInt(_) => {
                                     let mut product = num_bigint::BigInt::from(1);
                                     for item in list.iter() {
@@ -5109,6 +5134,70 @@ impl AsyncProcess {
                                     }
                                     let result_ptr = self.heap.alloc_bigint(product);
                                     set_reg!(dst, GcValue::BigInt(result_ptr));
+                                }
+                                GcValue::Int8(_) => {
+                                    let mut product: i64 = 1;
+                                    for item in list.iter() {
+                                        if let GcValue::Int8(n) = item { product *= *n as i64; }
+                                        else { return Err(RuntimeError::Panic(format!("listProduct: mixed types, expected Int8, got {:?}", item.type_name(&self.heap)))); }
+                                    }
+                                    set_reg!(dst, GcValue::Int64(product));
+                                }
+                                GcValue::Int16(_) => {
+                                    let mut product: i64 = 1;
+                                    for item in list.iter() {
+                                        if let GcValue::Int16(n) = item { product *= *n as i64; }
+                                        else { return Err(RuntimeError::Panic(format!("listProduct: mixed types, expected Int16, got {:?}", item.type_name(&self.heap)))); }
+                                    }
+                                    set_reg!(dst, GcValue::Int64(product));
+                                }
+                                GcValue::Int32(_) => {
+                                    let mut product: i64 = 1;
+                                    for item in list.iter() {
+                                        if let GcValue::Int32(n) = item { product *= *n as i64; }
+                                        else { return Err(RuntimeError::Panic(format!("listProduct: mixed types, expected Int32, got {:?}", item.type_name(&self.heap)))); }
+                                    }
+                                    set_reg!(dst, GcValue::Int64(product));
+                                }
+                                GcValue::UInt8(_) => {
+                                    let mut product: i64 = 1;
+                                    for item in list.iter() {
+                                        if let GcValue::UInt8(n) = item { product *= *n as i64; }
+                                        else { return Err(RuntimeError::Panic(format!("listProduct: mixed types, expected UInt8, got {:?}", item.type_name(&self.heap)))); }
+                                    }
+                                    set_reg!(dst, GcValue::Int64(product));
+                                }
+                                GcValue::UInt16(_) => {
+                                    let mut product: i64 = 1;
+                                    for item in list.iter() {
+                                        if let GcValue::UInt16(n) = item { product *= *n as i64; }
+                                        else { return Err(RuntimeError::Panic(format!("listProduct: mixed types, expected UInt16, got {:?}", item.type_name(&self.heap)))); }
+                                    }
+                                    set_reg!(dst, GcValue::Int64(product));
+                                }
+                                GcValue::UInt32(_) => {
+                                    let mut product: i64 = 1;
+                                    for item in list.iter() {
+                                        if let GcValue::UInt32(n) = item { product *= *n as i64; }
+                                        else { return Err(RuntimeError::Panic(format!("listProduct: mixed types, expected UInt32, got {:?}", item.type_name(&self.heap)))); }
+                                    }
+                                    set_reg!(dst, GcValue::Int64(product));
+                                }
+                                GcValue::UInt64(_) => {
+                                    let mut product: u64 = 1;
+                                    for item in list.iter() {
+                                        if let GcValue::UInt64(n) = item { product = product.wrapping_mul(*n); }
+                                        else { return Err(RuntimeError::Panic(format!("listProduct: mixed types, expected UInt64, got {:?}", item.type_name(&self.heap)))); }
+                                    }
+                                    set_reg!(dst, GcValue::UInt64(product));
+                                }
+                                GcValue::Decimal(_) => {
+                                    let mut product = rust_decimal::Decimal::ONE;
+                                    for item in list.iter() {
+                                        if let GcValue::Decimal(d) = item { product *= d; }
+                                        else { return Err(RuntimeError::Panic(format!("listProduct: mixed types, expected Decimal, got {:?}", item.type_name(&self.heap)))); }
+                                    }
+                                    set_reg!(dst, GcValue::Decimal(product));
                                 }
                                 _ => {
                                     let mut product: i64 = 1;
