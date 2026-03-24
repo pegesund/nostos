@@ -1262,6 +1262,40 @@ impl Compiler {
                 // Both conditions must be true
                 self.chunk.emit(Instruction::And(success_reg, ge_start, le_end), line);
             }
+            Pattern::Record(fields, _) => {
+                // Record pattern: { field1: pat1, field2 } matches any record with those fields.
+                // We don't need to check the type name - the type checker already verified it.
+                // Just start as true (no tag check needed for records).
+                self.chunk.emit(Instruction::LoadTrue(success_reg), 0);
+
+                for field in fields {
+                    match field {
+                        RecordPatternField::Punned(ident) => {
+                            // { x } means bind field "x" to variable "x"
+                            let field_reg = self.alloc_reg();
+                            let field_const = self.chunk.add_constant(Value::String(Arc::new(ident.node.clone())));
+                            self.chunk.emit(Instruction::GetField(field_reg, scrut_reg, field_const), 0);
+                            bindings.push((ident.node.clone(), field_reg, false));
+                        }
+                        RecordPatternField::Named(ident, pat) => {
+                            // { x: pat } means get field "x", then match against pat
+                            let field_reg = self.alloc_reg();
+                            let field_const = self.chunk.add_constant(Value::String(Arc::new(ident.node.clone())));
+                            self.chunk.emit(Instruction::GetField(field_reg, scrut_reg, field_const), 0);
+                            let (sub_success, mut sub_bindings) = self.compile_pattern_test(pat, field_reg)?;
+                            self.chunk.emit(Instruction::And(success_reg, success_reg, sub_success), 0);
+                            // Add bindings to locals so subsequent fields can pin against them
+                            for (name, reg, is_float) in &sub_bindings {
+                                self.locals.insert(name.clone(), LocalInfo { reg: *reg, is_float: *is_float, mutable: false, is_cell: false, scope_depth: self.block_depth });
+                            }
+                            bindings.append(&mut sub_bindings);
+                        }
+                        RecordPatternField::Rest(_) => {
+                            // { field1, .. } - rest pattern means "ignore remaining fields"
+                        }
+                    }
+                }
+            }
             _ => {
                 return Err(CompileError::NotImplemented {
                     feature: format!("pattern: {:?}", pattern),

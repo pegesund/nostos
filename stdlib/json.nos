@@ -305,6 +305,8 @@ pub convertPrimitive(json, typeName) =
             _ -> throw("Expected Object for " ++ typeName ++ ", got " ++ show(json))
         }
     }
+    else if String.startsWith(typeName, "Result[") then
+        convertResultJson(json, typeName)
     else
         # Nested type - recursive call
         fromJsonValue(typeName, json)
@@ -322,6 +324,23 @@ pub convertMapPairs(pairs, keyType, valType, acc) = match pairs {
         convertedKey = convertPrimitive(String(k), keyType)
         convertedVal = convertPrimitive(v, valType)
         convertMapPairs(rest, keyType, valType, Map.insert(acc, convertedKey, convertedVal))
+    }
+}
+
+# Convert a JSON object to a Result[ok, err] value
+pub convertResultJson(json, typeName) = {
+    (_, typeArgs) = parseTypeName(typeName)
+    (okType, errType) = match typeArgs {
+        [o, e] -> (o, e)
+        _ -> throw("Result expects exactly two type arguments in " ++ typeName)
+    }
+    match json {
+        Object(pairs) -> match pairs {
+            [("Ok", okVal)] -> Ok(convertPrimitive(okVal, okType))
+            [("Err", errVal)] -> Err(convertPrimitive(errVal, errType))
+            _ -> throw("Result JSON must have exactly one key: Ok or Err")
+        }
+        _ -> throw("Expected Object for " ++ typeName ++ ", got " ++ show(json))
     }
 }
 
@@ -502,8 +521,19 @@ pub fromJsonValue(typeName, json) = {
             }
         }
         else if kind == "variant" then {
-            # Variant: json should be Object with single key (constructor name)
+            # Variant: json can be:
+            #   - String "CtorName"  -> unit constructor (no fields)
+            #   - Object {"CtorName": ...} -> constructor with fields
             match json {
+                String(ctorName) -> {
+                    # Unit constructor (no fields)
+                    constructors = Map.get(info, "constructors")
+                    ctor = findConstructor(constructors, ctorName)
+                    if Map.isEmpty(ctor) then
+                        throw("Unknown constructor: " ++ ctorName ++ " for type " ++ baseType)
+                    else
+                        makeVariantByName(baseType, ctorName, %{})
+                }
                 Object(pairs) -> match pairs {
                     [(ctorName, ctorValue)] -> {
                         constructors = Map.get(info, "constructors")
@@ -518,7 +548,7 @@ pub fromJsonValue(typeName, json) = {
                     }
                     _ -> throw("Variant JSON must have exactly one key (constructor name)")
                 }
-                _ -> throw("Expected Object for variant type " ++ baseType)
+                _ -> throw("Expected Object or String for variant type " ++ baseType)
             }
         }
         else
