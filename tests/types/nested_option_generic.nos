@@ -1,0 +1,13 @@
+# expect: 42
+# Regression: nested stdlib generic types (Option[Option[Int]]) must work
+# when stdlib is loaded from bytecode cache
+main() = {
+  x = Some(Some(42))
+  match x {
+    Some(inner) -> match inner {
+      Some(v) -> v
+      None -> -1
+    }
+    None -> -2
+  }
+}
