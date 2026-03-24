@@ -491,8 +491,12 @@ pub substituteTypeParam(fieldType, typeParamMap) =
 pub fromJsonValue(typeName, json) = {
     (baseType, typeArgs) = parseTypeName(typeName)
 
-    # Handle builtin generic types (List, Option, Map) that don't have typeInfo
-    if baseType == "List" || baseType == "Option" || baseType == "Map" || baseType == "Result" then
+    # Handle builtin types (primitives and generics) that don't have typeInfo
+    if baseType == "List" || baseType == "Option" || baseType == "Map" || baseType == "Result" ||
+       baseType == "Bool" || baseType == "String" || baseType == "Char" ||
+       baseType == "Int" || baseType == "Int8" || baseType == "Int16" || baseType == "Int32" || baseType == "Int64" ||
+       baseType == "UInt8" || baseType == "UInt16" || baseType == "UInt32" || baseType == "UInt64" ||
+       baseType == "Float" || baseType == "Float32" || baseType == "Float64" || baseType == "BigInt" then
         convertPrimitive(json, typeName)
     else {
 
