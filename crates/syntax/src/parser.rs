@@ -421,6 +421,11 @@ fn pattern() -> impl Parser<Token, Pattern, Error = Simple<Token>> + Clone {
             Token::UInt32(n) => Ok(Pattern::UInt32(n, to_span(span))),
             Token::UInt64(n) => Ok(Pattern::UInt64(n, to_span(span))),
             Token::BigInt(s) => Ok(Pattern::BigInt(s, to_span(span))),
+            Token::OutOfRangeInt(s) => {
+                let msg = crate::lexer::typed_int_overflow_error(&s)
+                    .unwrap_or_else(|| format!("integer literal `{}` is out of range", s));
+                Err(Simple::custom(span, msg))
+            }
             _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
         });
 
@@ -739,6 +744,11 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
             Token::UInt32(n) => Ok(Expr::UInt32(n, to_span(span))),
             Token::UInt64(n) => Ok(Expr::UInt64(n, to_span(span))),
             Token::BigInt(s) => Ok(Expr::BigInt(s, to_span(span))),
+            Token::OutOfRangeInt(s) => {
+                let msg = crate::lexer::typed_int_overflow_error(&s)
+                    .unwrap_or_else(|| format!("integer literal `{}` is out of range", s));
+                Err(Simple::custom(span, msg))
+            }
             _ => Err(Simple::expected_input_found(span, vec![], Some(tok))),
         });
 
@@ -2532,6 +2542,43 @@ fn module() -> impl Parser<Token, Module, Error = Simple<Token>> + Clone {
         .map(|items| Module { name: None, items })
 }
 
+/// Scan a token list for OutOfRangeInt tokens and convert them to parse errors.
+/// Returns the errors found. These should be reported alongside any parse errors.
+/// Check whether the negated value of a typed int literal text is in range.
+/// For example, "32768i16" negated is -32768 which IS in range for Int16.
+fn negated_in_range(text: &str) -> bool {
+    if text.ends_with("i8") {
+        let n: i64 = text[..text.len()-2].replace('_', "").parse().unwrap_or(i64::MAX);
+        n <= 128  // -128 is valid for i8
+    } else if text.ends_with("i16") {
+        let n: i64 = text[..text.len()-3].replace('_', "").parse().unwrap_or(i64::MAX);
+        n <= 32768  // -32768 is valid for i16
+    } else if text.ends_with("i32") {
+        let n: i64 = text[..text.len()-3].replace('_', "").parse().unwrap_or(i64::MAX);
+        n <= 2147483648  // -2147483648 is valid for i32
+    } else {
+        false  // unsigned types can't be negated into range
+    }
+}
+
+fn extract_out_of_range_int_errors(tokens: &[(Token, std::ops::Range<usize>)]) -> Vec<Simple<Token>> {
+    tokens.iter().enumerate().filter_map(|(i, (tok, span))| {
+        if let Token::OutOfRangeInt(s) = tok {
+            // Check if preceded by a Minus token - if so, -value might be in range
+            let preceded_by_minus = i > 0 && tokens[i - 1].0 == Token::Minus;
+            if preceded_by_minus && negated_in_range(s) {
+                // -32768i16 is valid even though 32768i16 overflows: allow it
+                return None;
+            }
+            let msg = crate::lexer::typed_int_overflow_error(s)
+                .unwrap_or_else(|| format!("integer literal `{}` is out of range", s));
+            Some(Simple::custom(span.clone(), msg))
+        } else {
+            None
+        }
+    }).collect()
+}
+
 /// Parse source code into a module.
 pub fn parse(source: &str) -> (Option<Module>, Vec<Simple<Token>>) {
     // Filter out comment tokens - they're kept for syntax highlighting only
@@ -2540,11 +2587,19 @@ pub fn parse(source: &str) -> (Option<Module>, Vec<Simple<Token>>) {
         .collect();
     let len = source.len();
 
-    let (result, errors) = module().parse_recovery(chumsky::Stream::from_iter(
+    // Pre-check for out-of-range typed integer literals and report them immediately
+    let mut out_of_range_errors = extract_out_of_range_int_errors(&tokens);
+    if !out_of_range_errors.is_empty() {
+        // Return the out-of-range errors directly without parsing further
+        return (None, out_of_range_errors);
+    }
+
+    let (result, mut errors) = module().parse_recovery(chumsky::Stream::from_iter(
         len..len + 1,
         tokens.into_iter(),
     ));
 
+    errors.append(&mut out_of_range_errors);
     (result, errors)
 }
 
@@ -2555,6 +2610,12 @@ pub fn parse_expr(source: &str) -> (Option<Expr>, Vec<Simple<Token>>) {
         .filter(|(tok, _)| !matches!(tok, Token::Comment | Token::MultiLineComment))
         .collect();
     let len = source.len();
+
+    // Pre-check for out-of-range typed integer literals
+    let out_of_range_errors = extract_out_of_range_int_errors(&tokens);
+    if !out_of_range_errors.is_empty() {
+        return (None, out_of_range_errors);
+    }
 
     let (result, errors) = expr()
         .then_ignore(end())

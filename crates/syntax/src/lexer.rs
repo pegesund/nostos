@@ -195,6 +195,11 @@ pub enum Token {
     })]
     BigInt(String),
 
+    /// Synthesized by lex() when a typed integer literal overflows its type.
+    /// Carries the original source text (e.g. "128i8") so the parser can emit a good error.
+    /// This variant has no regex - it is never produced by logos directly.
+    OutOfRangeInt(String),
+
     // Decimal integer
     #[regex(r"[0-9][0-9_]*", |lex| lex.slice().replace('_', "").parse::<i64>().ok())]
     Int(i64),
@@ -583,6 +588,7 @@ impl fmt::Display for Token {
             Token::UInt32(n) => write!(f, "{}u32", n),
             Token::UInt64(n) => write!(f, "{}u64", n),
             Token::BigInt(s) => write!(f, "{}n", s),
+            Token::OutOfRangeInt(s) => write!(f, "{}", s),
             Token::Int(n) => write!(f, "{}", n),
             Token::Float32(s) => write!(f, "{}f32", s),
             Token::Decimal(s) => write!(f, "{}d", s),
@@ -643,11 +649,73 @@ impl fmt::Display for Token {
     }
 }
 
+/// Detect whether `text` looks like an out-of-range typed integer literal (e.g. "128i8", "32768i16").
+/// Public so the parser can call it when it encounters an OutOfRangeInt token.
+/// Returns a human-readable error description if so, or None if the text is not a typed int literal.
+pub fn typed_int_overflow_error(text: &str) -> Option<String> {
+    // Patterns: <digits><suffix> where suffix is i8, i16, i32, u8, u16, u32, u64
+    let (digits, suffix) = if text.ends_with("i8") {
+        (&text[..text.len()-2], "i8")
+    } else if text.ends_with("i16") {
+        (&text[..text.len()-3], "i16")
+    } else if text.ends_with("i32") {
+        (&text[..text.len()-3], "i32")
+    } else if text.ends_with("u8") {
+        (&text[..text.len()-2], "u8")
+    } else if text.ends_with("u16") {
+        (&text[..text.len()-3], "u16")
+    } else if text.ends_with("u32") {
+        (&text[..text.len()-3], "u32")
+    } else if text.ends_with("u64") {
+        (&text[..text.len()-3], "u64")
+    } else {
+        return None;
+    };
+    // Make sure digits part is all digits/underscores (not some random identifier)
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit() || c == '_') {
+        return None;
+    }
+    let range_str = match suffix {
+        "i8"  => "-128 to 127",
+        "i16" => "-32768 to 32767",
+        "i32" => "-2147483648 to 2147483647",
+        "u8"  => "0 to 255",
+        "u16" => "0 to 65535",
+        "u32" => "0 to 4294967295",
+        "u64" => "0 to 18446744073709551615",
+        _     => "valid range",
+    };
+    let type_name = match suffix {
+        "i8"  => "Int8",
+        "i16" => "Int16",
+        "i32" => "Int32",
+        "u8"  => "UInt8",
+        "u16" => "UInt16",
+        "u32" => "UInt32",
+        "u64" => "UInt64",
+        _     => suffix,
+    };
+    Some(format!("integer literal `{}` is out of range for {} (valid range: {})", text, type_name, range_str))
+}
+
 /// Lex source code into tokens with spans.
 pub fn lex(source: &str) -> impl Iterator<Item = (Token, std::ops::Range<usize>)> + '_ {
     Token::lexer(source)
         .spanned()
-        .filter_map(|(tok, span)| tok.ok().map(|t| (t, span)))
+        .filter_map(move |(tok, span)| {
+            match tok {
+                Ok(t) => Some((t, span)),
+                Err(_) => {
+                    // Check if this is an out-of-range typed integer literal
+                    let text = &source[span.clone()];
+                    if typed_int_overflow_error(text).is_some() {
+                        Some((Token::OutOfRangeInt(text.to_string()), span))
+                    } else {
+                        None
+                    }
+                }
+            }
+        })
 }
 
 #[cfg(test)]
