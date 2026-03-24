@@ -1,4 +1,4 @@
-# expect_error: expected `Bool`
+# expect_error: type mismatch
 # Test: passing Int where Bool is expected
 
 check(flag: Bool) = if flag then 1 else 0
