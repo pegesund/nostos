@@ -1,6 +1,7 @@
 # Nostos
 
 [![MSRV](https://img.shields.io/badge/msrv-1.85.0-informational?style=flat&labelColor=282c34&logo=rust)](https://www.rust-lang.org)
+[![Hypercommit](https://img.shields.io/badge/Hypercommit-DB2475)](https://hypercommit.com/nostos)
 
 > *In Greek, Nostos (νόστος) means a hero's homecoming or return from a long journey.*
 
