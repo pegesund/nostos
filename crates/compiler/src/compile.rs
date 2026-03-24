@@ -9959,6 +9959,11 @@ impl Compiler {
             }
         }
         Err(e) => {
+            {
+                use std::io::Write;
+                let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log").unwrap();
+                writeln!(f, "[compile_fn_def Err] def={}, err={:?}", def.name.node, e).unwrap();
+            }
             // Report type errors - only filter truly spurious ones from inference limitations
             let should_report = match &e {
                 // All type error filtering now happens in type_check_fn via
@@ -16724,7 +16729,7 @@ impl Compiler {
                             let is_numeric = matches!(arg_type.as_str(),
                                 "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
                                 "UInt8" | "UInt16" | "UInt32" | "UInt64" |
-                                "Float" | "Float32" | "Float64" | "BigInt"
+                                "Float" | "Float32" | "Float64" | "BigInt" | "Decimal"
                             );
 
                             if !is_numeric && !is_type_variable {
@@ -16848,7 +16853,7 @@ impl Compiler {
                             let is_numeric = matches!(t.as_str(),
                                 "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
                                 "UInt8" | "UInt16" | "UInt32" | "UInt64" |
-                                "Float" | "Float32" | "Float64" | "BigInt"
+                                "Float" | "Float32" | "Float64" | "BigInt" | "Decimal"
                             );
                             if has_user_defined_fn {
                                 // Only use builtin for definitively numeric types; not for unresolved/polymorphic
@@ -27883,6 +27888,56 @@ scope_depth: self.block_depth,
             }
         }
 
+        // Infer non-lambda top-level bindings with self.functions available.
+        // This must happen BEFORE creating the main InferCtx so that non-lambda
+        // bindings like `addFive = addN(5)` (whose values reference user functions)
+        // are correctly typed. In build_hm_base_env, self.functions are absent, so
+        // these bindings fail to infer and are left out of env.bindings.
+        // Now that self.functions are registered in env, we can infer them correctly.
+        {
+            let mut non_lambda_to_infer: Vec<(&str, &str, &nostos_syntax::Expr)> = Vec::new();
+            for (binding_name, (binding, _, _)) in &self.top_level_bindings {
+                if let Pattern::Var(ident) = &binding.pattern {
+                    let bind_name = ident.node.as_str();
+                    // Skip if already bound (type annotation or base env inferred it)
+                    if env.bindings.contains_key(bind_name) {
+                        continue;
+                    }
+                    // Only handle non-lambda bindings; lambdas handled below via infer_binding
+                    if !matches!(&binding.value, nostos_syntax::Expr::Lambda(_, _, _)) {
+                        non_lambda_to_infer.push((bind_name, binding_name.as_str(), &binding.value));
+                    }
+                }
+            }
+            if !non_lambda_to_infer.is_empty() {
+                let mut tmp_env = env.clone();
+                let mut tmp_ctx = InferCtx::new(&mut tmp_env);
+                let mut inferred: Vec<(String, String, nostos_types::Type)> = Vec::new();
+                for (name, qualified, expr) in &non_lambda_to_infer {
+                    {
+                        use std::io::Write;
+                        let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log").unwrap();
+                        writeln!(f, "[try_hm] non_lambda_to_infer: name={}, qualified={}", name, qualified).unwrap();
+                    }
+                    let result = tmp_ctx.infer_expr(expr);
+                    if let Ok(ty) = result {
+                        inferred.push((name.to_string(), qualified.to_string(), ty));
+                    }
+                }
+                let _ = tmp_ctx.solve();
+                for (name, qualified, ty) in inferred {
+                    let resolved = tmp_ctx.apply_full_subst(&ty);
+                    env.bind(name.clone(), resolved.clone(), false);
+                    if qualified != name {
+                        env.bind(qualified, resolved, false);
+                    }
+                }
+                if tmp_env.next_var > env.next_var {
+                    env.next_var = tmp_env.next_var;
+                }
+            }
+        }
+
         // Create inference context
         let mut ctx = InferCtx::new(&mut env);
 
@@ -29388,6 +29443,11 @@ scope_depth: self.block_depth,
                 let _ = tmp_ctx.solve();
                 for (name, qualified, ty) in inferred {
                     let resolved = tmp_ctx.apply_full_subst(&ty);
+                    {
+                        use std::io::Write;
+                        let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log").unwrap();
+                        writeln!(f, "[type_check_fn] binding '{}' resolved to: {}", name, resolved.display()).unwrap();
+                    }
                     env.bind(name.clone(), resolved.clone(), false);
                     // Also register with qualified name so Module.binding lookups work
                     if qualified != name {
@@ -29627,6 +29687,11 @@ scope_depth: self.block_depth,
             };
             if !suppress {
                 let error_span = ctx.last_error_span().unwrap_or(span);
+                {
+                    use std::io::Write;
+                    let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log").unwrap();
+                    writeln!(f, "[type_check_fn RETURN ERR] def={}, err={:?}", def.name.node, e).unwrap();
+                }
                 return Err(self.convert_type_error(e, error_span));
             }
         }

@@ -1929,6 +1929,7 @@ impl AsyncProcess {
                     GcValue::Int32(v) => GcValue::Float64(*v as f64),
                     GcValue::Float64(v) => GcValue::Float64(*v),
                     GcValue::Float32(v) => GcValue::Float64(*v as f64),
+                    GcValue::Decimal(d) => GcValue::Float64(rust_decimal::prelude::ToPrimitive::to_f64(d).unwrap_or(f64::NAN)),
                     _ => return Err(RuntimeError::Panic("IntToFloat: expected numeric".into())),
                 };
                 set_reg!(dst, result);
@@ -12630,6 +12631,7 @@ impl AsyncVM {
                     GcValue::UInt8(i) => Ok(GcValue::Float64(*i as f64)),
                     GcValue::UInt16(i) => Ok(GcValue::Float64(*i as f64)),
                     GcValue::UInt32(i) => Ok(GcValue::Float64(*i as f64)),
+                    GcValue::Decimal(d) => Ok(GcValue::Float64(rust_decimal::prelude::ToPrimitive::to_f64(d).unwrap_or(f64::NAN))),
                     _ => Err(RuntimeError::TypeError {
                         expected: "numeric type".to_string(),
                         found: "other".to_string(),
