@@ -1646,6 +1646,10 @@ impl AsyncProcess {
                         let result_ptr = self.heap.alloc_bigint(&bx % &by);
                         GcValue::BigInt(result_ptr)
                     }
+                    (GcValue::Decimal(x), GcValue::Decimal(y)) => {
+                        if *y == rust_decimal::Decimal::ZERO { self.throw_exception("DivisionByZero", "Division by zero".to_string())?; continue 'instruction_loop; }
+                        GcValue::Decimal(*x % *y)
+                    }
                     (GcValue::Float64(x), GcValue::Float64(y)) => GcValue::Float64(x % y),
                     (GcValue::Float32(x), GcValue::Float32(y)) => GcValue::Float32(x % y),
                     (GcValue::Float64(x), GcValue::Int64(y)) => GcValue::Float64(x % (*y as f64)),
