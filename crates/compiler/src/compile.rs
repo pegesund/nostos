@@ -63,6 +63,7 @@ static BUILTIN_METHODS: LazyLock<HashMap<(&str, &str), &str>> = LazyLock::new(||
         ("String", "parseInt", "String.toInt"),
         ("String", "toFloat", "String.toFloat"),
         ("String", "parseFloat", "String.toFloat"),
+        ("String", "toBigInt", "String.toBigInt"),
         ("String", "trim", "String.trim"),
         ("String", "trimStart", "String.trimStart"),
         ("String", "trimEnd", "String.trimEnd"),
@@ -629,6 +630,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "String.toInt", signature: "String -> Option[Int]", doc: "Parse string as integer, returns Option[Int] (Some(n) or None)" },
     BuiltinInfo { name: "String.parseInt", signature: "String -> Option[Int]", doc: "Parse string as integer (alias for toInt), returns Option[Int] (Some(n) or None)" },
     BuiltinInfo { name: "String.toFloat", signature: "String -> Option[Float]", doc: "Parse string as float, returns Option[Float] (Some(n) or None)" },
+    BuiltinInfo { name: "String.toBigInt", signature: "String -> Option[BigInt]", doc: "Parse string as BigInt, returns Option[BigInt] (Some(n) or None)" },
     BuiltinInfo { name: "String.parseFloat", signature: "String -> Option[Float]", doc: "Parse string as float (alias for toFloat), returns Option[Float] (Some(n) or None)" },
     BuiltinInfo { name: "String.trim", signature: "String -> String", doc: "Remove leading and trailing whitespace" },
     BuiltinInfo { name: "String.trimStart", signature: "String -> String", doc: "Remove leading whitespace" },
@@ -9348,6 +9350,7 @@ impl Compiler {
             "chars" => Some("String.chars"),
             "toInt" | "parseInt" => Some("String.toInt"),
             "toFloat" | "parseFloat" => Some("String.toFloat"),
+            "toBigInt" => Some("String.toBigInt"),
             "trim" => Some("String.trim"),
             "trimStart" => Some("String.trimStart"),
             "trimEnd" => Some("String.trimEnd"),
@@ -12721,7 +12724,7 @@ impl Compiler {
                         }
                         // String functions (1 arg)
                         "String.length" | "String.chars" | "String.from_chars" | "String.toInt" | "String.to_int"
-                        | "String.parseInt" | "String.toFloat" | "String.parseFloat"
+                        | "String.parseInt" | "String.toFloat" | "String.parseFloat" | "String.toBigInt"
                         | "String.trim" | "String.trimStart" | "String.trimEnd"
                         | "String.toUpper" | "String.toLower" | "String.reverse" | "String.lines"
                         | "String.words" | "String.isEmpty" if args.len() == 1 => {

@@ -4808,6 +4808,20 @@ impl AsyncProcess {
                                     }
                                     set_reg!(dst, GcValue::Float64(sum));
                                 }
+                                GcValue::BigInt(_) => {
+                                    let mut sum = num_bigint::BigInt::from(0);
+                                    for item in list.iter() {
+                                        if let GcValue::BigInt(ptr) = item {
+                                            sum += self.heap.get_bigint(*ptr).unwrap().value.clone();
+                                        } else {
+                                            return Err(RuntimeError::Panic(
+                                                format!("listSum: mixed types, expected BigInt, got {:?}", item.type_name(&self.heap))
+                                            ));
+                                        }
+                                    }
+                                    let result_ptr = self.heap.alloc_bigint(sum);
+                                    set_reg!(dst, GcValue::BigInt(result_ptr));
+                                }
                                 _ => {
                                     let mut sum: i64 = 0;
                                     for item in list.iter() {
@@ -4856,6 +4870,20 @@ impl AsyncProcess {
                                         }
                                     }
                                     set_reg!(dst, GcValue::Float64(product));
+                                }
+                                GcValue::BigInt(_) => {
+                                    let mut product = num_bigint::BigInt::from(1);
+                                    for item in list.iter() {
+                                        if let GcValue::BigInt(ptr) = item {
+                                            product *= self.heap.get_bigint(*ptr).unwrap().value.clone();
+                                        } else {
+                                            return Err(RuntimeError::Panic(
+                                                format!("listProduct: mixed types, expected BigInt, got {:?}", item.type_name(&self.heap))
+                                            ));
+                                        }
+                                    }
+                                    let result_ptr = self.heap.alloc_bigint(product);
+                                    set_reg!(dst, GcValue::BigInt(result_ptr));
                                 }
                                 _ => {
                                     let mut product: i64 = 1;
@@ -12613,6 +12641,35 @@ impl AsyncVM {
                         expected: "numeric type".to_string(),
                         found: "other".to_string(),
                     }),
+                }
+            }),
+        }));
+
+        // String.toBigInt - parse string as BigInt, returns Option[BigInt]
+        self.register_native("String.toBigInt", Arc::new(GcNativeFn {
+            name: "String.toBigInt".to_string(),
+            arity: 1,
+            func: Box::new(|args, heap| {
+                let option_type = Arc::new("stdlib.list.Option".to_string());
+                match &args[0] {
+                    GcValue::String(s) => {
+                        if let Some(str_val) = heap.get_string(*s) {
+                            match str_val.data.trim().parse::<num_bigint::BigInt>() {
+                                Ok(n) => {
+                                    let bigint_ptr = heap.alloc_bigint(n);
+                                    let ptr = heap.alloc_variant(option_type, Arc::new("Some".to_string()), vec![GcValue::BigInt(bigint_ptr)]);
+                                    Ok(GcValue::Variant(ptr))
+                                }
+                                Err(_) => {
+                                    let ptr = heap.alloc_variant(option_type, Arc::new("None".to_string()), vec![]);
+                                    Ok(GcValue::Variant(ptr))
+                                }
+                            }
+                        } else {
+                            Err(RuntimeError::Panic("Invalid string pointer".to_string()))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
                 }
             }),
         }));
