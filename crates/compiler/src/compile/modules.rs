@@ -776,6 +776,16 @@ impl Compiler {
                             env.bind(qualified, resolved, false);
                         }
                     }
+                    // CRITICAL: Advance env.next_var past any fresh vars created by tmp_ctx.
+                    // Without this, the main batch ctx (InferCtx::new(&mut env)) will reuse
+                    // those var IDs for unrelated purposes, causing spurious unification with
+                    // the Var types stored in env.bindings for top-level constants.
+                    // Example: addFive = addN(1) stores Var(N) in env.bindings; if env.next_var
+                    // is not advanced, the main ctx reuses Var(N) for a list element type Int,
+                    // making addFive appear to be Int when passed to map() as a callback.
+                    if tmp_env.next_var > env.next_var {
+                        env.next_var = tmp_env.next_var;
+                    }
                 }
             }
 
