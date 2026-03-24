@@ -1843,18 +1843,48 @@ impl AsyncProcess {
 
             // === Float comparisons ===
             EqFloat(dst, a, b) => {
-                let va = match reg_ref!(a) { GcValue::Float64(n) => *n, _ => return Err(RuntimeError::Panic("EqFloat: expected Float64".into())) };
-                let vb = match reg_ref!(b) { GcValue::Float64(n) => *n, _ => return Err(RuntimeError::Panic("EqFloat: expected Float64".into())) };
+                let va = match reg_ref!(a) {
+                    GcValue::Float64(n) => *n,
+                    GcValue::Int64(n) => *n as f64,
+                    GcValue::Int32(n) => *n as f64,
+                    _ => return Err(RuntimeError::Panic("EqFloat: expected Float64".into()))
+                };
+                let vb = match reg_ref!(b) {
+                    GcValue::Float64(n) => *n,
+                    GcValue::Int64(n) => *n as f64,
+                    GcValue::Int32(n) => *n as f64,
+                    _ => return Err(RuntimeError::Panic("EqFloat: expected Float64".into()))
+                };
                 set_reg!(dst, GcValue::Bool(va == vb));
             }
             LtFloat(dst, a, b) => {
-                let va = match reg_ref!(a) { GcValue::Float64(n) => *n, _ => return Err(RuntimeError::Panic("LtFloat: expected Float64".into())) };
-                let vb = match reg_ref!(b) { GcValue::Float64(n) => *n, _ => return Err(RuntimeError::Panic("LtFloat: expected Float64".into())) };
+                let va = match reg_ref!(a) {
+                    GcValue::Float64(n) => *n,
+                    GcValue::Int64(n) => *n as f64,
+                    GcValue::Int32(n) => *n as f64,
+                    _ => return Err(RuntimeError::Panic("LtFloat: expected Float64".into()))
+                };
+                let vb = match reg_ref!(b) {
+                    GcValue::Float64(n) => *n,
+                    GcValue::Int64(n) => *n as f64,
+                    GcValue::Int32(n) => *n as f64,
+                    _ => return Err(RuntimeError::Panic("LtFloat: expected Float64".into()))
+                };
                 set_reg!(dst, GcValue::Bool(va < vb));
             }
             LeFloat(dst, a, b) => {
-                let va = match reg_ref!(a) { GcValue::Float64(n) => *n, _ => return Err(RuntimeError::Panic("LeFloat: expected Float64".into())) };
-                let vb = match reg_ref!(b) { GcValue::Float64(n) => *n, _ => return Err(RuntimeError::Panic("LeFloat: expected Float64".into())) };
+                let va = match reg_ref!(a) {
+                    GcValue::Float64(n) => *n,
+                    GcValue::Int64(n) => *n as f64,
+                    GcValue::Int32(n) => *n as f64,
+                    _ => return Err(RuntimeError::Panic("LeFloat: expected Float64".into()))
+                };
+                let vb = match reg_ref!(b) {
+                    GcValue::Float64(n) => *n,
+                    GcValue::Int64(n) => *n as f64,
+                    GcValue::Int32(n) => *n as f64,
+                    _ => return Err(RuntimeError::Panic("LeFloat: expected Float64".into()))
+                };
                 set_reg!(dst, GcValue::Bool(va <= vb));
             }
 

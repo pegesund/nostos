@@ -504,6 +504,7 @@ impl VM {
             ($r:expr) => {
                 match reg!($r) {
                     Value::Float(f) => *f,
+                    Value::Int(i) => *i as f64,
                     other => return Err(RuntimeError::TypeError {
                         expected: "Float".to_string(),
                         found: other.type_name().to_string(),
