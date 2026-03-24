@@ -81,6 +81,7 @@ fn check_module_compiles_standalone(content: &str) -> Result<(), String> {
                 collect_calls(&binding.value, calls, local_types, known_functions);
             }
             Stmt::Assign(_, expr, _) => collect_calls(expr, calls, local_types, known_functions),
+            Stmt::LocalFnDef(_) => {}  // Local function definitions are not call sites
         }
     }
 

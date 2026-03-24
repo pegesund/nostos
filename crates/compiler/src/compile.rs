@@ -1296,10 +1296,17 @@ impl CompileError {
                          .with_note("to concatenate strings, use `++`: show(3.14) ++ \" value\"");
                     }
 
-                    // Bool vs non-Bool in condition
+                    // Bool vs non-Bool type mismatch.
+                    // NOTE: We cannot reliably distinguish if/while condition errors from
+                    // list element type errors here (both produce "Cannot unify types: X and Bool").
+                    // We use a generic mismatch message to avoid misleading "condition" hints
+                    // in list contexts like [1, true] or ["hello", true].
                     if type1 == "Bool" || type2 == "Bool" {
-                        let non_bool = if type1 == "Bool" { type2 } else { type1 };
-                        return SourceError::condition_not_bool(non_bool, span);
+                        let (expected, found) = if type1 == "Bool" { (type2, type1) } else { (type1, type2) };
+                        return SourceError::compile(
+                            format!("type mismatch: expected `{}`, found `{}`", expected, found),
+                            span,
+                        ).with_hint(format!("`{}` and `Bool` are incompatible types", expected));
                     }
 
                     // List vs Function mismatch - common when function arguments are in wrong order
