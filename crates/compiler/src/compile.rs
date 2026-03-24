@@ -27150,7 +27150,14 @@ scope_depth: self.block_depth,
                     name: p.name.node.clone(),
                     constraints: p.constraints.iter().map(|c| c.node.clone()).collect(),
                 }).collect())
-                .unwrap_or_default();
+                .unwrap_or_else(|| {
+                    // Fallback: use type_param_names from TypeInfo (populated from cache/external types)
+                    // This handles stdlib types loaded from cache where type_defs is not populated.
+                    type_info.type_param_names.iter().map(|n| nostos_types::TypeParam {
+                        name: n.clone(),
+                        constraints: vec![],
+                    }).collect()
+                });
 
             match &type_info.kind {
                 TypeInfoKind::Record { fields, mutable } => {
@@ -28499,13 +28506,20 @@ scope_depth: self.block_depth,
 
         // Register known types from the compiler context
         for (name, type_info) in &self.types {
-            // Get type parameters from the original TypeDef if available
+            // Get type parameters from the original TypeDef if available,
+            // falling back to type_param_names from TypeInfo for cached/external types.
             let type_params: Vec<nostos_types::TypeParam> = self.type_defs.get(name)
                 .map(|td| td.type_params.iter().map(|p| nostos_types::TypeParam {
                     name: p.name.node.clone(),
                     constraints: p.constraints.iter().map(|c| c.node.clone()).collect(),
                 }).collect())
-                .unwrap_or_default();
+                .unwrap_or_else(|| {
+                    // Fallback: use type_param_names from TypeInfo (for stdlib loaded from cache)
+                    type_info.type_param_names.iter().map(|n| nostos_types::TypeParam {
+                        name: n.clone(),
+                        constraints: vec![],
+                    }).collect()
+                });
 
             match &type_info.kind {
                 TypeInfoKind::Record { fields, mutable } => {
