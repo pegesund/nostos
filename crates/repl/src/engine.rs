@@ -6541,7 +6541,6 @@ impl ReplEngine {
                 for fn_name in new_sources.keys() {
                     let qualified = format!("{}{}", prefix, fn_name);
                     if let Some(CompileStatus::CompileError(e)) = self.compile_status.get(&qualified) {
-                        eprintln!("LSP DEBUG: No changes, preserving existing error for {}: {}", qualified, e);
                         return Err(e.clone());
                     }
                 }

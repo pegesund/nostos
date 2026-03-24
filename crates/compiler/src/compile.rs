@@ -29260,18 +29260,30 @@ scope_depth: self.block_depth,
         // Second: overlay per-module imports from module_imports.
         // During second-pass type checking, self.imports may not contain module-specific
         // imports (e.g., `eval` → `types.eval` from `use types.*` in main.nos).
-        // The module_imports map, populated during Pass 1.5b, has the correct per-module imports.
+        // The module_imports map, populated during Pass 1.5b and add_module, has the correct
+        // per-module imports.
         {
             let module_key = qualified_name.split('/').next().unwrap_or(qualified_name);
             // Extract module path: "main.foo" → "main", "types.eval" → "types"
+            // For top-level functions like "main" (no dots), use empty string key "" to find
+            // imports saved by add_module for the top-level file.
             let module_path = if let Some(dot_pos) = module_key.rfind('.') {
                 &module_key[..dot_pos]
             } else {
                 module_key
             };
-            if let Some(mod_imports) = self.module_imports.get(module_path) {
-                for (short, qualified) in mod_imports {
+            // Always check the top-level (empty) imports first, then module-specific imports.
+            // This ensures use statements from top-level files are available.
+            if let Some(toplevel_imports) = self.module_imports.get("") {
+                for (short, qualified) in toplevel_imports {
                     env.function_aliases.insert(short.clone(), qualified.clone());
+                }
+            }
+            if module_path != "" {
+                if let Some(mod_imports) = self.module_imports.get(module_path) {
+                    for (short, qualified) in mod_imports {
+                        env.function_aliases.insert(short.clone(), qualified.clone());
+                    }
                 }
             }
         }

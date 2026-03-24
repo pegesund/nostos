@@ -2534,6 +2534,30 @@ impl Compiler {
         // Compile items
         self.compile_items(&module.items)?;
 
+        // Save per-module imports for type_check_fn in compile_all_collecting_errors.
+        // For top-level files (empty module_path), save under empty-string key.
+        // For named modules, save under module name (e.g., "mymod").
+        // type_check_fn uses this to set up function_aliases when re-type-checking functions.
+        {
+            let module_key = if self.module_path.is_empty() {
+                String::new()
+            } else {
+                self.module_path.join(".")
+            };
+            let fn_imports: std::collections::HashMap<String, String> = self.imports.iter()
+                .filter(|(_, v)| {
+                    // Function imports have qualified names where last segment starts lowercase
+                    v.split('.').last()
+                        .map(|s| s.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false))
+                        .unwrap_or(false)
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            if !fn_imports.is_empty() {
+                self.module_imports.insert(module_key, fn_imports);
+            }
+        }
+
         // Restore imports to prevent transitive leaking between file-based modules
         self.imports = saved_imports;
         self.import_sources = saved_import_sources;
