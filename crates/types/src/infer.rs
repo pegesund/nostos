@@ -10043,25 +10043,37 @@ impl<'a> InferCtx<'a> {
             (clause_params, clause_ret, vec![])
         };
 
-        // Pre-scan: detect param positions where clauses have tuple patterns of different arities.
-        // For such positions, the function signature must use an unconstrained type variable
-        // (so any tuple arity can be passed), rather than a specific tuple type.
+        // Pre-scan: detect param positions where clauses have structurally incompatible patterns.
+        // This covers tuple patterns that differ in arity or nested structure across clauses.
+        // For such positions, skip cross-clause type unification and use a fresh type variable.
         let arity = func.clauses[0].params.len();
         let mut conflicting_tuple_arity_positions: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+        // Helper: compute a "structural signature" of a pattern for comparison.
+        // Returns None for non-structural patterns (vars, wildcards, literals),
+        // or Some(string) describing the tuple structure.
+        fn pattern_structure(p: &Pattern) -> Option<String> {
+            match p {
+                Pattern::Tuple(elems, _) => {
+                    let inner: Vec<String> = elems.iter().map(|e| {
+                        pattern_structure(e).unwrap_or_else(|| "_".to_string())
+                    }).collect();
+                    Some(format!("({})", inner.join(",")))
+                }
+                _ => None,
+            }
+        }
+
         for i in 0..arity {
-            let first_tuple_len = if let Some(Pattern::Tuple(e, _)) = func.clauses[0].params.get(i).map(|p| &p.pattern) {
-                Some(e.len())
-            } else {
-                None
-            };
-            if let Some(first_len) = first_tuple_len {
-                for clause in func.clauses.iter().skip(1) {
-                    if let Some(Pattern::Tuple(e, _)) = clause.params.get(i).map(|p| &p.pattern) {
-                        if e.len() != first_len {
-                            conflicting_tuple_arity_positions.insert(i);
-                            break;
-                        }
-                    }
+            let structures: Vec<Option<String>> = func.clauses.iter()
+                .filter_map(|c| c.params.get(i).map(|p| pattern_structure(&p.pattern)))
+                .collect();
+            // If any two clauses have different structural signatures, mark as conflicting
+            let first = &structures[0];
+            for s in structures.iter().skip(1) {
+                if s != first {
+                    conflicting_tuple_arity_positions.insert(i);
+                    break;
                 }
             }
         }
@@ -10078,8 +10090,8 @@ impl<'a> InferCtx<'a> {
                 });
             }
             for i in 0..param_types.len() {
-                // If this param position has conflicting tuple arities across clauses,
-                // do NOT unify them. Different-arity tuple dispatch is valid at runtime
+                // If this param position has conflicting tuple structures across clauses,
+                // do NOT unify them. Different-structure tuple dispatch is valid at runtime
                 // (mutually exclusive patterns), but unifying would force conflicting sizes.
                 if !conflicting_tuple_arity_positions.contains(&i) {
                     self.unify(param_types[i].clone(), clause_params[i].clone());

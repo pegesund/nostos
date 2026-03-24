@@ -1,0 +1,11 @@
+# expect: 0
+# Regression: multi-clause function with structurally different tuple patterns
+# (nested tuple in one clause, plain variable in another)
+process((a, (b, c))) = a + b + c
+process((a, b)) = a + b
+
+main() = {
+  assert_eq(6, process((1, (2, 3))))
+  assert_eq(3, process((1, 2)))
+  0
+}
