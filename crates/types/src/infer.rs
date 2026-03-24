@@ -4791,7 +4791,6 @@ impl<'a> InferCtx<'a> {
                         for (param_ty, arg_ty) in ft.params.iter().zip(reordered_args.iter()) {
                             let resolved_arg = self.env.apply_subst(arg_ty);
                             let resolved_param = self.env.apply_subst(param_ty);
-
                             // Handle function type mismatches between curried and uncurried forms
                             if let (Type::Function(expected_fn), Type::Function(actual_fn)) =
                                 (&resolved_param, &resolved_arg)

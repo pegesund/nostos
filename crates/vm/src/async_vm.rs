@@ -1916,45 +1916,51 @@ impl AsyncProcess {
             EqFloat(dst, a, b) => {
                 let va = match reg_ref!(a) {
                     GcValue::Float64(n) => *n,
+                    GcValue::Float32(n) => *n as f64,
                     GcValue::Int64(n) => *n as f64,
                     GcValue::Int32(n) => *n as f64,
-                    _ => return Err(RuntimeError::Panic("EqFloat: expected Float64".into()))
+                    _ => return Err(RuntimeError::Panic("EqFloat: expected float".into()))
                 };
                 let vb = match reg_ref!(b) {
                     GcValue::Float64(n) => *n,
+                    GcValue::Float32(n) => *n as f64,
                     GcValue::Int64(n) => *n as f64,
                     GcValue::Int32(n) => *n as f64,
-                    _ => return Err(RuntimeError::Panic("EqFloat: expected Float64".into()))
+                    _ => return Err(RuntimeError::Panic("EqFloat: expected float".into()))
                 };
                 set_reg!(dst, GcValue::Bool(va == vb));
             }
             LtFloat(dst, a, b) => {
                 let va = match reg_ref!(a) {
                     GcValue::Float64(n) => *n,
+                    GcValue::Float32(n) => *n as f64,
                     GcValue::Int64(n) => *n as f64,
                     GcValue::Int32(n) => *n as f64,
-                    _ => return Err(RuntimeError::Panic("LtFloat: expected Float64".into()))
+                    _ => return Err(RuntimeError::Panic("LtFloat: expected float".into()))
                 };
                 let vb = match reg_ref!(b) {
                     GcValue::Float64(n) => *n,
+                    GcValue::Float32(n) => *n as f64,
                     GcValue::Int64(n) => *n as f64,
                     GcValue::Int32(n) => *n as f64,
-                    _ => return Err(RuntimeError::Panic("LtFloat: expected Float64".into()))
+                    _ => return Err(RuntimeError::Panic("LtFloat: expected float".into()))
                 };
                 set_reg!(dst, GcValue::Bool(va < vb));
             }
             LeFloat(dst, a, b) => {
                 let va = match reg_ref!(a) {
                     GcValue::Float64(n) => *n,
+                    GcValue::Float32(n) => *n as f64,
                     GcValue::Int64(n) => *n as f64,
                     GcValue::Int32(n) => *n as f64,
-                    _ => return Err(RuntimeError::Panic("LeFloat: expected Float64".into()))
+                    _ => return Err(RuntimeError::Panic("LeFloat: expected float".into()))
                 };
                 let vb = match reg_ref!(b) {
                     GcValue::Float64(n) => *n,
+                    GcValue::Float32(n) => *n as f64,
                     GcValue::Int64(n) => *n as f64,
                     GcValue::Int32(n) => *n as f64,
-                    _ => return Err(RuntimeError::Panic("LeFloat: expected Float64".into()))
+                    _ => return Err(RuntimeError::Panic("LeFloat: expected float".into()))
                 };
                 set_reg!(dst, GcValue::Bool(va <= vb));
             }
@@ -2143,46 +2149,66 @@ impl AsyncProcess {
 
             // === Comparisons ===
             EqInt(dst, a, b) => {
-                let va = match reg_ref!(a) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("EqInt: expected Int64".into())) };
-                let vb = match reg_ref!(b) { GcValue::Int64(n) => *n, _ => return Err(RuntimeError::Panic("EqInt: expected Int64".into())) };
-                set_reg!(dst, GcValue::Bool(va == vb));
+                let equal = self.heap.gc_values_equal(reg_ref!(a), reg_ref!(b));
+                set_reg!(dst, GcValue::Bool(equal));
             }
             LtInt(dst, a, b) => {
                 let result = match (reg_ref!(a), reg_ref!(b)) {
+                    (GcValue::Int8(x), GcValue::Int8(y)) => x < y,
+                    (GcValue::Int16(x), GcValue::Int16(y)) => x < y,
+                    (GcValue::Int32(x), GcValue::Int32(y)) => x < y,
                     (GcValue::Int64(x), GcValue::Int64(y)) => x < y,
+                    (GcValue::UInt8(x), GcValue::UInt8(y)) => x < y,
+                    (GcValue::UInt16(x), GcValue::UInt16(y)) => x < y,
+                    (GcValue::UInt32(x), GcValue::UInt32(y)) => x < y,
+                    (GcValue::UInt64(x), GcValue::UInt64(y)) => x < y,
                     (GcValue::BigInt(px), GcValue::BigInt(py)) => {
                         let bx = self.heap.get_bigint(*px).unwrap().value.clone();
                         let by = self.heap.get_bigint(*py).unwrap().value.clone();
                         bx < by
                     }
                     (GcValue::Decimal(x), GcValue::Decimal(y)) => x < y,
-                    _ => return Err(RuntimeError::Panic("LtInt: expected Int64".into())),
+                    _ => return Err(RuntimeError::Panic("LtInt: expected comparable numeric".into())),
                 };
                 set_reg!(dst, GcValue::Bool(result));
             }
             LeInt(dst, a, b) => {
                 let result = match (reg_ref!(a), reg_ref!(b)) {
+                    (GcValue::Int8(x), GcValue::Int8(y)) => x <= y,
+                    (GcValue::Int16(x), GcValue::Int16(y)) => x <= y,
+                    (GcValue::Int32(x), GcValue::Int32(y)) => x <= y,
                     (GcValue::Int64(x), GcValue::Int64(y)) => x <= y,
+                    (GcValue::UInt8(x), GcValue::UInt8(y)) => x <= y,
+                    (GcValue::UInt16(x), GcValue::UInt16(y)) => x <= y,
+                    (GcValue::UInt32(x), GcValue::UInt32(y)) => x <= y,
+                    (GcValue::UInt64(x), GcValue::UInt64(y)) => x <= y,
                     (GcValue::BigInt(px), GcValue::BigInt(py)) => {
                         let bx = self.heap.get_bigint(*px).unwrap().value.clone();
                         let by = self.heap.get_bigint(*py).unwrap().value.clone();
                         bx <= by
                     }
                     (GcValue::Decimal(x), GcValue::Decimal(y)) => x <= y,
-                    _ => return Err(RuntimeError::Panic("LeInt: expected Int64".into())),
+                    _ => return Err(RuntimeError::Panic("LeInt: expected comparable numeric".into())),
                 };
                 set_reg!(dst, GcValue::Bool(result));
             }
             GtInt(dst, a, b) => {
                 let result = match (reg_ref!(a), reg_ref!(b)) {
+                    (GcValue::Int8(x), GcValue::Int8(y)) => x > y,
+                    (GcValue::Int16(x), GcValue::Int16(y)) => x > y,
+                    (GcValue::Int32(x), GcValue::Int32(y)) => x > y,
                     (GcValue::Int64(x), GcValue::Int64(y)) => x > y,
+                    (GcValue::UInt8(x), GcValue::UInt8(y)) => x > y,
+                    (GcValue::UInt16(x), GcValue::UInt16(y)) => x > y,
+                    (GcValue::UInt32(x), GcValue::UInt32(y)) => x > y,
+                    (GcValue::UInt64(x), GcValue::UInt64(y)) => x > y,
                     (GcValue::BigInt(px), GcValue::BigInt(py)) => {
                         let bx = self.heap.get_bigint(*px).unwrap().value.clone();
                         let by = self.heap.get_bigint(*py).unwrap().value.clone();
                         bx > by
                     }
                     (GcValue::Decimal(x), GcValue::Decimal(y)) => x > y,
-                    _ => return Err(RuntimeError::Panic("GtInt: expected Int64".into())),
+                    _ => return Err(RuntimeError::Panic("GtInt: expected comparable numeric".into())),
                 };
                 set_reg!(dst, GcValue::Bool(result));
             }
@@ -3424,14 +3450,21 @@ impl AsyncProcess {
 
             GeInt(dst, a, b) => {
                 let result = match (reg_ref!(a), reg_ref!(b)) {
+                    (GcValue::Int8(x), GcValue::Int8(y)) => x >= y,
+                    (GcValue::Int16(x), GcValue::Int16(y)) => x >= y,
+                    (GcValue::Int32(x), GcValue::Int32(y)) => x >= y,
                     (GcValue::Int64(x), GcValue::Int64(y)) => x >= y,
+                    (GcValue::UInt8(x), GcValue::UInt8(y)) => x >= y,
+                    (GcValue::UInt16(x), GcValue::UInt16(y)) => x >= y,
+                    (GcValue::UInt32(x), GcValue::UInt32(y)) => x >= y,
+                    (GcValue::UInt64(x), GcValue::UInt64(y)) => x >= y,
                     (GcValue::BigInt(px), GcValue::BigInt(py)) => {
                         let bx = self.heap.get_bigint(*px).unwrap().value.clone();
                         let by = self.heap.get_bigint(*py).unwrap().value.clone();
                         bx >= by
                     }
                     (GcValue::Decimal(x), GcValue::Decimal(y)) => x >= y,
-                    _ => return Err(RuntimeError::Panic("GeInt: expected Int64".into())),
+                    _ => return Err(RuntimeError::Panic("GeInt: expected comparable numeric".into())),
                 };
                 set_reg!(dst, GcValue::Bool(result));
             }
