@@ -613,6 +613,11 @@ impl VM {
                 let b = get_float!(b);
                 set_reg!(dst, Value::Float(a.powf(b)));
             }
+            Instruction::PowInt(dst, a, b) => {
+                let a = get_int!(a);
+                let b = get_int!(b);
+                set_reg!(dst, Value::Int(a.wrapping_pow(b as u32)));
+            }
 
             // Comparisons
             Instruction::EqInt(dst, a, b) => {

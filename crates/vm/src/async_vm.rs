@@ -1829,6 +1829,43 @@ impl AsyncProcess {
                 };
                 set_reg!(dst, result);
             }
+            PowInt(dst, a, b) => {
+                let va = reg_ref!(a);
+                let vb = reg_ref!(b);
+                let result = match (va, vb) {
+                    (GcValue::Int64(x), GcValue::Int64(y)) => {
+                        if *y < 0 { return Err(RuntimeError::Panic("PowInt: negative exponent for Int".into())); }
+                        GcValue::Int64(x.wrapping_pow(*y as u32))
+                    }
+                    (GcValue::Int32(x), GcValue::Int32(y)) => {
+                        if *y < 0 { return Err(RuntimeError::Panic("PowInt: negative exponent for Int32".into())); }
+                        GcValue::Int32(x.wrapping_pow(*y as u32))
+                    }
+                    (GcValue::Int16(x), GcValue::Int16(y)) => {
+                        if *y < 0 { return Err(RuntimeError::Panic("PowInt: negative exponent for Int16".into())); }
+                        GcValue::Int16(x.wrapping_pow(*y as u32))
+                    }
+                    (GcValue::Int8(x), GcValue::Int8(y)) => {
+                        if *y < 0 { return Err(RuntimeError::Panic("PowInt: negative exponent for Int8".into())); }
+                        GcValue::Int8(x.wrapping_pow(*y as u32))
+                    }
+                    (GcValue::UInt64(x), GcValue::UInt64(y)) => GcValue::UInt64(x.wrapping_pow(*y as u32)),
+                    (GcValue::UInt32(x), GcValue::UInt32(y)) => GcValue::UInt32(x.wrapping_pow(*y as u32)),
+                    (GcValue::UInt16(x), GcValue::UInt16(y)) => GcValue::UInt16(x.wrapping_pow(*y as u32)),
+                    (GcValue::UInt8(x), GcValue::UInt8(y)) => GcValue::UInt8(x.wrapping_pow(*y as u32)),
+                    (GcValue::BigInt(px), GcValue::BigInt(py)) => {
+                        let bx = self.heap.get_bigint(*px).unwrap().value.clone();
+                        let by = self.heap.get_bigint(*py).unwrap().value.clone();
+                        use num_traits::ToPrimitive;
+                        let exp = by.to_u32().ok_or_else(|| RuntimeError::Panic("PowInt BigInt: exponent too large or negative".into()))?;
+                        let result_val = num_bigint::BigInt::pow(&bx, exp);
+                        let result_ptr = self.heap.alloc_bigint(result_val);
+                        GcValue::BigInt(result_ptr)
+                    }
+                    _ => return Err(RuntimeError::Panic(format!("PowInt: unsupported types {:?} {:?}", va.type_name(&self.heap), vb.type_name(&self.heap)))),
+                };
+                set_reg!(dst, result);
+            }
             FloorFloat(dst, src) => {
                 let v = reg_ref!(src);
                 let result = match v {

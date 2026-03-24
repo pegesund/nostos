@@ -16231,7 +16231,13 @@ impl Compiler {
                 }
             }
             BinOp::Mod => Instruction::ModInt(dst, left_reg, right_reg),
-            BinOp::Pow => Instruction::PowFloat(dst, left_reg, right_reg),
+            BinOp::Pow => {
+                if is_float {
+                    Instruction::PowFloat(dst, left_reg, right_reg)
+                } else {
+                    Instruction::PowInt(dst, left_reg, right_reg)
+                }
+            }
             BinOp::Eq => {
                 if is_float {
                     Instruction::EqFloat(dst, left_reg, right_reg)

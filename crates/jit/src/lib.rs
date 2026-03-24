@@ -895,6 +895,10 @@ impl JitCompiler {
                     }
                 }
 
+                Instruction::PowInt(_, _, _) => {
+                    // Int/BigInt power - not JIT compiled, falls through to interpreter
+                }
+
                 // Float comparison (produces Bool, not Float!)
                 Instruction::LtFloat(dst, _, _) |
                 Instruction::LeFloat(dst, _, _) |

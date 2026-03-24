@@ -1465,7 +1465,8 @@ pub enum Instruction {
     MulFloat(Reg, Reg, Reg),
     DivFloat(Reg, Reg, Reg),
     NegFloat(Reg, Reg),
-    PowFloat(Reg, Reg, Reg),    // dst = a ** b
+    PowFloat(Reg, Reg, Reg),    // dst = a ** b (float)
+    PowInt(Reg, Reg, Reg),      // dst = a ** b (int / bigint)
 
     // === Comparison ===
     EqInt(Reg, Reg, Reg),       // dst = a == b
