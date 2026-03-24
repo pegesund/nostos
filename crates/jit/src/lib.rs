@@ -741,6 +741,7 @@ impl JitCompiler {
 
         let mut detected_type: Option<NumericType> = None;
         let mut bool_regs: std::collections::HashSet<u8> = std::collections::HashSet::new(); // Registers holding Bool values
+        let mut has_float_comparison = false; // True if function contains EqFloat/LtFloat/LeFloat
         let code = &func.code.code;
 
         // Check all instructions and constants to determine the type
@@ -900,6 +901,9 @@ impl JitCompiler {
                 Instruction::EqFloat(dst, _, _) => {
                     // Comparison instructions produce Bool values
                     bool_regs.insert(*dst);
+                    // Mark that this function has float comparisons; if it also has
+                    // float arithmetic (making cl_type=F64), we'll return NotSuitable below.
+                    has_float_comparison = true;
                 }
 
                 // Math functions - integer
@@ -923,6 +927,16 @@ impl JitCompiler {
                     ));
                 }
             }
+        }
+
+        // If the function has both float arithmetic AND float comparisons, the simple
+        // float JIT cannot handle it: all registers would be typed as F64, but comparison
+        // results are I64 (0/1), causing cranelift verifier panics on type mismatches.
+        // Fall back to the interpreter for these mixed float/bool functions.
+        if has_float_comparison && detected_type.map(|t| t.is_float()).unwrap_or(false) {
+            return Err(JitError::NotSuitable(
+                "float function with float comparisons - mixed float/bool register types not supported in simple JIT".to_string()
+            ));
         }
 
         // Track if function returns Bool (for VM to convert 0/1 → GcValue::Bool)
@@ -1395,6 +1409,9 @@ impl JitCompiler {
                     }
 
                     // Float comparisons
+                    // Note: These should NOT be reached for float-typed functions (detect_numeric_type
+                    // returns NotSuitable for float functions with float comparisons). These handlers
+                    // only run when the function is integer-typed but happens to contain float comparisons.
                     Instruction::EqFloat(dst, a, b) => {
                         let va = builder.use_var(regs[*a as usize]);
                         let vb = builder.use_var(regs[*b as usize]);
