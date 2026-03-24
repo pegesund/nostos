@@ -1,0 +1,7 @@
+# expect: [11, 12, 13]
+# Top-level constant binding of function-returning-function used as map callback.
+# Regression test: this previously gave "type mismatch: expected function, found Int"
+# due to type variable ID collision in the to_infer block of batch inference.
+makeAdder(n) = x => x + n
+addTen = makeAdder(10)
+main() = [1, 2, 3].map(addTen)
