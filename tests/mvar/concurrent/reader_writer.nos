@@ -26,12 +26,20 @@ do_reads(n, sum) = if n <= 0 then sum else {
 
 writer(parent, values) = {
     do_writes(values)
-    parent <- "writer_done"
+    parent <- "done"
 }
 
 reader(parent, count) = {
     total = do_reads(count, 0)
-    parent <- total
+    parent <- "done"
+}
+
+collect_n(n) = {
+    if n <= 0 then ()
+    else {
+        receive { _ -> () }
+        collect_n(n - 1)
+    }
 }
 
 main() = {
@@ -44,12 +52,8 @@ main() = {
     spawn { reader(me, 5) }
     spawn { reader(me, 5) }
 
-    # Wait for writer
-    receive { "writer_done" -> () }
-
-    # Wait for readers
-    receive { _ -> () }
-    receive { _ -> () }
+    # Wait for all 3 to complete (use wildcard - any message means done)
+    collect_n(3)
 
     # Final value should be 5
     assert_eq(5, read_value())
