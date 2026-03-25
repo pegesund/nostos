@@ -1249,7 +1249,7 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
             .then(just(Token::When).ignore_then(expr.clone()).or_not())
             .then_ignore(just(Token::RightArrow))
             .then(stmt.clone())
-            .then_ignore(just(Token::Comma).or(just(Token::Semicolon)).or_not())  // Allow comma or semicolon separator
+            .then_ignore(just(Token::Comma).or(just(Token::Semicolon)).or(just(Token::Pipe)).or_not())  // Allow comma, semicolon, or trailing | separator
             .map_with_span(|((pat, guard), body_stmt), span| {
                 let body = match body_stmt {
                     Stmt::Expr(e) => e,
