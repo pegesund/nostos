@@ -11354,7 +11354,7 @@ impl AsyncProcess {
                     .find(|(k, _)| k == &field.name)
                     .map(|(_, v)| v.clone())
                     .ok_or_else(|| RuntimeError::Panic(format!("Missing field: {}", field.name)))?;
-                let field_value = self.json_to_primitive(&field_json, &field.type_name)?;
+                let field_value = self.json_to_primitive_with_option(&field_json, &field.type_name)?;
                 is_float.push(field.type_name == "Float" || field.type_name == "Float64" || field.type_name == "Float32");
                 field_values.push(field_value);
             }
@@ -11393,7 +11393,7 @@ impl AsyncProcess {
             } else if ctor.fields.len() == 1 {
                 // Single-field variant: value is directly the field value (no _0 wrapper)
                 let field = &ctor.fields[0];
-                let field_value = self.json_to_primitive(fields_json, &field.type_name)?;
+                let field_value = self.json_to_primitive_with_option(fields_json, &field.type_name)?;
                 let var_ptr = self.heap.alloc_variant(
                     Arc::new(type_name.to_string()),
                     Arc::new(ctor_name.clone()),
@@ -11413,7 +11413,7 @@ impl AsyncProcess {
 
                 let mut field_values = Vec::new();
                 for (i, field) in ctor.fields.iter().enumerate() {
-                    let field_value = self.json_to_primitive(&array_items[i], &field.type_name)?;
+                    let field_value = self.json_to_primitive_with_option(&array_items[i], &field.type_name)?;
                     field_values.push(field_value);
                 }
 
@@ -11503,9 +11503,20 @@ impl AsyncProcess {
     }
 
     /// Convert a Json value to a primitive GcValue based on expected type
+    /// wrap_option: if true, handle Option[T] wrapping (used by Postgres typed queries)
+    /// If false, Option handling is left to the caller (used by fromJsonValue in stdlib)
     fn json_to_primitive(&mut self, json: &GcValue, expected_type: &str) -> Result<GcValue, RuntimeError> {
+        self.json_to_primitive_inner(json, expected_type, false)
+    }
+
+    fn json_to_primitive_with_option(&mut self, json: &GcValue, expected_type: &str) -> Result<GcValue, RuntimeError> {
+        self.json_to_primitive_inner(json, expected_type, true)
+    }
+
+    fn json_to_primitive_inner(&mut self, json: &GcValue, expected_type: &str, wrap_option: bool) -> Result<GcValue, RuntimeError> {
         // If the target type is Option[T], handle Null->None and non-Null->Some(T)
-        if expected_type.starts_with("Option[") {
+        // Only when called from Postgres typed query path (wrap_option=true)
+        if wrap_option && expected_type.starts_with("Option[") {
             let inner_type = &expected_type[7..expected_type.len()-1];
             // Check if json is a Null variant
             let is_null = match json {
@@ -11526,7 +11537,7 @@ impl AsyncProcess {
                 return Ok(GcValue::Variant(none_ptr));
             } else {
                 // Recursively convert inner value and wrap in Some
-                let converted = self.json_to_primitive(json, inner_type)?;
+                let converted = self.json_to_primitive_inner(json, inner_type, false)?;
                 let some_ptr = self.heap.alloc_variant(
                     Arc::new("Option".to_string()),
                     Arc::new("Some".to_string()),
