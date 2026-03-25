@@ -256,8 +256,8 @@ pub enum Constraint {
     Equal(Type, Type, Option<Span>),
     /// A type must implement a trait (with optional span for error reporting)
     HasTrait(Type, String, Option<Span>),
-    /// A type must have a field
-    HasField(Type, String, Type),
+    /// A type must have a field (with optional span for error reporting)
+    HasField(Type, String, Type, Option<Span>),
 }
 
 /// A pending method call to be type-checked after constraint solving.
@@ -325,10 +325,10 @@ pub struct InferCtx<'a> {
     /// Unlike trait_bounds (which includes merged bounds from variable unification),
     /// this tracks only direct HasTrait constraints, avoiding false positives.
     deferred_has_trait: Vec<(Type, String, Option<Span>)>,
-    /// Deferred HasField constraints: type, field name, expected field type.
+    /// Deferred HasField constraints: type, field name, expected field type, optional span.
     /// These are saved when the type is still unresolved (Var) so they can be
     /// re-checked after check_pending_method_calls resolves more types.
-    deferred_has_field: Vec<(Type, String, Type)>,
+    deferred_has_field: Vec<(Type, String, Type, Option<Span>)>,
     /// Deferred length/len checks: the argument type and call span.
     /// length() only works on collections (List, String, Map, Set, arrays).
     deferred_length_checks: Vec<(Type, Span)>,
@@ -637,7 +637,7 @@ impl<'a> InferCtx<'a> {
 
     /// Get unresolved HasField constraints (field access on still-generic type vars).
     /// Used to propagate field requirements from generic function bodies to call sites.
-    pub fn get_deferred_has_field(&self) -> &[(Type, String, Type)] {
+    pub fn get_deferred_has_field(&self) -> &[(Type, String, Type, Option<Span>)] {
         &self.deferred_has_field
     }
 
@@ -791,13 +791,18 @@ impl<'a> InferCtx<'a> {
 
     /// Add a field constraint.
     pub fn require_field(&mut self, ty: Type, field: &str, field_ty: Type) {
+        self.require_field_at(ty, field, field_ty, None);
+    }
+
+    /// Add a field constraint with span for precise error reporting.
+    pub fn require_field_at(&mut self, ty: Type, field: &str, field_ty: Type, span: Option<Span>) {
         // Track the result Var ID so BinOp::Add can avoid eager unification
         // on field-result variables (prevents ?Y=Int before HasField resolves ?Y=String)
         if let Type::Var(id) = &field_ty {
             self.field_result_vars.insert(*id);
         }
         self.constraints
-            .push(Constraint::HasField(ty, field.to_string(), field_ty));
+            .push(Constraint::HasField(ty, field.to_string(), field_ty, span));
     }
 
     /// Peek at pending constraints to see what a type variable will resolve to.
@@ -1334,6 +1339,7 @@ impl<'a> InferCtx<'a> {
                             fresh_var.clone(),
                             field_name,
                             field_ty,
+                            None,
                         ));
                         // Also store in trait_bounds so transfer section can copy to var_subst vars
                         self.add_trait_bound(*var_id, constraint.clone());
@@ -1464,6 +1470,7 @@ impl<'a> InferCtx<'a> {
                                         var_subst_var.clone(),
                                         field_name,
                                         field_ty,
+                                        None,
                                     ));
                                 } else {
                                     self.add_trait_bound(*var_subst_id, bound.clone());
@@ -2699,7 +2706,7 @@ impl<'a> InferCtx<'a> {
                         }
                     }
                 }
-                Constraint::HasField(ty, field, expected_ty) => {
+                Constraint::HasField(ty, field, expected_ty, field_span) => {
                     // When the field name starts with uppercase, it's a namespace qualifier
                     // used in chaining like `val.Map.insert(k, v)` which the compiler rewrites
                     // to `Map.insert(val, k, v)`. Skip the HasField constraint silently so
@@ -2708,6 +2715,11 @@ impl<'a> InferCtx<'a> {
                     if field.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
                         // Namespace qualifier - suppress HasField constraint, don't error
                         continue;
+                    }
+                    // If we have a span for this field access, set it as the last error span
+                    // so NoSuchField errors point to the specific field access expression.
+                    if let Some(s) = field_span {
+                        self.last_error_span = Some(s);
                     }
                     let resolved = self.env.apply_subst(&ty);
                     match &resolved {
@@ -2811,11 +2823,11 @@ impl<'a> InferCtx<'a> {
                                 // Save this constraint for post-method-call re-check
                                 // Don't drop it - it may become checkable after
                                 // check_pending_method_calls resolves more types
-                                self.deferred_has_field.push((ty, field, expected_ty));
+                                self.deferred_has_field.push((ty, field, expected_ty, field_span));
                                 continue;
                             }
                             self.constraints
-                                .push(Constraint::HasField(resolved, field, expected_ty));
+                                .push(Constraint::HasField(resolved, field, expected_ty, field_span));
                         }
                         Type::Tuple(elems) => {
                             // Handle tuple field access like .0, .1, etc.
@@ -3105,7 +3117,11 @@ impl<'a> InferCtx<'a> {
             if deferred.is_empty() { break; }
             let mut still_deferred = Vec::new();
             let mut made_progress = false;
-        for (ty, field, expected_ty) in deferred {
+        for (ty, field, expected_ty, field_span) in deferred {
+            // Set the field's span so error reporting points to the specific access
+            if let Some(s) = field_span {
+                self.last_error_span = Some(s);
+            }
             let resolved = self.env.apply_subst(&ty);
             if !matches!(&resolved, Type::Var(_)) {
                 made_progress = true;
@@ -3221,7 +3237,7 @@ impl<'a> InferCtx<'a> {
                 }
                 Type::Var(_) => {
                     // Still unresolved - re-defer for another pass
-                    still_deferred.push((ty, field, expected_ty));
+                    still_deferred.push((ty, field, expected_ty, field_span));
                 }
                 _ => {
                     // Other types don't support field access
@@ -7592,7 +7608,7 @@ impl<'a> InferCtx<'a> {
             }
 
             // Field access
-            Expr::FieldAccess(expr, field, _) => {
+            Expr::FieldAccess(expr, field, field_access_span) => {
                 // Extract the base name from Var, unit Record, or nested FieldAccess.
                 // Supports nested modules: Outer.Inner.func => "Outer.Inner"
                 let base_name = Self::extract_qualified_name(expr);
@@ -7690,7 +7706,7 @@ impl<'a> InferCtx<'a> {
                     _ => {}
                 }
 
-                self.require_field(expr_ty, &field.node, field_ty.clone());
+                self.require_field_at(expr_ty, &field.node, field_ty.clone(), Some(*field_access_span));
                 Ok(field_ty)
             }
 
@@ -9692,7 +9708,7 @@ impl<'a> InferCtx<'a> {
                                 }
                             }
                         }
-                        Constraint::HasField(ty, _, field_ty) => {
+                        Constraint::HasField(ty, _, field_ty, _) => {
                             // HasField constrains against a specific field name (external)
                             let mut ids = Vec::new();
                             self.collect_var_ids(ty, &mut ids);

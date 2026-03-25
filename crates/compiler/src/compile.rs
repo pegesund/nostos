@@ -28850,7 +28850,7 @@ scope_depth: self.block_depth,
         //   HasField(value,b) a, HasField(value,c) a, HasField(value,d) a
         // which causes incorrect unification when the signature is instantiated by callers.
         let mut seen_has_field: HashSet<(u32, String)> = HashSet::new();
-        for (ty, field_name, field_ty) in &deferred_fields {
+        for (ty, field_name, field_ty, _field_span) in &deferred_fields {
             let resolved = ctx.env.apply_subst(ty);
             if let nostos_types::Type::Var(var_id) = &resolved {
                 // Source var might be in var_map from params/return or from HasMethod
