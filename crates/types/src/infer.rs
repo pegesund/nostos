@@ -24,7 +24,8 @@ fn expr_references_name(expr: &Expr, name: &str) -> bool {
             expr_references_name(l, name) || expr_references_name(r, name)
         }
         Expr::UnaryOp(_, e, _) | Expr::FieldAccess(e, _, _) | Expr::Try_(e, _)
-        | Expr::Quote(e, _) | Expr::Splice(e, _) => expr_references_name(e, name),
+        | Expr::Quote(e, _) | Expr::Splice(e, _)
+        | Expr::TypeAscription(e, _, _) => expr_references_name(e, name),
         Expr::Call(callee, _, args, _) => {
             expr_references_name(callee, name)
                 || args.iter().any(|a| call_arg_references_name(a, name))
@@ -8304,6 +8305,15 @@ impl<'a> InferCtx<'a> {
                     name: "Expr".to_string(),
                     args: vec![],
                 })
+            }
+
+            // Type ascription: `expr` constrained to be `Type`
+            // Used for lambda return type annotations: `(x: Int) -> RetType => body`
+            Expr::TypeAscription(inner, ty_expr, _) => {
+                let inner_ty = self.infer_expr(inner)?;
+                let ascribed_ty = self.type_from_ast(ty_expr);
+                self.unify(inner_ty, ascribed_ty.clone());
+                Ok(ascribed_ty)
             }
 
             // While loop: condition must be Bool, returns Unit or break-value type

@@ -1227,10 +1227,16 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         ));
 
         let lambda = lambda_params
+            .then(just(Token::RightArrow).ignore_then(type_expr()).or_not())
             .then_ignore(just(Token::FatArrow))
             .then(expr.clone())
-            .map_with_span(|(params, body), span| {
-                Expr::Lambda(params, Box::new(body), to_span(span))
+            .map_with_span(|((params, ret_ty), body), span| {
+                let s = to_span(span);
+                let body_expr = match ret_ty {
+                    Some(ty) => Expr::TypeAscription(Box::new(body), ty, s),
+                    None => body,
+                };
+                Expr::Lambda(params, Box::new(body_expr), s)
             });
 
         // If expression - skip newlines after then/else keywords
@@ -1869,6 +1875,7 @@ fn get_span(expr: &Expr) -> Span {
         Expr::Break(_, s) => *s,
         Expr::Continue(s) => *s,
         Expr::Return(_, s) => *s,
+        Expr::TypeAscription(_, _, s) => *s,
     }
 }
 

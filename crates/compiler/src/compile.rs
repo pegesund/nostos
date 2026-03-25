@@ -2985,6 +2985,9 @@ impl Compiler {
             // Quote (nested quote) - just return the inner expression's AST
             Expr::Quote(inner, _) => self.expr_to_ast_value(inner).kind,
 
+            // TypeAscription - transparent, just the inner expression
+            Expr::TypeAscription(inner, _, _) => self.expr_to_ast_value(inner).kind,
+
             // Try/catch expression
             Expr::Try(body, catch_arms, finally, _) => AstKind::Try {
                 body: Box::new(self.expr_to_ast_value(body)),
@@ -7815,6 +7818,10 @@ impl Compiler {
                 self.collect_mvar_access(expr, reads, writes);
             }
             Expr::Splice(expr, _) => {
+                self.collect_mvar_access(expr, reads, writes);
+            }
+            // TypeAscription - transparent, recurse into inner
+            Expr::TypeAscription(expr, _, _) => {
                 self.collect_mvar_access(expr, reads, writes);
             }
             // Literals and other expressions that don't contain mvar access
@@ -15884,6 +15891,11 @@ impl Compiler {
                 })
             }
 
+            // Type ascription: just compile the inner expression; type checking was done in HM inference
+            Expr::TypeAscription(inner, _ty, _) => {
+                self.compile_expr_tail(inner, is_tail)
+            }
+
             _ => Err(CompileError::NotImplemented {
                 feature: format!("expr: {:?}", expr),
                 span: expr.span(),
@@ -22827,6 +22839,7 @@ scope_depth: self.block_depth,
                         }
                     }
                     Expr::Lambda(_, body, _) => collect_in_expr(body, name, arities),
+                    Expr::TypeAscription(inner, _, _) => collect_in_expr(inner, name, arities),
                     Expr::Block(inner_stmts, _) => collect_call_arities_in_stmts(inner_stmts, name, arities),
                     Expr::If(cond, then_br, else_br, _) => {
                         collect_in_expr(cond, name, arities);
@@ -23129,6 +23142,9 @@ scope_depth: self.block_depth,
             }
             Expr::Lambda(params, body, span) => {
                 Expr::Lambda(params, Box::new(Self::rewrite_arity_calls_in_expr(*body, overloads)), span)
+            }
+            Expr::TypeAscription(inner, ty, span) => {
+                Expr::TypeAscription(Box::new(Self::rewrite_arity_calls_in_expr(*inner, overloads)), ty, span)
             }
             Expr::Block(stmts, span) => {
                 Expr::Block(Self::rewrite_arity_calls_in_stmts(stmts, overloads), span)
@@ -23640,6 +23656,7 @@ scope_depth: self.block_depth,
                     })
             }
             Expr::Try_(e, _) => self.expr_references_name(e, name),
+            Expr::TypeAscription(e, _, _) => self.expr_references_name(e, name),
             Expr::Try(try_expr, catch_arms, finally_expr, _) => {
                 self.expr_references_name(try_expr, name)
                     || catch_arms.iter().any(|arm| self.expr_references_name(&arm.body, name))
@@ -25406,6 +25423,9 @@ scope_depth: self.block_depth,
                     }
                 })
             }
+
+            // TypeAscription: delegate to inner
+            Expr::TypeAscription(inner, _, _) => self.infer_expr_type(inner),
 
             // Other cases: can't infer without full type system
             _ => None,
@@ -31352,6 +31372,11 @@ scope_depth: self.block_depth,
             // Transform splice expressions
             Expr::Splice(inner, span) => {
                 Expr::Splice(Box::new(self.transform_html_expr(inner)), *span)
+            }
+
+            // Transform TypeAscription
+            Expr::TypeAscription(inner, ty, span) => {
+                Expr::TypeAscription(Box::new(self.transform_html_expr(inner)), ty.clone(), *span)
             }
 
             // Transform string interpolations

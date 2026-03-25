@@ -807,6 +807,9 @@ fn extract_dependencies_from_expr(expr: &Expr, deps: &mut HashSet<String>, local
                 extract_dependencies_from_expr(val, deps, local_vars);
             }
         }
+        Expr::TypeAscription(inner, _, _) => {
+            extract_dependencies_from_expr(inner, deps, local_vars);
+        }
         // Literals don't have dependencies
         Expr::Int(_, _)
         | Expr::Int8(_, _)

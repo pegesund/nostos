@@ -514,6 +514,8 @@ pub enum Expr {
     Quote(Box<Expr>, Span),
     /// Splice in quote: `${expr}`
     Splice(Box<Expr>, Span),
+    /// Type ascription: `expr : Type` or `(params) -> RetType => body` desugars to this
+    TypeAscription(Box<Expr>, TypeExpr, Span),
 }
 
 impl Expr {
@@ -567,6 +569,7 @@ impl Expr {
             Expr::Try_(_, s) => *s,
             Expr::Quote(_, s) => *s,
             Expr::Splice(_, s) => *s,
+            Expr::TypeAscription(_, _, s) => *s,
         }
     }
 }
@@ -1893,6 +1896,10 @@ impl Expr {
                 expr.set_file_id(file_id);
             }
             Expr::Splice(expr, s) => {
+                s.file_id = file_id;
+                expr.set_file_id(file_id);
+            }
+            Expr::TypeAscription(expr, _ty, s) => {
                 s.file_id = file_id;
                 expr.set_file_id(file_id);
             }
