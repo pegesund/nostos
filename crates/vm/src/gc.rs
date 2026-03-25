@@ -2661,7 +2661,9 @@ impl Heap {
             }
             GcValue::Set(ptr) => {
                 if let Some(set) = self.get_set(*ptr) {
-                    format!("#{{...{} items}}", set.items.len())
+                    let mut items: Vec<String> = set.items.iter().map(|k| k.show()).collect();
+                    items.sort(); // stable display order
+                    format!("#{{{}}}", items.join(", "))
                 } else {
                     "<invalid set>".to_string()
                 }
