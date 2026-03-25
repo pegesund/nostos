@@ -395,9 +395,12 @@ fn type_expr() -> impl Parser<Token, TypeExpr, Error = Simple<Token>> + Clone {
     })
 }
 
-/// Parser for type expressions that must start with an uppercase type name.
+/// Parser for type expressions that must start with an uppercase type name or `(` (tuple).
 /// Used in trait impl headers (`Type: Trait`) to prevent ambiguity with bindings.
-/// Accepts: `TypeName`, `TypeName[T, U]`, qualified names like `mod.TypeName`
+/// Accepts: `TypeName`, `TypeName[T, U]`, qualified names like `mod.TypeName`,
+/// tuple types `(T, U)`, and list types `[T]`.
+/// Does NOT accept bare lowercase identifiers, preventing `x: Int = 5` from being
+/// mistakenly parsed as a trait impl.
 fn concrete_type_expr() -> impl Parser<Token, TypeExpr, Error = Simple<Token>> + Clone {
     recursive(|ty| {
         let generic = qualified_type_name()
@@ -411,7 +414,7 @@ fn concrete_type_expr() -> impl Parser<Token, TypeExpr, Error = Simple<Token>> +
 
         let simple = qualified_type_name().map(TypeExpr::Name);
 
-        // Tuple: (T, U) or list [T] also allowed as self type
+        // List type: [T]
         let list_type = ty.clone()
             .delimited_by(just(Token::LBracket), just(Token::RBracket))
             .map(|inner| {
@@ -419,7 +422,20 @@ fn concrete_type_expr() -> impl Parser<Token, TypeExpr, Error = Simple<Token>> +
                 TypeExpr::Generic(list_name, vec![inner])
             });
 
-        choice((generic, simple, list_type))
+        // Tuple type: (T, U, V) - starts with `(` so cannot be confused with a binding
+        let tuple_type = ty.clone()
+            .separated_by(just(Token::Comma))
+            .at_least(1)
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .map(|elems: Vec<TypeExpr>| {
+                if elems.len() == 1 {
+                    elems.into_iter().next().unwrap()
+                } else {
+                    TypeExpr::Tuple(elems)
+                }
+            });
+
+        choice((generic, simple, list_type, tuple_type))
     })
 }
 
