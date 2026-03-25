@@ -16738,7 +16738,8 @@ impl Compiler {
                             let is_numeric = matches!(arg_type.as_str(),
                                 "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
                                 "UInt8" | "UInt16" | "UInt32" | "UInt64" |
-                                "Float" | "Float32" | "Float64" | "BigInt" | "Decimal"
+                                "Float" | "Float32" | "Float64" | "BigInt" | "Decimal" |
+                                "Char"  // Char.toInt() returns the Unicode code point
                             );
 
                             if !is_numeric && !is_type_variable {

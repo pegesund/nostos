@@ -2094,6 +2094,7 @@ impl AsyncProcess {
                         }
                     }
                     GcValue::Decimal(d) => GcValue::Int64(d.to_string().parse::<f64>().unwrap_or(0.0) as i64),
+                    GcValue::Char(c) => GcValue::Int64(*c as i64),
                     _ => return Err(RuntimeError::Panic("FloatToInt: expected numeric".into())),
                 };
                 set_reg!(dst, result);
@@ -12951,6 +12952,7 @@ impl AsyncVM {
                     GcValue::UInt8(i) => Ok(GcValue::Int64(*i as i64)),
                     GcValue::UInt16(i) => Ok(GcValue::Int64(*i as i64)),
                     GcValue::UInt32(i) => Ok(GcValue::Int64(*i as i64)),
+                    GcValue::Char(c) => Ok(GcValue::Int64(*c as i64)),
                     _ => Err(RuntimeError::TypeError {
                         expected: "numeric type".to_string(),
                         found: "other".to_string(),
