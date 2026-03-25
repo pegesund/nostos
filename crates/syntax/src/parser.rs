@@ -1372,9 +1372,14 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                 Expr::For(var, Box::new(start), Box::new(end), Box::new(body), to_span(span))
             });
 
-        // Break: break or break expr
+        // Break: break or break expr (expr must be on the same line, i.e., no newline before it)
+        // Using filter(...).rewind() as a lookahead: succeeds if the next token is not a newline
+        // without consuming it, allowing the optional expr to be parsed on the same line.
+        let same_line_expr = filter(|t: &Token| *t != Token::Newline)
+            .rewind()
+            .ignore_then(expr.clone());
         let break_expr = just(Token::Break)
-            .ignore_then(expr.clone().or_not())
+            .ignore_then(same_line_expr.clone().or_not())
             .map_with_span(|val, span| {
                 Expr::Break(val.map(Box::new), to_span(span))
             });
@@ -1383,9 +1388,9 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         let continue_expr = just(Token::Continue)
             .map_with_span(|_, span| Expr::Continue(to_span(span)));
 
-        // Return: return or return expr
+        // Return: return or return expr (expr must be on the same line)
         let return_expr = just(Token::Return)
-            .ignore_then(expr.clone().or_not())
+            .ignore_then(same_line_expr.clone().or_not())
             .map_with_span(|val, span| {
                 Expr::Return(val.map(Box::new), to_span(span))
             });

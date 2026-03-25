@@ -9379,15 +9379,32 @@ impl<'a> InferCtx<'a> {
             self.unify(guard_ty, Type::Bool);
         }
 
+        // Save whether a `return` was already seen before this arm, so we can detect
+        // if THIS arm body contains a `return` statement (making it diverge).
+        let had_return_before = self.fn_has_return_stack.last().copied().unwrap_or(false);
+
         // Infer body
         let body_ty = self.infer_expr(&arm.body)?;
-        self.unify(body_ty.clone(), result_ty.clone());
+
+        // Check if this arm body introduced a `return` statement (i.e., the arm diverges).
+        let arm_has_return = self.fn_has_return_stack.last().copied().unwrap_or(false) && !had_return_before;
+
+        // If the arm body diverges via `return`, body_ty is Unit (the return stmt type),
+        // but the arm is actually compatible with any result type (it never falls through).
+        // Skip the unification to avoid false type mismatches with non-Unit arms.
+        if !arm_has_return || body_ty != Type::Unit {
+            self.unify(body_ty.clone(), result_ty.clone());
+        }
+
         // Restore the declared return type after body inference.
         self.current_declared_return_type = saved_arm_declared_return;
 
-        // Record branch type for post-solve structural container mismatch check
+        // Record branch type for post-solve structural container mismatch check.
+        // Skip diverging arms to avoid false positives.
         let arm_span = arm.body.span();
-        self.deferred_branch_type_checks.push((body_ty, result_ty.clone(), arm_span));
+        if !arm_has_return || body_ty != Type::Unit {
+            self.deferred_branch_type_checks.push((body_ty, result_ty.clone(), arm_span));
+        }
 
         self.env.bindings = saved_bindings;
         Ok(())
