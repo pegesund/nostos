@@ -6219,10 +6219,13 @@ impl<'a> InferCtx<'a> {
             (Type::Function(f1), Type::Function(f2)) => {
                 // Handle optional parameters: allow unifying when one has more params
                 // if the extra params have defaults
-                let (func_with_more, func_with_less) = if f1.params.len() >= f2.params.len() {
-                    (f1, f2)
+                // f1 is the "definition" side (lhs), f2 is the "call" side (rhs).
+                // We always produce errors as "expected: f1 param count, found: f2 param count"
+                // so the message reads "expected N (from definition), found M (from call)".
+                let (func_with_more, func_with_less, f1_is_more) = if f1.params.len() >= f2.params.len() {
+                    (f1, f2, true)
                 } else {
-                    (f2, f1)
+                    (f2, f1, false)
                 };
 
                 // Check if the arity difference is acceptable
@@ -6233,10 +6236,17 @@ impl<'a> InferCtx<'a> {
                 // Allow the call if provided args are between min_required and max_params
                 // When required_params is None, ALL params are required (no defaults)
                 if provided < min_required || provided > max_params {
-                    return Err(TypeError::ArityMismatch {
-                        expected: min_required,
-                        found: provided,
-                    });
+                    // Error direction: "expected <definition params>, found <call args>"
+                    // f1 is the definition (lhs of unify), f2 is what was provided (rhs).
+                    let (expected, found) = if f1_is_more {
+                        // f1 has more params (definition expects more than call provided)
+                        (min_required, provided)
+                    } else {
+                        // f2 has more params (call provided more than definition expects)
+                        // f1 is the definition, so expected = f1.params (= func_with_less.params)
+                        (provided, min_required)
+                    };
+                    return Err(TypeError::ArityMismatch { expected, found });
                 }
 
                 // Unify the params that were provided.
