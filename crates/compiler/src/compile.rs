@@ -14097,12 +14097,17 @@ impl Compiler {
                                         if let Some(pos) = param_names.iter().position(|p| p.as_deref() == Some(&name.node)) {
                                             resolved[pos] = Some(arg);
                                         } else {
-                                            while positional_idx < num_params && resolved[positional_idx].is_some() {
-                                                positional_idx += 1;
-                                            }
-                                            if positional_idx < num_params {
-                                                resolved[positional_idx] = Some(arg);
-                                            }
+                                            let valid_names: Vec<String> = param_names.iter()
+                                                .filter_map(|p| p.as_ref().map(|s| s.clone()))
+                                                .collect();
+                                            return Err(CompileError::TypeError {
+                                                message: format!(
+                                                    "unknown named argument '{}'; valid parameter names are: {}",
+                                                    name.node,
+                                                    if valid_names.is_empty() { "(none)".to_string() } else { valid_names.join(", ") }
+                                                ),
+                                                span: name.span,
+                                            });
                                         }
                                     }
                                     CallArg::Positional(_) => {
@@ -14714,13 +14719,17 @@ impl Compiler {
                                         if let Some(pos) = non_self_names.iter().position(|p| p.as_deref() == Some(&name.node)) {
                                             resolved[pos] = Some(expr);
                                         } else {
-                                            // Unknown name - treat as positional
-                                            while positional_idx < num_non_self && resolved[positional_idx].is_some() {
-                                                positional_idx += 1;
-                                            }
-                                            if positional_idx < num_non_self {
-                                                resolved[positional_idx] = Some(expr);
-                                            }
+                                            let valid_names: Vec<String> = non_self_names.iter()
+                                                .filter_map(|p| p.as_ref().map(|s| s.clone()))
+                                                .collect();
+                                            return Err(CompileError::TypeError {
+                                                message: format!(
+                                                    "unknown named argument '{}'; valid parameter names are: {}",
+                                                    name.node,
+                                                    if valid_names.is_empty() { "(none)".to_string() } else { valid_names.join(", ") }
+                                                ),
+                                                span: name.span,
+                                            });
                                         }
                                     }
                                     CallArg::Positional(expr) => {
@@ -16691,13 +16700,17 @@ impl Compiler {
                         if let Some(pos) = param_names.iter().position(|p| p.as_deref() == Some(&name.node)) {
                             result[pos] = Some(arg);
                         } else {
-                            // Unknown parameter name - treat as positional
-                            while positional_idx < result.len() && result[positional_idx].is_some() {
-                                positional_idx += 1;
-                            }
-                            if positional_idx < result.len() {
-                                result[positional_idx] = Some(arg);
-                            }
+                            let valid_names: Vec<String> = param_names.iter()
+                                .filter_map(|p| p.as_ref().map(|s| s.clone()))
+                                .collect();
+                            return Err(CompileError::TypeError {
+                                message: format!(
+                                    "unknown named argument '{}'; valid parameter names are: {}",
+                                    name.node,
+                                    if valid_names.is_empty() { "(none)".to_string() } else { valid_names.join(", ") }
+                                ),
+                                span: name.span,
+                            });
                         }
                     }
                     CallArg::Positional(_) => {
