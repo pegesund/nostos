@@ -624,24 +624,29 @@ impl Compiler {
             let next_arm_jump = self.chunk.emit(Instruction::JumpIfFalse(match_success, 0), 0);
 
             // Bind pattern variables with type info from pattern.
-            // Exception variables are always String (throw() always takes a String message),
+            // Exception variables are commonly String (throw() often takes a String message),
             // so register them in local_types as String to enable method dispatch like .split().
+            // Note: comparison guards (e.g., `when n > 100`) are handled specially in
+            // compile_binop to use generic instructions when the types are mismatched
+            // (String LHS vs Int RHS), enabling Int exception comparison to work correctly.
             for (name, reg, is_float) in bindings {
                 self.locals.insert(name.clone(), LocalInfo { reg, is_float, mutable: false, is_cell: false, scope_depth: self.block_depth });
                 // Register exception variable as String type for UFCS method resolution
+                // (comparison operators handle type mismatches via generic instructions)
                 self.local_types.insert(name, nostos_types::Type::String);
             }
 
             // Compile guard if present
+            let mut guard_fail_jump: Option<usize> = None;
             if let Some(guard) = &arm.guard {
                 let guard_reg = self.compile_expr_tail(guard, false)?;
-                // If guard fails, jump to next arm (or rethrow for last arm)
+                // If guard fails, jump to next arm (for non-last) or rethrow (for last arm)
                 let guard_jump = self.chunk.emit(Instruction::JumpIfFalse(guard_reg, 0), 0);
                 if is_last {
                     rethrow_jumps.push(guard_jump);
                 } else {
-                    // Patch to same location as pattern mismatch
-                    rethrow_jumps.push(guard_jump);
+                    // Will be patched to point to next arm's start (same as next_arm_jump target)
+                    guard_fail_jump = Some(guard_jump);
                 }
             }
 
@@ -658,6 +663,10 @@ impl Compiler {
             } else {
                 let next_target = self.chunk.code.len();
                 self.chunk.patch_jump(next_arm_jump, next_target);
+                // Also patch guard fail to the same location (next arm's pattern test)
+                if let Some(guard_jump) = guard_fail_jump {
+                    self.chunk.patch_jump(guard_jump, next_target);
+                }
             }
 
             // Restore locals and local_types after arm (pattern bindings shouldn't leak to next arm or subsequent code)

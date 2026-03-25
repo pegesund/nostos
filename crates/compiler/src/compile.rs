@@ -16078,7 +16078,44 @@ impl Compiler {
         let right_is_bigint = self.is_bigint_expr(right);
         let is_float = left_is_float || right_is_float;
         let is_bigint = left_is_bigint || right_is_bigint;
-        let is_string = self.is_string_expr(left) || self.is_string_expr(right);
+        let left_is_string = self.is_string_expr(left);
+        let right_is_string = self.is_string_expr(right);
+        // is_string is true only when BOTH sides agree on String, or when only one side is
+        // known and it's String. However, if one side is String and the other is clearly a
+        // non-string type (Int, Float), we use generic comparison to handle dynamically-typed
+        // exception variables (e.g., `throw(42)` caught as String-typed var compared to Int).
+        let is_string = if left_is_string && right_is_string {
+            true
+        } else if left_is_string && !right_is_string {
+            // LHS is String-typed but RHS might be Int/Float: check if RHS is clearly numeric
+            let right_is_numeric = right_is_float || right_is_bigint || {
+                let rt = self.expr_type_info(right).display_name();
+                rt.as_ref().map_or(false, |t| {
+                    matches!(t.as_str(), "Int" | "Int8" | "Int16" | "Int32" | "Int64"
+                        | "UInt8" | "UInt16" | "UInt32" | "UInt64" | "Float" | "Float32" | "Float64")
+                }) || matches!(right, Expr::Int(_, _) | Expr::Int8(_, _) | Expr::Int16(_, _)
+                    | Expr::Int32(_, _) | Expr::UInt8(_, _) | Expr::UInt16(_, _)
+                    | Expr::UInt32(_, _) | Expr::UInt64(_, _)
+                    | Expr::Float(_, _) | Expr::Float32(_, _))
+            };
+            // If RHS is clearly numeric, don't treat as String (use generic Gt instead)
+            !right_is_numeric
+        } else if right_is_string && !left_is_string {
+            // RHS is String-typed but LHS might be Int/Float
+            let left_is_numeric = left_is_float || left_is_bigint || {
+                let lt = self.expr_type_info(left).display_name();
+                lt.as_ref().map_or(false, |t| {
+                    matches!(t.as_str(), "Int" | "Int8" | "Int16" | "Int32" | "Int64"
+                        | "UInt8" | "UInt16" | "UInt32" | "UInt64" | "Float" | "Float32" | "Float64")
+                }) || matches!(left, Expr::Int(_, _) | Expr::Int8(_, _) | Expr::Int16(_, _)
+                    | Expr::Int32(_, _) | Expr::UInt8(_, _) | Expr::UInt16(_, _)
+                    | Expr::UInt32(_, _) | Expr::UInt64(_, _)
+                    | Expr::Float(_, _) | Expr::Float32(_, _))
+            };
+            !left_is_numeric
+        } else {
+            false
+        };
 
         // Check if either operand is a Char - Char comparisons must use generic Lt/Gt/Le/Ge
         // (not LtInt/GtInt which expect Int64)
