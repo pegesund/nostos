@@ -2420,11 +2420,13 @@ impl Heap {
         match value {
             GcValue::String(ptr) => {
                 if let Some(s) = self.get_string(*ptr) {
-                    format!("\"{}\"", s.data)
+                    let escaped = s.data.replace('\\', "\\\\").replace('"', "\\\"");
+                    format!("\"{}\"", escaped)
                 } else {
                     "<invalid string>".to_string()
                 }
             }
+            GcValue::Char(c) => format!("'{}'", c),
             GcValue::List(list) => {
                 let mut result = "[".to_string();
                 for (i, item) in list.items().iter().enumerate() {

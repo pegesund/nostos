@@ -262,6 +262,14 @@ pub enum PgValue {
     Json(String),
     /// Vector data (for pgvector extension)
     Vector(Vec<f32>),
+    /// Array of integers (INT2[], INT4[], INT8[])
+    IntArray(Vec<i64>),
+    /// Array of floats (FLOAT4[], FLOAT8[])
+    FloatArray(Vec<f64>),
+    /// Array of strings (TEXT[], VARCHAR[])
+    StringArray(Vec<String>),
+    /// Array of booleans (BOOL[])
+    BoolArray(Vec<bool>),
 }
 
 /// A call frame on the stack.

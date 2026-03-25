@@ -3072,6 +3072,55 @@ impl IoRuntime {
                     Err(_) => PgValue::Null,
                 }
             }
+            Type::UUID => {
+                // UUID - return as hyphenated string using uuid crate (via tokio-postgres with-uuid-1 feature)
+                match row.try_get::<_, uuid::Uuid>(idx) {
+                    Ok(v) => PgValue::String(v.hyphenated().to_string()),
+                    Err(_) => PgValue::Null,
+                }
+            }
+            Type::INT4_ARRAY => {
+                match row.try_get::<_, Vec<i32>>(idx) {
+                    Ok(v) => PgValue::IntArray(v.into_iter().map(|i| i as i64).collect()),
+                    Err(_) => PgValue::Null,
+                }
+            }
+            Type::INT8_ARRAY => {
+                match row.try_get::<_, Vec<i64>>(idx) {
+                    Ok(v) => PgValue::IntArray(v),
+                    Err(_) => PgValue::Null,
+                }
+            }
+            Type::INT2_ARRAY => {
+                match row.try_get::<_, Vec<i16>>(idx) {
+                    Ok(v) => PgValue::IntArray(v.into_iter().map(|i| i as i64).collect()),
+                    Err(_) => PgValue::Null,
+                }
+            }
+            Type::FLOAT4_ARRAY => {
+                match row.try_get::<_, Vec<f32>>(idx) {
+                    Ok(v) => PgValue::FloatArray(v.into_iter().map(|f| f as f64).collect()),
+                    Err(_) => PgValue::Null,
+                }
+            }
+            Type::FLOAT8_ARRAY => {
+                match row.try_get::<_, Vec<f64>>(idx) {
+                    Ok(v) => PgValue::FloatArray(v),
+                    Err(_) => PgValue::Null,
+                }
+            }
+            Type::TEXT_ARRAY | Type::VARCHAR_ARRAY => {
+                match row.try_get::<_, Vec<String>>(idx) {
+                    Ok(v) => PgValue::StringArray(v),
+                    Err(_) => PgValue::Null,
+                }
+            }
+            Type::BOOL_ARRAY => {
+                match row.try_get::<_, Vec<bool>>(idx) {
+                    Ok(v) => PgValue::BoolArray(v),
+                    Err(_) => PgValue::Null,
+                }
+            }
             _ => {
                 // Check for vector type by name (pgvector extension)
                 if col_type.name() == "vector" {

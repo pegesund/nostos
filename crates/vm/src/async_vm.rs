@@ -10530,6 +10530,24 @@ impl AsyncProcess {
                 let ptr = self.heap.alloc_float32_array(floats);
                 GcValue::Float32Array(ptr)
             }
+            PgValue::IntArray(ints) => {
+                let values: Vec<GcValue> = ints.into_iter().map(GcValue::Int64).collect();
+                GcValue::List(GcList::from_vec(values))
+            }
+            PgValue::FloatArray(floats) => {
+                let values: Vec<GcValue> = floats.into_iter().map(GcValue::Float64).collect();
+                GcValue::List(GcList::from_vec(values))
+            }
+            PgValue::StringArray(strings) => {
+                let values: Vec<GcValue> = strings.into_iter()
+                    .map(|s| GcValue::String(self.heap.alloc_string(s)))
+                    .collect();
+                GcValue::List(GcList::from_vec(values))
+            }
+            PgValue::BoolArray(bools) => {
+                let values: Vec<GcValue> = bools.into_iter().map(GcValue::Bool).collect();
+                GcValue::List(GcList::from_vec(values))
+            }
         }
     }
 
