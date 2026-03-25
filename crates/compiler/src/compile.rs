@@ -9351,6 +9351,33 @@ impl Compiler {
         false
     }
 
+    /// If exactly one type implements a trait method, return (type_name, qualified_method_name).
+    /// Used for unambiguous trait dispatch when the receiver type is unknown (e.g., from receive{}).
+    fn find_unique_trait_method_impl(&self, method_name: &str) -> Option<(String, String)> {
+        let mut found: Option<(String, String)> = None;
+        for (type_name, trait_names) in &self.type_traits {
+            for trait_name in trait_names {
+                if let Some(trait_info) = self.trait_defs.get(trait_name) {
+                    if trait_info.methods.iter().any(|m| m.name == method_name) {
+                        let qualified = format!("{}.{}.{}", type_name, trait_name, method_name);
+                        // Check if this impl actually exists as a compiled function
+                        let exists = self.functions.keys().any(|k| {
+                            k == &qualified || k.starts_with(&format!("{}/", qualified))
+                        });
+                        if exists {
+                            if found.is_some() {
+                                // More than one impl - ambiguous
+                                return None;
+                            }
+                            found = Some((type_name.clone(), qualified));
+                        }
+                    }
+                }
+            }
+        }
+        found
+    }
+
     /// Check if a method is a generic builtin that works on any type.
     /// These methods don't require type information to dispatch - they work universally.
     fn is_generic_builtin_method(method_name: &str) -> bool {
@@ -14806,7 +14833,8 @@ impl Compiler {
                             });
                         }
                     } else if (type_name.starts_with('?') || self.is_current_type_param(&type_name)
-                               || type_name.contains("(polymorphic)") || type_name.contains("(type parameter)"))
+                               || type_name.contains("(polymorphic)") || type_name.contains("(type parameter)")
+                               || type_name.contains("[polymorphic]") || type_name.contains("[type parameter]"))
                                && self.is_known_trait_method(&method.node)
                                && !Self::is_ambiguous_builtin_method(&method.node)
                                && !Self::is_generic_builtin_method(&method.node) {
@@ -14815,6 +14843,65 @@ impl Compiler {
                         // The method is a trait method that needs monomorphization.
                         // Ambiguous builtins (contains, get, etc.) fall through to UFCS
                         // where they can be resolved via stdlib.
+                        //
+                        // Exception: if exactly one type implements this method, dispatch directly.
+                        // This handles cases like `receive { v -> v }.traitMethod()` where the
+                        // receiver type is unresolved but the method has only one possible impl.
+                        // Only applies when NOT in a generic/polymorphic context (where the type
+                        // parameter genuinely represents different types at different call sites).
+                        if !self.current_fn_generic_hm
+                            && self.current_fn_type_params.is_empty()
+                            && self.current_type_bindings.is_empty() {
+                            if let Some((_unique_type, qualified_method)) = self.find_unique_trait_method_impl(&method.node) {
+                                // Try resolve_function_call first, then fall back to prefix search.
+                                // The function may be stored as "MyRec.HasX.getX/MyRec" (concrete type)
+                                // rather than "MyRec.HasX.getX/_" (wildcard), so we need prefix search.
+                                let mut all_args = vec![obj.as_ref().clone()];
+                                all_args.extend(args.iter().map(|a| Self::call_arg_expr(a).clone()));
+                                let arg_types: Vec<Option<String>> = all_args.iter()
+                                    .map(|a| self.expr_type_info(a).display_name())
+                                    .collect();
+                                let call_name = if let Some(resolved) = self.resolve_function_call(&qualified_method, &arg_types) {
+                                    Some(resolved)
+                                } else {
+                                    // Try prefix search: find any function starting with "method/"
+                                    let prefix = format!("{}/", qualified_method);
+                                    let arity = arg_types.len();
+                                    self.functions.keys()
+                                        .find(|k| {
+                                            if let Some(suffix) = k.strip_prefix(&prefix) {
+                                                let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
+                                                param_count == arity
+                                            } else {
+                                                false
+                                            }
+                                        })
+                                        .cloned()
+                                };
+                                if let Some(call_name) = call_name {
+                                    let obj_reg = self.compile_expr_tail(obj, false)?;
+                                    let mut arg_regs = vec![obj_reg];
+                                    for arg in args {
+                                        let reg = self.compile_expr_tail(Self::call_arg_expr(arg), false)?;
+                                        arg_regs.push(reg);
+                                    }
+                                    let dst = self.alloc_reg();
+                                    if let Some(&func_idx) = self.function_indices.get(&call_name) {
+                                        self.current_fn_calls.insert(call_name.clone());
+                                        if is_tail {
+                                            for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                                                self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+                                            }
+                                            self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
+                                            return Ok(0);
+                                        } else {
+                                            self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), line);
+                                            return Ok(dst);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         return Err(CompileError::UnresolvedTraitMethod {
                             method: method.node.clone(),
                             span: method.span,
@@ -14951,6 +15038,54 @@ impl Compiler {
                     if self.is_known_trait_method(&method.node)
                         && !Self::is_ambiguous_builtin_method(&method.node)
                         && !Self::is_generic_builtin_method(&method.node) {
+                        // Before giving up: check if exactly ONE type implements this method.
+                        // If so, we can dispatch unambiguously even without knowing the receiver
+                        // type (e.g., when value comes from receive{} which has unknown msg type).
+                        if let Some((_type_name, qualified_method)) = self.find_unique_trait_method_impl(&method.node) {
+                            let mut all_args = vec![obj.as_ref().clone()];
+                            all_args.extend(args.iter().map(|a| Self::call_arg_expr(a).clone()));
+                            let arg_types: Vec<Option<String>> = all_args.iter()
+                                .map(|a| self.expr_type_info(a).display_name())
+                                .collect();
+                            let arity = arg_types.len();
+                            let call_name_opt = if let Some(resolved) = self.resolve_function_call(&qualified_method, &arg_types) {
+                                Some(resolved)
+                            } else {
+                                // Prefix search: function stored as "Type.Trait.method/Type" not "Type.Trait.method/_"
+                                let prefix = format!("{}/", qualified_method);
+                                self.functions.keys()
+                                    .find(|k| {
+                                        if let Some(suffix) = k.strip_prefix(&prefix) {
+                                            let param_count = if suffix.is_empty() { 0 } else { Self::count_signature_params(suffix) };
+                                            param_count == arity
+                                        } else { false }
+                                    })
+                                    .cloned()
+                            };
+                            if let Some(call_name) = call_name_opt {
+                                let obj_reg = self.compile_expr_tail(obj, false)?;
+                                let mut arg_regs = vec![obj_reg];
+                                for arg in args {
+                                    let reg = self.compile_expr_tail(Self::call_arg_expr(arg), false)?;
+                                    arg_regs.push(reg);
+                                }
+                                let dst = self.alloc_reg();
+                                if let Some(&func_idx) = self.function_indices.get(&call_name) {
+                                    self.current_fn_calls.insert(call_name.clone());
+                                    if is_tail {
+                                        for (_, name_idx, is_write) in self.current_fn_mvar_locks.iter().rev() {
+                                            self.chunk.emit(Instruction::MvarUnlock(*name_idx, *is_write), 0);
+                                        }
+                                        self.chunk.emit(Instruction::TailCallDirect(func_idx, arg_regs.into()), line);
+                                        return Ok(0);
+                                    } else {
+                                        self.chunk.emit(Instruction::CallDirect(dst, func_idx, arg_regs.into()), line);
+                                        return Ok(dst);
+                                    }
+                                }
+                            }
+                            // Function not found by index - fall through to error
+                        }
                         return Err(CompileError::UnresolvedTraitMethod {
                             method: method.node.clone(),
                             span: method.span,
@@ -18673,7 +18808,6 @@ impl Compiler {
         // This is critical for monomorphization: param_types has the concrete type (e.g., "Box")
         // while inferred_expr_types might have the type parameter (e.g., "T").
         if let Expr::Var(ident) = expr {
-            // DEBUG: Trace variable type lookups
             if let Some(ty) = self.param_types.get(&ident.node) {
                 // Substitute type parameters using proper Type substitution
                 let substituted = self.substitute_type_params_in_type(ty);
@@ -23284,6 +23418,7 @@ scope_depth: self.block_depth,
         // step1$Result exists with a known return type in its signature.
         let value_type = if let Some(ref ty_str) = value_type {
             if ty_str.contains("(polymorphic)") || ty_str.contains("(type parameter)")
+                || ty_str.contains("[polymorphic]") || ty_str.contains("[type parameter]")
                 || ty_str.contains('?') {
                 // Try to get a better type after compilation
                 if let Expr::Call(inner_func, _, _, _) = &binding.value {
