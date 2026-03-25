@@ -1995,6 +1995,33 @@ impl AsyncProcess {
                 };
                 set_reg!(dst, result);
             }
+            SinFloat(dst, src) => {
+                let v = reg_ref!(src);
+                let result = match v {
+                    GcValue::Float64(n) => GcValue::Float64(n.sin()),
+                    GcValue::Float32(n) => GcValue::Float32(n.sin()),
+                    _ => return Err(RuntimeError::Panic("SinFloat: expected Float".into())),
+                };
+                set_reg!(dst, result);
+            }
+            CosFloat(dst, src) => {
+                let v = reg_ref!(src);
+                let result = match v {
+                    GcValue::Float64(n) => GcValue::Float64(n.cos()),
+                    GcValue::Float32(n) => GcValue::Float32(n.cos()),
+                    _ => return Err(RuntimeError::Panic("CosFloat: expected Float".into())),
+                };
+                set_reg!(dst, result);
+            }
+            TanFloat(dst, src) => {
+                let v = reg_ref!(src);
+                let result = match v {
+                    GcValue::Float64(n) => GcValue::Float64(n.tan()),
+                    GcValue::Float32(n) => GcValue::Float32(n.tan()),
+                    _ => return Err(RuntimeError::Panic("TanFloat: expected Float".into())),
+                };
+                set_reg!(dst, result);
+            }
 
             // === Float comparisons ===
             EqFloat(dst, a, b) => {

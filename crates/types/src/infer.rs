@@ -4407,6 +4407,18 @@ impl<'a> InferCtx<'a> {
                             resolve_result_method_alias(&call.method_name)
                                 .and_then(|name| self.env.functions.get(name).cloned())
                         }
+                        // For numeric types (Float, Int, etc.), fall back to generic builtins.
+                        // E.g., Float.toInt() should resolve to generic `toInt: a -> Int` (returns Int),
+                        // not String.toInt (returns Option[Int]).
+                        "Float" | "Float32" | "Float64" |
+                        "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
+                        "UInt8" | "UInt16" | "UInt32" | "UInt64" |
+                        "BigInt" | "Decimal" => {
+                            // Look up generic unqualified builtin (accepts any type via Var param)
+                            self.env.functions.get(&call.method_name).cloned().filter(|ft| {
+                                matches!(ft.params.first(), Some(Type::Var(_)))
+                            })
+                        }
                         _ => None,
                     }
                 });
