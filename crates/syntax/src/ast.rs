@@ -323,6 +323,8 @@ pub enum Pattern {
     Or(Vec<Pattern>, Span),
     /// Range pattern: `1..10` (exclusive) or `1..=10` (inclusive)
     Range(i64, i64, bool, Span),  // (start, end, inclusive, span)
+    /// Type-annotated pattern: `x: Int` in lambda params `(x: Int) => ...`
+    TypeAnnotated(Box<Pattern>, TypeExpr, Span),
 }
 
 impl Pattern {
@@ -357,6 +359,7 @@ impl Pattern {
             Pattern::Pin(_, s) => *s,
             Pattern::Or(_, s) => *s,
             Pattern::Range(_, _, _, s) => *s,
+            Pattern::TypeAnnotated(_, _, s) => *s,
         }
     }
 
@@ -365,6 +368,7 @@ impl Pattern {
     pub fn simple_name(&self) -> Option<String> {
         match self {
             Pattern::Var(ident) => Some(ident.node.clone()),
+            Pattern::TypeAnnotated(inner, _, _) => inner.simple_name(),
             _ => None,
         }
     }
@@ -1621,6 +1625,10 @@ impl Pattern {
                 }
             }
             Pattern::Range(_, _, _, s) => s.file_id = file_id,
+            Pattern::TypeAnnotated(pat, _, s) => {
+                s.file_id = file_id;
+                pat.set_file_id(file_id);
+            }
         }
     }
 }

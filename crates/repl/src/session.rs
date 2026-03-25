@@ -490,6 +490,7 @@ fn extract_pattern_names(pattern: &Pattern, names: &mut HashSet<String>) {
         Pattern::Float(_, _) | Pattern::Float32(_, _) | Pattern::Decimal(_, _) | Pattern::BigInt(_, _) |
         Pattern::String(_, _) | Pattern::Char(_, _) | Pattern::Bool(_, _) | Pattern::Unit(_) |
         Pattern::StringCons(_, _) | Pattern::Map(_, _) | Pattern::Set(_, _) | Pattern::Range(_, _, _, _) => {}
+        Pattern::TypeAnnotated(inner, _, _) => extract_pattern_names(inner, names),
     }
 }
 

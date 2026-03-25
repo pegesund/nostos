@@ -1200,10 +1200,18 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
 
         // Lambda: x => expr or (a, b) => expr or () => expr
         // Also supports type-annotated params: (x: Int) => expr, (a: String, b: Int) => expr
-        // Type annotations are parsed but discarded (type inference handles actual types)
+        // Type annotations are stored in the pattern as TypeAnnotated for type checking.
         let lambda_param = pattern()
             .then(just(Token::Colon).ignore_then(type_expr()).or_not())
-            .map(|(pat, _type_annotation)| pat);  // discard type, keep pattern
+            .map_with_span(|(pat, type_annotation), span| {
+                match type_annotation {
+                    Some(ty) => {
+                        let s = to_span(span);
+                        Pattern::TypeAnnotated(Box::new(pat), ty, s)
+                    }
+                    None => pat,
+                }
+            });
 
         let lambda_params = choice((
             // Empty parens: () => expr (must be first to avoid parsing as unit pattern)

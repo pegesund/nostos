@@ -301,6 +301,9 @@ impl Compiler {
             Pattern::Set(_, _) | Pattern::StringCons(_, _) | Pattern::Range(_, _, _, _) => {
                 // Not handling these for now
             }
+            Pattern::TypeAnnotated(inner, _, _) => {
+                self.extract_pattern_binding_types_inner(inner, ty, result);
+            }
         }
     }
 
@@ -558,6 +561,7 @@ impl Compiler {
             Pattern::Wildcard(_) => true,
             Pattern::Var(_) => true,
             Pattern::Or(patterns, _) => patterns.iter().any(|p| self.pattern_is_catch_all(p)),
+            Pattern::TypeAnnotated(inner, _, _) => self.pattern_is_catch_all(inner),
             _ => false,
         }
     }
@@ -1304,6 +1308,13 @@ impl Compiler {
                         }
                     }
                 }
+            }
+            Pattern::TypeAnnotated(inner, _, _) => {
+                // Type annotation is enforced at compile time by HM inference.
+                // At runtime, just delegate to the inner pattern.
+                let (inner_success, inner_bindings) = self.compile_pattern_test(inner, scrut_reg)?;
+                self.chunk.emit(Instruction::Move(success_reg, inner_success), 0);
+                bindings.extend(inner_bindings);
             }
             _ => {
                 return Err(CompileError::NotImplemented {

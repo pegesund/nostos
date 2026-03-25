@@ -9052,6 +9052,15 @@ impl<'a> InferCtx<'a> {
                 self.unify(expected.clone(), Type::Int);
                 Ok(())
             }
+
+            Pattern::TypeAnnotated(inner_pat, type_expr, _) => {
+                // Convert the type annotation to a Type and unify with the expected type.
+                // This enforces that when the lambda is called, the argument must match the annotation.
+                let annotated_ty = self.type_from_ast(type_expr);
+                self.unify(expected.clone(), annotated_ty);
+                self.infer_pattern(inner_pat, expected)?;
+                Ok(())
+            }
         }
     }
 

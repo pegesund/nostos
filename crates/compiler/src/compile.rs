@@ -11041,6 +11041,7 @@ impl Compiler {
         match pattern {
             Pattern::Var(ident) => Some(ident.node.clone()),
             Pattern::Wildcard(_) => None,
+            Pattern::TypeAnnotated(inner, _, _) => self.pattern_binding_name(inner),
             _ => None, // Complex patterns need deconstruction
         }
     }
@@ -32304,6 +32305,7 @@ fn find_mutations_inside_lambda(
 fn pattern_var_name(pat: &Pattern) -> Option<String> {
     match pat {
         Pattern::Var(ident) => Some(ident.node.clone()),
+        Pattern::TypeAnnotated(inner, _, _) => pattern_var_name(inner),
         _ => None,
     }
 }
@@ -32369,6 +32371,9 @@ fn collect_pattern_vars(pat: &Pattern, vars: &mut std::collections::HashSet<Stri
             for p in pats {
                 collect_pattern_vars(p, vars);
             }
+        }
+        Pattern::TypeAnnotated(inner, _, _) => {
+            collect_pattern_vars(inner, vars);
         }
         _ => {}
     }
