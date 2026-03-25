@@ -1426,14 +1426,16 @@ impl HeapData {
                 std::mem::size_of::<GcTuple>() + t.items.len() * std::mem::size_of::<GcValue>()
             }
             HeapData::Map(m) => {
+                // Use O(1) size estimate to avoid O(n) iteration on every alloc_map call.
+                // (Iterating all keys to sum string lengths makes Map building O(n^2).)
+                // Add a fixed overhead per entry to account for string keys.
                 std::mem::size_of::<GcMap>()
-                    + m.entries.len() * (std::mem::size_of::<GcMapKey>() + std::mem::size_of::<GcValue>())
-                    + m.entries.keys().map(|k| match k { GcMapKey::String(s) => s.len(), _ => 0 }).sum::<usize>()
+                    + m.entries.len() * (std::mem::size_of::<GcMapKey>() + std::mem::size_of::<GcValue>() + 16)
             }
             HeapData::Set(s) => {
+                // Same O(1) approximation for sets.
                 std::mem::size_of::<GcSet>()
-                    + s.items.len() * std::mem::size_of::<GcMapKey>()
-                    + s.items.iter().map(|k| match k { GcMapKey::String(s) => s.len(), _ => 0 }).sum::<usize>()
+                    + s.items.len() * (std::mem::size_of::<GcMapKey>() + 16)
             }
             HeapData::Record(r) => {
                 std::mem::size_of::<GcRecord>()
