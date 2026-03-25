@@ -2253,22 +2253,44 @@ impl Heap {
             // Reactive variants - compare by ID (same cell = equal)
             (GcValue::ReactiveVariant(a), GcValue::ReactiveVariant(b)) => a.id == b.id,
 
-            // Maps - compare entries
+            // Maps - compare entries by key-value pairs
             (GcValue::Map(a), GcValue::Map(b)) => {
                 if a == b {
-                    return true;
+                    return true; // Same pointer
                 }
-                // For now, just compare by pointer since deep comparison of maps is complex
-                false
+                match (self.get_map(*a), self.get_map(*b)) {
+                    (Some(ma), Some(mb)) => {
+                        if ma.entries.len() != mb.entries.len() {
+                            return false;
+                        }
+                        // For each key in ma, check if mb has the same key with equal value
+                        // We need to clone entries to avoid borrow issues
+                        let ma_entries: Vec<(GcMapKey, GcValue)> = ma.entries.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                        for (key, val_a) in &ma_entries {
+                            match self.get_map(*b).and_then(|mb| mb.entries.get(key).cloned()) {
+                                Some(val_b) => {
+                                    if !self.gc_values_equal(val_a, &val_b) {
+                                        return false;
+                                    }
+                                }
+                                None => return false,
+                            }
+                        }
+                        true
+                    }
+                    _ => false,
+                }
             }
 
-            // Sets - compare entries
+            // Sets - compare entries (all keys must match)
             (GcValue::Set(a), GcValue::Set(b)) => {
                 if a == b {
-                    return true;
+                    return true; // Same pointer
                 }
-                // For now, just compare by pointer since deep comparison of sets is complex
-                false
+                match (self.get_set(*a), self.get_set(*b)) {
+                    (Some(sa), Some(sb)) => sa.items == sb.items,
+                    _ => false,
+                }
             }
 
             // Functions and closures - compare by identity (pointer)

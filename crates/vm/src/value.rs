@@ -2513,6 +2513,13 @@ impl PartialEq for Value {
             (Value::Record(a), Value::Record(b)) => {
                 a.type_name == b.type_name && a.fields == b.fields
             }
+            (Value::Map(a), Value::Map(b)) => {
+                if a.len() != b.len() {
+                    return false;
+                }
+                a.iter().all(|(k, v)| b.get(k).map_or(false, |bv| v == bv))
+            }
+            (Value::Set(a), Value::Set(b)) => a == b,
             (Value::Pid(a), Value::Pid(b)) => a == b,
             (Value::Ref(a), Value::Ref(b)) => a == b,
             _ => false,
