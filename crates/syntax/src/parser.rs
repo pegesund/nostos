@@ -2521,7 +2521,25 @@ fn use_stmt() -> impl Parser<Token, UseStmt, Error = Simple<Token>> + Clone {
             }
         });
 
-    with_braces_or_star.or(single_import)
+    // Option 3: bare `use module` with no dot — emit a helpful error
+    let bare_import = just(Token::Use)
+        .ignore_then(any_ident())
+        .validate(|name, span, emit| {
+            let n = name.node.clone();
+            emit(Simple::custom(
+                span.clone(),
+                format!(
+                    "bare `use {n}` is not valid — use `use {n}.*` to import all public names, or `use {n}.{{SomeName}}` to import specific names"
+                ),
+            ));
+            UseStmt {
+                path: vec![name],
+                imports: UseImports::All,
+                span: to_span(span),
+            }
+        });
+
+    with_braces_or_star.or(single_import).or(bare_import)
 }
 
 /// Parser for test definition.
