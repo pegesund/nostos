@@ -7960,9 +7960,16 @@ impl<'a> InferCtx<'a> {
                 // This handles qualified function calls like good.addf(1, 2)
                 if let Expr::Var(module_ident) = receiver.as_ref() {
                     let qualified_name = format!("{}.{}", module_ident.node, method.node);
-                    // Use arity-aware lookup since function keys include arity suffix
-                    if let Some(fn_type) = self.env.lookup_function_with_arity(&qualified_name, args.len()).cloned() {
-                        // Found the function - infer argument types and unify
+                    // Use arity-aware lookup to find ALL overloads (not just the first one).
+                    // This is critical for functions with multiple overloads like:
+                    //   add(a: Int, b: Int) = a + b
+                    //   add(a: String, b: String) = a ++ b
+                    // Without overload resolution, the wrong overload might be selected,
+                    // causing spurious type errors.
+                    let overloads: Vec<FunctionType> = self.env.lookup_all_functions_with_arity(&qualified_name, args.len())
+                        .into_iter().cloned().collect();
+                    if !overloads.is_empty() {
+                        // Infer argument types first (needed for overload resolution)
                         let mut arg_types = Vec::new();
                         for arg in args {
                             let expr = match arg {
@@ -7970,6 +7977,26 @@ impl<'a> InferCtx<'a> {
                             };
                             arg_types.push(self.infer_expr(expr)?);
                         }
+
+                        // Select the best overload based on argument types
+                        let fn_type = if overloads.len() == 1 {
+                            overloads.into_iter().next().unwrap()
+                        } else {
+                            let overload_refs: Vec<&FunctionType> = overloads.iter().collect();
+                            let (best_idx, is_ambiguous) = self.find_best_overload_idx(&overload_refs, &arg_types);
+                            if is_ambiguous {
+                                // Defer overload resolution until types are better known
+                                let ret_ty = self.fresh();
+                                self.deferred_overload_calls.push((
+                                    overloads.clone(),
+                                    arg_types.clone(),
+                                    ret_ty.clone(),
+                                    *call_span,
+                                ));
+                                return Ok(ret_ty);
+                            }
+                            overloads[best_idx.unwrap_or(0)].clone()
+                        };
 
                         // Instantiate the function type
                         let func_ty = self.instantiate_function(&fn_type);
