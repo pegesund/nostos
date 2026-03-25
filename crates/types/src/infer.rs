@@ -769,11 +769,21 @@ impl<'a> InferCtx<'a> {
 
     /// Add an equality constraint (without span information).
     pub fn unify(&mut self, t1: Type, t2: Type) {
+        // Eagerly instantiate TypeParams to function-scoped fresh vars before storing.
+        // Without this, TypeParam("a") from different functions shares the same name
+        // and gets merged by type_param_mappings during solve(), causing spurious
+        // type errors like "expected (a, Stack[a]), found Int".
+        let t1 = if self.contains_type_param(&t1) { self.instantiate_type_params(&t1) } else { t1 };
+        let t2 = if self.contains_type_param(&t2) { self.instantiate_type_params(&t2) } else { t2 };
         self.constraints.push(Constraint::Equal(t1, t2, None));
     }
 
     /// Add an equality constraint with span information for precise error reporting.
     pub fn unify_at(&mut self, t1: Type, t2: Type, span: Span) {
+        // Eagerly instantiate TypeParams to function-scoped fresh vars before storing.
+        // Same reasoning as unify() above.
+        let t1 = if self.contains_type_param(&t1) { self.instantiate_type_params(&t1) } else { t1 };
+        let t2 = if self.contains_type_param(&t2) { self.instantiate_type_params(&t2) } else { t2 };
         self.constraints.push(Constraint::Equal(t1, t2, Some(span)));
     }
 
@@ -2550,7 +2560,9 @@ impl<'a> InferCtx<'a> {
                         match self.check_annotation_required(&t1, &t2, &e) {
                             Some(better_error) => {
                                 if structural {
-                                    if first_unification_error.is_none() {
+                                    let has_tp = self.contains_type_param(&t1r)
+                                        || self.contains_type_param(&t2r);
+                                    if !has_tp && first_unification_error.is_none() {
                                         first_unification_error = Some(better_error);
                                     }
                                 } else {
@@ -2598,7 +2610,15 @@ impl<'a> InferCtx<'a> {
                                 };
                                 if !is_multi_tp_false_positive {
                                     if structural {
-                                        if first_unification_error.is_none() {
+                                        // Skip structural mismatches where either side contains
+                                        // TypeParams (e.g., Tuple[(TypeParam a, Named Stack[TypeParam a])]
+                                        // vs Int). These arise from uninstantiated generic function
+                                        // signatures during batch inference and are false positives.
+                                        // The TypeParam check at line ~2480 only catches top-level
+                                        // TypeParams; here we catch TypeParams nested inside containers.
+                                        let has_tp = self.contains_type_param(&t1r)
+                                            || self.contains_type_param(&t2r);
+                                        if !has_tp && first_unification_error.is_none() {
                                             first_unification_error = Some(e);
                                         }
                                     } else {
@@ -2961,6 +2981,12 @@ impl<'a> InferCtx<'a> {
                     let func_ty = self.instantiate_function(&sig);
                     if let Type::Function(ft) = func_ty {
                         for (arg_ty, param_ty) in arg_types.iter().zip(ft.params.iter()) {
+                            if std::env::var("NOSTOS_DEBUG_DEFERRED").is_ok() {
+                                let ra = self.env.apply_subst(arg_ty);
+                                let rp = self.env.apply_subst(param_ty);
+                                eprintln!("[3-PASS UNIFY] {} <-> {} (overload[{}] ret={})",
+                                    ra.display(), rp.display(), idx, ft.ret.display());
+                            }
                             self.unify_types(arg_ty, param_ty)?;
                         }
                         self.unify_types(&ret_ty, &ft.ret)?;
@@ -2979,6 +3005,15 @@ impl<'a> InferCtx<'a> {
             let mut sequential_error: Option<TypeError> = None;
 
             for (overloads, arg_types, ret_ty, _span) in &deferred_overloads {
+                if std::env::var("NOSTOS_DEBUG_DEFERRED").is_ok() {
+                    eprintln!("[DEFERRED] {} overloads, arg_types={:?}", overloads.len(),
+                        arg_types.iter().map(|t| self.env.apply_subst(t).display()).collect::<Vec<_>>());
+                    for (i, ov) in overloads.iter().enumerate() {
+                        eprintln!("  overload[{}]: params={:?} ret={}", i,
+                            ov.params.iter().map(|p| p.display()).collect::<Vec<_>>(),
+                            ov.ret.display());
+                    }
+                }
                 let resolved_args: Vec<Type> = arg_types.iter()
                     .map(|t| self.env.apply_subst(t))
                     .collect();
