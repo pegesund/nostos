@@ -11504,6 +11504,38 @@ impl AsyncProcess {
 
     /// Convert a Json value to a primitive GcValue based on expected type
     fn json_to_primitive(&mut self, json: &GcValue, expected_type: &str) -> Result<GcValue, RuntimeError> {
+        // If the target type is Option[T], handle Null->None and non-Null->Some(T)
+        if expected_type.starts_with("Option[") {
+            let inner_type = &expected_type[7..expected_type.len()-1];
+            // Check if json is a Null variant
+            let is_null = match json {
+                GcValue::Variant(var_ptr) => {
+                    self.heap.get_variant(*var_ptr)
+                        .map(|v| v.constructor.as_ref() == "Null")
+                        .unwrap_or(false)
+                }
+                GcValue::Unit => true,
+                _ => false,
+            };
+            if is_null {
+                let none_ptr = self.heap.alloc_variant(
+                    Arc::new("Option".to_string()),
+                    Arc::new("None".to_string()),
+                    vec![],
+                );
+                return Ok(GcValue::Variant(none_ptr));
+            } else {
+                // Recursively convert inner value and wrap in Some
+                let converted = self.json_to_primitive(json, inner_type)?;
+                let some_ptr = self.heap.alloc_variant(
+                    Arc::new("Option".to_string()),
+                    Arc::new("Some".to_string()),
+                    vec![converted],
+                );
+                return Ok(GcValue::Variant(some_ptr));
+            }
+        }
+
         match json {
             GcValue::Variant(var_ptr) => {
                 let variant = self.heap.get_variant(*var_ptr)
@@ -11511,6 +11543,16 @@ impl AsyncProcess {
 
                 let ctor: &str = &variant.constructor;
                 if ctor == "Null" {
+                    // If the expected field type is Option[T], a Null should become None
+                    // (handled above, but kept for safety)
+                    if expected_type.starts_with("Option[") {
+                        let none_ptr = self.heap.alloc_variant(
+                            Arc::new("Option".to_string()),
+                            Arc::new("None".to_string()),
+                            vec![],
+                        );
+                        return Ok(GcValue::Variant(none_ptr));
+                    }
                     Ok(GcValue::Unit)
                 } else if ctor == "Bool" {
                     if variant.fields.is_empty() {
