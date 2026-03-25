@@ -9841,10 +9841,12 @@ impl<'a> InferCtx<'a> {
             }
         }
 
-        // If there's a type annotation, unify with it
+        // If there's a type annotation, unify with it.
+        // Order: annotated_ty first, value_ty second so that unification failures report
+        // "expected <annotation>, found <actual>" in the correct direction.
         if let Some(ty_expr) = &binding.ty {
             let annotated_ty = self.type_from_ast(ty_expr);
-            self.unify(value_ty.clone(), annotated_ty.clone());
+            self.unify(annotated_ty.clone(), value_ty.clone());
             // Also record for deferred check (batch unify errors are dropped)
             self.deferred_typed_binding_checks.push((
                 value_ty.clone(),
