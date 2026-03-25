@@ -441,6 +441,11 @@ pub struct InferCtx<'a> {
     /// E.g., if both IntTree and StrTree have a `Node` constructor, and the function returns
     /// `StrTree`, prefer `StrTree.Node` over `IntTree.Node`.
     current_declared_return_type: Option<String>,
+    /// Stack of type variables for the current loop's break value type.
+    /// When a while/for loop is entered, a fresh type var is pushed.
+    /// `break value` unifies its value type with the top of this stack.
+    /// The while/for loop's return type is this var (resolved after solve).
+    loop_break_type_stack: Vec<Type>,
 }
 
 use crate::is_structural_mismatch;
@@ -488,8 +493,10 @@ impl<'a> InferCtx<'a> {
             polymorphic_body_deferred_overloads: Vec::new(),
             freshened_binding_vars: Vec::new(),
             current_declared_return_type: None,
+            loop_break_type_stack: Vec::new(),
         }
     }
+
 
     /// Set the known implicit conversion function names.
     /// These follow the naming convention: {targetTypeLower}From{SourceTypeShort}
@@ -8223,15 +8230,20 @@ impl<'a> InferCtx<'a> {
                 })
             }
 
-            // While loop: condition must be Bool, returns Unit
+            // While loop: condition must be Bool, returns Unit or break-value type
             Expr::While(cond, body, _) => {
                 let cond_ty = self.infer_expr(cond)?;
                 self.unify(cond_ty, Type::Bool);
+                // Push a fresh type var for any break value
+                let break_tv = self.fresh();
+                self.loop_break_type_stack.push(break_tv.clone());
                 let _ = self.infer_expr(body)?;
-                Ok(Type::Unit)
+                self.loop_break_type_stack.pop();
+                // The while loop returns the break type var (may be Unit if no break with value)
+                Ok(break_tv)
             }
 
-            // For loop: iterates from start to end (both Int), returns Unit
+            // For loop: iterates from start to end (both Int), returns Unit or break-value type
             Expr::For(var, start, end, body, _) => {
                 let start_ty = self.infer_expr(start)?;
                 let end_ty = self.infer_expr(end)?;
@@ -8240,15 +8252,28 @@ impl<'a> InferCtx<'a> {
                 // Add loop variable to scope
                 let saved_bindings = self.env.bindings.clone();
                 self.env.bind(var.node.clone(), Type::Int, false);
+                // Push a fresh type var for any break value
+                let break_tv = self.fresh();
+                self.loop_break_type_stack.push(break_tv.clone());
                 let _ = self.infer_expr(body)?;
+                self.loop_break_type_stack.pop();
                 self.env.bindings = saved_bindings;
-                Ok(Type::Unit)
+                Ok(break_tv)
             }
 
             // Break: optional value, returns Never (doesn't produce a value normally)
             Expr::Break(value, _) => {
                 if let Some(val) = value {
-                    let _ = self.infer_expr(val)?;
+                    let val_ty = self.infer_expr(val)?;
+                    // Unify with the current loop's break type
+                    if let Some(break_tv) = self.loop_break_type_stack.last().cloned() {
+                        self.unify(break_tv, val_ty);
+                    }
+                } else {
+                    // bare break: unify loop break type with Unit
+                    if let Some(break_tv) = self.loop_break_type_stack.last().cloned() {
+                        self.unify(break_tv, Type::Unit);
+                    }
                 }
                 Ok(Type::Unit) // Break doesn't continue execution normally
             }
