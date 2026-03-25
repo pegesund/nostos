@@ -7051,7 +7051,33 @@ impl<'a> InferCtx<'a> {
                     param_types.push(param_ty);
                 }
 
+                // Push a new return-type tracking frame for this lambda.
+                // This ensures that `return` inside a lambda:
+                // 1. Contributes to the lambda's return type (not the outer function's)
+                // 2. Doesn't corrupt the outer function's fn_has_return_stack flag
+                let lambda_ret_var = self.fresh();
+                self.fn_return_type_stack.push(lambda_ret_var.clone());
+                self.fn_has_return_stack.push(false);
+
                 let body_ty = self.infer_expr(body)?;
+
+                // Pop the lambda's return-type tracking frame
+                self.fn_return_type_stack.pop();
+                let lambda_has_return = self.fn_has_return_stack.pop().unwrap_or(false);
+
+                // If the lambda body has `return` statements and the body type is Unit
+                // (because the last statement was a return), use lambda_ret_var instead.
+                let effective_body_ty = if lambda_has_return {
+                    match &body_ty {
+                        Type::Unit => lambda_ret_var,
+                        _ => {
+                            self.unify(lambda_ret_var, body_ty.clone());
+                            body_ty
+                        }
+                    }
+                } else {
+                    body_ty
+                };
 
                 // Restore bindings
                 self.env.bindings = saved_bindings;
@@ -7059,7 +7085,7 @@ impl<'a> InferCtx<'a> {
                 Ok(Type::Function(FunctionType { required_params: None,
                     type_params: vec![],
                     params: param_types,
-                    ret: Box::new(body_ty),
+                    ret: Box::new(effective_body_ty),
                     var_bounds: vec![],
                 }))
             }
