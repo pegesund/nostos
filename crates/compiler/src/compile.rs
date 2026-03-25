@@ -1909,6 +1909,8 @@ struct LoopContext {
     continue_jumps: Vec<usize>,
     /// Addresses of break jumps to patch at loop end
     break_jumps: Vec<usize>,
+    /// Register that holds the loop's result value (for break-with-value)
+    result_reg: Reg,
 }
 
 /// Type information for code generation.
@@ -15701,6 +15703,7 @@ impl Compiler {
             continue_addr: loop_start,
             continue_jumps: Vec::new(),
             break_jumps: Vec::new(),
+            result_reg: dst,
         });
 
         // Compile condition
@@ -15757,6 +15760,7 @@ impl Compiler {
             continue_addr: 0, // Will be set after body compilation
             continue_jumps: Vec::new(),
             break_jumps: Vec::new(),
+            result_reg: dst,
         });
 
         // Check if counter < end
@@ -15816,9 +15820,15 @@ impl Compiler {
             });
         }
 
-        // If there's a value, compile it (for future: return value from loop)
+        // If there's a value, compile it and store into the loop's result register
         let dst = if let Some(val) = value {
-            self.compile_expr_tail(val, false)?
+            let val_reg = self.compile_expr_tail(val, false)?;
+            // Get the loop's result register and move value into it
+            let result_reg = self.loop_stack.last().map(|ctx| ctx.result_reg).unwrap();
+            if val_reg != result_reg {
+                self.chunk.emit(Instruction::Move(result_reg, val_reg), 0);
+            }
+            result_reg
         } else {
             let r = self.alloc_reg();
             self.chunk.emit(Instruction::LoadUnit(r), 0);
