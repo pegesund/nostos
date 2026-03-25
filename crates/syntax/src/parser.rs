@@ -395,6 +395,34 @@ fn type_expr() -> impl Parser<Token, TypeExpr, Error = Simple<Token>> + Clone {
     })
 }
 
+/// Parser for type expressions that must start with an uppercase type name.
+/// Used in trait impl headers (`Type: Trait`) to prevent ambiguity with bindings.
+/// Accepts: `TypeName`, `TypeName[T, U]`, qualified names like `mod.TypeName`
+fn concrete_type_expr() -> impl Parser<Token, TypeExpr, Error = Simple<Token>> + Clone {
+    recursive(|ty| {
+        let generic = qualified_type_name()
+            .then(
+                ty.clone()
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .delimited_by(just(Token::LBracket), just(Token::RBracket)),
+            )
+            .map(|(name, args)| TypeExpr::Generic(name, args));
+
+        let simple = qualified_type_name().map(TypeExpr::Name);
+
+        // Tuple: (T, U) or list [T] also allowed as self type
+        let list_type = ty.clone()
+            .delimited_by(just(Token::LBracket), just(Token::RBracket))
+            .map(|inner| {
+                let list_name = Spanned::new("List".to_string(), Span::default());
+                TypeExpr::Generic(list_name, vec![inner])
+            });
+
+        choice((generic, simple, list_type))
+    })
+}
+
 /// Parser for patterns.
 fn pattern() -> impl Parser<Token, Pattern, Error = Simple<Token>> + Clone {
     recursive(|pat| {
@@ -2214,6 +2242,7 @@ fn binding() -> impl Parser<Token, Binding, Error = Simple<Token>> + Clone {
         })
 }
 
+
 /// Parser for module-level mutable variable definition (mvar).
 /// Syntax: `mvar name: Type = expr` or `pub mvar name: Type = expr`
 /// Type annotation is required for thread-safe shared state.
@@ -2395,9 +2424,11 @@ fn trait_impl() -> impl Parser<Token, TraitImpl, Error = Simple<Token>> + Clone 
 
     // Allow optional `pub` before `Type: Trait` — the keyword is discarded since
     // trait impls inherit visibility from the trait definition itself.
+    // Use concrete_type_expr() (not type_expr()) to prevent parsing lowercase bindings
+    // like `y: Int = 5` as trait impls.
     just(Token::Pub)
         .or_not()
-        .ignore_then(type_expr())
+        .ignore_then(concrete_type_expr())
         .then_ignore(just(Token::Colon))
         .then(type_name())
         .then(when_clause)
