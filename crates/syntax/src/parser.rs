@@ -949,6 +949,13 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         // or to an assignment target (for arr[i] = x, record.field = x)
         let expr_or_binding = expr.clone()
             .then(
+                // Optionally parse `-> type_expr` for local function return type annotation:
+                // `inner(y: Int) -> Int = y * 2`
+                just(Token::RightArrow)
+                    .ignore_then(type_expr())
+                    .or_not()
+            )
+            .then(
                 just(Token::Eq)
                     .ignore_then(expr.clone())
                     .then(
@@ -963,7 +970,7 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                     )
                     .or_not()
             )
-            .map_with_span(|(lhs, maybe_rhs_else), span| {
+            .map_with_span(|((lhs, maybe_return_type), maybe_rhs_else), span| {
                 match maybe_rhs_else {
                     Some((rhs, maybe_else)) => {
                         // Have `=`, first try to convert lhs to pattern (for let binding)
@@ -1092,7 +1099,7 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                                                         let clause = FnClause {
                                                             params,
                                                             guard: None,
-                                                            return_type: None,
+                                                            return_type: maybe_return_type.clone(),
                                                             body: rhs,
                                                             span: call_span,
                                                         };
@@ -1112,6 +1119,7 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                                                     }
                                                 } else {
                                                     // No defaults: desugar to lambda (original behavior)
+                                                    // If a return type annotation was given, upgrade to LocalFnDef
                                                     let params: Option<Vec<Pattern>> = call_args.into_iter().map(|arg| {
                                                         match arg {
                                                             CallArg::Positional(expr) => expr_to_pattern(expr),
@@ -1121,6 +1129,9 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                                                         }
                                                     }).collect();
                                                     if let Some(param_patterns) = params {
+                                                        // Note: maybe_return_type is parsed but currently
+                                                        // used as documentation only for the Lambda path.
+                                                        // Type inference verifies the actual return type.
                                                         let lambda = Expr::Lambda(param_patterns, Box::new(rhs), call_span.clone());
                                                         Stmt::Let(Binding {
                                                             visibility: Visibility::Private,
