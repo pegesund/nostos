@@ -1,0 +1,8 @@
+# expect: 9090
+use config.*
+
+main() = {
+  c = Config(host: "localhost", port: 8080)
+  c2 = withPort(c, 9090)
+  c2.port
+}

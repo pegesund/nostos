@@ -24940,6 +24940,18 @@ scope_depth: self.block_depth,
             });
         }
 
+        // Resolve type_name through imports if not found directly in self.types.
+        // This handles cross-module cases where resolve_name("Config") returns "Config"
+        // (because known_constructors has "Config") but self.types only has "types.Config".
+        let resolved_type_name: String = if !self.types.contains_key(type_name) {
+            // Try resolving through imports
+            self.imports.get(type_name).cloned()
+                .unwrap_or_else(|| type_name.to_string())
+        } else {
+            type_name.to_string()
+        };
+        let type_name = resolved_type_name.as_str();
+
         // Check type visibility (private types cannot be used from other modules)
         self.check_type_visibility(type_name, Span::default())?;
 
@@ -24947,6 +24959,24 @@ scope_depth: self.block_depth,
         let type_info = self.types.get(type_name);
         let all_field_names: Vec<String> = match type_info.map(|t| &t.kind) {
             Some(TypeInfoKind::Record { fields: f, .. }) => f.iter().map(|(n, _)| n.clone()).collect(),
+            Some(TypeInfoKind::Variant { constructors }) => {
+                // Single Named constructor (type Config = Config { ... }) - treat as record update
+                if constructors.len() == 1 {
+                    if let (_, VariantFieldsInfo::Named(named_fields)) = &constructors[0] {
+                        named_fields.iter().map(|(n, _)| n.clone()).collect()
+                    } else {
+                        return Err(CompileError::TypeError {
+                            message: format!("Cannot update non-record variant type: {}", type_name),
+                            span: Span::default(),
+                        });
+                    }
+                } else {
+                    return Err(CompileError::TypeError {
+                        message: format!("Cannot update non-record type: {}", type_name),
+                        span: Span::default(),
+                    });
+                }
+            }
             _ => return Err(CompileError::TypeError {
                 message: format!("Cannot update non-record type: {}", type_name),
                 span: Span::default(),
@@ -24990,20 +25020,42 @@ scope_depth: self.block_depth,
         let dst = self.alloc_reg();
         // Try to emit MakeRecordCached with pre-computed template
         if let Some(info) = self.types.get(type_name) {
-            if let TypeInfoKind::Record { fields, mutable } = &info.kind {
-                let field_names_vec: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
-                let mutable_fields_vec: Vec<bool> = vec![*mutable; fields.len()];
-                let template = RecordTemplate {
-                    type_name: Arc::from(type_name),
-                    field_names: Arc::from(field_names_vec),
-                    mutable_fields: Arc::from(mutable_fields_vec),
-                    discriminant: constructor_discriminant(type_name),
-                };
-                let tmpl_idx = self.chunk.add_constant(Value::RecordTemplate(Arc::new(template)));
-                self.chunk.emit(Instruction::MakeRecordCached(dst, tmpl_idx, field_regs.into()), 0);
-            } else {
-                let type_idx = self.chunk.add_constant(Value::String(Arc::new(type_name.to_string())));
-                self.chunk.emit(Instruction::MakeRecord(dst, type_idx, field_regs.into()), 0);
+            match &info.kind {
+                TypeInfoKind::Record { fields, mutable } => {
+                    let field_names_vec: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
+                    let mutable_fields_vec: Vec<bool> = vec![*mutable; fields.len()];
+                    let template = RecordTemplate {
+                        type_name: Arc::from(type_name),
+                        field_names: Arc::from(field_names_vec),
+                        mutable_fields: Arc::from(mutable_fields_vec),
+                        discriminant: constructor_discriminant(type_name),
+                    };
+                    let tmpl_idx = self.chunk.add_constant(Value::RecordTemplate(Arc::new(template)));
+                    self.chunk.emit(Instruction::MakeRecordCached(dst, tmpl_idx, field_regs.into()), 0);
+                }
+                TypeInfoKind::Variant { constructors } if constructors.len() == 1 => {
+                    // Single Named constructor: type Config = Config { ... }
+                    // Use MakeRecordCached with the constructor name as type_name
+                    if let (ctor_name, VariantFieldsInfo::Named(named_fields)) = &constructors[0] {
+                        let field_names_vec: Vec<String> = named_fields.iter().map(|(n, _)| n.clone()).collect();
+                        let mutable_fields_vec: Vec<bool> = vec![false; named_fields.len()];
+                        let template = RecordTemplate {
+                            type_name: Arc::from(ctor_name.as_str()),
+                            field_names: Arc::from(field_names_vec),
+                            mutable_fields: Arc::from(mutable_fields_vec),
+                            discriminant: constructor_discriminant(ctor_name),
+                        };
+                        let tmpl_idx = self.chunk.add_constant(Value::RecordTemplate(Arc::new(template)));
+                        self.chunk.emit(Instruction::MakeRecordCached(dst, tmpl_idx, field_regs.into()), 0);
+                    } else {
+                        let type_idx = self.chunk.add_constant(Value::String(Arc::new(type_name.to_string())));
+                        self.chunk.emit(Instruction::MakeRecord(dst, type_idx, field_regs.into()), 0);
+                    }
+                }
+                _ => {
+                    let type_idx = self.chunk.add_constant(Value::String(Arc::new(type_name.to_string())));
+                    self.chunk.emit(Instruction::MakeRecord(dst, type_idx, field_regs.into()), 0);
+                }
             }
         } else {
             let type_idx = self.chunk.add_constant(Value::String(Arc::new(type_name.to_string())));

@@ -9,7 +9,7 @@
 //! 1. Generate constraints by walking the AST
 //! 2. Solve constraints through unification
 
-use crate::{Constructor, FunctionType, RecordType, Type, TypeDef, TypeError, TypeEnv};
+use crate::{Constructor, FunctionType, RecordType, Type, TypeDef, TypeError, TypeEnv, TypeParam};
 use nostos_syntax::ast::{
     BinOp, Binding, CallArg, Expr, FnClause, FnDef, Item, MatchArm, Module, Pattern, RecordField,
     RecordPatternField, Span, Stmt, TypeExpr, UnaryOp, VariantPatternFields,
@@ -7221,9 +7221,43 @@ impl<'a> InferCtx<'a> {
                             // This is a record update - infer base type and require it matches the record type
                             let base_ty = self.infer_expr(base_expr)?;
 
-                            // For generic record types, get params and create substitution from base type args
-                            if let Some(TypeDef::Record { params, fields: def_fields, .. }) = self.env.lookup_type(&resolved_type_name).cloned() {
-                                // Create substitution from base type's args (if it's a Named type)
+                            // Helper: given params and the base_ty, build substitution and expected_ty,
+                            // then type-check the named update fields against def_fields.
+                            // Returns Ok(expected_ty) if handled, or falls through.
+                            let typedef = self.env.lookup_type(&resolved_type_name).cloned();
+
+                            // Extract (params, def_fields) from either Record or single-Named-constructor Variant
+                            let record_info: Option<(Vec<TypeParam>, Vec<(String, Type, bool)>)> = match &typedef {
+                                Some(TypeDef::Record { params, fields: def_fields, .. }) => {
+                                    Some((params.clone(), def_fields.clone()))
+                                }
+                                Some(TypeDef::Variant { params, constructors }) => {
+                                    // If it's a single Named constructor with the same name as the type
+                                    // (i.e., `type Config = Config { ... }`), treat it as a record update target
+                                    if constructors.len() == 1 {
+                                        if let Constructor::Named(ctor_name, named_fields) = &constructors[0] {
+                                            let short_type_name = resolved_type_name.split('.').last().unwrap_or(&resolved_type_name);
+                                            if ctor_name == short_type_name || &resolved_type_name == ctor_name {
+                                                // Convert Named fields to the same format as Record fields
+                                                let def_fields: Vec<(String, Type, bool)> = named_fields.iter()
+                                                    .map(|(n, t)| (n.clone(), t.clone(), false))
+                                                    .collect();
+                                                Some((params.clone(), def_fields))
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                }
+                                _ => None,
+                            };
+
+                            if let Some((params, def_fields)) = record_info {
+                                // For generic record types, get params and create substitution from base type args
                                 let resolved_base = self.env.apply_subst(&base_ty);
                                 let substitution: HashMap<String, Type> = if let Type::Named { args, .. } = &resolved_base {
                                     params.iter().zip(args.iter())

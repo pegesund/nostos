@@ -1,0 +1,3 @@
+pub type Config = Config { host: String, port: Int }
+
+pub withPort(c: Config, p: Int) = Config(c, port: p)

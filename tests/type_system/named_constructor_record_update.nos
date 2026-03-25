@@ -1,0 +1,9 @@
+# expect: 9090
+# Record update syntax for named-constructor types: type Config = Config { ... }
+type Config = Config { host: String, port: Int }
+
+main() = {
+  c = Config(host: "localhost", port: 8080)
+  c2 = Config(c, port: 9090)
+  c2.port
+}
