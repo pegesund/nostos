@@ -6947,15 +6947,22 @@ impl Compiler {
     /// Get the full name of a type expression including type parameters.
     /// Check if a type name is a built-in type (primitives, collections, etc.)
     fn is_builtin_type_name(&self, name: &str) -> bool {
-        // "Unit" is a special case: it's the built-in unit type ONLY when there is no
-        // user-defined type named "Unit" (e.g., `type Unit = Grams | Ml`). If a user
-        // defines their own `Unit` type, it should shadow the built-in.
-        if name == "Unit" {
-            // Check if any user-defined type is named "Unit" (qualified or unqualified)
-            let has_user_unit = self.types.keys().any(|k| {
-                k == "Unit" || k.ends_with(".Unit")
+        // Some builtin type names can be shadowed by user-defined types.
+        // If a user defines their own type with the same name, it takes precedence.
+        // This applies to "Unit", "List", "Map", "Set", etc.
+        let shadowable_builtins = matches!(name,
+            "Unit" | "List" | "Array" | "Set" | "Map" | "IO" | "Pid" | "Ref" |
+            "Buffer" | "BigInt" | "Decimal"
+        );
+        if shadowable_builtins {
+            // Check if any user-defined type is named exactly this (qualified or unqualified)
+            let suffix = format!(".{}", name);
+            let has_user_type = self.types.keys().any(|k| {
+                k == name || k.ends_with(&suffix)
             });
-            return !has_user_unit;
+            if has_user_type {
+                return false;
+            }
         }
         matches!(name,
             "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
@@ -6964,7 +6971,7 @@ impl Compiler {
             "Bool" | "Char" | "String" | "BigInt" | "Decimal" |
             "List" | "Array" | "Set" | "Map" | "IO" | "Pid" | "Ref" |
             "Int64Array" | "Float64Array" | "Float32Array" | "Buffer" |
-            "()" | "Never"
+            "Unit" | "()" | "Never"
         )
     }
 
@@ -9976,11 +9983,6 @@ impl Compiler {
             }
         }
         Err(e) => {
-            {
-                use std::io::Write;
-                let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log").unwrap();
-                writeln!(f, "[compile_fn_def Err] def={}, err={:?}", def.name.node, e).unwrap();
-            }
             // Report type errors - only filter truly spurious ones from inference limitations
             let should_report = match &e {
                 // All type error filtering now happens in type_check_fn via
@@ -21765,9 +21767,12 @@ impl Compiler {
                     .map(|a| Self::type_expr_to_hm_type(a, type_param_vars, compiler, env))
                     .collect();
                 let base_name = &name.node;
+                // Resolve through user-defined types (handles shadowing of builtins like List, Map, etc.)
+                // E.g., in module "linked" with `type List[a] = ...`, `List[a]` resolves to "linked.List"
+                let resolved_name = compiler.resolve_user_type_name(base_name);
                 // Build Named type with generic args
                 nostos_types::Type::Named {
-                    name: base_name.clone(),
+                    name: resolved_name,
                     args: inner_types,
                 }
             }
@@ -27839,6 +27844,12 @@ scope_depth: self.block_depth,
             }
         }
 
+        // Set current module so resolve_type_name prefers this module's types.
+        // E.g., inside module "linked", `List` resolves to `linked.List` if defined there.
+        if !self.module_path.is_empty() {
+            env.current_module = Some(self.module_path.join("."));
+        }
+
         // Register type aliases from imports (module-specific)
         for (short_name, qualified_name) in &self.imports {
             if self.types.contains_key(qualified_name) || self.type_alias_targets.contains_key(qualified_name) {
@@ -28151,11 +28162,6 @@ scope_depth: self.block_depth,
                 let mut tmp_ctx = InferCtx::new(&mut tmp_env);
                 let mut inferred: Vec<(String, String, nostos_types::Type)> = Vec::new();
                 for (name, qualified, expr) in &non_lambda_to_infer {
-                    {
-                        use std::io::Write;
-                        let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log").unwrap();
-                        writeln!(f, "[try_hm] non_lambda_to_infer: name={}, qualified={}", name, qualified).unwrap();
-                    }
                     let result = tmp_ctx.infer_expr(expr);
                     if let Ok(ty) = result {
                         inferred.push((name.to_string(), qualified.to_string(), ty));
@@ -29271,6 +29277,13 @@ scope_depth: self.block_depth,
             }
         };
 
+        // Set current module so resolve_type_name prefers this module's types.
+        // E.g., inside module "linked", `List` resolves to `linked.List` if defined there.
+        if let Some(ref prefix) = current_module_prefix {
+            // prefix is e.g. "linked." - strip the trailing dot
+            env.current_module = Some(prefix.trim_end_matches('.').to_string());
+        }
+
         // Build trait method names set for type_check_fn (same as try_hm_inference)
         let mut trait_method_names_tc: std::collections::HashSet<String> = self.trait_defs.values()
             .flat_map(|td| td.methods.iter().map(|m| m.name.clone()))
@@ -29680,11 +29693,6 @@ scope_depth: self.block_depth,
                 let _ = tmp_ctx.solve();
                 for (name, qualified, ty) in inferred {
                     let resolved = tmp_ctx.apply_full_subst(&ty);
-                    {
-                        use std::io::Write;
-                        let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log").unwrap();
-                        writeln!(f, "[type_check_fn] binding '{}' resolved to: {}", name, resolved.display()).unwrap();
-                    }
                     env.bind(name.clone(), resolved.clone(), false);
                     // Also register with qualified name so Module.binding lookups work
                     if qualified != name {
@@ -29924,11 +29932,6 @@ scope_depth: self.block_depth,
             };
             if !suppress {
                 let error_span = ctx.last_error_span().unwrap_or(span);
-                {
-                    use std::io::Write;
-                    let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_debug.log").unwrap();
-                    writeln!(f, "[type_check_fn RETURN ERR] def={}, err={:?}", def.name.node, e).unwrap();
-                }
                 return Err(self.convert_type_error(e, error_span));
             }
         }

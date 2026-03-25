@@ -141,6 +141,25 @@ impl Compiler {
 
                 // Parse type arguments (handle nested brackets for things like List[List[Int]])
                 let args = self.parse_type_args(args_str);
+                // Before matching built-in parameterized types, check if the user has defined
+                // a type with this name (which would shadow the built-in).
+                // For example, `type List[a] = Nil | Cons(a, List[a])` should shadow stdlib List.
+                let user_resolved = if matches!(name, "List" | "Array" | "Set" | "Map" | "IO") {
+                    let resolved = self.resolve_user_type_name(name);
+                    if resolved != name {
+                        Some(resolved)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                if let Some(user_type_name) = user_resolved {
+                    return nostos_types::Type::Named {
+                        name: user_type_name,
+                        args,
+                    };
+                }
                 // Handle built-in parameterized types
                 return match name {
                     "List" if args.len() == 1 => {

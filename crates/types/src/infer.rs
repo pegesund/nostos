@@ -6519,6 +6519,17 @@ impl<'a> InferCtx<'a> {
             TypeExpr::Generic(name, args) => {
                 let type_args: Vec<_> = args.iter().map(|a| self.type_from_ast_with_params(a, type_params)).collect();
                 let name_str = &name.node;
+                // Check if this name is a user-defined type that shadows a builtin name
+                // (e.g., `type List[a]` in a user module shadows the stdlib List)
+                if matches!(name_str.as_str(), "List" | "Array" | "Set" | "Map" | "IO") {
+                    let resolved = self.env.resolve_type_name(name_str);
+                    if resolved != name_str.as_str() {
+                        return Type::Named {
+                            name: resolved,
+                            args: type_args,
+                        };
+                    }
+                }
                 match name_str.as_str() {
                     "List" if type_args.len() == 1 => Type::List(Box::new(type_args[0].clone())),
                     "Array" if type_args.len() == 1 => Type::Array(Box::new(type_args[0].clone())),
