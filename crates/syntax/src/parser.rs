@@ -1808,9 +1808,11 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         });
 
         // |> (pipe operator)
+        // Allow newlines before |> so multi-line pipe chains can use leading |>
+        // (consistent with how method chains allow leading . on a new line)
         let pipe = or
             .clone()
-            .then(just(Token::PipeRight).to(BinOp::Pipe).then(nl.clone().ignore_then(or)).repeated());
+            .then(nl.clone().ignore_then(just(Token::PipeRight)).to(BinOp::Pipe).then(nl.clone().ignore_then(or)).repeated());
         let pipe = pipe.foldl(|lhs, (op, rhs)| {
             let span = get_span(&lhs).merge(get_span(&rhs));
             Expr::BinOp(Box::new(lhs), op, Box::new(rhs), span)
