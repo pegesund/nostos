@@ -12961,6 +12961,27 @@ impl AsyncVM {
             }),
         }));
 
+        // toChar - converts an Int (Unicode code point) to Char
+        self.register_native("toChar", Arc::new(GcNativeFn {
+            name: "toChar".to_string(),
+            arity: 1,
+            func: Box::new(|args, _heap| {
+                match &args[0] {
+                    GcValue::Int64(i) => {
+                        if let Some(c) = char::from_u32(*i as u32) {
+                            Ok(GcValue::Char(c))
+                        } else {
+                            Err(RuntimeError::Panic(format!("toChar: {} is not a valid Unicode code point", i)))
+                        }
+                    }
+                    _ => Err(RuntimeError::TypeError {
+                        expected: "Int".to_string(),
+                        found: "other".to_string(),
+                    }),
+                }
+            }),
+        }));
+
         // String.toBigInt - parse string as BigInt, returns Option[BigInt]
         self.register_native("String.toBigInt", Arc::new(GcNativeFn {
             name: "String.toBigInt".to_string(),

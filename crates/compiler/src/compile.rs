@@ -87,6 +87,17 @@ static BUILTIN_METHODS: LazyLock<HashMap<(&str, &str), &str>> = LazyLock::new(||
         ("String", "split", "String.split"),
         ("String", "drop", "String.drop"),
         ("String", "take", "String.take"),
+        // Int/numeric methods
+        ("Int", "toChar", "toChar"),
+        ("Int8", "toChar", "toChar"),
+        ("Int16", "toChar", "toChar"),
+        ("Int32", "toChar", "toChar"),
+        ("Int64", "toChar", "toChar"),
+        ("UInt8", "toChar", "toChar"),
+        ("UInt16", "toChar", "toChar"),
+        ("UInt32", "toChar", "toChar"),
+        // Char methods
+        ("Char", "toInt", "toInt"),
         // List methods (join dispatches to String.join)
         ("List", "join", "String.join"),
         // Float64Array methods
@@ -528,6 +539,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "toUInt32", signature: "a -> UInt32", doc: "Convert numeric value to UInt32" },
     BuiltinInfo { name: "toUInt64", signature: "a -> UInt64", doc: "Convert numeric value to UInt64" },
     BuiltinInfo { name: "toBigInt", signature: "a -> BigInt", doc: "Convert integer value to BigInt" },
+    BuiltinInfo { name: "toChar", signature: "Int -> Char", doc: "Convert Int (Unicode code point) to Char" },
 
     // === File I/O ===
     // All File functions throw exceptions on error
