@@ -8036,6 +8036,10 @@ impl<'a> InferCtx<'a> {
 
             // Do block (IO monad)
             Expr::Do(stmts, _) => {
+                // Do blocks compile like regular blocks at the bytecode level.
+                // IO[T] is purely a type-level annotation; at runtime T and IO[T] are identical.
+                // Treat bind statements (x = expr) as let-bindings and expression statements
+                // like block statements — result type is the type of the last expression.
                 let saved_bindings = self.env.bindings.clone();
                 let mut result_ty = Type::Unit;
 
@@ -8044,25 +8048,22 @@ impl<'a> InferCtx<'a> {
                     match stmt {
                         nostos_syntax::ast::DoStmt::Bind(pat, expr) => {
                             let expr_ty = self.infer_expr(expr)?;
-                            // expr should have type IO[T]
-                            let inner_ty = self.fresh();
-                            self.unify(expr_ty, Type::IO(Box::new(inner_ty.clone())));
-                            self.infer_pattern(pat, &inner_ty)?;
+                            self.infer_pattern(pat, &expr_ty)?;
+                            if is_last {
+                                result_ty = expr_ty;
+                            }
                         }
                         nostos_syntax::ast::DoStmt::Expr(expr) => {
                             let ty = self.infer_expr(expr)?;
                             if is_last {
-                                // Last expr should be IO[T]
-                                let inner_ty = self.fresh();
-                                self.unify(ty, Type::IO(Box::new(inner_ty.clone())));
-                                result_ty = inner_ty;
+                                result_ty = ty;
                             }
                         }
                     }
                 }
 
                 self.env.bindings = saved_bindings;
-                Ok(Type::IO(Box::new(result_ty)))
+                Ok(result_ty)
             }
 
             // Spawn

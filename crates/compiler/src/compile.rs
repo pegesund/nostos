@@ -11593,6 +11593,27 @@ impl Compiler {
                 self.compile_block(stmts, is_tail)
             }
 
+            // Do block (monadic IO notation): do x = expr ... end
+            // At the bytecode level, IO[T] is just T — the IO type is only for type inference.
+            // Desugar to a regular Block: Bind(pat, expr) → Stmt::Let, Expr(expr) → Stmt::Expr.
+            Expr::Do(do_stmts, span) => {
+                use nostos_syntax::ast::DoStmt;
+                use nostos_syntax::ast::{Stmt, Binding};
+                use nostos_syntax::ast::Visibility;
+                let stmts: Vec<Stmt> = do_stmts.iter().map(|s| match s {
+                    DoStmt::Bind(pat, expr) => Stmt::Let(Binding {
+                        visibility: Visibility::Private,
+                        pattern: pat.clone(),
+                        mutable: false,
+                        value: expr.clone(),
+                        ty: None,
+                        span: *span,
+                    }),
+                    DoStmt::Expr(expr) => Stmt::Expr(expr.clone()),
+                }).collect();
+                self.compile_block(&stmts, is_tail)
+            }
+
             // List literal
             Expr::List(items, tail, _) => {
                 // Check if all items are Int64 for specialization
