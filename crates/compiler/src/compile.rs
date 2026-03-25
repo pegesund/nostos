@@ -31837,6 +31837,29 @@ fn free_vars(expr: &Expr, bound: &std::collections::HashSet<String>) -> std::col
                 free.extend(free_vars(item, bound));
             }
         }
+        Expr::While(cond, body, _) => {
+            free.extend(free_vars(cond, bound));
+            free.extend(free_vars(body, bound));
+        }
+        Expr::For(var, start, end, body, _) => {
+            free.extend(free_vars(start, bound));
+            free.extend(free_vars(end, bound));
+            // var is bound inside the for loop body
+            let mut for_bound = bound.clone();
+            for_bound.insert(var.node.clone());
+            free.extend(free_vars(body, &for_bound));
+        }
+        Expr::Break(val, _) => {
+            if let Some(v) = val {
+                free.extend(free_vars(v, bound));
+            }
+        }
+        Expr::Return(val, _) => {
+            if let Some(v) = val {
+                free.extend(free_vars(v, bound));
+            }
+        }
+        Expr::Continue(_) => {}
         _ => {} // Other expressions - add as needed
     }
 
