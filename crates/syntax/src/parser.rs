@@ -2361,7 +2361,11 @@ fn trait_impl() -> impl Parser<Token, TraitImpl, Error = Simple<Token>> + Clone 
     // Allow newlines between function definitions in trait impls
     let fn_with_nl = nl.clone().ignore_then(trait_method_def);
 
-    type_expr()
+    // Allow optional `pub` before `Type: Trait` — the keyword is discarded since
+    // trait impls inherit visibility from the trait definition itself.
+    just(Token::Pub)
+        .or_not()
+        .ignore_then(type_expr())
         .then_ignore(just(Token::Colon))
         .then(type_name())
         .then(when_clause)
