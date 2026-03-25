@@ -16673,7 +16673,13 @@ impl Compiler {
                 let effective_name = self.local_fn_internal_names.get(qname.as_str())
                     .cloned()
                     .unwrap_or_else(|| qname.clone());
-                (self.get_function_param_names(&effective_name), self.get_function_param_defaults(&effective_name))
+                // Get arg types from provided args so we can select the right overload's defaults
+                let provided_arg_types: Vec<Option<String>> = args.iter()
+                    .map(|a| self.expr_type_info(Self::call_arg_expr(a)).display_name())
+                    .collect();
+                let param_names = self.get_function_param_names(&effective_name);
+                let param_defaults = self.get_function_param_defaults_for_overload(&effective_name, &provided_arg_types);
+                (param_names, param_defaults)
             } else {
                 (vec![], vec![])
             };
@@ -20578,6 +20584,77 @@ impl Compiler {
             }
         }
         vec![]
+    }
+
+    /// Get parameter defaults for an overloaded function, selecting the right overload
+    /// by matching provided argument type strings against the overload signature key.
+    /// Falls back to `get_function_param_defaults` if no match is found.
+    fn get_function_param_defaults_for_overload(&self, fn_name: &str, provided_arg_types: &[Option<String>]) -> Vec<Option<Expr>> {
+        if provided_arg_types.is_empty() {
+            return self.get_function_param_defaults(fn_name);
+        }
+        let resolved = self.resolve_name(fn_name);
+        let prefix = format!("{}/", resolved);
+
+        // Collect all matching overload keys
+        let mut candidates: Vec<(&str, &FnDef)> = self.fn_asts.iter()
+            .filter(|(key, _)| key.starts_with(&prefix) || key.as_str() == fn_name)
+            .filter(|(_, def)| !def.clauses.is_empty())
+            .map(|(key, def)| (key.as_str(), def))
+            .collect();
+
+        if candidates.len() <= 1 {
+            // No overloading, just return first match
+            return candidates.into_iter().next()
+                .map(|(_, def)| def.clauses[0].params.iter().map(|p| p.default.clone()).collect())
+                .unwrap_or_default();
+        }
+
+        // Try to find the overload whose parameter types match the provided arg types.
+        // The key signature portion (after '/') contains param types separated by commas.
+        // e.g. "describe/String,String#1" -> first param type is "String"
+        for (key, def) in &candidates {
+            // Extract the signature part: everything between '/' and '#' (or end)
+            let sig_part = if let Some(slash_pos) = key.find('/') {
+                let after_slash = &key[slash_pos + 1..];
+                // Remove clause index if present (#N)
+                if let Some(hash_pos) = after_slash.find('#') {
+                    &after_slash[..hash_pos]
+                } else {
+                    after_slash
+                }
+            } else {
+                continue;
+            };
+
+            // Split signature into individual param types
+            let sig_types: Vec<&str> = sig_part.split(',').collect();
+
+            // Check if the provided arg types match the beginning of sig_types
+            let matches = provided_arg_types.iter().enumerate().all(|(i, maybe_type)| {
+                if let Some(arg_type) = maybe_type {
+                    if i < sig_types.len() {
+                        // Simple check: arg type starts with or equals sig type
+                        // (handles cases like "Int" matching "Int" but not "String")
+                        let sig_t = sig_types[i];
+                        arg_type == sig_t || sig_t.starts_with(arg_type.as_str()) || arg_type.starts_with(sig_t)
+                    } else {
+                        true // no type info for this position
+                    }
+                } else {
+                    true // no type info, can't rule out
+                }
+            });
+
+            if matches {
+                return def.clauses[0].params.iter().map(|p| p.default.clone()).collect();
+            }
+        }
+
+        // No specific match found - fall back to first candidate
+        candidates.into_iter().next()
+            .map(|(_, def)| def.clauses[0].params.iter().map(|p| p.default.clone()).collect())
+            .unwrap_or_default()
     }
 
     /// Parse a type string like "List[Box]" into a TypeExpr.
