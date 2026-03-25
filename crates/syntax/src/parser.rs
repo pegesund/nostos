@@ -1606,6 +1606,7 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
         let unary = choice((
             just(Token::Minus).to(UnaryOp::Neg),
             just(Token::Bang).to(UnaryOp::Not),
+            just(Token::Not).to(UnaryOp::Not),
         ))
         .repeated()
         .then(splice)

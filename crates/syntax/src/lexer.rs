@@ -98,6 +98,10 @@ pub enum Token {
     Panic,
     // Note: assert is now a builtin function, not a keyword
 
+    // === Boolean operators ===
+    #[token("not")]
+    Not,
+
     // === FFI ===
     #[token("extern")]
     Extern,
@@ -613,6 +617,7 @@ impl fmt::Display for Token {
             Token::AndAnd => write!(f, "&&"),
             Token::OrOr => write!(f, "||"),
             Token::Bang => write!(f, "!"),
+            Token::Not => write!(f, "not"),
             Token::PlusPlus => write!(f, "++"),
             Token::PipeRight => write!(f, "|>"),
             Token::Eq => write!(f, "="),
