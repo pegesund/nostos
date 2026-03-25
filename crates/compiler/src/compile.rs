@@ -32961,15 +32961,30 @@ impl Compiler {
                 if let Pattern::Var(ident) = &binding.pattern {
                     let qualified_name = self.qualify_name(&ident.node);
 
-                    // Type-check bindings with type annotations
+                    // Type-check bindings with type annotations.
+                    // Use standard_env() for a quick check - suppresses UnknownType/UnknownIdent
+                    // errors because standard_env() lacks stdlib functions (e.g., Map.empty).
+                    // Those will be caught by the full try_hm_inference pass later.
                     if binding.ty.is_some() {
                         let mut env = nostos_types::standard_env();
                         let mut ctx = InferCtx::new(&mut env);
-                        if let Err(e) = ctx.infer_binding(binding) {
-                            return Err(self.convert_type_error(e, binding.span));
-                        }
-                        if let Err(e) = ctx.solve() {
-                            return Err(self.convert_type_error(e, binding.span));
+                        let infer_result = ctx.infer_binding(binding);
+                        let solve_result = if infer_result.is_ok() { ctx.solve() } else { Ok(()) };
+                        // Only report errors that are NOT caused by unknown identifiers/types
+                        // (those occur because standard_env is incomplete - they're caught later).
+                        let is_incomplete_env_error = |e: &nostos_types::TypeError| matches!(e,
+                            nostos_types::TypeError::UnknownType(_)
+                            | nostos_types::TypeError::UnknownIdent(_)
+                            | nostos_types::TypeError::UnknownConstructor(_)
+                        );
+                        if let Err(e) = infer_result {
+                            if !is_incomplete_env_error(&e) {
+                                return Err(self.convert_type_error(e, binding.span));
+                            }
+                        } else if let Err(e) = solve_result {
+                            if !is_incomplete_env_error(&e) {
+                                return Err(self.convert_type_error(e, binding.span));
+                            }
                         }
                     }
 
