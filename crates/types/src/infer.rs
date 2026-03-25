@@ -4414,10 +4414,29 @@ impl<'a> InferCtx<'a> {
                         "Int" | "Int8" | "Int16" | "Int32" | "Int64" |
                         "UInt8" | "UInt16" | "UInt32" | "UInt64" |
                         "BigInt" | "Decimal" => {
-                            // Look up generic unqualified builtin (accepts any type via Var param)
-                            self.env.functions.get(&call.method_name).cloned().filter(|ft| {
-                                matches!(ft.params.first(), Some(Type::Var(_)))
-                            })
+                            // Numeric types don't support list-only or string-only methods.
+                            // Don't look them up — let the error branch below catch these.
+                            let list_and_string_methods = [
+                                "length", "len", "head", "tail", "init", "last", "nth",
+                                "push", "pop", "slice", "concat", "reverse", "sort",
+                                "map", "filter", "fold", "any", "all", "find", "position",
+                                "unique", "flatten", "zip", "unzip", "take", "drop",
+                                "empty", "isEmpty", "sum", "product", "indexOf", "sortBy",
+                                "intersperse", "spanList", "groupBy", "transpose", "pairwise",
+                                "isSorted", "isSortedBy", "enumerate", "maximum", "minimum",
+                                "takeWhile", "dropWhile", "partition", "zipWith", "flatMap",
+                                "join", "split", "trim", "trimStart", "trimEnd",
+                                "toUpper", "toLower", "startsWith", "endsWith",
+                                "contains", "replace", "chars",
+                            ];
+                            if list_and_string_methods.contains(&call.method_name.as_str()) {
+                                None
+                            } else {
+                                // Look up generic unqualified builtin (accepts any type via Var param)
+                                self.env.functions.get(&call.method_name).cloned().filter(|ft| {
+                                    matches!(ft.params.first(), Some(Type::Var(_)))
+                                })
+                            }
                         }
                         _ => None,
                     }
