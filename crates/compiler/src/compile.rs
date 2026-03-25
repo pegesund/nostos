@@ -2003,6 +2003,9 @@ pub struct TraitMethodInfo {
     /// Parameter types from the trait definition (e.g., ["_", "Int"] for `method(self, n: Int)`).
     /// "_" means the parameter has no explicit type annotation in the trait.
     pub param_types: Vec<(String, String)>,  // (param_name, type_string)
+    /// Number of required (non-default) parameters, if any params have defaults.
+    /// None means all params are required.
+    pub required_params: Option<usize>,
 }
 
 /// Trait implementation information.
@@ -18648,6 +18651,35 @@ impl Compiler {
                                             format!("{}/{}", trait_fn_base, wildcard_sig)
                                         })
                                 });
+                            // Fill in missing default parameters for function-style trait method calls.
+                            // When called as `method(obj)` instead of `obj.method()`, the resolver
+                            // in compile_call doesn't know it's a trait method, so defaults weren't
+                            // computed. Look them up from the fn_asts using the resolved call_name.
+                            if let Some(fn_def) = self.fn_asts.get(&call_name).cloned() {
+                                let expected_params = fn_def.clauses[0].params.len();
+                                if arg_regs.len() < expected_params {
+                                    // Find the imports for this function's module context
+                                    let prefix = format!("{}/", trait_fn_base);
+                                    let saved_imports = self.fn_ast_imports.get(call_name.as_str())
+                                        .or_else(|| self.fn_ast_imports.iter()
+                                            .find(|(k, _)| k.starts_with(&prefix))
+                                            .map(|(_, v)| v))
+                                        .map(|fn_imports| {
+                                            let saved = self.imports.clone();
+                                            self.imports.extend(fn_imports.iter().map(|(k, v)| (k.clone(), v.clone())));
+                                            saved
+                                        });
+                                    for i in arg_regs.len()..expected_params {
+                                        if let Some(ref default_expr) = fn_def.clauses[0].params[i].default {
+                                            let reg = self.compile_expr_tail(&default_expr.clone(), false)?;
+                                            arg_regs.push(reg);
+                                        }
+                                    }
+                                    if let Some(saved) = saved_imports {
+                                        self.imports = saved;
+                                    }
+                                }
+                            }
                             let dst = self.alloc_reg();
                             if let Some(&func_idx) = self.function_indices.get(&call_name) {
                                 if is_tail {
@@ -27933,14 +27965,14 @@ scope_depth: self.block_depth,
                     };
                     let fn_key = format!("{}{}", method_name, arity_suffix);
                     env.insert_function(fn_key, nostos_types::FunctionType {
-                        required_params: None,
+                        required_params: method.required_params,
                         type_params: vec![],
                         params,
                         ret: Box::new(ret),
                         var_bounds: vec![],
                     });
                     env.insert_function(method_name.clone(), nostos_types::FunctionType {
-                        required_params: None,
+                        required_params: method.required_params,
                         type_params: vec![],
                         params: {
                             let mut p = Vec::new();
@@ -29671,14 +29703,14 @@ scope_depth: self.block_depth,
                     };
                     let fn_key = format!("{}{}", method_name, arity_suffix);
                     env.insert_function(fn_key, nostos_types::FunctionType {
-                        required_params: None,
+                        required_params: method.required_params,
                         type_params: vec![],
                         params: params.clone(),
                         ret: Box::new(ret.clone()),
                         var_bounds: vec![],
                     });
                     env.insert_function(method_name.clone(), nostos_types::FunctionType {
-                        required_params: None,
+                        required_params: method.required_params,
                         type_params: vec![],
                         params: {
                             let mut p = Vec::new();

@@ -2708,6 +2708,10 @@ impl Compiler {
                                     })
                                     .unwrap_or_else(|| "()".to_string()),
                                 param_types,
+                                required_params: {
+                                    let req = m.params.iter().filter(|p| p.default.is_none()).count();
+                                    if req < m.params.len() { Some(req) } else { None }
+                                },
                             }
                         })
                         .collect();
@@ -2796,6 +2800,10 @@ impl Compiler {
                                     })
                                     .unwrap_or_else(|| "()".to_string()),
                                 param_types,
+                                required_params: {
+                                    let req = m.params.iter().filter(|p| p.default.is_none()).count();
+                                    if req < m.params.len() { Some(req) } else { None }
+                                },
                             }
                         })
                         .collect();
