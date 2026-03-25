@@ -446,6 +446,16 @@ pub struct InferCtx<'a> {
     /// `break value` unifies its value type with the top of this stack.
     /// The while/for loop's return type is this var (resolved after solve).
     loop_break_type_stack: Vec<Type>,
+    /// Stack of type variables for the current function's return type.
+    /// When a function clause is entered, a fresh type var is pushed.
+    /// `return expr` unifies its value type with the top of this stack,
+    /// so early returns contribute to the function's inferred return type.
+    fn_return_type_stack: Vec<Type>,
+    /// Stack of booleans tracking whether any `return` statement was encountered
+    /// in the current function clause. Paired 1:1 with fn_return_type_stack.
+    /// When true, the function's return type should come from fn_return_type_stack
+    /// rather than from the body's fallthrough type.
+    fn_has_return_stack: Vec<bool>,
 }
 
 use crate::is_structural_mismatch;
@@ -494,6 +504,8 @@ impl<'a> InferCtx<'a> {
             freshened_binding_vars: Vec::new(),
             current_declared_return_type: None,
             loop_break_type_stack: Vec::new(),
+            fn_return_type_stack: Vec::new(),
+            fn_has_return_stack: Vec::new(),
         }
     }
 
@@ -8283,8 +8295,22 @@ impl<'a> InferCtx<'a> {
 
             // Return: optional value, returns Never (doesn't produce a value normally)
             Expr::Return(value, _) => {
+                // Mark that this function has a `return` statement
+                if let Some(flag) = self.fn_has_return_stack.last_mut() {
+                    *flag = true;
+                }
                 if let Some(val) = value {
-                    let _ = self.infer_expr(val)?;
+                    let val_ty = self.infer_expr(val)?;
+                    // Unify with the current function's return type variable so that
+                    // early returns contribute to the inferred return type.
+                    if let Some(ret_tv) = self.fn_return_type_stack.last().cloned() {
+                        self.unify(ret_tv, val_ty);
+                    }
+                } else {
+                    // bare return: unify function return type with Unit
+                    if let Some(ret_tv) = self.fn_return_type_stack.last().cloned() {
+                        self.unify(ret_tv, Type::Unit);
+                    }
                 }
                 Ok(Type::Unit) // Return doesn't continue execution normally
             }
@@ -10287,21 +10313,53 @@ impl<'a> InferCtx<'a> {
             self.current_declared_return_type = ret_type_name;
         }
 
+        // Push a fresh type variable for this function's return type.
+        // `return expr` inside the body will unify with this var, so early
+        // returns contribute to the inferred return type rather than being lost.
+        let fn_ret_var = self.fresh();
+        self.fn_return_type_stack.push(fn_ret_var.clone());
+        self.fn_has_return_stack.push(false);
+
         // Infer body
         let body_ty = self.infer_expr(&clause.body)?;
+
+        // Pop the function return type var and the has-return flag.
+        self.fn_return_type_stack.pop();
+        let has_return = self.fn_has_return_stack.pop().unwrap_or(false);
 
         // Restore the declared return type after body inference.
         self.current_declared_return_type = saved_declared_return;
 
+        // The actual return type is the join of:
+        //  - body_ty: the type of the last expression (Unit when body ends with `return`)
+        //  - fn_ret_var: unified with all `return expr` values inside the body
+        //
+        // If has_return is true and body_ty is Unit (body ends with a `return` statement),
+        // use fn_ret_var as the return type so early returns are not lost.
+        // If has_return is true and body_ty is NOT Unit, unify fn_ret_var with body_ty.
+        // If has_return is false, use body_ty as usual (fn_ret_var is an unbound fresh var).
+        let effective_body_ty = if has_return {
+            match &body_ty {
+                Type::Unit => fn_ret_var.clone(),
+                _ => {
+                    // Unify: any `return expr` values must match the fallthrough type
+                    self.unify(fn_ret_var, body_ty.clone());
+                    body_ty
+                }
+            }
+        } else {
+            body_ty
+        };
+
         // If there's a return type annotation, unify with it.
-        // Order: unify(annotated, body_ty) so errors say "expected <annotated>, found <body_type>"
+        // Order: unify(annotated, effective_body_ty) so errors say "expected <annotated>, found <body_type>"
         // which is the natural reading: the annotation is what's expected, the body is what was found.
         let ret_ty = if let Some(ret_expr) = &clause.return_type {
             let annotated = self.type_from_ast(ret_expr);
-            self.unify(annotated.clone(), body_ty);
+            self.unify(annotated.clone(), effective_body_ty);
             annotated
         } else {
-            body_ty
+            effective_body_ty
         };
 
         self.env.bindings = saved_bindings;
