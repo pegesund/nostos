@@ -1,13 +1,13 @@
 # expect_error: reads mvar `countdown` and later writes it
-# Tests that compare-and-set pattern is detected: read in condition, write in branch.
+# Tests that compare-and-set pattern is detected: read in condition, non-self write in branch.
 # This pattern has race conditions and is correctly rejected.
 
 mvar countdown: Int = 100
 
-# Dangerous pattern: reads countdown in condition, writes in branch
+# Dangerous pattern: reads countdown in condition, writes DIFFERENT value in branch
 decrement() = {
     if countdown > 0 then {
-        countdown = countdown - 1
+        countdown = 50
         true
     } else {
         false

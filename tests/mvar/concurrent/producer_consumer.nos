@@ -1,13 +1,13 @@
 # expect_error: reads mvar `queue_size` and later writes it
 # Tests that compare-and-set pattern is detected in consume function.
-# The pattern "if queue_size > 0 then { queue_size = ... }" has race conditions.
+# The pattern "if queue_size > 0 then { queue_size = CONSTANT }" has race conditions.
 
 mvar queue_size: Int = 0
 
-# Dangerous pattern: reads queue_size in condition, writes in branch
+# Dangerous pattern: reads queue_size in condition, writes NON-SELF value in branch
 consume() = {
     if queue_size > 0 then {
-        queue_size = queue_size - 1
+        queue_size = 0
         true
     } else {
         false
