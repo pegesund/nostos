@@ -96,6 +96,26 @@ static BUILTIN_METHODS: LazyLock<HashMap<(&str, &str), &str>> = LazyLock::new(||
         ("UInt8", "toChar", "toChar"),
         ("UInt16", "toChar", "toChar"),
         ("UInt32", "toChar", "toChar"),
+        // Numeric conversion methods - these dispatch to the generic natives that handle
+        // multiple numeric types (not the String-specific String.toFloat/String.toInt).
+        // This ensures n.toFloat() works correctly in local functions where HM inference
+        // is skipped but param_types still provides the concrete type.
+        ("Int", "toFloat", "toFloat"),
+        ("Int", "toFloat64", "toFloat"),
+        ("Int", "toInt", "toInt"),
+        ("Int8", "toFloat", "toFloat"),
+        ("Int16", "toFloat", "toFloat"),
+        ("Int32", "toFloat", "toFloat"),
+        ("Int64", "toFloat", "toFloat"),
+        ("UInt8", "toFloat", "toFloat"),
+        ("UInt16", "toFloat", "toFloat"),
+        ("UInt32", "toFloat", "toFloat"),
+        ("Float", "toInt", "toInt"),
+        ("Float", "toFloat", "toFloat"),
+        ("Float64", "toInt", "toInt"),
+        ("Float64", "toFloat", "toFloat"),
+        ("Float32", "toInt", "toInt"),
+        ("Float32", "toFloat", "toFloat"),
         // Char methods
         ("Char", "toInt", "toInt"),
         // List methods (join dispatches to String.join)
@@ -21462,6 +21482,16 @@ impl Compiler {
                 if let Some((_, ty)) = param_types.iter().find(|(n, _)| n == &name) {
                     self.local_types.insert(name.clone(), self.type_name_to_type(ty));
                 }
+                // Also add type from Pattern::TypeAnnotated (type annotations in local fn defs)
+                // e.g., `helper(i: Int, acc: Int) = body` desugars to lambda with typed patterns
+                if let Pattern::TypeAnnotated(_, ty_expr, _) = param {
+                    let ty = self.type_expr_to_type(ty_expr);
+                    // Store in both local_types and param_types so expr_type_name can find it.
+                    // local_types is saved/restored by lambda compilation; param_types is not,
+                    // but that's fine - we add lambda param types that won't conflict with outer params.
+                    self.local_types.insert(name.clone(), ty.clone());
+                    self.param_types.insert(name.clone(), ty);
+                }
                 param_names.push(name);
             } else {
                 // Complex pattern (tuple, etc.) - need to destructure
@@ -25052,6 +25082,12 @@ scope_depth: self.block_depth,
             if let Some(name) = self.pattern_binding_name(param) {
                 // Simple variable pattern - bind directly to param register
                 self.locals.insert(name.clone(), LocalInfo { reg: arg_reg, is_float: false, mutable: false, is_cell: false, scope_depth: self.block_depth + 1 });
+                // Also store type from Pattern::TypeAnnotated (from type-annotated local fn defs)
+                if let Pattern::TypeAnnotated(_, ty_expr, _) = param {
+                    let ty = self.type_expr_to_type(ty_expr);
+                    self.local_types.insert(name.clone(), ty.clone());
+                    self.param_types.insert(name.clone(), ty);
+                }
                 param_names.push(name);
             } else {
                 // Complex pattern (tuple, etc.) - need to destructure

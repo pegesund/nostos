@@ -88,6 +88,47 @@ fn expr_looks_like_type(expr: &Expr) -> bool {
     }
 }
 
+/// Convert an expression that looks like a type into a TypeExpr.
+/// Used to preserve type annotations in local function definitions.
+fn expr_to_type_expr(expr: &Expr) -> Option<TypeExpr> {
+    match expr {
+        Expr::Var(id) => Some(TypeExpr::Name(id.clone())),
+        Expr::Record(id, fields, _) if fields.is_empty() => Some(TypeExpr::Name(id.clone())),
+        // List type: [Int] → List[Int] (TypeExpr::Generic("List", [Int]))
+        Expr::List(elems, tail, span) if tail.is_none() && elems.len() == 1 => {
+            expr_to_type_expr(&elems[0]).map(|inner| {
+                TypeExpr::Generic(
+                    Spanned { node: "List".to_string(), span: *span },
+                    vec![inner],
+                )
+            })
+        }
+        // Generic type: List[Int] → TypeExpr::Generic("List", [Int])
+        Expr::Index(base, idx, span) => {
+            let base_name = match base.as_ref() {
+                Expr::Var(id) => Some(id.clone()),
+                Expr::Record(id, fields, _) if fields.is_empty() => Some(id.clone()),
+                _ => None,
+            };
+            if let Some(base_ident) = base_name {
+                let args: Option<Vec<TypeExpr>> = match idx.as_ref() {
+                    Expr::Tuple(elems, _) => elems.iter().map(expr_to_type_expr).collect(),
+                    _ => expr_to_type_expr(idx).map(|t| vec![t]),
+                };
+                args.map(|a| TypeExpr::Generic(base_ident, a))
+            } else {
+                None
+            }
+        }
+        Expr::Tuple(elems, _) if !elems.is_empty() => {
+            let types: Option<Vec<TypeExpr>> = elems.iter().map(expr_to_type_expr).collect();
+            types.map(TypeExpr::Tuple)
+        }
+        Expr::Unit(_) => Some(TypeExpr::Unit),
+        _ => None,
+    }
+}
+
 /// Convert an expression to a pattern (for when we parsed something as an expression
 /// but it turned out to be a let binding with `=`).
 fn expr_to_pattern(expr: Expr) -> Option<Pattern> {
@@ -1171,20 +1212,26 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                                                         Stmt::Expr(lhs)
                                                     }
                                                 } else {
-                                                    // No defaults: desugar to lambda (original behavior)
-                                                    // If a return type annotation was given, upgrade to LocalFnDef
+                                                    // No defaults: desugar to lambda.
+                                                    // For type-annotated params (e.g., `helper(i: Int, acc: Int)`),
+                                                    // wrap the pattern in Pattern::TypeAnnotated to preserve type info
+                                                    // for the compiler's type inference (e.g., for method dispatch).
                                                     let params: Option<Vec<Pattern>> = call_args.into_iter().map(|arg| {
                                                         match arg {
                                                             CallArg::Positional(expr) => expr_to_pattern(expr),
-                                                            // Named args in `f(...) = body` are type-annotated params
-                                                            // e.g., helper(i: Int, acc: Int) = ...
-                                                            CallArg::Named(param_name, _type_expr) => Some(Pattern::Var(param_name)),
+                                                            CallArg::Named(param_name, type_expr) => {
+                                                                // Named args are type-annotated params:
+                                                                // helper(i: Int) → Pattern::TypeAnnotated(Var("i"), TypeExpr::Name("Int"), span)
+                                                                let base_pat = Pattern::Var(param_name.clone());
+                                                                if let Some(ty_expr) = expr_to_type_expr(&type_expr) {
+                                                                    Some(Pattern::TypeAnnotated(Box::new(base_pat), ty_expr, param_name.span))
+                                                                } else {
+                                                                    Some(base_pat)
+                                                                }
+                                                            }
                                                         }
                                                     }).collect();
                                                     if let Some(param_patterns) = params {
-                                                        // Note: maybe_return_type is parsed but currently
-                                                        // used as documentation only for the Lambda path.
-                                                        // Type inference verifies the actual return type.
                                                         let lambda = Expr::Lambda(param_patterns, Box::new(rhs), call_span.clone());
                                                         Stmt::Let(Binding {
                                                             visibility: Visibility::Private,
