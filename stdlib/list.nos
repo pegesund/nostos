@@ -119,7 +119,8 @@ init[T](list: List[T]) -> List[T] = match list {
 }
 
 # Get element at index (0-based)
-nth[T](list: List[T], idx: Int) -> T = if idx < 0 then throw("Index out of bounds: " ++ show(idx) ++ " (negative index not allowed)") else if isEmpty(list) then throw("Index out of bounds: index " ++ show(idx) ++ " is out of range") else if idx == 0 then head(list) else nth(tail(list), idx - 1)
+nthHelper[T](list: List[T], idx: Int, origIdx: Int) -> T = if isEmpty(list) then throw("Index out of bounds: index " ++ show(origIdx) ++ " is out of range") else if idx == 0 then head(list) else nthHelper(tail(list), idx - 1, origIdx)
+nth[T](list: List[T], idx: Int) -> T = if idx < 0 then throw("Index out of bounds: " ++ show(idx) ++ " (negative index not allowed)") else nthHelper(list, idx, idx)
 
 # Alias for nth
 get[T](list: List[T], idx: Int) -> T = nth(list, idx)
