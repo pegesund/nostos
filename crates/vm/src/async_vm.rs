@@ -242,6 +242,11 @@ pub struct AsyncSharedState {
     /// Stops current execution but allows VM to be reused.
     pub interrupt: AtomicBool,
 
+    /// Panic message from a spawned process crash.
+    /// When a spawned actor panics, its error message is stored here and the
+    /// interrupt flag is set so the main process terminates with the correct error.
+    pub spawned_panic: std::sync::Mutex<Option<String>>,
+
     /// Interactive mode flag (true in REPL/TUI, false in script mode).
     pub interactive_mode: AtomicBool,
 
@@ -5812,11 +5817,32 @@ impl AsyncProcess {
                     });
 
                     // Run the process
-                    let _result = process.run().await;
+                    let result = process.run().await;
 
                     // Unregister on exit (cleanup abort handle too)
                     shared_clone.unregister_process(child_pid).await;
                     shared_clone.process_abort_handles.write().await.remove(&child_pid);
+
+                    // If the spawned process panicked with an unhandled error, propagate it
+                    // by storing the error message in shared state and setting the interrupt flag.
+                    // This ensures the main process (waiting in receive) terminates rather than
+                    // hanging forever.
+                    if let Err(e) = result {
+                        // Don't propagate normal interrupts (Ctrl+C already handled globally).
+                        // Check both plain Interrupted and Interrupted wrapped in WithStackTrace.
+                        let is_interrupted = matches!(e, RuntimeError::Interrupted)
+                            || matches!(&e, RuntimeError::WithStackTrace { error, .. } if matches!(error.as_ref(), RuntimeError::Interrupted));
+                        if !is_interrupted {
+                            // Only store the first panic (don't overwrite if already set)
+                            let mut panic_guard = shared_clone.spawned_panic.lock().unwrap();
+                            if panic_guard.is_none() {
+                                *panic_guard = Some(e.to_string());
+                            }
+                            drop(panic_guard);
+                            // Interrupt the main process so it stops waiting in receive
+                            shared_clone.interrupt.store(true, Ordering::SeqCst);
+                        }
+                    }
                 });
 
                 // In interactive mode, use the long-lived IO runtime for spawned processes
@@ -5906,10 +5932,25 @@ impl AsyncProcess {
                         return_reg: None,
                     });
 
-                    let _result = process.run().await;
+                    let result = process.run().await;
 
                     shared_clone.unregister_process(child_pid).await;
                     shared_clone.process_abort_handles.write().await.remove(&child_pid);
+
+                    // Propagate spawned process panics to the main process
+                    if let Err(e) = result {
+                        // Don't propagate normal interrupts (Ctrl+C already handled globally).
+                        let is_interrupted = matches!(e, RuntimeError::Interrupted)
+                            || matches!(&e, RuntimeError::WithStackTrace { error, .. } if matches!(error.as_ref(), RuntimeError::Interrupted));
+                        if !is_interrupted {
+                            let mut panic_guard = shared_clone.spawned_panic.lock().unwrap();
+                            if panic_guard.is_none() {
+                                *panic_guard = Some(e.to_string());
+                            }
+                            drop(panic_guard);
+                            shared_clone.interrupt.store(true, Ordering::SeqCst);
+                        }
+                    }
                 });
 
                 let is_interactive = self.shared.interactive_mode.load(Ordering::SeqCst);
@@ -5950,9 +5991,26 @@ impl AsyncProcess {
 
             // === Concurrency: Receive (async!) ===
             Receive(dst) => {
-                // This is where async shines - we await the message!
-                // Unlike the parallel VM which polls, we yield to tokio scheduler
-                match self.mailbox.recv().await {
+                // Await a message from the mailbox, but periodically check the interrupt
+                // flag so that if a spawned process panicked we don't hang forever.
+                let msg = loop {
+                    let interrupted = self.local_interrupt
+                        .as_ref()
+                        .map(|i| i.load(Ordering::SeqCst))
+                        .unwrap_or_else(|| self.shared.interrupt.load(Ordering::SeqCst));
+                    if interrupted {
+                        return Err(RuntimeError::Interrupted);
+                    }
+                    match tokio::time::timeout(
+                        Duration::from_millis(50),
+                        self.mailbox.recv()
+                    ).await {
+                        Ok(Some(msg)) => break Some(msg),
+                        Ok(None) => break None,
+                        Err(_timeout) => continue, // check interrupt again
+                    }
+                };
+                match msg {
                     Some(msg) => {
                         let gc_msg = msg.to_gc_value(&mut self.heap);
                         set_reg!(dst, gc_msg);
@@ -12105,6 +12163,7 @@ impl AsyncVM {
             jit_bool_returning: RwLock::new(HashSet::new()),
             shutdown: AtomicBool::new(false),
             interrupt: AtomicBool::new(false),
+            spawned_panic: std::sync::Mutex::new(None),
             interactive_mode: AtomicBool::new(false),
             spawn_runtime_handle: Some(spawn_runtime_handle),
             process_registry: TokioRwLock::new(HashMap::new()),
@@ -16816,7 +16875,20 @@ impl AsyncVM {
                 let sendable = SendableValue::from_gc_value(&value, &process.heap);
                 Ok(sendable)
             }
-            Err(e) => Err(e.to_string()),
+            Err(e) => {
+                // If interrupted because a spawned process panicked, report that error instead.
+                // Check both plain Interrupted and Interrupted wrapped in WithStackTrace.
+                let is_interrupted = matches!(e, RuntimeError::Interrupted)
+                    || matches!(&e, RuntimeError::WithStackTrace { error, .. } if matches!(error.as_ref(), RuntimeError::Interrupted));
+                if is_interrupted {
+                    if let Ok(mut guard) = shared.spawned_panic.lock() {
+                        if let Some(panic_msg) = guard.take() {
+                            return Err(panic_msg);
+                        }
+                    }
+                }
+                Err(e.to_string())
+            }
         }
     }
 
@@ -16885,7 +16957,20 @@ impl AsyncVM {
                 let sendable = SendableValue::from_gc_value(&value, &process.heap);
                 Ok((sendable, profile_summary))
             }
-            Err(e) => Err(e.to_string()),
+            Err(e) => {
+                // If interrupted because a spawned process panicked, report that error instead.
+                // Check both plain Interrupted and Interrupted wrapped in WithStackTrace.
+                let is_interrupted = matches!(e, RuntimeError::Interrupted)
+                    || matches!(&e, RuntimeError::WithStackTrace { error, .. } if matches!(error.as_ref(), RuntimeError::Interrupted));
+                if is_interrupted {
+                    if let Ok(mut guard) = self.shared.spawned_panic.lock() {
+                        if let Some(panic_msg) = guard.take() {
+                            return Err(panic_msg);
+                        }
+                    }
+                }
+                Err(e.to_string())
+            }
         }
     }
 
