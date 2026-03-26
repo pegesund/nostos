@@ -549,6 +549,34 @@ impl Compiler {
             }
         }
 
+        // Check for Result type (special case - very common)
+        // Use structural type first, fall back to string matching
+        let is_result = scrut_type_structural.map(|ty| self.as_result_type(ty).is_some()).unwrap_or(false)
+            || scrut_type.starts_with("Result[") || scrut_type == "Result";
+        if is_result {
+            fn pattern_covers_variant(pattern: &Pattern, variant_name: &str) -> bool {
+                match pattern {
+                    Pattern::Variant(ident, _, _) => ident.node == variant_name,
+                    Pattern::Or(patterns, _) => patterns.iter().any(|p| pattern_covers_variant(p, variant_name)),
+                    Pattern::Var(_) | Pattern::Wildcard(_) => true,
+                    _ => false,
+                }
+            }
+
+            let has_ok = arms.iter().any(|arm| pattern_covers_variant(&arm.pattern, "Ok"));
+            let has_err = arms.iter().any(|arm| pattern_covers_variant(&arm.pattern, "Err"));
+
+            if !has_ok || !has_err {
+                let mut missing = Vec::new();
+                if !has_ok { missing.push("Ok(_)".to_string()); }
+                if !has_err { missing.push("Err(_)".to_string()); }
+                return Err(CompileError::TypeError {
+                    message: format!("non-exhaustive patterns: `{}` not covered", missing.join("`, `")),
+                    span,
+                });
+            }
+        }
+
         // For other types (Int, String, List, etc.), we can't check exhaustiveness
         // without a wildcard pattern - but we don't error here because these types
         // have infinite values
