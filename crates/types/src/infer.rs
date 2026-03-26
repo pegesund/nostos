@@ -10502,6 +10502,21 @@ impl<'a> InferCtx<'a> {
             }
         }
 
+        // Pre-compute: for each param position, does this FnDef have a mix of
+        // typed AND untyped clauses? If so, it contains multiple typed overloads
+        // grouped together, and we must not unify params across overload boundaries.
+        // Example: inc(x) = x+1 grouped with inc(x: String) = x++"!" - these are
+        // separate dispatches; their param types must not be unified.
+        let mut mixed_type_annotation_positions: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
+        for i in 0..arity {
+            let has_typed = func.clauses.iter().any(|c| c.params.get(i).map_or(false, |p| p.ty.is_some()));
+            let has_untyped = func.clauses.iter().any(|c| c.params.get(i).map_or(false, |p| p.ty.is_none()));
+            if has_typed && has_untyped {
+                mixed_type_annotation_positions.insert(i);
+            }
+        }
+
         // Infer remaining clauses and unify their types with the first
         for clause in func.clauses.iter().skip(1) {
             let (clause_params, clause_ret) = self.infer_clause(clause)?;
@@ -10513,6 +10528,48 @@ impl<'a> InferCtx<'a> {
                     found: clause_params.len(),
                 });
             }
+
+            // Determine if this clause is part of a different typed dispatch branch.
+            // A clause is a separate typed overload if ALL params at mixed positions have
+            // explicit type annotations that DIFFER from the accumulated type.
+            // This prevents cross-contamination like: inc(x:String)=x++"!" acquiring Num bounds
+            // from inc(x)=x+1 when both end up in the same FnDef due to grouping.
+            let is_separate_typed_overload = if mixed_type_annotation_positions.is_empty() {
+                false
+            } else {
+                // Check if this clause's explicit type annotations at mixed positions
+                // differ from accumulated param types.
+                let mut has_concrete_type_mismatch = false;
+                for &i in &mixed_type_annotation_positions {
+                    let accumulated = self.env.apply_subst(&param_types[i]);
+                    let accumulated_is_concrete = !matches!(&accumulated, Type::Var(_));
+                    if accumulated_is_concrete {
+                        if let Some(p) = clause.params.get(i) {
+                            if p.ty.is_none() {
+                                // This clause has NO type annotation at a mixed position where
+                                // the accumulated type is already concrete: it's the untyped branch.
+                                has_concrete_type_mismatch = true;
+                                break;
+                            }
+                            // Has explicit type - check if it matches
+                            let explicit_ty = self.type_from_ast(p.ty.as_ref().unwrap());
+                            if accumulated != explicit_ty {
+                                has_concrete_type_mismatch = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                has_concrete_type_mismatch
+            };
+
+            if is_separate_typed_overload {
+                // This clause belongs to a different typed dispatch branch - skip param unification
+                // to prevent cross-contamination between distinct overloads.
+                // Return types are also skipped (different overloads return independently).
+                continue;
+            }
+
             for i in 0..param_types.len() {
                 // If this param position has conflicting tuple structures across clauses,
                 // do NOT unify them. Different-structure tuple dispatch is valid at runtime

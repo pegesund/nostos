@@ -2044,6 +2044,22 @@ pub struct TraitImplInfo {
     pub method_names: Vec<String>,  // Maps to qualified function names like "Point.Show.show"
 }
 
+/// Determine the implicit type string of a literal pattern, e.g. Pattern::Int → "Int".
+/// Returns None for variable, wildcard, constructor patterns, etc.
+fn literal_pattern_type_str(pattern: &Pattern) -> Option<&'static str> {
+    match pattern {
+        Pattern::Int(_, _) => Some("Int"),
+        Pattern::Int8(_, _) => Some("Int8"),
+        Pattern::Int16(_, _) => Some("Int16"),
+        Pattern::Int32(_, _) => Some("Int32"),
+        Pattern::Float(_, _) => Some("Float"),
+        Pattern::Float32(_, _) => Some("Float32"),
+        Pattern::String(_, _) => Some("String"),
+        Pattern::Bool(_, _) => Some("Bool"),
+        _ => None,
+    }
+}
+
 impl Compiler {
     pub fn new_empty() -> Self {
         // Pre-register built-in pseudo-modules for native functions
@@ -2286,6 +2302,7 @@ impl Compiler {
             // Group clauses by their explicit type signature
             // A clause's explicit signature is the types of params that have explicit annotations
             // Clauses with compatible signatures can be merged
+
             let mut groups: Vec<(Vec<Option<String>>, Vec<(FnClause, Span, Visibility)>)> = Vec::new();
 
             for def in defs {
@@ -2299,16 +2316,42 @@ impl Compiler {
                     let mut found_group = false;
                     for (group_sig, group_clauses) in &mut groups {
                         // Check if signatures are compatible (no conflicts).
-                        // Two clauses belong in the same FnDef only if their param types don't conflict:
-                        // - Both untyped (None, None) → compatible (same generic function)
-                        // - Both typed with same type (Some(x), Some(x)) → compatible (same overload)
-                        // - Mixed typed/untyped (None, Some) or (Some, None) → NOT compatible (different overloads)
-                        //   e.g., inc(x) = x+1 and inc(x:String) = x++"!" must remain separate
-                        let compatible = explicit_sig.iter().zip(group_sig.iter()).all(|(e, g)| {
+                        // Typed and untyped clauses are only compatible at position i when:
+                        // - Both are typed with the same type (Some(T), Some(T)) → same overload
+                        // - Both are untyped (None, None) → same generic function
+                        // - One is typed (Some(T)) and other is untyped (None), BUT the untyped
+                        //   clause has a LITERAL PATTERN of the same type at that position.
+                        //   e.g., factorial(0)=1 with factorial(n:Int)=... → compatible (0 is Int)
+                        // - SEPARATE: variable pattern (Ident/Wildcard) at position i vs typed param
+                        //   e.g., inc(x)=x+1 with inc(x:String)=x++"!" → different overloads
+                        let compatible = explicit_sig.iter().zip(group_sig.iter()).enumerate().all(|(i, (e, g))| {
                             match (e, g) {
-                                (None, None) => true,  // Both untyped: same generic function
+                                (None, None) => true, // Both untyped: same generic function
                                 (Some(et), Some(gt)) => et == gt, // Both typed: must match
-                                (None, Some(_)) | (Some(_), None) => false, // Mixed: separate overloads
+                                (Some(et), None) => {
+                                    // New clause has explicit type, group is untyped.
+                                    // Compatible only if the group's first clause has a literal
+                                    // pattern of the same type (e.g., group has literal 0 → Int).
+                                    if let Some((first_clause, _, _)) = group_clauses.first() {
+                                        if let Some(lit_ty) = first_clause.params.get(i)
+                                            .and_then(|p| literal_pattern_type_str(&p.pattern))
+                                        {
+                                            return lit_ty == et.as_str();
+                                        }
+                                    }
+                                    false // Variable pattern in group → separate overloads
+                                }
+                                (None, Some(gt)) => {
+                                    // New clause is untyped, group has explicit type.
+                                    // Compatible only if new clause has a literal pattern of
+                                    // the same type (e.g., clause has literal 0 → Int).
+                                    if let Some(lit_ty) = clause.params.get(i)
+                                        .and_then(|p| literal_pattern_type_str(&p.pattern))
+                                    {
+                                        return lit_ty == gt.as_str();
+                                    }
+                                    false // Variable pattern in new clause → separate overloads
+                                }
                             }
                         }) && explicit_sig.len() == group_sig.len();
 
@@ -32963,7 +33006,8 @@ impl Compiler {
             let defs = fn_defs_by_base.get(base_name).unwrap();
 
             // Group clauses by their explicit type signature
-            // Clauses with compatible signatures can be merged
+            // Clauses with compatible signatures can be merged.
+            // See forward_declare_functions for the compatibility rules.
             let mut groups: Vec<(Vec<Option<String>>, Vec<(FnClause, &FnDef)>)> = Vec::new();
 
             for def in defs {
@@ -32976,13 +33020,32 @@ impl Compiler {
                     // Find a compatible group
                     let mut found_group = false;
                     for (group_sig, group_clauses) in &mut groups {
-                        // Same grouping rule as forward_declare_functions:
-                        // mixed typed/untyped params = separate overloads
-                        let compatible = explicit_sig.iter().zip(group_sig.iter()).all(|(e, g)| {
+                        let compatible = explicit_sig.iter().zip(group_sig.iter()).enumerate().all(|(i, (e, g))| {
                             match (e, g) {
                                 (None, None) => true,
                                 (Some(et), Some(gt)) => et == gt,
-                                (None, Some(_)) | (Some(_), None) => false, // Mixed: separate overloads
+                                (Some(et), None) => {
+                                    // New clause typed, group untyped: compatible only if group's
+                                    // first clause has a literal pattern of the matching type.
+                                    if let Some((first_clause, _)) = group_clauses.first() {
+                                        if let Some(lit_ty) = first_clause.params.get(i)
+                                            .and_then(|p| literal_pattern_type_str(&p.pattern))
+                                        {
+                                            return lit_ty == et.as_str();
+                                        }
+                                    }
+                                    false
+                                }
+                                (None, Some(gt)) => {
+                                    // New clause untyped, group typed: compatible only if new
+                                    // clause has a literal pattern of the group's type.
+                                    if let Some(lit_ty) = clause.params.get(i)
+                                        .and_then(|p| literal_pattern_type_str(&p.pattern))
+                                    {
+                                        return lit_ty == gt.as_str();
+                                    }
+                                    false
+                                }
                             }
                         }) && explicit_sig.len() == group_sig.len();
 
@@ -33030,8 +33093,6 @@ impl Compiler {
                     .collect();
 
                 // Sort only by type annotation count: typed params before untyped.
-                // Do NOT sort by pattern specificity - preserve definition order
-                // for pattern-based clauses (like Haskell/ML/Erlang).
                 let mut sorted_clauses = all_clauses;
                 sorted_clauses.sort_by(|a, b| {
                     let a_typed = -(a.params.iter().filter(|p| p.ty.is_some()).count() as i32);
