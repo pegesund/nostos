@@ -567,6 +567,9 @@ impl TypeError {
         // Early return confusion: `return X` in a branch makes HM see () vs X.
         // Suppress Unit vs non-primitive (valid early return pattern).
         // Keep Unit vs primitive (real: f() + 1 where f returns ()).
+        // IMPORTANT: Only suppress when the non-unit type has unresolved type variables.
+        // If both types are fully concrete (no vars), this is a real type mismatch,
+        // not early-return confusion. E.g., fn() -> MyRecord = { x = 3 } should error.
         fn is_unit_type(t: &Type) -> bool {
             matches!(t, Type::Unit) || matches!(t, Type::Tuple(f) if f.is_empty())
         }
@@ -577,10 +580,10 @@ impl TypeError {
                 | Type::BigInt | Type::Decimal
                 | Type::String | Type::Char | Type::Bool)
         }
-        if is_unit_type(t1) && !is_unit_type(t2) && !is_primitive_type(t2) {
+        if is_unit_type(t1) && !is_unit_type(t2) && !is_primitive_type(t2) && t2.has_any_type_var() {
             return true;
         }
-        if is_unit_type(t2) && !is_unit_type(t1) && !is_primitive_type(t1) {
+        if is_unit_type(t2) && !is_unit_type(t1) && !is_primitive_type(t1) && t1.has_any_type_var() {
             return true;
         }
 
