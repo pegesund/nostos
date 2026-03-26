@@ -1699,6 +1699,9 @@ pub struct Compiler {
     /// Maps local function name (user-visible) → internal qualified name (used for default lookup).
     /// Populated by compile_local_fn_def so callers can find param defaults for local fns.
     local_fn_internal_names: HashMap<String, String>,
+    /// Maps local variable name → function name when a variable is assigned a function reference.
+    /// e.g., `f = add` stores "f" → "add". Used to look up param defaults when calling via var.
+    local_var_fn_refs: HashMap<String, String>,
     /// Tracks local functions that have multiple arity overloads.
     /// Maps base name → list of arities that have separate lambdas stored as `{name}__arity_{n}`.
     /// e.g., if `combine(x) = ...` and `combine(x,y) = ...` both exist, stores "combine" → [1, 2].
@@ -2073,6 +2076,7 @@ impl Compiler {
             current_fn_generic_hm: false,
             compiling_stranded_fn: false,
             local_fn_internal_names: HashMap::new(),
+            local_var_fn_refs: HashMap::new(),
             local_arity_overloads: HashMap::new(),
             current_type_bindings: HashMap::new(),
             loop_stack: Vec::new(),
@@ -2694,6 +2698,7 @@ impl Compiler {
             current_fn_generic_hm: false,
             compiling_stranded_fn: false,
             local_fn_internal_names: HashMap::new(),
+            local_var_fn_refs: HashMap::new(),
             local_arity_overloads: HashMap::new(),
             current_type_bindings: HashMap::new(),
             loop_stack: Vec::new(),
@@ -16936,7 +16941,10 @@ impl Compiler {
         let (param_names, param_defaults): (Vec<Option<String>>, Vec<Option<Expr>>) =
             if let Some(ref qname) = maybe_qualified_name {
                 // Check if this is a local function variable with defaults
+                // Try local_fn_internal_names first (for locally-defined functions with defaults)
+                // then local_var_fn_refs (for variables assigned from functions with defaults, e.g. f = add)
                 let effective_name = self.local_fn_internal_names.get(qname.as_str())
+                    .or_else(|| self.local_var_fn_refs.get(qname.as_str()))
                     .cloned()
                     .unwrap_or_else(|| qname.clone());
                 // Get arg types from provided args so we can select the right overload's defaults
@@ -22656,6 +22664,7 @@ impl Compiler {
         // --- BEGIN SCOPE ---
         let saved_locals = self.locals.clone();
         let saved_local_types = self.local_types.clone();
+        let saved_local_var_fn_refs = self.local_var_fn_refs.clone();
         self.block_depth += 1;
 
         // Pre-process: merge multiple Stmt::LocalFnDef with the same name into one
@@ -22776,6 +22785,7 @@ scope_depth: self.block_depth,
         self.block_depth -= 1;
         self.locals = saved_locals;
         self.local_types = saved_local_types;
+        self.local_var_fn_refs = saved_local_var_fn_refs;
         self.closure_mutated_vars = saved_closure_mutated;
         self.local_arity_overloads = saved_arity_overloads;
 
@@ -23665,6 +23675,17 @@ scope_depth: self.block_depth,
                         (value_reg, false)
                     };
                     self.locals.insert(ident.node.clone(), LocalInfo { reg: final_reg, is_float, mutable: binding.mutable, is_cell, scope_depth: self.block_depth });
+                    // Track function reference assignments: `f = add` → local_var_fn_refs["f"] = "add"
+                    // This allows call sites to look up param defaults for calls like `f(32)`.
+                    if !binding.mutable {
+                        if let Expr::Var(ref fn_ident) = binding.value {
+                            let resolved = self.resolve_name(&fn_ident.node);
+                            let defaults = self.get_function_param_defaults(&resolved);
+                            if defaults.iter().any(|d| d.is_some()) {
+                                self.local_var_fn_refs.insert(ident.node.clone(), resolved);
+                            }
+                        }
+                    }
                     // Record debug symbol for this local variable
                     self.current_fn_debug_symbols.push(LocalVarSymbol {
                         name: ident.node.clone(),

@@ -1,0 +1,15 @@
+# expect: 0
+# Test: calling a function stored in a variable when it has default params
+
+add(a: Int, b: Int = 10) = a + b
+greet(name: String, greeting: String = "Hello") = greeting ++ ", " ++ name ++ "!"
+
+main() = {
+    f = add
+    g = greet
+    t1 = f(32) == 42
+    t2 = f(5, 3) == 8
+    t3 = g("Alice") == "Hello, Alice!"
+    t4 = g("Bob", "Hi") == "Hi, Bob!"
+    if t1 && t2 && t3 && t4 then 0 else 1
+}
