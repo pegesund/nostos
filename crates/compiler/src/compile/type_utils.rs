@@ -233,7 +233,7 @@ impl Compiler {
         }
 
         match ty {
-            "Int" | "Int64" => nostos_types::Type::Int,
+            "Int" | "Int64" | "PgConn" => nostos_types::Type::Int,
             "Int8" => nostos_types::Type::Int8,
             "Int16" => nostos_types::Type::Int16,
             "Int32" => nostos_types::Type::Int32,

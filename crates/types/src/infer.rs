@@ -6480,7 +6480,7 @@ impl<'a> InferCtx<'a> {
                 let resolved_name = self.env.resolve_type_name(name);
                 let primitive = match resolved_name.as_str() {
                     "String" => Some(Type::String),
-                    "Int" | "Int64" => Some(Type::Int),
+                    "Int" | "Int64" | "PgConn" => Some(Type::Int),
                     "Float" | "Float64" => Some(Type::Float),
                     "Bool" => Some(Type::Bool),
                     "Char" => Some(Type::Char),
@@ -6558,7 +6558,7 @@ impl<'a> InferCtx<'a> {
                 }
                 match name.as_str() {
                     // Integer types
-                    "Int" => Type::Int,
+                    "Int" | "PgConn" => Type::Int,
                     "Int8" => Type::Int8,
                     "Int16" => Type::Int16,
                     "Int32" => Type::Int32,

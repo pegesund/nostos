@@ -6987,7 +6987,8 @@ impl Compiler {
             "Bool" | "Char" | "String" | "BigInt" | "Decimal" |
             "List" | "Array" | "Set" | "Map" | "IO" | "Pid" | "Ref" |
             "Int64Array" | "Float64Array" | "Float32Array" | "Buffer" |
-            "Unit" | "()" | "Never"
+            "Unit" | "()" | "Never" |
+            "PgConn"  // Alias for Int (PostgreSQL connection handle)
         )
     }
 
