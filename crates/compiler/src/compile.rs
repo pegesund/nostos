@@ -16325,15 +16325,26 @@ impl Compiler {
                 }
 
                 // Only dispatch to trait methods for non-primitive custom types
-                if !Self::is_primitive_type(&left_type) && self.types.contains_key(&left_type) {
+                // Also handle generic instantiations (e.g., "Scored[String]") by stripping
+                // type args to get the base type name ("Scored") for the types map lookup.
+                let left_type_base = if let Some(bracket_pos) = left_type.find('[') {
+                    left_type[..bracket_pos].to_string()
+                } else {
+                    left_type.clone()
+                };
+                if !Self::is_primitive_type(&left_type) && (self.types.contains_key(&left_type) || self.types.contains_key(&left_type_base)) {
+                    // Use base type name for trait lookup (traits are registered on base types,
+                    // not on specific instantiations like "Scored[String]")
+                    let lookup_type = if self.types.contains_key(&left_type) { &left_type } else { &left_type_base };
                     // Check if the type implements the trait and get the actual registered trait name
                     // (may be qualified like "nalgebra.Num" even if we looked for "Num")
-                    if let Some(actual_trait_name) = self.find_implemented_trait(&left_type, trait_name) {
+                    if let Some(actual_trait_name) = self.find_implemented_trait(lookup_type, trait_name) {
                         // Look up the trait method implementation using the actual trait name
-                        let qualified_method = format!("{}.{}.{}", left_type, actual_trait_name, method_name);
+                        let qualified_method = format!("{}.{}.{}", lookup_type, actual_trait_name, method_name);
 
                         // Find the actual function with signature
-                        let method_arg_types = vec![Some(left_type.clone()), self.expr_type_info(right).display_name()];
+                        // Use lookup_type (base type name) for arg type to match registered function signatures
+                        let method_arg_types = vec![Some(lookup_type.clone()), self.expr_type_info(right).display_name()];
                         if let Some(resolved_method) = self.resolve_function_call(&qualified_method, &method_arg_types) {
                             if self.functions.contains_key(&resolved_method) {
                                 // Compile as a function call to the trait method
