@@ -10503,16 +10503,29 @@ impl<'a> InferCtx<'a> {
         }
 
         // Pre-compute: for each param position, does this FnDef have a mix of
-        // typed AND untyped clauses? If so, it contains multiple typed overloads
-        // grouped together, and we must not unify params across overload boundaries.
+        // typed AND pure-variable (unstructured) untyped clauses? If so, it contains
+        // multiple typed overloads grouped together, and we must not unify params across
+        // overload boundaries.
         // Example: inc(x) = x+1 grouped with inc(x: String) = x++"!" - these are
         // separate dispatches; their param types must not be unified.
+        //
+        // NOTE: structural untyped patterns ([], Some(x), (a,b), etc.) are NOT flagged
+        // as "mixed" because they're compatible with typed params (same dispatch type).
+        // Only pure variable/wildcard patterns indicate a different dispatch category.
         let mut mixed_type_annotation_positions: std::collections::HashSet<usize> =
             std::collections::HashSet::new();
         for i in 0..arity {
             let has_typed = func.clauses.iter().any(|c| c.params.get(i).map_or(false, |p| p.ty.is_some()));
-            let has_untyped = func.clauses.iter().any(|c| c.params.get(i).map_or(false, |p| p.ty.is_none()));
-            if has_typed && has_untyped {
+            // Only count variable/wildcard patterns as "untyped dispatch" - structural patterns
+            // ([], Some(x), etc.) are just pattern-matched variants of the same typed dispatch.
+            let has_variable_untyped = func.clauses.iter().any(|c| {
+                c.params.get(i).map_or(false, |p| {
+                    if p.ty.is_some() { return false; }
+                    // Variable or wildcard pattern = true untyped dispatch
+                    matches!(&p.pattern, Pattern::Wildcard(_) | Pattern::Var(_))
+                })
+            });
+            if has_typed && has_variable_untyped {
                 mixed_type_annotation_positions.insert(i);
             }
         }

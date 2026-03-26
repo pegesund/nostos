@@ -2060,6 +2060,35 @@ fn literal_pattern_type_str(pattern: &Pattern) -> Option<&'static str> {
     }
 }
 
+/// Returns true if pattern is a pure variable or wildcard (matches any value of any type).
+/// Such patterns, when used in a function clause with no explicit type annotation, create
+/// a "generic" dispatch case that should be SEPARATE from explicitly typed overloads.
+fn is_variable_or_wildcard_pattern(pattern: &Pattern) -> bool {
+    matches!(pattern, Pattern::Wildcard(_) | Pattern::Var(_))
+}
+
+/// Returns true if a pattern has a deterministic concrete type that can be compared to
+/// an explicit type annotation for merging compatibility.
+/// Only literal patterns have deterministic types (0 → Int, "str" → String, etc.).
+/// Constructor patterns ([], Some(x)) have open/generic types and should NOT be merged.
+fn has_deterministic_type(pattern: &Pattern) -> bool {
+    literal_pattern_type_str(pattern).is_some()
+}
+
+/// Returns a "specificity score" for a pattern: higher = more specific.
+/// This is used to sort clauses so that more-specific patterns are tried first.
+/// - Literal patterns (0, "hello", true): score 3
+/// - Structural patterns ([], [h|t], Some(x), Tuple, Variant): score 2
+/// - Variable/wildcard patterns: score 0
+fn pattern_specificity(pattern: &Pattern) -> i32 {
+    match pattern {
+        Pattern::Int(_, _) | Pattern::Int8(_, _) | Pattern::Int16(_, _) | Pattern::Int32(_, _) |
+        Pattern::Float(_, _) | Pattern::Float32(_, _) | Pattern::String(_, _) | Pattern::Bool(_, _) => 3,
+        Pattern::Wildcard(_) | Pattern::Var(_) => 0,
+        _ => 2, // Structural: [], [h|t], Variant, Tuple, StringCons, etc.
+    }
+}
+
 impl Compiler {
     pub fn new_empty() -> Self {
         // Pre-register built-in pseudo-modules for native functions
@@ -2316,41 +2345,40 @@ impl Compiler {
                     let mut found_group = false;
                     for (group_sig, group_clauses) in &mut groups {
                         // Check if signatures are compatible (no conflicts).
-                        // Typed and untyped clauses are only compatible at position i when:
-                        // - Both are typed with the same type (Some(T), Some(T)) → same overload
-                        // - Both are untyped (None, None) → same generic function
-                        // - One is typed (Some(T)) and other is untyped (None), BUT the untyped
-                        //   clause has a LITERAL PATTERN of the same type at that position.
-                        //   e.g., factorial(0)=1 with factorial(n:Int)=... → compatible (0 is Int)
-                        // - SEPARATE: variable pattern (Ident/Wildcard) at position i vs typed param
-                        //   e.g., inc(x)=x+1 with inc(x:String)=x++"!" → different overloads
+                        // Typed and untyped clauses are compatible at position i when:
+                        // - Both typed with same type (Some(T), Some(T)) → same overload
+                        // - Both untyped (None, None) → same generic function
+                        // - One typed (Some(T)), one untyped (None) with LITERAL pattern of type T
+                        //   e.g., factorial(0)=1 with factorial(n:Int)=... → compatible (0 is Int literal)
+                        // - SEPARATE: variable/wildcard or non-literal structural patterns
+                        //   e.g., inc(x)=x+1 with inc(x:String)=x++"!" → different type overloads
+                        //   e.g., describe([])=... with describe(xs:[Int])=... → separate ([] is generic)
                         let compatible = explicit_sig.iter().zip(group_sig.iter()).enumerate().all(|(i, (e, g))| {
                             match (e, g) {
                                 (None, None) => true, // Both untyped: same generic function
                                 (Some(et), Some(gt)) => et == gt, // Both typed: must match
                                 (Some(et), None) => {
                                     // New clause has explicit type, group is untyped.
-                                    // Compatible only if the group's first clause has a literal
-                                    // pattern of the same type (e.g., group has literal 0 → Int).
+                                    // Compatible only if group's first clause has a LITERAL pattern
+                                    // of the matching type (e.g., 0 for Int, "str" for String).
                                     if let Some((first_clause, _, _)) = group_clauses.first() {
-                                        if let Some(lit_ty) = first_clause.params.get(i)
-                                            .and_then(|p| literal_pattern_type_str(&p.pattern))
-                                        {
-                                            return lit_ty == et.as_str();
+                                        if let Some(p) = first_clause.params.get(i) {
+                                            if let Some(lit_ty) = literal_pattern_type_str(&p.pattern) {
+                                                return lit_ty == et.as_str();
+                                            }
                                         }
                                     }
-                                    false // Variable pattern in group → separate overloads
+                                    false // Variable, wildcard, or structural pattern → separate overloads
                                 }
                                 (None, Some(gt)) => {
                                     // New clause is untyped, group has explicit type.
-                                    // Compatible only if new clause has a literal pattern of
-                                    // the same type (e.g., clause has literal 0 → Int).
-                                    if let Some(lit_ty) = clause.params.get(i)
-                                        .and_then(|p| literal_pattern_type_str(&p.pattern))
-                                    {
-                                        return lit_ty == gt.as_str();
+                                    // Compatible only if new clause has a LITERAL pattern of the group's type.
+                                    if let Some(p) = clause.params.get(i) {
+                                        if let Some(lit_ty) = literal_pattern_type_str(&p.pattern) {
+                                            return lit_ty == gt.as_str();
+                                        }
                                     }
-                                    false // Variable pattern in new clause → separate overloads
+                                    false // Variable, wildcard, or structural pattern → separate overloads
                                 }
                             }
                         }) && explicit_sig.len() == group_sig.len();
@@ -2401,20 +2429,21 @@ impl Compiler {
                     .collect();
 
                 // Sort clauses by specificity: more specific patterns first.
-                // 1. Literal patterns come first (most specific)
-                // 2. Then by type annotation count
-                // 3. Preserve relative declaration order for same specificity
+                // Sort clauses by specificity: more specific patterns first.
+                // 1. Higher pattern_specificity sum first (literals > structural > typed-only > wildcard)
+                // 2. More type annotations next
+                // 3. Preserve relative declaration order for equal specificity
                 let mut sorted_indexed: Vec<(usize, FnClause)> = all_clauses.into_iter().enumerate().collect();
                 sorted_indexed.sort_by(|(ai, a), (bi, b)| {
-                    let a_literals = a.params.iter()
-                        .filter(|p| p.ty.is_none() && literal_pattern_type_str(&p.pattern).is_some())
-                        .count() as i32;
-                    let b_literals = b.params.iter()
-                        .filter(|p| p.ty.is_none() && literal_pattern_type_str(&p.pattern).is_some())
-                        .count() as i32;
-                    let lit_cmp = (-a_literals).cmp(&(-b_literals));
-                    if lit_cmp != std::cmp::Ordering::Equal {
-                        return lit_cmp;
+                    let a_spec: i32 = a.params.iter()
+                        .map(|p| if p.ty.is_none() { pattern_specificity(&p.pattern) } else { 0 })
+                        .sum();
+                    let b_spec: i32 = b.params.iter()
+                        .map(|p| if p.ty.is_none() { pattern_specificity(&p.pattern) } else { 0 })
+                        .sum();
+                    let spec_cmp = (-a_spec).cmp(&(-b_spec));
+                    if spec_cmp != std::cmp::Ordering::Equal {
+                        return spec_cmp;
                     }
                     let a_typed = a.params.iter().filter(|p| p.ty.is_some()).count() as i32;
                     let b_typed = b.params.iter().filter(|p| p.ty.is_some()).count() as i32;
@@ -33036,6 +33065,8 @@ impl Compiler {
                     // Find a compatible group
                     let mut found_group = false;
                     for (group_sig, group_clauses) in &mut groups {
+                        // Same compatibility rule as forward_declare_functions:
+                        // only literal patterns can merge with typed clauses.
                         let compatible = explicit_sig.iter().zip(group_sig.iter()).enumerate().all(|(i, (e, g))| {
                             match (e, g) {
                                 (None, None) => true,
@@ -33044,10 +33075,10 @@ impl Compiler {
                                     // New clause typed, group untyped: compatible only if group's
                                     // first clause has a literal pattern of the matching type.
                                     if let Some((first_clause, _)) = group_clauses.first() {
-                                        if let Some(lit_ty) = first_clause.params.get(i)
-                                            .and_then(|p| literal_pattern_type_str(&p.pattern))
-                                        {
-                                            return lit_ty == et.as_str();
+                                        if let Some(p) = first_clause.params.get(i) {
+                                            if let Some(lit_ty) = literal_pattern_type_str(&p.pattern) {
+                                                return lit_ty == et.as_str();
+                                            }
                                         }
                                     }
                                     false
@@ -33055,10 +33086,10 @@ impl Compiler {
                                 (None, Some(gt)) => {
                                     // New clause untyped, group typed: compatible only if new
                                     // clause has a literal pattern of the group's type.
-                                    if let Some(lit_ty) = clause.params.get(i)
-                                        .and_then(|p| literal_pattern_type_str(&p.pattern))
-                                    {
-                                        return lit_ty == gt.as_str();
+                                    if let Some(p) = clause.params.get(i) {
+                                        if let Some(lit_ty) = literal_pattern_type_str(&p.pattern) {
+                                            return lit_ty == gt.as_str();
+                                        }
                                     }
                                     false
                                 }
@@ -33109,31 +33140,27 @@ impl Compiler {
                     .collect();
 
                 // Sort clauses by specificity: more specific patterns first.
-                // 1. Clauses with literal patterns come first (most specific)
-                // 2. Then clauses with more type annotations
-                // 3. Preserve relative declaration order for same specificity
+                // 1. Higher pattern_specificity sum first
+                // 2. More type annotations next
+                // 3. Preserve relative declaration order for equal specificity
                 let mut sorted_clauses: Vec<(usize, FnClause)> = all_clauses.into_iter().enumerate().collect();
                 sorted_clauses.sort_by(|(ai, a), (bi, b)| {
-                    // Count literal patterns (most specific)
-                    let a_literals = a.params.iter()
-                        .filter(|p| p.ty.is_none() && literal_pattern_type_str(&p.pattern).is_some())
-                        .count() as i32;
-                    let b_literals = b.params.iter()
-                        .filter(|p| p.ty.is_none() && literal_pattern_type_str(&p.pattern).is_some())
-                        .count() as i32;
-                    // More literals = higher specificity = smaller sort key
-                    let lit_cmp = (-a_literals).cmp(&(-b_literals));
-                    if lit_cmp != std::cmp::Ordering::Equal {
-                        return lit_cmp;
+                    let a_spec: i32 = a.params.iter()
+                        .map(|p| if p.ty.is_none() { pattern_specificity(&p.pattern) } else { 0 })
+                        .sum();
+                    let b_spec: i32 = b.params.iter()
+                        .map(|p| if p.ty.is_none() { pattern_specificity(&p.pattern) } else { 0 })
+                        .sum();
+                    let spec_cmp = (-a_spec).cmp(&(-b_spec));
+                    if spec_cmp != std::cmp::Ordering::Equal {
+                        return spec_cmp;
                     }
-                    // Then by type annotation count: more typed = more specific
                     let a_typed = a.params.iter().filter(|p| p.ty.is_some()).count() as i32;
                     let b_typed = b.params.iter().filter(|p| p.ty.is_some()).count() as i32;
                     let typed_cmp = (-a_typed).cmp(&(-b_typed));
                     if typed_cmp != std::cmp::Ordering::Equal {
                         return typed_cmp;
                     }
-                    // Preserve declaration order for equal specificity
                     ai.cmp(bi)
                 });
                 let sorted_clauses: Vec<FnClause> = sorted_clauses.into_iter().map(|(_, c)| c).collect();
