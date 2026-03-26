@@ -6886,8 +6886,20 @@ impl AsyncProcess {
                         return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
                     }
                     let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
-                    if let Some(gc_value) = self.handle_io_result(result, "io_error")? {
-                        set_reg!(dst, gc_value);
+                    // Handle result manually: always convert bytes to List[Int] (not String)
+                    match result {
+                        Ok(IoResponseValue::Bytes(bytes)) => {
+                            let values: Vec<GcValue> = bytes.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
+                            let list = GcValue::List(self.heap.make_list(values));
+                            set_reg!(dst, list);
+                        }
+                        Ok(other) => {
+                            let gc_value = self.io_response_to_gc_value(other);
+                            set_reg!(dst, gc_value);
+                        }
+                        Err(e) => {
+                            self.throw_exception("io_error", e.to_string())?;
+                        }
                     }
                 } else {
                     return Err(RuntimeError::IOError("IO runtime not available".to_string()));
@@ -10407,9 +10419,11 @@ impl AsyncProcess {
         match response {
             IoResponseValue::Unit => GcValue::Unit,
             IoResponseValue::Bytes(bytes) => {
+                // Used by File.read (returns String) - convert bytes to UTF-8 string
                 match std::string::String::from_utf8(bytes.clone()) {
                     Ok(s) => GcValue::String(self.heap.alloc_string(s)),
                     Err(_) => {
+                        // Fallback for non-UTF-8: return as List[Int]
                         let values: Vec<GcValue> = bytes.into_iter().map(|b| GcValue::Int64(b as i64)).collect();
                         GcValue::List(self.heap.make_list(values))
                     }
