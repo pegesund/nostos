@@ -9340,12 +9340,33 @@ impl<'a> InferCtx<'a> {
             if let Some(ref ret_ty_name) = declared_return {
                 // Normalize: strip module prefix for comparison
                 let ret_base = ret_ty_name.rsplit('.').next().unwrap_or(ret_ty_name.as_str());
-                let found = matching_type_names.iter()
-                    .find(|tn| {
-                        let tn_base = tn.rsplit('.').next().unwrap_or(tn.as_str());
-                        tn_base == ret_base || tn.as_str() == ret_ty_name.as_str()
-                    })
+                // Priority order: exact name match > non-stdlib base match > stdlib base match
+                // This ensures user-defined types shadow stdlib types with the same base name.
+                // (e.g., user-defined `ValidationResult` shadows `stdlib.validation.ValidationResult`)
+                let exact_match = matching_type_names.iter()
+                    .find(|tn| tn.as_str() == ret_ty_name.as_str())
                     .cloned();
+                let found = if exact_match.is_some() {
+                    exact_match
+                } else {
+                    // Among base-name matches, prefer non-stdlib types
+                    let non_stdlib = matching_type_names.iter()
+                        .find(|tn| {
+                            let tn_base = tn.rsplit('.').next().unwrap_or(tn.as_str());
+                            (tn_base == ret_base) && !tn.starts_with("stdlib.")
+                        })
+                        .cloned();
+                    if non_stdlib.is_some() {
+                        non_stdlib
+                    } else {
+                        matching_type_names.iter()
+                            .find(|tn| {
+                                let tn_base = tn.rsplit('.').next().unwrap_or(tn.as_str());
+                                tn_base == ret_base || tn.as_str() == ret_ty_name.as_str()
+                            })
+                            .cloned()
+                    }
+                };
                 found
             } else {
                 None
