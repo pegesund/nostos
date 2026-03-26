@@ -20102,8 +20102,15 @@ impl Compiler {
         let mut specialized_def = fn_def.clone();
         // Use just the base part without signature for the def name
         // mangled_name is like "hashable$Point/Point", we want "hashable$Point"
+        // IMPORTANT: use the module prefix to strip (not rsplitn('.')) because the type suffix
+        // may contain dots (e.g., "stdlib.db.toRecord$types.PgRow" — the last dot is in the type!)
         let name_without_sig = mangled_name.split('/').next().unwrap_or(&mangled_name);
-        let local_name = if name_without_sig.contains('.') {
+        let local_name = if !original_module_path.is_empty() {
+            let module_prefix = format!("{}.", original_module_path.join("."));
+            name_without_sig.strip_prefix(&module_prefix)
+                .unwrap_or(name_without_sig)
+                .to_string()
+        } else if name_without_sig.contains('.') {
             name_without_sig.rsplitn(2, '.').next().unwrap_or(name_without_sig).to_string()
         } else {
             name_without_sig.to_string()
@@ -20416,9 +20423,17 @@ impl Compiler {
         };
 
         // Create specialized definition
+        // IMPORTANT: use the module prefix to strip the local name (not rsplitn('.')) because
+        // the type suffix may contain dots (e.g., "stdlib.db.query$types.PgRow" — the last
+        // dot is in the type param, not the module separator!)
         let mut specialized_def = fn_def.clone();
         let name_without_sig = mangled_name.split('/').next().unwrap_or(&mangled_name);
-        let local_name = if name_without_sig.contains('.') {
+        let local_name = if !original_module_path.is_empty() {
+            let module_prefix = format!("{}.", original_module_path.join("."));
+            name_without_sig.strip_prefix(&module_prefix)
+                .unwrap_or(name_without_sig)
+                .to_string()
+        } else if name_without_sig.contains('.') {
             name_without_sig.rsplitn(2, '.').next().unwrap_or(name_without_sig).to_string()
         } else {
             name_without_sig.to_string()
@@ -20522,6 +20537,33 @@ impl Compiler {
             self.current_type_bindings = saved_type_bindings;
             self.inferred_expr_types = saved_inferred_expr_types;
             return Err(e);
+        }
+
+        // Fix-up: if compile_fn_def stored the function under a different key
+        // (e.g., when query[T](conn, sql, params) is monomorphized, the param types
+        // may cause a different signature suffix), copy to the expected mangled_name.
+        // This mirrors the same fix-up in compile_monomorphized_variant.
+        if self.functions.get(&mangled_name).map(|f| f.code.code.is_empty()).unwrap_or(false) {
+            let base_name_part = mangled_name.split('/').next().unwrap_or(&mangled_name);
+            let actual_key = self.functions.keys()
+                .find(|k| k.starts_with(base_name_part) && k.as_str() != mangled_name && {
+                    self.functions.get(*k).map(|f| !f.code.code.is_empty()).unwrap_or(false)
+                })
+                .cloned();
+            if let Some(actual_key) = actual_key {
+                if let Some(compiled_fn) = self.functions.get(&actual_key).cloned() {
+                    let mut fn_val = (*compiled_fn).clone();
+                    fn_val.name = mangled_name.clone();
+                    self.functions.insert(mangled_name.clone(), Arc::new(fn_val));
+                    self.functions.remove(&actual_key);
+                    if let Some(idx) = self.function_indices.remove(&actual_key) {
+                        self.function_indices.insert(mangled_name.clone(), idx);
+                        if let Some(entry) = self.function_list.iter_mut().find(|n| **n == actual_key) {
+                            *entry = mangled_name.clone();
+                        }
+                    }
+                }
+            }
         }
 
         // Restore context — merge inferred_expr_types: variant's fresh entries take priority
@@ -22437,8 +22479,17 @@ impl Compiler {
             None => return Ok(()),
         };
 
+        // Strip type parameter suffix (e.g., "stdlib.db.query$types.PgRow" -> "stdlib.db.query")
+        // The '$' character introduces type arguments and everything after it (including dots) is
+        // not part of the module path.
+        let base_name_no_type_args = if let Some(dollar_pos) = base_name.find('$') {
+            &base_name[..dollar_pos]
+        } else {
+            base_name
+        };
+
         // Extract the module path from the qualified name (everything before the last dot)
-        let function_module: Vec<&str> = base_name.rsplitn(2, '.').collect();
+        let function_module: Vec<&str> = base_name_no_type_args.rsplitn(2, '.').collect();
         let function_module = if function_module.len() > 1 {
             function_module[1].split('.').collect::<Vec<_>>()
         } else {
@@ -22458,7 +22509,8 @@ impl Compiler {
 
         // Different module - check if it's imported
         let function_module_string = function_module.join(".");
-        let function_name_with_sig = base_name.rsplit('.').next().unwrap_or(base_name);
+        // Use base_name_no_type_args so we extract the real function name, not a type arg component
+        let function_name_with_sig = base_name_no_type_args.rsplit('.').next().unwrap_or(base_name_no_type_args);
         let function_name = function_name_with_sig.split('/').next().unwrap_or(function_name_with_sig);
 
         // Check if this is a trait method call (Type.Trait.method pattern)
