@@ -10147,11 +10147,40 @@ impl<'a> InferCtx<'a> {
             true
         };
 
+        // Build typed qualified name for overload lookup (e.g., "inc/String" for inc(x: String)).
+        // This is needed when multiple overloads exist (e.g., inc/_  and inc/String).
+        // The wildcard qualified_name ("inc/_") would find the wrong overload for typed functions.
+        let typed_qualified_name: Option<String> = {
+            let any_typed = declared_param_types.iter().any(|dp| dp.is_some());
+            if any_typed {
+                let parts: Vec<String> = declared_param_types.iter().map(|dp| {
+                    match dp {
+                        Some(ty) => ty.display(),
+                        None => "_".to_string(),
+                    }
+                }).collect();
+                Some(format!("{}/{}", name, parts.join(",")))
+            } else {
+                None
+            }
+        };
+
         #[allow(clippy::redundant_closure)]
-        let pre_registered = self.env.functions.get(name).cloned()
-            .filter(|ft| check_param_compat(ft))
-            .or_else(|| self.env.functions.get(&qualified_name).cloned()
-                .filter(|ft| check_param_compat(ft)))
+        let pre_registered = if let Some(ref tqn) = typed_qualified_name {
+            // Try typed qualified name first (e.g., "inc/String") to avoid cross-contamination
+            // with other overloads (e.g., "inc/_" which may have Num constraints).
+            self.env.functions.get(tqn.as_str()).cloned()
+                .filter(|ft| check_param_compat(ft))
+                .or_else(|| self.env.functions.get(&qualified_name).cloned()
+                    .filter(|ft| check_param_compat(ft)))
+                .or_else(|| self.env.functions.get(name).cloned()
+                    .filter(|ft| check_param_compat(ft)))
+        } else {
+            self.env.functions.get(name).cloned()
+                .filter(|ft| check_param_compat(ft))
+                .or_else(|| self.env.functions.get(&qualified_name).cloned()
+                    .filter(|ft| check_param_compat(ft)))
+        }
             .or_else(|| {
                 // Check typed overloads (e.g., "showCounter/Counter")
                 // Clone to avoid borrow conflicts with self

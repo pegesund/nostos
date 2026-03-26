@@ -2298,11 +2298,17 @@ impl Compiler {
                     // Find a compatible group to add this clause to
                     let mut found_group = false;
                     for (group_sig, group_clauses) in &mut groups {
-                        // Check if signatures are compatible (no conflicts)
+                        // Check if signatures are compatible (no conflicts).
+                        // Two clauses belong in the same FnDef only if their param types don't conflict:
+                        // - Both untyped (None, None) → compatible (same generic function)
+                        // - Both typed with same type (Some(x), Some(x)) → compatible (same overload)
+                        // - Mixed typed/untyped (None, Some) or (Some, None) → NOT compatible (different overloads)
+                        //   e.g., inc(x) = x+1 and inc(x:String) = x++"!" must remain separate
                         let compatible = explicit_sig.iter().zip(group_sig.iter()).all(|(e, g)| {
                             match (e, g) {
-                                (None, _) | (_, None) => true, // Untyped is compatible with anything
-                                (Some(et), Some(gt)) => et == gt, // Must match if both typed
+                                (None, None) => true,  // Both untyped: same generic function
+                                (Some(et), Some(gt)) => et == gt, // Both typed: must match
+                                (None, Some(_)) | (Some(_), None) => false, // Mixed: separate overloads
                             }
                         }) && explicit_sig.len() == group_sig.len();
 
@@ -32970,10 +32976,13 @@ impl Compiler {
                     // Find a compatible group
                     let mut found_group = false;
                     for (group_sig, group_clauses) in &mut groups {
+                        // Same grouping rule as forward_declare_functions:
+                        // mixed typed/untyped params = separate overloads
                         let compatible = explicit_sig.iter().zip(group_sig.iter()).all(|(e, g)| {
                             match (e, g) {
-                                (None, _) | (_, None) => true,
+                                (None, None) => true,
                                 (Some(et), Some(gt)) => et == gt,
+                                (None, Some(_)) | (Some(_), None) => false, // Mixed: separate overloads
                             }
                         }) && explicit_sig.len() == group_sig.len();
 

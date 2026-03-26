@@ -1652,6 +1652,42 @@ impl Compiler {
             }
         }
 
+        // POST-ENRICHMENT FIX-UP: For functions with template decorators, the decorator
+        // transforms the function body at compile time, potentially changing the return type.
+        // The batch inference ran on the UNDECORATED body (e.g., `myFunc(x:Int) = 0` → ret=Int),
+        // but after decoration the body may return a different type (e.g., → ret=String).
+        // Reset the return type to an unresolved Var so that type_check_fn (which runs on the
+        // DECORATED body) doesn't get a stale Int constraint.
+        {
+            let decorated_fn_names: std::collections::HashSet<String> = pending.iter()
+                .filter(|(fn_def, _, _, _, _, _)| !fn_def.decorators.is_empty())
+                .map(|(fn_def, module_path, _, _, _, _)| {
+                    if module_path.is_empty() {
+                        fn_def.name.node.clone()
+                    } else {
+                        format!("{}.{}", module_path.join("."), fn_def.name.node)
+                    }
+                })
+                .collect();
+
+            if !decorated_fn_names.is_empty() {
+                for (fn_name, fn_type) in self.pending_fn_signatures.iter_mut() {
+                    let base_name = fn_name.split('/').next().unwrap_or(fn_name);
+                    if decorated_fn_names.contains(base_name) {
+                        // Only reset if return type is fully concrete (no Vars/TypeParams).
+                        // If it's still a Var, the type is already appropriately unresolved.
+                        // If it's a TypeParam, there's some generic return type - keep it.
+                        let ret_is_concrete = !matches!(fn_type.ret.as_ref(),
+                            nostos_types::Type::Var(_) | nostos_types::Type::TypeParam(_));
+                        if ret_is_concrete {
+                            // Use Var(u32::MAX) as sentinel for "return type unknown due to decoration"
+                            fn_type.ret = Box::new(nostos_types::Type::Var(u32::MAX));
+                        }
+                    }
+                }
+            }
+        }
+
         // Pre-populate fn_asts with all pending functions so they can see each other
         // This is critical for multi-file modules where functions from different files
         // need to call each other (e.g., main.nos calling benchmark.nos in the same module)
