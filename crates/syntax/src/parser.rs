@@ -30,8 +30,14 @@ fn to_span(span: std::ops::Range<usize>) -> Span {
 /// - Unit type: `()` → Expr::Unit
 fn expr_looks_like_type(expr: &Expr) -> bool {
     match expr {
-        // Simple uppercase type name: `Int`, `String`, `MyType` (lowercase ident form)
-        Expr::Var(id) => id.node.starts_with(|c: char| c.is_uppercase()),
+        // Simple type name: `Int`, `String`, `MyType` (uppercase) OR type variable like `a`, `b` (single lowercase letter)
+        // Type variables are conventionally single lowercase letters (a, b, c, t, etc.).
+        // This handles `inner(x: a) -> a = body` where `a` is a type param from the enclosing generic function.
+        // Without this, `inner(x: a)` is mistakenly parsed as a default parameter `x = a`.
+        Expr::Var(id) => {
+            id.node.starts_with(|c: char| c.is_uppercase())
+            || (id.node.len() == 1 && id.node.chars().next().map(|c| c.is_lowercase()).unwrap_or(false))
+        },
         // Uppercase names parsed as Expr::Record with no fields: `Int`, `Maybe`, `List`
         // This happens for uppercase identifiers that the parser treats as record constructors.
         Expr::Record(id, fields, _) => fields.is_empty() && id.node.starts_with(|c: char| c.is_uppercase()),
