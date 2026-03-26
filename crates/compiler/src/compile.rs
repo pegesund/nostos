@@ -2400,15 +2400,31 @@ impl Compiler {
                     .map(|(c, _, _)| c)
                     .collect();
 
-                // Sort only by type annotation count: typed params before untyped.
-                // Do NOT sort by pattern specificity - preserve definition order
-                // for pattern-based clauses (like Haskell/ML/Erlang).
-                let mut sorted_clauses = all_clauses;
-                sorted_clauses.sort_by(|a, b| {
-                    let a_typed = -(a.params.iter().filter(|p| p.ty.is_some()).count() as i32);
-                    let b_typed = -(b.params.iter().filter(|p| p.ty.is_some()).count() as i32);
-                    a_typed.cmp(&b_typed)
+                // Sort clauses by specificity: more specific patterns first.
+                // 1. Literal patterns come first (most specific)
+                // 2. Then by type annotation count
+                // 3. Preserve relative declaration order for same specificity
+                let mut sorted_indexed: Vec<(usize, FnClause)> = all_clauses.into_iter().enumerate().collect();
+                sorted_indexed.sort_by(|(ai, a), (bi, b)| {
+                    let a_literals = a.params.iter()
+                        .filter(|p| p.ty.is_none() && literal_pattern_type_str(&p.pattern).is_some())
+                        .count() as i32;
+                    let b_literals = b.params.iter()
+                        .filter(|p| p.ty.is_none() && literal_pattern_type_str(&p.pattern).is_some())
+                        .count() as i32;
+                    let lit_cmp = (-a_literals).cmp(&(-b_literals));
+                    if lit_cmp != std::cmp::Ordering::Equal {
+                        return lit_cmp;
+                    }
+                    let a_typed = a.params.iter().filter(|p| p.ty.is_some()).count() as i32;
+                    let b_typed = b.params.iter().filter(|p| p.ty.is_some()).count() as i32;
+                    let typed_cmp = (-a_typed).cmp(&(-b_typed));
+                    if typed_cmp != std::cmp::Ordering::Equal {
+                        return typed_cmp;
+                    }
+                    ai.cmp(bi)
                 });
+                let sorted_clauses: Vec<FnClause> = sorted_indexed.into_iter().map(|(_, c)| c).collect();
 
                 fn_order.push(qualified_name.clone());
                 fn_spans.insert(qualified_name.clone(), merged_span);
@@ -33092,13 +33108,35 @@ impl Compiler {
                     .map(|(c, _)| c)
                     .collect();
 
-                // Sort only by type annotation count: typed params before untyped.
-                let mut sorted_clauses = all_clauses;
-                sorted_clauses.sort_by(|a, b| {
-                    let a_typed = -(a.params.iter().filter(|p| p.ty.is_some()).count() as i32);
-                    let b_typed = -(b.params.iter().filter(|p| p.ty.is_some()).count() as i32);
-                    a_typed.cmp(&b_typed)
+                // Sort clauses by specificity: more specific patterns first.
+                // 1. Clauses with literal patterns come first (most specific)
+                // 2. Then clauses with more type annotations
+                // 3. Preserve relative declaration order for same specificity
+                let mut sorted_clauses: Vec<(usize, FnClause)> = all_clauses.into_iter().enumerate().collect();
+                sorted_clauses.sort_by(|(ai, a), (bi, b)| {
+                    // Count literal patterns (most specific)
+                    let a_literals = a.params.iter()
+                        .filter(|p| p.ty.is_none() && literal_pattern_type_str(&p.pattern).is_some())
+                        .count() as i32;
+                    let b_literals = b.params.iter()
+                        .filter(|p| p.ty.is_none() && literal_pattern_type_str(&p.pattern).is_some())
+                        .count() as i32;
+                    // More literals = higher specificity = smaller sort key
+                    let lit_cmp = (-a_literals).cmp(&(-b_literals));
+                    if lit_cmp != std::cmp::Ordering::Equal {
+                        return lit_cmp;
+                    }
+                    // Then by type annotation count: more typed = more specific
+                    let a_typed = a.params.iter().filter(|p| p.ty.is_some()).count() as i32;
+                    let b_typed = b.params.iter().filter(|p| p.ty.is_some()).count() as i32;
+                    let typed_cmp = (-a_typed).cmp(&(-b_typed));
+                    if typed_cmp != std::cmp::Ordering::Equal {
+                        return typed_cmp;
+                    }
+                    // Preserve declaration order for equal specificity
+                    ai.cmp(bi)
                 });
+                let sorted_clauses: Vec<FnClause> = sorted_clauses.into_iter().map(|(_, c)| c).collect();
 
                 fn_order.push(qualified_name.clone());
                 fn_spans.insert(qualified_name.clone(), merged_span);
