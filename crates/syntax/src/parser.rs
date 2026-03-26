@@ -1643,7 +1643,15 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
             }
             PostfixOp::MethodCall(name, args) => {
                 let full_span = get_span(&lhs).merge(span);
-                Expr::MethodCall(Box::new(lhs), name, args, full_span)
+                // If the "method name" is a numeric tuple index (e.g., pair.0(42)),
+                // desugar to Call(FieldAccess(lhs, "0"), args) instead of MethodCall.
+                // This allows calling functions stored in tuple fields.
+                if name.node.chars().all(|c| c.is_ascii_digit()) {
+                    let field_access = Expr::FieldAccess(Box::new(lhs), name, full_span);
+                    Expr::Call(Box::new(field_access), vec![], args, full_span)
+                } else {
+                    Expr::MethodCall(Box::new(lhs), name, args, full_span)
+                }
             }
             PostfixOp::FieldAccess(name) => {
                 let full_span = get_span(&lhs).merge(span);
