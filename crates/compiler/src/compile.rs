@@ -7965,7 +7965,7 @@ impl Compiler {
                 if !is_stdlib_file {
                     for v in variants {
                         let ctor_name = &v.name.node;
-                        // Check if this constructor name exists in any stdlib type
+                        // Check if this constructor name exists in any stdlib type that is actually imported
                         for (type_name, type_info) in &self.types {
                             // Skip checking against ourselves (the type being defined)
                             if type_name == &name {
@@ -7974,14 +7974,29 @@ impl Compiler {
                             if type_name.starts_with("stdlib.") {
                                 if let TypeInfoKind::Variant { constructors } = &type_info.kind {
                                     if constructors.iter().any(|(cname, _)| cname == ctor_name) {
-                                        return Err(CompileError::TypeError {
-                                            message: format!(
-                                                "Constructor '{}' conflicts with stdlib type '{}'. \
-                                                 Use a different constructor name to avoid ambiguity.",
-                                                ctor_name, type_name
-                                            ),
-                                            span: v.name.span,
-                                        });
+                                        // Only flag a conflict if the stdlib module is actually imported
+                                        // by the CURRENT module being compiled.
+                                        // e.g. "stdlib.html.Html" -> module is "stdlib.html" -> short name is "html"
+                                        let parts: Vec<&str> = type_name.splitn(3, '.').collect();
+                                        // parts = ["stdlib", "html", "Html"] -> module short name = "html"
+                                        let stdlib_module_short = if parts.len() >= 2 { parts[1] } else { "" };
+                                        let current_module_path = &self.module_path;
+                                        let is_imported = !stdlib_module_short.is_empty()
+                                            && self.imported_modules.iter().any(|(importer, imported)| {
+                                                importer == current_module_path
+                                                    && (imported == stdlib_module_short
+                                                        || imported.ends_with(&format!(".{}", stdlib_module_short)))
+                                            });
+                                        if is_imported {
+                                            return Err(CompileError::TypeError {
+                                                message: format!(
+                                                    "Constructor '{}' conflicts with stdlib type '{}'. \
+                                                     Use a different constructor name to avoid ambiguity.",
+                                                    ctor_name, type_name
+                                                ),
+                                                span: v.name.span,
+                                            });
+                                        }
                                     }
                                 }
                             }
