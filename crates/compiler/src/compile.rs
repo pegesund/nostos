@@ -24127,11 +24127,14 @@ scope_depth: self.block_depth,
                 // Collect mvar reads in the condition
                 let cond_reads = self.collect_mvar_refs_with_locals(cond, fn_locals);
 
-                // Collect mvar writes in the branches
-                let then_writes = self.collect_mvar_writes_with_locals(then_branch, fn_locals);
-                let else_writes = self.collect_mvar_writes_with_locals(else_branch, fn_locals);
+                // Only collect NON-self-updating writes in branches.
+                // Self-updating writes like `x = x + 1` are safe atomic operations even
+                // when the condition reads x - no lock is needed because the write itself
+                // re-reads the current value atomically.
+                let then_writes = self.collect_non_self_updating_writes(then_branch, fn_locals);
+                let else_writes = self.collect_non_self_updating_writes(else_branch, fn_locals);
 
-                // Check if any mvar read in condition is written in a branch
+                // Check if any mvar read in condition is NON-self-updated in a branch
                 for mvar in &cond_reads {
                     if then_writes.contains(mvar) || else_writes.contains(mvar) {
                         return Some(mvar.clone());
@@ -24152,9 +24155,9 @@ scope_depth: self.block_depth,
                 // Collect mvar reads in the scrutinee
                 let scrutinee_reads = self.collect_mvar_refs_with_locals(scrutinee, fn_locals);
 
-                // Check each arm
+                // Check each arm - only flag non-self-updating writes
                 for arm in arms {
-                    let arm_writes = self.collect_mvar_writes_with_locals(&arm.body, fn_locals);
+                    let arm_writes = self.collect_non_self_updating_writes(&arm.body, fn_locals);
                     for mvar in &scrutinee_reads {
                         if arm_writes.contains(mvar) {
                             return Some(mvar.clone());
