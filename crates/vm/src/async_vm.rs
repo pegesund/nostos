@@ -13679,6 +13679,10 @@ impl AsyncVM {
                                         return Err(RuntimeError::Panic("Invalid string pointer".to_string()));
                                     }
                                 }
+                                GcValue::Char(c) => {
+                                    let mut buf = [0u8; 4];
+                                    result.push(c.encode_utf8(&mut buf).to_string());
+                                }
                                 _ => return Err(RuntimeError::TypeError { expected: "String".to_string(), found: "other".to_string() })
                             }
                         }

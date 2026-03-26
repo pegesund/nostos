@@ -122,7 +122,9 @@ static EXCLUSIVE_LIST_METHODS: LazyLock<HashSet<&str>> = LazyLock::new(|| {
         "filter", "fold", "any", "all", "find",
         "sort", "sortBy", "head", "tail", "init", "last",
         "sum", "product", "zip", "unzip",
-        "unique", "flatten", "position", "indexOf",
+        "unique", "flatten", "position",
+        // Note: "indexOf" is NOT here - it's also valid on String (String.indexOf returns Int)
+        // so it doesn't uniquely identify a List receiver.
         "push", "pop", "nth", "slice",
         "scanl", "foldl", "foldr", "enumerate", "intersperse",
         "spanList", "groupBy", "transpose", "pairwise", "isSorted",
@@ -5370,7 +5372,10 @@ impl<'a> InferCtx<'a> {
                     "filter", "fold", "any", "all", "find",
                     "sort", "sortBy", "head", "tail", "init", "last",
                     "sum", "product", "zip", "unzip",
-                    "unique", "flatten", "position", "indexOf",
+                    "unique", "flatten", "position",
+                    // Note: "indexOf" is NOT here because it's also valid on String.
+                    // Assuming List for indexOf would incorrectly type String.indexOf calls
+                    // when the receiver is still a type variable.
                     "push", "pop", "nth", "slice",
                     "scanl", "foldl", "foldr", "enumerate", "intersperse",
                     "spanList", "groupBy", "transpose", "pairwise", "isSorted",

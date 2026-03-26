@@ -312,7 +312,8 @@ pub renderRHtml(result: RHtmlResult) = {
 # Render RNode directly (no component support)
 pub renderRNode(rhtml: RNode) = {
     buf = Buffer.new()
-    renderToBuffer(rhtml, %{}, buf)
+    emptyRenderers: Map[String, () -> RHtmlResult] = %{}
+    renderToBuffer(rhtml, emptyRenderers, buf)
     Buffer.toString(buf)
 }
 

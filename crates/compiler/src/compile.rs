@@ -435,7 +435,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "take", signature: "[a] -> Int -> [a]", doc: "Take first n elements" },
     BuiltinInfo { name: "drop", signature: "[a] -> Int -> [a]", doc: "Drop first n elements" },
     BuiltinInfo { name: "split", signature: "String -> String -> [String]", doc: "Split string by delimiter" },
-    BuiltinInfo { name: "join", signature: "String -> [String] -> String", doc: "Join strings with delimiter" },
+    BuiltinInfo { name: "join", signature: "Show a => String -> [a] -> String", doc: "Join strings or chars with delimiter" },
     BuiltinInfo { name: "range", signature: "Int -> Int -> [Int]", doc: "Create list of integers from start to end" },
     BuiltinInfo { name: "replicate", signature: "Int -> a -> [a]", doc: "Create list of n copies of a value" },
     BuiltinInfo { name: "toIntList", signature: "[Int] -> Int64List", doc: "Convert list to specialized Int64List for fast operations" },
@@ -509,6 +509,11 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "Float32Array.set", signature: "Float32Array -> Int -> Float -> Float32Array", doc: "Set element at index, returns new array" },
     BuiltinInfo { name: "Float32Array.toList", signature: "Float32Array -> [Float]", doc: "Convert to a list of floats" },
     BuiltinInfo { name: "Float32Array.make", signature: "Int -> Float -> Float32Array", doc: "Create array of size with default value" },
+
+    // === Buffer (efficient string building) ===
+    // Note: Buffer.append and Buffer.toString are NOT here due to type inference conflicts
+    // with html.nos where buf is an untyped parameter. Only Buffer.new is safe.
+    BuiltinInfo { name: "Buffer.new", signature: "() -> Buffer", doc: "Create a new mutable string buffer" },
 
     // === Type Conversions (as<Type> methods) ===
     // Available on all numeric types: Int, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float, Float32, Float64, BigInt
@@ -665,7 +670,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "String.words", signature: "String -> [String]", doc: "Split string into words (by whitespace)" },
     BuiltinInfo { name: "String.isEmpty", signature: "String -> Bool", doc: "Check if string is empty" },
     BuiltinInfo { name: "String.split", signature: "String -> String -> [String]", doc: "Split string by delimiter" },
-    BuiltinInfo { name: "String.join", signature: "[String] -> String -> String", doc: "Join list of strings with delimiter" },
+    BuiltinInfo { name: "String.join", signature: "Show a => [a] -> String -> String", doc: "Join list of strings or chars with delimiter" },
     BuiltinInfo { name: "String.drop", signature: "String -> Int -> String", doc: "Drop first n characters" },
     BuiltinInfo { name: "String.take", signature: "String -> Int -> String", doc: "Take first n characters" },
 
