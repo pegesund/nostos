@@ -14140,6 +14140,15 @@ impl Compiler {
                                 match arg {
                                     CallArg::Named(name, _) => {
                                         if let Some(pos) = param_names.iter().position(|p| p.as_deref() == Some(&name.node)) {
+                                            if resolved[pos].is_some() {
+                                                return Err(CompileError::TypeError {
+                                                    message: format!(
+                                                        "duplicate named argument '{}'",
+                                                        name.node
+                                                    ),
+                                                    span: name.span,
+                                                });
+                                            }
                                             resolved[pos] = Some(arg);
                                         } else {
                                             let valid_names: Vec<String> = param_names.iter()
@@ -14762,6 +14771,15 @@ impl Compiler {
                                     CallArg::Named(name, expr) => {
                                         // Find matching param position (in non-self names)
                                         if let Some(pos) = non_self_names.iter().position(|p| p.as_deref() == Some(&name.node)) {
+                                            if resolved[pos].is_some() {
+                                                return Err(CompileError::TypeError {
+                                                    message: format!(
+                                                        "duplicate named argument '{}'",
+                                                        name.node
+                                                    ),
+                                                    span: name.span,
+                                                });
+                                            }
                                             resolved[pos] = Some(expr);
                                         } else {
                                             let valid_names: Vec<String> = non_self_names.iter()
@@ -16917,6 +16935,15 @@ impl Compiler {
                     CallArg::Named(name, _) => {
                         // Find the parameter position for this name
                         if let Some(pos) = param_names.iter().position(|p| p.as_deref() == Some(&name.node)) {
+                            if result[pos].is_some() {
+                                return Err(CompileError::TypeError {
+                                    message: format!(
+                                        "duplicate named argument '{}'",
+                                        name.node
+                                    ),
+                                    span: name.span,
+                                });
+                            }
                             result[pos] = Some(arg);
                         } else {
                             let valid_names: Vec<String> = param_names.iter()
