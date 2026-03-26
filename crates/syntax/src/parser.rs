@@ -47,7 +47,8 @@ fn expr_looks_like_type(expr: &Expr) -> bool {
         }
         // Generic type: `List[Int]`, `Map[String, Int]`, `Option[Int]`
         // In expression context, `List[Int]` parses as Expr::Index(base, idx, ...)
-        // `Map[String, Int]` parses as Expr::Index(base, Tuple([String, Int]))
+        // `Map[String, Int]` parses as Expr::Index(base, List([String, Int], None, span))
+        // Single-arg with tuple: `List[(Int, String)]` parses as Expr::Index(base, Tuple([Int, String]))
         // where base and idx may be Expr::Var OR Expr::Record (uppercase names parse as Records).
         // We detect this pattern: uppercase_name[type_expr] or uppercase_name[type1, type2, ...]
         Expr::Index(base, idx, _) => {
@@ -60,9 +61,10 @@ fn expr_looks_like_type(expr: &Expr) -> bool {
                 if !name.starts_with(|c: char| c.is_uppercase()) {
                     return false;
                 }
-                // Check if idx is a single type or a tuple of types (multi-param generic)
+                // Multi-arg generics (e.g., Map[K, V]) are represented as List nodes,
+                // single-arg are stored directly (including tuple args like (Int, String)).
                 match idx.as_ref() {
-                    Expr::Tuple(elems, _) => elems.iter().all(expr_looks_like_type),
+                    Expr::List(elems, None, _) => elems.iter().all(expr_looks_like_type),
                     _ => expr_looks_like_type(idx),
                 }
             } else {
@@ -104,6 +106,8 @@ fn expr_to_type_expr(expr: &Expr) -> Option<TypeExpr> {
             })
         }
         // Generic type: List[Int] → TypeExpr::Generic("List", [Int])
+        // Multi-arg: Map[K, V] is encoded as Index(Map, List([K, V], None, span))
+        // Single tuple arg: List[(Int, String)] is encoded as Index(List, Tuple([Int, String]))
         Expr::Index(base, idx, span) => {
             let base_name = match base.as_ref() {
                 Expr::Var(id) => Some(id.clone()),
@@ -112,7 +116,9 @@ fn expr_to_type_expr(expr: &Expr) -> Option<TypeExpr> {
             };
             if let Some(base_ident) = base_name {
                 let args: Option<Vec<TypeExpr>> = match idx.as_ref() {
-                    Expr::Tuple(elems, _) => elems.iter().map(expr_to_type_expr).collect(),
+                    // Multi-arg generic (e.g., Map[K, V]): items stored as List node
+                    Expr::List(elems, None, _) => elems.iter().map(expr_to_type_expr).collect(),
+                    // Single type arg (including tuple types like (Int, String))
                     _ => expr_to_type_expr(idx).map(|t| vec![t]),
                 };
                 args.map(|a| TypeExpr::Generic(base_ident, a))
@@ -1670,10 +1676,13 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                         if items.len() == 1 {
                             (PostfixOp::Index(items.into_iter().next().unwrap()), s)
                         } else {
-                            // Multiple type params: represent as Tuple so expr_looks_like_type can detect it
-                            // e.g., Map[String, Int] -> Index(Map, Tuple([String, Int]))
-                            let tuple_span = to_span(span);
-                            (PostfixOp::Index(Expr::Tuple(items, tuple_span)), s)
+                            // Multiple type params: represent as List (with no tail) so
+                            // expr_to_type_expr can distinguish this from a user-written
+                            // tuple type arg like List[(Int, String)].
+                            // e.g., Map[String, Int] -> Index(Map, List([String, Int]))
+                            // This avoids confusing Map[K, V] with List[(K, V)].
+                            let list_span = to_span(span);
+                            (PostfixOp::Index(Expr::List(items, None, list_span)), s)
                         }
                     }),
                 // Try operator: expr?
