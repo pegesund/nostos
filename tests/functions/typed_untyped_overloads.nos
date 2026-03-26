@@ -1,0 +1,42 @@
+# expect: 1
+# Test: typed and untyped overloads coexist correctly
+
+# Generic untyped + String-specific overload
+inc(x) = x + 1
+inc(x: String) = x ++ "!"
+
+# Multiple typed overloads
+stringify(x: Int) = "int:" ++ show(x)
+stringify(x: String) = "str:" ++ x
+stringify(x: Bool) = "bool:" ++ show(x)
+
+# Literal + typed fallback
+categorize(0) = "zero"
+categorize(1) = "one"
+categorize(n: Int) = "other"
+
+# Generic + typed versions
+process(x) = x
+process(x: Int) = x * 10
+
+main() = {
+  # Typed and untyped overloads
+  assert_eq(inc(5), 6)
+  assert_eq(inc("hi"), "hi!")
+
+  # Multiple typed overloads
+  assert_eq(stringify(42), "int:42")
+  assert_eq(stringify("world"), "str:world")
+  assert_eq(stringify(true), "bool:true")
+
+  # Literal + typed fallback
+  assert_eq(categorize(0), "zero")
+  assert_eq(categorize(1), "one")
+  assert_eq(categorize(5), "other")
+
+  # Generic vs typed dispatch
+  assert_eq(process(5), 50)     # typed Int version
+  assert_eq(process("hi"), "hi")  # untyped fallback
+
+  1
+}
