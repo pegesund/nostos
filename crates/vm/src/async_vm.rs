@@ -5993,21 +5993,35 @@ impl AsyncProcess {
             Receive(dst) => {
                 // Await a message from the mailbox, but periodically check the interrupt
                 // flag so that if a spawned process panicked we don't hang forever.
+                // IMPORTANT: Always try to receive a pending message first (non-blocking),
+                // before checking the interrupt flag. This prevents a spawned child panic
+                // from killing the parent when the parent already has messages waiting.
                 let msg = loop {
-                    let interrupted = self.local_interrupt
-                        .as_ref()
-                        .map(|i| i.load(Ordering::SeqCst))
-                        .unwrap_or_else(|| self.shared.interrupt.load(Ordering::SeqCst));
-                    if interrupted {
-                        return Err(RuntimeError::Interrupted);
-                    }
-                    match tokio::time::timeout(
-                        Duration::from_millis(50),
-                        self.mailbox.recv()
-                    ).await {
-                        Ok(Some(msg)) => break Some(msg),
-                        Ok(None) => break None,
-                        Err(_timeout) => continue, // check interrupt again
+                    // First: try non-blocking receive - if a message is already queued, get it
+                    // without checking interrupt. This ensures a panic in an unrelated spawn
+                    // doesn't kill the parent when it has messages ready to process.
+                    match self.mailbox.try_recv() {
+                        Ok(msg) => break Some(msg),
+                        Err(mpsc::error::TryRecvError::Disconnected) => break None,
+                        Err(mpsc::error::TryRecvError::Empty) => {
+                            // No message available yet - NOW check interrupt
+                            let interrupted = self.local_interrupt
+                                .as_ref()
+                                .map(|i| i.load(Ordering::SeqCst))
+                                .unwrap_or_else(|| self.shared.interrupt.load(Ordering::SeqCst));
+                            if interrupted {
+                                return Err(RuntimeError::Interrupted);
+                            }
+                            // Wait a bit for a message, then re-check
+                            match tokio::time::timeout(
+                                Duration::from_millis(50),
+                                self.mailbox.recv()
+                            ).await {
+                                Ok(Some(msg)) => break Some(msg),
+                                Ok(None) => break None,
+                                Err(_timeout) => continue, // check interrupt again
+                            }
+                        }
                     }
                 };
                 match msg {
