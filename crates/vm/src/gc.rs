@@ -2640,7 +2640,7 @@ impl Heap {
                         }
                         result.push_str(&k.show());
                         result.push_str(": ");
-                        result.push_str(&self.display_value(v));
+                        result.push_str(&self.show_value(v));
                     }
                     result.push('}');
                     result
