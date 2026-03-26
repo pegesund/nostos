@@ -555,6 +555,9 @@ impl Compiler {
             .or_insert_with(Vec::new);
         if !traits_vec.contains(&trait_name) {
             traits_vec.push(trait_name.clone());
+            // Invalidate the cached HM base env so the new trait impl is reflected
+            // in subsequent type inference calls. The cache is rebuilt lazily on next use.
+            self.cached_hm_base_env = None;
         }
         // Also register under base type names so find_trait_method can find the trait:
         // 1. Module-qualified without type args: "types.Either2" (for cross-module lookup)

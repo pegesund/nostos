@@ -1,4 +1,4 @@
-# expect_error: countMe
+# expect_error: does not implement Countable
 # Issue 13: Trait bound violations should be compile error, not crash
 trait Countable
     countMe(self) -> Int

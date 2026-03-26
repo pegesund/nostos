@@ -1286,7 +1286,66 @@ impl TypeEnv {
 
     /// Check if two types match (simple equality for now).
     fn types_match(&self, a: &Type, b: &Type) -> bool {
-        a == b
+        if a == b {
+            return true;
+        }
+        // Handle Named { "PrimName", [] } vs Type::PrimName (different enum variants
+        // but semantically the same type). This happens when trait impls for primitive
+        // types are registered via compile.rs (which always uses Named { name, args: [] }).
+        fn type_to_canonical_name(ty: &Type) -> Option<&str> {
+            match ty {
+                Type::Named { name, args } if args.is_empty() => Some(name.as_str()),
+                Type::Int => Some("Int"),
+                Type::Float => Some("Float"),
+                Type::String => Some("String"),
+                Type::Bool => Some("Bool"),
+                Type::Char => Some("Char"),
+                Type::Unit => Some("Unit"),
+                Type::Int8 => Some("Int8"),
+                Type::Int16 => Some("Int16"),
+                Type::Int32 => Some("Int32"),
+                Type::Int64 => Some("Int64"),
+                Type::UInt8 => Some("UInt8"),
+                Type::UInt16 => Some("UInt16"),
+                Type::UInt32 => Some("UInt32"),
+                Type::UInt64 => Some("UInt64"),
+                Type::Float32 => Some("Float32"),
+                Type::Float64 => Some("Float64"),
+                Type::BigInt => Some("BigInt"),
+                Type::Decimal => Some("Decimal"),
+                _ => None,
+            }
+        }
+        if let (Some(a_name), Some(b_name)) = (type_to_canonical_name(a), type_to_canonical_name(b)) {
+            if a_name == b_name {
+                return true;
+            }
+        }
+        // A generic impl (with no args or TypeParam args) matches a monomorphized type.
+        // E.g., an impl for `Box` (no args) also covers `Box[Int]`, `Box[String]`, etc.
+        // Similarly, an impl for `Box[TypeParam("a")]` covers `Box[Int]`, etc.
+        match (a, b) {
+            (Type::Named { name: a_name, args: a_args }, Type::Named { name: b_name, args: b_args }) => {
+                if a_name != b_name {
+                    return false;
+                }
+                // If the impl type has no args, it's a generic impl covering all instantiations
+                if a_args.is_empty() && !b_args.is_empty() {
+                    return true;
+                }
+                if b_args.is_empty() && !a_args.is_empty() {
+                    return true;
+                }
+                if a_args.len() != b_args.len() {
+                    return false;
+                }
+                // If all impl args are TypeParams, it's a fully generic impl
+                a_args.iter().zip(b_args.iter()).all(|(x, y)| {
+                    matches!(x, Type::TypeParam(_)) || matches!(y, Type::TypeParam(_)) || self.types_match(x, y)
+                })
+            }
+            _ => false,
+        }
     }
 
     /// Check if two trait names match, considering module qualification.

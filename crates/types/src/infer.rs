@@ -1357,7 +1357,14 @@ impl<'a> InferCtx<'a> {
                         self.add_trait_bound(*var_id, constraint.clone());
                     } else {
                         self.add_trait_bound(*var_id, constraint.clone());
-                        if matches!(constraint.as_str(), "Eq" | "Ord" | "Num" | "Concat" | "Hash" | "Show") {
+                        // Push HasTrait for well-known builtin traits AND for user-defined traits
+                        // that are registered in the type environment. This allows generic functions
+                        // with user-defined trait bounds (e.g., [a: Transformer]) to validate that
+                        // callers provide types implementing the trait.
+                        let is_builtin_trait = matches!(constraint.as_str(), "Eq" | "Ord" | "Num" | "Concat" | "Hash" | "Show");
+                        let is_known_user_trait = self.env.traits.contains_key(constraint.as_str())
+                            || self.env.traits.keys().any(|k| k.ends_with(&format!(".{}", constraint)));
+                        if is_builtin_trait || is_known_user_trait {
                             self.constraints.push(Constraint::HasTrait(
                                 fresh_var.clone(),
                                 constraint.clone(),
@@ -2790,7 +2797,8 @@ impl<'a> InferCtx<'a> {
                                         // require pattern matching since the VM can't resolve
                                         // field names across different constructors.
                                         if constructors.len() == 1 {
-                                            if let Some(Constructor::Named(_, fields)) = constructors.first() {
+                                            match constructors.first() {
+                                            Some(Constructor::Named(_, fields)) => {
                                                 if let Some((_, actual_ty)) = fields.iter().find(|(n, _)| n == &field) {
                                                     let subst: HashMap<String, Type> = params.iter()
                                                         .map(|p| p.name.clone())
@@ -2806,12 +2814,40 @@ impl<'a> InferCtx<'a> {
                                                         resolved_type: Some(resolved.clone()),
                                                     });
                                                 }
-                                            } else {
+                                            }
+                                            Some(Constructor::Positional(_, field_types)) => {
+                                                // Support numeric field access: .0, .1, .2, etc.
+                                                if let Ok(idx) = field.parse::<usize>() {
+                                                    if let Some(actual_ty) = field_types.get(idx) {
+                                                        let subst: HashMap<String, Type> = params.iter()
+                                                            .map(|p| p.name.clone())
+                                                            .zip(args.iter().cloned())
+                                                            .collect();
+                                                        let substituted_ty = Self::substitute_type_params(actual_ty, &subst);
+                                                        self.unify_types(&substituted_ty, &expected_ty)?;
+                                                        deferred_count = 0; // Made progress
+                                                    } else {
+                                                        return Err(TypeError::NoSuchField {
+                                                            ty: resolved.display(),
+                                                            field,
+                                                            resolved_type: Some(resolved.clone()),
+                                                        });
+                                                    }
+                                                } else {
+                                                    return Err(TypeError::NoSuchField {
+                                                        ty: resolved.display(),
+                                                        field,
+                                                        resolved_type: Some(resolved.clone()),
+                                                    });
+                                                }
+                                            }
+                                            _ => {
                                                 return Err(TypeError::NoSuchField {
                                                     ty: resolved.display(),
                                                     field,
                                                     resolved_type: Some(resolved.clone()),
                                                 });
+                                            }
                                             }
                                         } else {
                                             return Err(TypeError::NoSuchField {
@@ -3197,7 +3233,8 @@ impl<'a> InferCtx<'a> {
                             crate::TypeDef::Variant { params, constructors } => {
                                 // Only allow field access on single-constructor variants
                                 if constructors.len() == 1 {
-                                    if let Some(Constructor::Named(_, fields)) = constructors.first() {
+                                    match constructors.first() {
+                                    Some(Constructor::Named(_, fields)) => {
                                         if let Some((_, actual_ty)) = fields.iter().find(|(n, _)| n == &field) {
                                             let subst: HashMap<String, Type> = params.iter()
                                                 .map(|p| p.name.clone())
@@ -3212,12 +3249,39 @@ impl<'a> InferCtx<'a> {
                                                 resolved_type: Some(resolved.clone()),
                                             });
                                         }
-                                    } else {
+                                    }
+                                    Some(Constructor::Positional(_, field_types)) => {
+                                        // Support numeric field access: .0, .1, .2, etc.
+                                        if let Ok(idx) = field.parse::<usize>() {
+                                            if let Some(actual_ty) = field_types.get(idx) {
+                                                let subst: HashMap<String, Type> = params.iter()
+                                                    .map(|p| p.name.clone())
+                                                    .zip(args.iter().cloned())
+                                                    .collect();
+                                                let substituted_ty = Self::substitute_type_params(actual_ty, &subst);
+                                                self.unify_types(&substituted_ty, &expected_ty)?;
+                                            } else {
+                                                return Err(TypeError::NoSuchField {
+                                                    ty: resolved.display(),
+                                                    field,
+                                                    resolved_type: Some(resolved.clone()),
+                                                });
+                                            }
+                                        } else {
+                                            return Err(TypeError::NoSuchField {
+                                                ty: resolved.display(),
+                                                field,
+                                                resolved_type: Some(resolved.clone()),
+                                            });
+                                        }
+                                    }
+                                    _ => {
                                         return Err(TypeError::NoSuchField {
                                             ty: resolved.display(),
                                             field,
                                             resolved_type: Some(resolved.clone()),
                                         });
+                                    }
                                     }
                                 } else {
                                     return Err(TypeError::NoSuchField {

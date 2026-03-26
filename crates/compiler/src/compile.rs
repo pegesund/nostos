@@ -9805,8 +9805,23 @@ impl Compiler {
 
         // Check if the type has an explicit trait implementation
         // Try direct name first, then resolve through imports (e.g., "Age" -> "Validator.Age")
+        // Also strip type args for generic types (e.g., "Wrapper[Int]" -> "Wrapper")
+        // since trait impls are registered under the base type name.
+        let base_type_name = if let Some(bracket_pos) = type_name.find('[') {
+            &type_name[..bracket_pos]
+        } else {
+            type_name
+        };
         let mut type_names_to_try = vec![type_name.to_string()];
+        if base_type_name != type_name && !type_names_to_try.contains(&base_type_name.to_string()) {
+            type_names_to_try.push(base_type_name.to_string());
+        }
         if let Some(qualified) = self.imports.get(type_name) {
+            if !type_names_to_try.contains(qualified) {
+                type_names_to_try.push(qualified.clone());
+            }
+        }
+        if let Some(qualified) = self.imports.get(base_type_name) {
             if !type_names_to_try.contains(qualified) {
                 type_names_to_try.push(qualified.clone());
             }
@@ -9814,6 +9829,10 @@ impl Compiler {
         let qualified = self.qualify_name(type_name);
         if !type_names_to_try.contains(&qualified) {
             type_names_to_try.push(qualified);
+        }
+        let qualified_base = self.qualify_name(base_type_name);
+        if !type_names_to_try.contains(&qualified_base) {
+            type_names_to_try.push(qualified_base);
         }
 
         for try_type_name in &type_names_to_try {
