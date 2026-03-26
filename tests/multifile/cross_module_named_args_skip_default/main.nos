@@ -1,0 +1,7 @@
+# expect: "example.com:80/api"
+use config.*
+
+main() = {
+    url = config.buildUrl(host: "example.com", path: "/api")
+    url
+}

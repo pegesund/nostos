@@ -8001,6 +8001,7 @@ impl<'a> InferCtx<'a> {
                             .into_iter().cloned().collect();
                         if let Some(fn_type) = overloads.into_iter().next() {
                             // Found the function - infer argument types and unify
+                            let has_named_args = args.iter().any(|a| matches!(a, CallArg::Named(_, _)));
                             let mut arg_types = Vec::new();
                             for arg in args {
                                 let expr = match arg {
@@ -8012,6 +8013,12 @@ impl<'a> InferCtx<'a> {
                             // Instantiate the function type
                             let func_ty = self.instantiate_function(&fn_type);
                             if let Type::Function(ft) = func_ty {
+                                // When named args are present, skip positional type checking.
+                                // The compiler will reorder args by name at code generation time.
+                                if has_named_args {
+                                    self.deferred_collection_ret_checks.push(((*ft.ret).clone(), *call_span));
+                                    return Ok(*ft.ret);
+                                }
                                 // Check arity (accounting for optional parameters)
                                 let min_args = ft.required_params.unwrap_or(ft.params.len());
                                 let max_args = ft.params.len();
@@ -8079,6 +8086,7 @@ impl<'a> InferCtx<'a> {
                         .into_iter().cloned().collect();
                     if !overloads.is_empty() {
                         // Infer argument types first (needed for overload resolution)
+                        let has_named_args = args.iter().any(|a| matches!(a, CallArg::Named(_, _)));
                         let mut arg_types = Vec::new();
                         for arg in args {
                             let expr = match arg {
@@ -8092,7 +8100,11 @@ impl<'a> InferCtx<'a> {
                             overloads.into_iter().next().unwrap()
                         } else {
                             let overload_refs: Vec<&FunctionType> = overloads.iter().collect();
-                            let (best_idx, is_ambiguous) = self.find_best_overload_idx(&overload_refs, &arg_types);
+                            let (best_idx, is_ambiguous) = if has_named_args {
+                                (Some(0), false) // Use first overload for named args; positional check skipped
+                            } else {
+                                self.find_best_overload_idx(&overload_refs, &arg_types)
+                            };
                             if is_ambiguous {
                                 // Defer overload resolution until types are better known
                                 let ret_ty = self.fresh();
@@ -8110,6 +8122,13 @@ impl<'a> InferCtx<'a> {
                         // Instantiate the function type
                         let func_ty = self.instantiate_function(&fn_type);
                         if let Type::Function(ft) = func_ty {
+                            // When named args are present, skip positional type checking.
+                            // The compiler will reorder args by name at code generation time.
+                            // Return the function's return type directly.
+                            if has_named_args {
+                                self.deferred_collection_ret_checks.push(((*ft.ret).clone(), *call_span));
+                                return Ok(*ft.ret);
+                            }
                             // Check arity (accounting for optional parameters)
                             let min_args = ft.required_params.unwrap_or(ft.params.len());
                             let max_args = ft.params.len();
@@ -8141,6 +8160,7 @@ impl<'a> InferCtx<'a> {
                     let overloads: Vec<FunctionType> = self.env.lookup_all_functions_with_arity(&qualified_name, args.len())
                         .into_iter().cloned().collect();
                     if let Some(fn_type) = overloads.into_iter().next() {
+                        let has_named_args = args.iter().any(|a| matches!(a, CallArg::Named(_, _)));
                         let mut arg_types = Vec::new();
                         for arg in args {
                             let expr = match arg {
@@ -8150,6 +8170,12 @@ impl<'a> InferCtx<'a> {
                         }
                         let func_ty = self.instantiate_function(&fn_type);
                         if let Type::Function(ft) = func_ty {
+                            // When named args are present, skip positional type checking.
+                            // The compiler will reorder args by name at code generation time.
+                            if has_named_args {
+                                self.deferred_collection_ret_checks.push(((*ft.ret).clone(), *call_span));
+                                return Ok(*ft.ret);
+                            }
                             let min_args = ft.required_params.unwrap_or(ft.params.len());
                             let max_args = ft.params.len();
                             if arg_types.len() < min_args || arg_types.len() > max_args {

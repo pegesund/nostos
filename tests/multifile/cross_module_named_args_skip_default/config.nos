@@ -1,0 +1,2 @@
+pub buildUrl(host: String, port: Int = 80, path: String = "/") = 
+    host ++ ":" ++ toString(port) ++ path

@@ -14074,6 +14074,11 @@ impl Compiler {
                         .map(|a| self.expr_type_info(Self::call_arg_expr(a)).display_name())
                         .collect();
 
+                    // When named args are present (possibly with defaults), the number of provided
+                    // args may be less than the total parameter count. Try to find the function
+                    // by base name when arity-based lookup would fail due to defaults.
+                    let has_named_args_here = args.iter().any(|a| matches!(a, CallArg::Named(_, _)));
+
                     // Resolve to the correct function variant using signature matching
                     let call_name = if let Some(resolved) = self.resolve_function_call(&resolved_name, &arg_types) {
                         resolved
@@ -14089,7 +14094,7 @@ impl Compiler {
                             wildcard_key
                         } else if let Some(keys) = self.fn_asts_by_base.get(&resolved_name) {
                             let prefix = format!("{}/", resolved_name);
-                            keys.iter()
+                            let found = keys.iter()
                                 .find(|k| {
                                     if let Some(suffix) = k.strip_prefix(&prefix) {
                                         Self::count_signature_params(suffix) == arg_types.len()
@@ -14097,12 +14102,27 @@ impl Compiler {
                                         false
                                     }
                                 })
-                                .cloned()
-                                .unwrap_or(wildcard_key)
+                                .cloned();
+                            // When named args are present, also try finding a function whose
+                            // parameter count is >= the number of provided args (has defaults).
+                            if found.is_none() && has_named_args_here {
+                                keys.iter()
+                                    .find(|k| {
+                                        if let Some(suffix) = k.strip_prefix(&prefix) {
+                                            Self::count_signature_params(suffix) >= arg_types.len()
+                                        } else {
+                                            false
+                                        }
+                                    })
+                                    .cloned()
+                                    .unwrap_or(wildcard_key)
+                            } else {
+                                found.unwrap_or(wildcard_key)
+                            }
                         } else {
                             // Also check compiled functions map
                             let prefix = format!("{}/", resolved_name);
-                            self.functions.keys()
+                            let found = self.functions.keys()
                                 .find(|k| {
                                     if let Some(suffix) = k.strip_prefix(&prefix) {
                                         Self::count_signature_params(suffix) == arg_types.len()
@@ -14110,8 +14130,23 @@ impl Compiler {
                                         false
                                     }
                                 })
-                                .cloned()
-                                .unwrap_or(wildcard_key)
+                                .cloned();
+                            // When named args are present, also try finding a function whose
+                            // parameter count is >= the number of provided args (has defaults).
+                            if found.is_none() && has_named_args_here {
+                                self.functions.keys()
+                                    .find(|k| {
+                                        if let Some(suffix) = k.strip_prefix(&prefix) {
+                                            Self::count_signature_params(suffix) >= arg_types.len()
+                                        } else {
+                                            false
+                                        }
+                                    })
+                                    .cloned()
+                                    .unwrap_or(wildcard_key)
+                            } else {
+                                found.unwrap_or(wildcard_key)
+                            }
                         }
                     };
 
