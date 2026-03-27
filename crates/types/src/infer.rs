@@ -5351,7 +5351,7 @@ impl<'a> InferCtx<'a> {
                     let list_only_methods = [
                         "length", "len", "head", "tail", "init", "last", "nth",
                         "push", "pop", "slice", "concat", "reverse", "sort",
-                        "map", "filter", "fold", "any", "all", "find", "position",
+                        "map", "filter", "fold", "foldl", "foldr", "any", "all", "find", "position",
                         "unique", "flatten", "zip", "unzip", "take", "drop",
                         "empty", "isEmpty", "sum", "product", "indexOf", "sortBy",
                         "intersperse", "spanList", "groupBy", "transpose", "pairwise",
