@@ -12348,6 +12348,18 @@ impl Compiler {
                 // Resolve type name (check imports)
                 let qualified_type = self.resolve_name(&type_name.node);
 
+                // If no fields and the type is not a known constructor or record type,
+                // emit an UnknownType error with the actual source span (not Span::default()).
+                // This gives proper error location for things like `x == False` where False
+                // is not a defined constructor.
+                if fields.is_empty() && !self.known_constructors.contains(&qualified_type) && !self.known_constructors.contains(&type_name.node) {
+                    return Err(CompileError::UnknownType {
+                        name: type_name.node.clone(),
+                        span: *span,
+                        suggestion: self.suggest_import_for_type(&type_name.node),
+                    });
+                }
+
                 // Handle primitive type conversions: Float(x), Int(x), String(x), Bool(x)
                 // These are treated as explicit type casts, equivalent to toFloat(x), toInt(x), etc.
                 // BUT: if "Int" or "Float" is a user-defined variant constructor, skip the primitive
