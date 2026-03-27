@@ -26030,6 +26030,14 @@ scope_depth: self.block_depth,
         }
     }
 
+    /// Mark a function as polymorphic (needs monomorphization when called).
+    /// Used when loading cached functions with empty code stubs — these are
+    /// polymorphic functions that were compiled to stubs during --build-cache
+    /// and need to be monomorphized at the call site with concrete types.
+    pub fn mark_as_polymorphic(&mut self, name: &str) {
+        self.polymorphic_fns.insert(name.to_string());
+    }
+
     /// Register an external function's AST for parameter info (names, defaults).
     /// This is used when loading from cache - we have the bytecode but need
     /// parameter metadata for compiling calls with default arguments.

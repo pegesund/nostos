@@ -61,8 +61,11 @@ pub toRecord[T](row) = {
 }
 
 # Map a list of tuple rows to typed records using type parameter
-pub toRecords[T](rows) =
-    rows.map(row => toRecord[T](row))
+# Delegates to rowsToRecords with the resolved type name.
+pub toRecords[T](rows) = {
+    typeName = typeNameOf[T]()
+    rowsToRecords(typeName, rows)
+}
 
 # Query and map results to typed records
 # Requires connection and query to be executed first

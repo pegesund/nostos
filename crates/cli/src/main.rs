@@ -1002,7 +1002,14 @@ fn try_load_stdlib_from_cache(
                 None
             }
         });
+        // If the cached function has empty code, it was a polymorphic stub during
+        // --build-cache. Mark it as polymorphic so monomorphization is triggered
+        // at call sites with concrete types.
+        let is_empty_code = cached_fn.code.code.is_empty();
         compiler.register_external_function(&cached_fn.name, std::sync::Arc::new(func));
+        if is_empty_code {
+            compiler.mark_as_polymorphic(&cached_fn.name);
+        }
 
         // Register visibility for use statement wildcard imports
         let visibility = if cached_fn.is_public {

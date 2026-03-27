@@ -42,8 +42,11 @@ pub parseUrlQuery(pathOrQuery) -> Map[String, String] = {
 }
 
 # Helper: extract decoded string from Url.decode result
+# Handles application/x-www-form-urlencoded format where + means space
 urlDecodeValue(s) = {
-    (_, decoded) = Url.decode(s)
+    # Replace + with %20 before percent-decoding (query string format)
+    plusReplaced = Regex.replace(s, "\\+", "%20")
+    (_, decoded) = Url.decode(plusReplaced)
     decoded
 }
 
