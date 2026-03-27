@@ -901,14 +901,15 @@ impl TypeEnv {
         // When the name resolves to a non-stdlib user function via import, DON'T include
         // the bare name — it may be a builtin (e.g., "eval: String -> String") that should
         // be shadowed by the user's imported function (e.g., "types.eval: Expr -> Int").
+        // Determine which names to look up. When the bare name is explicitly imported
+        // (resolved_name != name), we use ONLY the resolved name. This prevents competing
+        // overloads from other stdlib modules (e.g., html.div when rhtml.div is imported)
+        // from polluting the overload list. For the common case where both resolved and bare
+        // name are the same (no import), we look up the bare name directly.
         let mut names_to_check: Vec<&str> = if resolved_name != name {
-            if resolved_name.starts_with("stdlib.") {
-                // Stdlib imports: include both resolved and bare name for coexistence
-                vec![resolved_name, name]
-            } else {
-                // User function import: only use the resolved name, shadow builtins
-                vec![resolved_name]
-            }
+            // Explicitly imported: use only the resolved module's functions.
+            // This prevents e.g. html.div overloads from appearing when rhtml.div is imported.
+            vec![resolved_name]
         } else {
             vec![resolved_name]
         };
@@ -948,8 +949,11 @@ impl TypeEnv {
                     }
                 }
 
-                // Collect ALL typed overloads with matching prefix and compatible arity
-                // Use O(1) index lookup instead of iterating all functions
+                // Collect ALL overloads with matching prefix and compatible arity
+                // Use O(1) index lookup instead of iterating all functions.
+                // Include wildcard-suffix entries (e.g., "input/_,...,_" with 19 underscores)
+                // because the arity loop above only checks up to arity+10, missing functions
+                // with many optional params (like rhtml.input which has 19 optional params).
                 let prefix = format!("{}/", check_name);
                 if let Some(keys) = self.functions_by_base.get(*check_name) {
                     for fn_name in keys {
@@ -957,14 +961,8 @@ impl TypeEnv {
                             if fn_name.starts_with(&prefix) {
                                 let min_required = ft.required_params.unwrap_or(ft.params.len());
                                 let arity_compatible = arity >= min_required && arity <= ft.params.len();
-                                if arity_compatible {
-                                    let suffix = &fn_name[prefix.len()..];
-                                    // Only include typed entries (not wildcard entries already checked)
-                                    if !suffix.chars().all(|c| c == '_' || c == ',')
-                                        && !results.contains(&ft)
-                                    {
-                                        results.push(ft);
-                                    }
+                                if arity_compatible && !results.contains(&ft) {
+                                    results.push(ft);
                                 }
                             }
                         }
