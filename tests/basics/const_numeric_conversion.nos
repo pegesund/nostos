@@ -1,0 +1,10 @@
+# expect: 45
+# Test that toInt/toFloat work on compile-time constants
+const MY_FLOAT = 3.7
+const MY_INT = 42
+
+main() = {
+  a = MY_FLOAT.toInt()
+  b = MY_INT.toFloat()
+  a + b.toInt()
+}

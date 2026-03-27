@@ -17404,7 +17404,8 @@ impl Compiler {
                             .map(|qualified| self.fn_asts_by_base.contains_key(qualified.as_str()))
                             .unwrap_or(false);
                     if !has_user_defined {
-                        if let Some(arg_type) = self.expr_type_info(arg_exprs[0]).display_name() {
+                        let debug_type = self.expr_type_info(arg_exprs[0]);
+                        if let Some(arg_type) = debug_type.display_name() {
                             // Type variables (?N) might resolve to numeric types, so allow them.
                             // Type parameters (single lowercase letters like "a", "b") from generic
                             // functions also might be numeric at monomorphization time.
@@ -17418,8 +17419,23 @@ impl Compiler {
                                 "Float" | "Float32" | "Float64" | "BigInt" | "Decimal" |
                                 "Char"  // Char.toInt() returns the Unicode code point
                             );
+                            // Check if the type name is actually a compile-time constant
+                            // whose underlying type IS numeric (e.g., const MY_FLOAT = 3.7)
+                            let is_numeric_const = if !is_numeric && !is_type_variable {
+                                self.constants.get(&arg_type)
+                                    .map(|ci| {
+                                        let ct = Self::mvar_init_value_to_type(&ci.value);
+                                        matches!(ct,
+                                            nostos_types::Type::Int | nostos_types::Type::Float
+                                            | nostos_types::Type::Char
+                                        )
+                                    })
+                                    .unwrap_or(false)
+                            } else {
+                                false
+                            };
 
-                            if !is_numeric && !is_type_variable {
+                            if !is_numeric && !is_type_variable && !is_numeric_const {
                                 return Err(CompileError::TypeError {
                                     message: format!(
                                         "type mismatch in argument 1: `{}` expects numeric type (Int, Float, etc.) but found `{}`",
@@ -19244,6 +19260,14 @@ impl Compiler {
             // Also try unqualified name for mvars defined in current module
             if let Some(mvar_info) = self.mvars.get(&ident.node) {
                 return Some(mvar_info.type_name.clone());
+            }
+            // Check compile-time constants - return their value type directly
+            // This ensures toInt/toFloat/etc. work on const-derived values
+            if let Some(const_info) = self.constants.get(&resolved_name)
+                .or_else(|| self.constants.get(&ident.node))
+            {
+                let const_type = Self::mvar_init_value_to_type(&const_info.value);
+                return Some(const_type.display());
             }
         }
 
