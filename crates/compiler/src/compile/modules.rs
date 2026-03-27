@@ -1204,7 +1204,6 @@ impl Compiler {
                         .map(|p| if has_explicit_type_params { ctx.env.apply_subst(p) } else { ctx.apply_full_subst(p) })
                         .collect();
                     let mut resolved_ret = if has_explicit_type_params { ctx.env.apply_subst(&fn_type.ret) } else { ctx.apply_full_subst(&fn_type.ret) };
-
                     // Fix: Batch inference can contaminate shared Var IDs (Var(1)='a', Var(2)='b',
                     // etc.) causing apply_full_subst to resolve them to Named("a"), Named("b")
                     // instead of keeping them as type variables. Normalize these back to Var IDs

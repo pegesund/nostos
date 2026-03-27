@@ -8280,13 +8280,19 @@ impl Compiler {
                     if let Some(ret) = bare_returns.get(&bare_arity) {
                         return Some(ret.clone());
                     }
-                    // Also try exact typed signature lookups
-                    for (key, ret) in resolved_returns.iter().chain(bare_returns.iter()) {
-                        let key_base = key.split('/').next().unwrap_or(key);
-                        let key_bare = key_base.rsplit('.').next().unwrap_or(key_base);
-                        if key_bare == name {
-                            return Some(ret.clone());
-                        }
+                    // Also try exact typed signature lookups, but only if there's EXACTLY ONE
+                    // function with this bare name. If multiple functions share the bare name
+                    // (e.g., list.span and rhtml.span both resolve as "span"), we can't
+                    // determine which one is meant here - leave it unresolved for type_check_fn.
+                    let matches: Vec<_> = resolved_returns.iter().chain(bare_returns.iter())
+                        .filter(|(key, _)| {
+                            let key_base = key.split('/').next().unwrap_or(key);
+                            let key_bare = key_base.rsplit('.').next().unwrap_or(key_base);
+                            key_bare == name
+                        })
+                        .collect();
+                    if matches.len() == 1 {
+                        return Some(matches[0].1.clone());
                     }
                 }
                 None
@@ -29025,6 +29031,8 @@ scope_depth: self.block_depth,
             .map(|ty| ctx.env.apply_subst(ty))
             .collect();
         let resolved_ret = ctx.env.apply_subst(&func_ty.ret);
+        // (debug removed)
+
 
         // Collect all type variable IDs in order of first appearance
         let mut var_order: Vec<u32> = Vec::new();
@@ -30005,9 +30013,11 @@ scope_depth: self.block_depth,
 
         // Second pass: register local names for functions IN the current module
         // (these OVERWRITE any existing local names to ensure same-module priority)
-        // Sort and iterate so that "foo/" (0-arity) is processed LAST and wins
-        // (since we're overwriting, the last one processed wins)
-        for fn_name in fn_keys_sorted.iter().rev() {
+        // Sort ascending so that typed entries (with '/') are processed LAST and win
+        // over bare forward-declaration entries (without '/').
+        // Example: "getNodes3" (bare, ret=Var(23)) sorted before "getNodes3/" (typed, ret=List[a]).
+        // Processing in ascending order: bare first, then typed (last-wins = typed wins).
+        for fn_name in fn_keys_sorted.iter() {
             let base_name = fn_name.split('/').next().unwrap_or(fn_name);
             let in_current_module = current_module_prefix.as_ref()
                 .map(|prefix| base_name.starts_with(prefix))
@@ -30488,17 +30498,6 @@ scope_depth: self.block_depth,
         // via try_hm_inference (which has throw in its env).
 
         // Create inference context
-        if std::env::var("NOSTOS_DEBUG_TC").is_ok() {
-            eprintln!("[TC] Building env for: {}", qualified_name);
-            for (k, v) in env.functions.iter() {
-                if k == "span" || k.starts_with("span/") || k.starts_with("span_") {
-                    eprintln!("  fn[{}]: params={:?} ret={} required={:?}", k,
-                        v.params.iter().map(|p| p.display()).collect::<Vec<_>>(),
-                        v.ret.display(), v.required_params);
-                }
-            }
-            eprintln!("  function_aliases[span] = {:?}", env.function_aliases.get("span"));
-        }
         let mut ctx = InferCtx::new(&mut env);
 
         // Register top-level lambda bindings via ctx.infer_binding() for let-polymorphism.

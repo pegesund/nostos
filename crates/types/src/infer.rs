@@ -3013,7 +3013,8 @@ impl<'a> InferCtx<'a> {
             let mut still_deferred = Vec::new();
             for (overloads, arg_types, ret_ty, span) in deferred_overloads {
                 let overload_refs: Vec<&FunctionType> = overloads.iter().collect();
-                let (best_idx, is_ambiguous) = self.find_best_overload_idx(&overload_refs, &arg_types);
+                let resolved_args: Vec<Type> = arg_types.iter().map(|t| self.env.apply_subst(t)).collect();
+                let (best_idx, is_ambiguous) = self.find_best_overload_idx(&overload_refs, &resolved_args);
                 if is_ambiguous {
                     // Still ambiguous - re-queue for next pass
                     still_deferred.push((overloads, arg_types, ret_ty, span));
@@ -3024,12 +3025,6 @@ impl<'a> InferCtx<'a> {
                     let func_ty = self.instantiate_function(&sig);
                     if let Type::Function(ft) = func_ty {
                         for (arg_ty, param_ty) in arg_types.iter().zip(ft.params.iter()) {
-                            if std::env::var("NOSTOS_DEBUG_DEFERRED").is_ok() {
-                                let ra = self.env.apply_subst(arg_ty);
-                                let rp = self.env.apply_subst(param_ty);
-                                eprintln!("[3-PASS UNIFY] {} <-> {} (overload[{}] ret={})",
-                                    ra.display(), rp.display(), idx, ft.ret.display());
-                            }
                             self.unify_types(arg_ty, param_ty)?;
                         }
                         self.unify_types(&ret_ty, &ft.ret)?;
@@ -3048,15 +3043,6 @@ impl<'a> InferCtx<'a> {
             let mut sequential_error: Option<TypeError> = None;
 
             for (overloads, arg_types, ret_ty, _span) in &deferred_overloads {
-                if std::env::var("NOSTOS_DEBUG_DEFERRED").is_ok() {
-                    eprintln!("[DEFERRED] {} overloads, arg_types={:?}", overloads.len(),
-                        arg_types.iter().map(|t| self.env.apply_subst(t).display()).collect::<Vec<_>>());
-                    for (i, ov) in overloads.iter().enumerate() {
-                        eprintln!("  overload[{}]: params={:?} ret={}", i,
-                            ov.params.iter().map(|p| p.display()).collect::<Vec<_>>(),
-                            ov.ret.display());
-                    }
-                }
                 let resolved_args: Vec<Type> = arg_types.iter()
                     .map(|t| self.env.apply_subst(t))
                     .collect();
@@ -10399,6 +10385,26 @@ impl<'a> InferCtx<'a> {
         let (clause_params, clause_ret) = self.infer_clause(&func.clauses[0])?;
         // If we have a pre-registered type, unify with its vars to connect recursive calls
         let (mut param_types, mut ret_ty, discovered_var_bounds) = if let Some(ref pre_reg) = pre_registered {
+            // Freshen the pre-registered type if it contains "small" Var IDs (1-26)
+            // from parse_signature_string. These IDs are shared across all parsed
+            // function signatures and cause false unification errors:
+            //   - renderWords has pre_registered.ret = Var(1) (from "a")
+            //   - list.span's stored FunctionType also uses Var(1) in its return type
+            //   - self.unify(clause_ret, Var(1)) links clause_ret to the shared Var(1)
+            //   - When Var(1) gets set from list.span processing, clause_ret gets wrong type
+            // Fix: freshen the pre_registered to get isolated fresh vars not shared with others.
+            let has_small_var_ids = {
+                let mut ids = Vec::new();
+                self.collect_var_ids(&Type::Function(pre_reg.clone()), &mut ids);
+                ids.iter().any(|&id| id > 0 && id <= 26)
+            };
+            let fresh_pre_reg: FunctionType = if has_small_var_ids {
+                let func_ty = self.instantiate_function(pre_reg);
+                if let Type::Function(ft) = func_ty { ft } else { pre_reg.clone() }
+            } else {
+                pre_reg.clone()
+            };
+            let pre_reg = &fresh_pre_reg;
             // Unify clause params with pre-registered params
             if clause_params.len() == pre_reg.params.len() {
                 for (cp, pp) in clause_params.iter().zip(pre_reg.params.iter()) {
