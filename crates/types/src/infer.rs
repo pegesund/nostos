@@ -6815,15 +6815,40 @@ impl<'a> InferCtx<'a> {
                     // Without this, `double = (x) => x + x; [1,2,3].map(double)` would lock
                     // ?N to Int, preventing later use with other types.
                     Ok(self.instantiate_local_binding(&ty, name, Some(ident.span)))
-                } else if let Some(sig) = self.env.functions.get(name).cloned() {
+                } else {
+                    // Resolve the name via function_aliases (imports) before looking up.
+                    // This ensures that when `span` is imported as `stdlib.rhtml.span`,
+                    // we look up `stdlib.rhtml.span` (6 params) not bare `span` (list span, 2 params).
+                    let resolved_name: &str = if !name.contains('.') {
+                        self.env.function_aliases.get(name.as_str())
+                            .map(|s| s.as_str())
+                            .unwrap_or(name.as_str())
+                    } else {
+                        name.as_str()
+                    };
+                    // Look up under the resolved (imported) name first, fall back to bare name
+                    let lookup_name = if resolved_name != name.as_str()
+                        && self.env.functions_by_base.contains_key(resolved_name)
+                    {
+                        resolved_name
+                    } else {
+                        name.as_str()
+                    };
+                if let Some(sig) = self.env.functions.get(lookup_name).cloned()
+                    .or_else(|| {
+                        // If no exact match on resolved name, try the bare name
+                        if lookup_name != name.as_str() { self.env.functions.get(name.as_str()).cloned() } else { None }
+                    })
+                {
                     // Check if there are multiple typed overloads for this function name.
                     // When a function reference like `double` is used as a HOF argument
                     // (e.g., `xs.map(double)`), we need to let the calling context determine
                     // which overload to use via unification, rather than committing to whichever
                     // overload was registered first under the bare name.
-                    let typed_overload_count = self.env.functions_by_base.get(name)
+                    // Use the resolved name for counting overloads (not bare name).
+                    let typed_overload_count = self.env.functions_by_base.get(lookup_name)
                         .map_or(0, |keys| {
-                            let prefix = format!("{}/", name);
+                            let prefix = format!("{}/", lookup_name);
                             keys.iter().filter(|k| {
                                 if !k.starts_with(&prefix) { return false; }
                                 let suffix = &k[prefix.len()..];
@@ -6865,6 +6890,7 @@ impl<'a> InferCtx<'a> {
                 } else {
                     Err(TypeError::UnknownIdent(name.clone()))
                 }
+                } // close outer else block (resolved name lookup)
             }
 
             // Binary operations
@@ -6960,9 +6986,20 @@ impl<'a> InferCtx<'a> {
                             // Return early to skip normal func_ty unification.
                             if is_ambiguous && overloads.len() > 1 && !is_recursive {
                                 let ret_ty = self.fresh();
+                                // When named args are present, store only the positional arg types
+                                // in the deferred entry. This matches how find_best_overload_idx
+                                // was called (with types_for_overload = positional_arg_types).
+                                // Using full arg_types would cause wrong overload selection because
+                                // named-arg positions may have Var params in one overload but
+                                // concrete String params in another, skewing the scores.
+                                let deferred_arg_types = if has_named_args && !types_for_overload.is_empty() {
+                                    types_for_overload.clone()
+                                } else {
+                                    arg_types.clone()
+                                };
                                 self.deferred_overload_calls.push((
                                     overloads.clone(),
-                                    arg_types.clone(),
+                                    deferred_arg_types,
                                     ret_ty.clone(),
                                     *call_span,
                                 ));
@@ -7047,9 +7084,16 @@ impl<'a> InferCtx<'a> {
 
                             if is_ambiguous && overloads.len() > 1 {
                                 let ret_ty = self.fresh();
+                                // When named args are present, store only the positional arg types
+                                // (same reasoning as in the Expr::Var branch above).
+                                let deferred_arg_types2 = if has_named_args && !types_for_overload2.is_empty() {
+                                    types_for_overload2.clone()
+                                } else {
+                                    arg_types.clone()
+                                };
                                 self.deferred_overload_calls.push((
                                     overloads.clone(),
-                                    arg_types.clone(),
+                                    deferred_arg_types2,
                                     ret_ty.clone(),
                                     *call_span,
                                 ));
@@ -8216,11 +8260,18 @@ impl<'a> InferCtx<'a> {
                             };
                             let (best_idx, is_ambiguous) = self.find_best_overload_idx(&overload_refs, &types_for_overload3);
                             if is_ambiguous {
-                                // Defer overload resolution until types are better known
+                                // Defer overload resolution until types are better known.
+                                // When named args are present, store only positional arg types
+                                // to match how find_best_overload_idx was called above.
+                                let deferred_arg_types3 = if has_named_args && !types_for_overload3.is_empty() {
+                                    types_for_overload3.clone()
+                                } else {
+                                    arg_types.clone()
+                                };
                                 let ret_ty = self.fresh();
                                 self.deferred_overload_calls.push((
                                     overloads.clone(),
-                                    arg_types.clone(),
+                                    deferred_arg_types3,
                                     ret_ty.clone(),
                                     *call_span,
                                 ));
