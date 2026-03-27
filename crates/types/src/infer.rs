@@ -6939,13 +6939,21 @@ impl<'a> InferCtx<'a> {
                         if !overloads.is_empty() {
                             let is_recursive = self.current_function.as_ref() == Some(name);
                             // Find best overload index first to avoid borrow issues
-                            // Skip strict matching if named args present (can't reorder without param names)
-                            let (best_idx, is_ambiguous) = if has_named_args {
-                                (Some(0), false) // Use first/wildcard overload for named args
+                            // NOTE: Even with named args, we use find_best_overload_idx with positional args
+                            // to filter by first-arg-type compatibility (e.g., div(str) vs div([children])).
+                            // Named args can't be reordered, but we can still disambiguate by first positional arg.
+                            let positional_arg_types: Vec<Type> = args.iter().zip(arg_types.iter())
+                                .filter_map(|(arg, ty)| {
+                                    if matches!(arg, CallArg::Positional(_)) { Some(ty.clone()) } else { None }
+                                })
+                                .collect();
+                            let types_for_overload = if has_named_args && !positional_arg_types.is_empty() {
+                                positional_arg_types
                             } else {
-                                let overload_refs: Vec<&FunctionType> = overloads.iter().collect();
-                                self.find_best_overload_idx(&overload_refs, &arg_types)
+                                arg_types.clone()
                             };
+                            let overload_refs: Vec<&FunctionType> = overloads.iter().collect();
+                            let (best_idx, is_ambiguous) = self.find_best_overload_idx(&overload_refs, &types_for_overload);
 
                             // If ambiguous (multiple overloads tied because args are Vars),
                             // defer overload selection until after constraint solving.
@@ -7023,13 +7031,19 @@ impl<'a> InferCtx<'a> {
                             .into_iter().cloned().collect();
                         if !overloads.is_empty() {
                             // Find best overload index first to avoid borrow issues
-                            // Skip strict matching if named args present
-                            let (best_idx, is_ambiguous) = if has_named_args {
-                                (Some(0), false)
+                            // Even with named args, use positional args for first-arg disambiguation
+                            let positional_arg_types2: Vec<Type> = args.iter().zip(arg_types.iter())
+                                .filter_map(|(arg, ty)| {
+                                    if matches!(arg, CallArg::Positional(_)) { Some(ty.clone()) } else { None }
+                                })
+                                .collect();
+                            let types_for_overload2 = if has_named_args && !positional_arg_types2.is_empty() {
+                                positional_arg_types2
                             } else {
-                                let overload_refs: Vec<&FunctionType> = overloads.iter().collect();
-                                self.find_best_overload_idx(&overload_refs, &arg_types)
+                                arg_types.clone()
                             };
+                            let overload_refs: Vec<&FunctionType> = overloads.iter().collect();
+                            let (best_idx, is_ambiguous) = self.find_best_overload_idx(&overload_refs, &types_for_overload2);
 
                             if is_ambiguous && overloads.len() > 1 {
                                 let ret_ty = self.fresh();
@@ -8190,11 +8204,17 @@ impl<'a> InferCtx<'a> {
                             overloads.into_iter().next().unwrap()
                         } else {
                             let overload_refs: Vec<&FunctionType> = overloads.iter().collect();
-                            let (best_idx, is_ambiguous) = if has_named_args {
-                                (Some(0), false) // Use first overload for named args; positional check skipped
+                            let positional_arg_types3: Vec<Type> = args.iter().zip(arg_types.iter())
+                                .filter_map(|(arg, ty)| {
+                                    if matches!(arg, CallArg::Positional(_)) { Some(ty.clone()) } else { None }
+                                })
+                                .collect();
+                            let types_for_overload3 = if has_named_args && !positional_arg_types3.is_empty() {
+                                positional_arg_types3
                             } else {
-                                self.find_best_overload_idx(&overload_refs, &arg_types)
+                                arg_types.clone()
                             };
+                            let (best_idx, is_ambiguous) = self.find_best_overload_idx(&overload_refs, &types_for_overload3);
                             if is_ambiguous {
                                 // Defer overload resolution until types are better known
                                 let ret_ty = self.fresh();

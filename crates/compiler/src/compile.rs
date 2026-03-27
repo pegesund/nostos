@@ -28623,6 +28623,62 @@ scope_depth: self.block_depth,
             }
         }
 
+        // Override function short names based on explicit user imports (module-specific).
+        // This fixes the case where both stdlib.html and stdlib.rhtml define functions with
+        // the same short name (e.g., `div`). Without this, the alphabetically-first module
+        // (html) wins because the big loop above only sets a short name when it's not yet set.
+        // With this fix, the explicitly imported module's type overwrites the default.
+        // E.g., `use stdlib.rhtml.*` sets imports["div"] = "stdlib.rhtml.div", so we
+        // override env["div"] and env["div/_,..."] with rhtml's type.
+        {
+            let imports_snapshot: Vec<(String, String)> = self.imports.iter()
+                .filter(|(_, v)| v.starts_with("stdlib."))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            for (short_name, qualified_base) in &imports_snapshot {
+                let prefix = format!("{}/", qualified_base);
+                // Find any wildcard entry for the imported qualified base, or fall back to any entry
+                let best_key: Option<String> = {
+                    let wildcard = env.functions.keys()
+                        .find(|k| k.starts_with(&prefix) && {
+                            let suffix = &k[prefix.len()..];
+                            suffix.is_empty() || suffix.chars().all(|c| c == '_' || c == ',')
+                        })
+                        .cloned();
+                    if wildcard.is_some() { wildcard }
+                    else {
+                        // Fall back to any key with this prefix (shortest = simplest)
+                        env.functions.keys()
+                            .filter(|k| k.starts_with(&prefix))
+                            .min_by_key(|k| k.len())
+                            .cloned()
+                    }
+                };
+                if let Some(bkey) = best_key {
+                    if let Some(ft) = env.functions.get(&bkey).cloned() {
+                        // Override bare short name with the explicitly imported module's type
+                        env.insert_function(short_name.clone(), ft.clone());
+                        // Override wildcard arity suffix entries
+                        if let Some(slash_pos) = bkey.find('/') {
+                            let arity_suffix = &bkey[slash_pos..];
+                            // Insert for the exact arity suffix from this key
+                            let short_qualified = format!("{}{}", short_name, arity_suffix);
+                            env.insert_function(short_qualified, ft.clone());
+                            // Also insert wildcard suffix based on function's actual param count
+                            let param_count = ft.params.len();
+                            if param_count > 0 {
+                                let wc_suffix = format!("/{}", vec!["_"; param_count].join(","));
+                                if wc_suffix != arity_suffix {
+                                    let short_wc = format!("{}{}", short_name, wc_suffix);
+                                    env.insert_function(short_wc, ft);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // CRITICAL: Update next_var to avoid collisions with type variables in registered functions
         // Signature strings use 'a'->Var(1), 'b'->Var(2), etc. Fresh variables must not collide with these.
         let max_var_in_functions = env.functions.values()
@@ -29971,6 +30027,37 @@ scope_depth: self.block_depth,
                 let local_name = format!("{}{}", local_name_base, arity_suffix);
                 if let Some(fn_type) = env.functions.get(fn_name).cloned() {
                     env.insert_function(local_name, fn_type);
+                }
+            }
+        }
+
+        // Override function short names based on explicit user imports.
+        // This fixes the case where both stdlib.html and stdlib.rhtml define functions with
+        // the same short name (e.g., `div`). The local-name pass above uses "first wins"
+        // (alphabetically, html beats rhtml). Here we override based on the user's explicit
+        // imports so that `use stdlib.rhtml.*` causes `div` → rhtml div type.
+        for (short_name, qualified_base) in &self.imports {
+            if !qualified_base.starts_with("stdlib.") { continue; }
+            let prefix = format!("{}/", qualified_base);
+            // Find any entry for the imported qualified base to determine its type.
+            // We prefer entries that have fewer params (simpler overloads).
+            // Also need to find entries that could be wildcards in type_check_fn's env,
+            // which only has fully qualified keys (not wildcard entries).
+            let any_key: Option<String> = env.functions.keys()
+                .filter(|k| k.starts_with(&prefix))
+                .min_by_key(|k| k.len())  // prefer shorter (simpler) keys
+                .cloned();
+            if let Some(akey) = any_key {
+                if let Some(ft) = env.functions.get(&akey).cloned() {
+                    // Override the bare short name with the explicitly imported module's type
+                    env.insert_function(short_name.clone(), ft.clone());
+                    // Also insert wildcard arity suffix entries based on the function's actual arity
+                    let param_count = ft.params.len();
+                    if param_count > 0 {
+                        let wildcard_suffix = format!("/{}", vec!["_"; param_count].join(","));
+                        let short_wildcard = format!("{}{}", short_name, wildcard_suffix);
+                        env.insert_function(short_wildcard, ft);
+                    }
                 }
             }
         }
