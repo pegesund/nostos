@@ -17996,7 +17996,19 @@ impl Compiler {
                     }
                     "pow" if arg_regs.len() == 2 => {
                         let dst = self.alloc_reg();
-                        self.chunk.emit(Instruction::PowFloat(dst, arg_regs[0], arg_regs[1]), line);
+                        let arg_type = self.infer_expr_type(Self::call_arg_expr(&args[0]));
+                        match arg_type {
+                            Some(InferredType::Int) => {
+                                self.chunk.emit(Instruction::PowInt(dst, arg_regs[0], arg_regs[1]), line);
+                            }
+                            Some(InferredType::Float) => {
+                                self.chunk.emit(Instruction::PowFloat(dst, arg_regs[0], arg_regs[1]), line);
+                            }
+                            None => {
+                                // Fallback: emit PowFloat (matches prior behavior for unresolved types)
+                                self.chunk.emit(Instruction::PowFloat(dst, arg_regs[0], arg_regs[1]), line);
+                            }
+                        }
                         return Ok(dst);
                     }
                     "min" if arg_regs.len() == 2 => {
