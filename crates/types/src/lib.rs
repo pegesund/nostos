@@ -981,6 +981,29 @@ impl TypeEnv {
             }
         }
 
+        // Fallback: if the alias resolved to a different name but gave 0 results,
+        // also check the bare name. This handles the case where a function name is
+        // ambiguous between modules (e.g., "span" maps to "stdlib.list.span" in imports
+        // but the user imported "use stdlib.rhtml.*" which registered span overloads under
+        // the bare name "span" in functions_by_base). In that case, the alias is stale
+        // (pointing to the wrong module) but the correct overloads are findable by bare name.
+        if results.is_empty() && resolved_name != name {
+            let prefix = format!("{}/", name);
+            if let Some(keys) = self.functions_by_base.get(name) {
+                for fn_name in keys {
+                    if let Some(ft) = self.functions.get(fn_name) {
+                        if fn_name.starts_with(&prefix) {
+                            let min_required = ft.required_params.unwrap_or(ft.params.len());
+                            let arity_compatible = arity >= min_required && arity <= ft.params.len();
+                            if arity_compatible && !results.contains(&ft) {
+                                results.push(ft);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Sort results by param signature for deterministic overload resolution order.
         // Without sorting, HashSet iteration order causes non-deterministic tiebreaking.
         results.sort_by(|a, b| {

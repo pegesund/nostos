@@ -639,4 +639,15 @@ impl Compiler {
 
         None
     }
+
+    /// Convert a Type to its display string for use in function keys.
+    /// This mirrors the format used by function key generation elsewhere in the compiler,
+    /// e.g. `List[RNode]` for List types, `String` for String, etc.
+    /// TypeParam and Var return "_" (wildcard) since they're not concrete types.
+    pub(super) fn type_to_string_for_key(&self, t: &nostos_types::Type) -> String {
+        match t {
+            nostos_types::Type::Var(_) | nostos_types::Type::TypeParam(_) => "_".to_string(),
+            _ => t.display(),
+        }
+    }
 }

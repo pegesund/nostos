@@ -5885,15 +5885,35 @@ impl Compiler {
         if has_qualified || self.types.contains_key(&qualified) || self.known_constructors.contains(&qualified) {
             return Ok(qualified);
         }
-        // Check if it's in the global scope (before imports for user-defined global functions)
-        if self.has_function_with_base(name) || self.types.contains_key(name) || self.known_constructors.contains(name) {
+        // Check if it's in the global scope (for user-defined global functions).
+        // Only match if the bare name refers to a LOCALLY-DEFINED function (no dots in the key base).
+        // Cross-module imports registered under the bare name (e.g., functions_by_base["span"] having
+        // "stdlib.rhtml.span/..." and "stdlib.list.span/...") should NOT prevent imports from resolving.
+        let has_user_defined_bare = self.functions_by_base.get(name)
+            .map(|keys| keys.iter().any(|k| {
+                let base = k.split('/').next().unwrap_or(k);
+                !base.contains('.') // User-defined: no dots in base name
+            }))
+            .unwrap_or(false)
+            || self.fn_asts_by_base.get(name)
+            .map(|keys| keys.iter().any(|k| {
+                let base = k.split('/').next().unwrap_or(k);
+                !base.contains('.')
+            }))
+            .unwrap_or(false);
+        if has_user_defined_bare || self.types.contains_key(name) || self.known_constructors.contains(name) {
             return Ok(name.to_string());
         }
 
-        // Check explicit imports first (from "use" statements with specific names or "use lib.*")
-        // This is the authoritative source for unqualified name resolution
-        if let Some(qualified) = self.imports.get(name) {
-            return Ok(qualified.clone());
+        // Check explicit imports (from "use" statements with specific names or "use lib.*")
+        // This is the authoritative source for unqualified stdlib function resolution
+        if let Some(import_qualified) = self.imports.get(name) {
+            return Ok(import_qualified.clone());
+        }
+        // Fallback for cross-module imported functions registered under bare name
+        // (e.g., functions_by_base["span"] having stdlib overloads from conflict handler)
+        if self.has_function_with_base(name) {
+            return Ok(name.to_string());
         }
 
         // Return the original name (will error later if not found)
@@ -30036,27 +30056,109 @@ scope_depth: self.block_depth,
         // the same short name (e.g., `div`). The local-name pass above uses "first wins"
         // (alphabetically, html beats rhtml). Here we override based on the user's explicit
         // imports so that `use stdlib.rhtml.*` causes `div` → rhtml div type.
-        for (short_name, qualified_base) in &self.imports {
-            if !qualified_base.starts_with("stdlib.") { continue; }
-            let prefix = format!("{}/", qualified_base);
-            // Find any entry for the imported qualified base to determine its type.
-            // We prefer entries that have fewer params (simpler overloads).
-            // Also need to find entries that could be wildcards in type_check_fn's env,
-            // which only has fully qualified keys (not wildcard entries).
-            let any_key: Option<String> = env.functions.keys()
-                .filter(|k| k.starts_with(&prefix))
-                .min_by_key(|k| k.len())  // prefer shorter (simpler) keys
-                .cloned();
-            if let Some(akey) = any_key {
-                if let Some(ft) = env.functions.get(&akey).cloned() {
-                    // Override the bare short name with the explicitly imported module's type
-                    env.insert_function(short_name.clone(), ft.clone());
-                    // Also insert wildcard arity suffix entries based on the function's actual arity
-                    let param_count = ft.params.len();
-                    if param_count > 0 {
-                        let wildcard_suffix = format!("/{}", vec!["_"; param_count].join(","));
-                        let short_wildcard = format!("{}{}", short_name, wildcard_suffix);
-                        env.insert_function(short_wildcard, ft);
+        //
+        // IMPORTANT: Use module_imports (per-module imports, stable across passes) NOT
+        // self.imports (which gets mutated during Pass 2 and may revert to stale values).
+        // module_imports[""] always reflects the user's `use` statements correctly.
+        {
+            // Collect imports from module_imports[""] and the current function's module imports.
+            // This mirrors the logic at lines 30258-30270 for function_aliases setup.
+            let module_key = qualified_name.split('/').next().unwrap_or(qualified_name);
+            let module_path = if let Some(dot_pos) = module_key.rfind('.') {
+                &module_key[..dot_pos]
+            } else {
+                module_key
+            };
+            let mut effective_imports: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+            if let Some(toplevel) = self.module_imports.get("") {
+                for (short, qualified) in toplevel {
+                    effective_imports.insert(short.clone(), qualified.clone());
+                }
+            }
+            if module_path != "" {
+                if let Some(mod_imports) = self.module_imports.get(module_path) {
+                    for (short, qualified) in mod_imports {
+                        effective_imports.insert(short.clone(), qualified.clone());
+                    }
+                }
+            }
+
+            for (short_name, qualified_base) in &effective_imports {
+                if !qualified_base.starts_with("stdlib.") { continue; }
+                let prefix = format!("{}/", qualified_base);
+                // Look up all type signatures for this qualified function from self.functions
+                // (which uses fully qualified keys like "stdlib.rhtml.span/List[RNode],...").
+                // We need to register ALL overloads under the short name so that
+                // lookup_all_functions_with_arity can find the right one by arity.
+                let mut found_any = false;
+                let qualified_keys: Vec<_> = self.functions.keys()
+                    .filter(|k| k.starts_with(&prefix))
+                    .cloned()
+                    .collect();
+                // Collect signatures to parse (avoids borrow conflicts with self.functions)
+                // Also collect required_params from the compiled FunctionValue.
+                let sigs_to_parse: Vec<(String, Option<usize>)> = qualified_keys.iter()
+                    .filter_map(|qkey| {
+                        self.functions.get(qkey).and_then(|f| {
+                            f.signature.as_ref().map(|s| (s.clone(), f.required_params))
+                        })
+                    })
+                    .collect();
+                for (sig, required_params) in sigs_to_parse {
+                    // Parse the signature string to get a FunctionType
+                    if let Some(mut ft) = self.parse_signature_string(&sig) {
+                        // Restore required_params from the compiled function
+                        // (parse_signature_string always returns None, losing this info)
+                        ft.required_params = required_params;
+                        // Register under short name (bare) on first occurrence
+                        if !found_any {
+                            env.insert_function(short_name.clone(), ft.clone());
+                            found_any = true;
+                        }
+                        // Register under arity-suffix short name for overload resolution.
+                        // Multiple overloads may have the same param count (e.g. span(List[RNode],...)
+                        // and span(String,...) both have 6 params). Register each under:
+                        //   1. A typed key: "span/List[RNode],_,_,_,_,_" for exact first-param matching
+                        //   2. A wildcard key: "span/_,_,_,_,_,_" (last one wins, but typed keys disambiguate)
+                        // lookup_all_functions_with_arity iterates functions_by_base["span"] and returns
+                        // all entries whose min_required <= call_arity <= total_params. Since the TypeEnv
+                        // stores all entries (typed AND wildcard), the typed entry for the correct overload
+                        // is found, while the wildcard serves as a fallback.
+                        let param_count = ft.params.len();
+                        if param_count > 0 {
+                            // Register under typed key using first param type for disambiguation
+                            let first_param_type = self.type_to_string_for_key(&ft.params[0]);
+                            let rest_wildcards = vec!["_"; param_count - 1].join(",");
+                            let typed_key = if param_count == 1 {
+                                format!("{}/{}", short_name, first_param_type)
+                            } else {
+                                format!("{}/{},{}", short_name, first_param_type, rest_wildcards)
+                            };
+                            env.insert_function(typed_key, ft.clone());
+                            // Also register under full-wildcard key (may overwrite, that's ok)
+                            let wildcard_suffix = format!("/{}", vec!["_"; param_count].join(","));
+                            let short_wildcard = format!("{}{}", short_name, wildcard_suffix);
+                            env.insert_function(short_wildcard, ft);
+                        }
+                    }
+                }
+                // Fallback: try pending_fn_signatures (for functions not yet compiled or
+                // stdlib functions loaded via add_module that have pending signatures).
+                if !found_any {
+                    let any_key: Option<String> = self.pending_fn_signatures.keys()
+                        .filter(|k| k.starts_with(&prefix))
+                        .min_by_key(|k| k.len())
+                        .cloned();
+                    if let Some(akey) = any_key {
+                        if let Some(ft) = self.pending_fn_signatures.get(&akey).cloned() {
+                            env.insert_function(short_name.clone(), ft.clone());
+                            let param_count = ft.params.len();
+                            if param_count > 0 {
+                                let wildcard_suffix = format!("/{}", vec!["_"; param_count].join(","));
+                                let short_wildcard = format!("{}{}", short_name, wildcard_suffix);
+                                env.insert_function(short_wildcard, ft);
+                            }
+                        }
                     }
                 }
             }
@@ -30386,6 +30488,17 @@ scope_depth: self.block_depth,
         // via try_hm_inference (which has throw in its env).
 
         // Create inference context
+        if std::env::var("NOSTOS_DEBUG_TC").is_ok() {
+            eprintln!("[TC] Building env for: {}", qualified_name);
+            for (k, v) in env.functions.iter() {
+                if k == "span" || k.starts_with("span/") || k.starts_with("span_") {
+                    eprintln!("  fn[{}]: params={:?} ret={} required={:?}", k,
+                        v.params.iter().map(|p| p.display()).collect::<Vec<_>>(),
+                        v.ret.display(), v.required_params);
+                }
+            }
+            eprintln!("  function_aliases[span] = {:?}", env.function_aliases.get("span"));
+        }
         let mut ctx = InferCtx::new(&mut env);
 
         // Register top-level lambda bindings via ctx.infer_binding() for let-polymorphism.
@@ -33702,6 +33815,13 @@ impl Compiler {
                                     let entry = self.fn_asts_by_base.entry(local_name.clone()).or_default();
                                     for key in keys { entry.insert(key); }
                                 }
+                                // Update self.imports to point to the most recently imported module.
+                                // "Latest import wins" semantics: if user writes `use stdlib.rhtml.*`
+                                // after the stdlib prelude imported stdlib.list.span, the rhtml.span
+                                // should be the primary alias. This ensures function_aliases in TypeEnv
+                                // points to an overload that actually exists for the expected arity.
+                                self.imports.insert(local_name.clone(), qualified_base.clone());
+                                self.import_sources.insert(local_name.clone(), module_path.clone());
                                 continue;
                             }
                         }

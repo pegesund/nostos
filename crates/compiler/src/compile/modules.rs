@@ -523,23 +523,28 @@ impl Compiler {
             // type names used inside module functions resolve correctly during batch inference.
             self.add_type_aliases_to_env(&mut env);
 
-            // Register already-compiled functions
-            // Skip functions that start with "stdlib." - they'll be registered from
-            // pending_fn_signatures below with proper type_params preserved.
+            // Register already-compiled functions.
+            // For stdlib functions: register them here since some stdlib functions (e.g.,
+            // stdlib.rhtml.span) are in self.functions but NOT in pending_fn_signatures,
+            // so without this registration they would be missing from the batch env.
+            // For non-stdlib functions: only register if they have a compiled signature.
             for (fn_name, fn_val) in &self.functions {
-                if fn_name.starts_with("stdlib.") {
-                    continue; // Registered from pending_fn_signatures with correct type_params
-                }
                 if fn_val.signature.is_some() {
                     if let Some(sig) = fn_val.signature.as_ref() {
                         if let Some(fn_type) = self.parse_signature_string(sig) {
-                            env.insert_function(fn_name.clone(), fn_type);
+                            // Preserve required_params from FunctionValue so optional params work
+                            let mut ft = fn_type;
+                            ft.required_params = fn_val.required_params;
+                            if !env.functions.contains_key(fn_name) {
+                                env.insert_function(fn_name.clone(), ft);
+                            }
                         }
                     }
                 }
             }
 
-            // Register ALL pending function signatures (stdlib now resolved, user still has type vars)
+            // Register ALL pending function signatures (stdlib now resolved, user still has type vars).
+            // These take precedence over the above (may have better type_params from HM inference).
             for (fn_name, fn_type) in &self.pending_fn_signatures {
                 env.insert_function(fn_name.clone(), fn_type.clone());
             }
@@ -877,7 +882,17 @@ impl Compiler {
                     let _ = ctx.infer_function(&qualified_def);
                 } else {
                     ctx.env.current_module = None;
+                    // Restore base aliases then overlay top-level file's imports.
+                    // This ensures that `use stdlib.rhtml.*` (which adds span → stdlib.rhtml.span)
+                    // is visible in batch inference, not just the global self.imports (which has
+                    // span → stdlib.list.span from the prelude). module_imports[""] is saved
+                    // inside compile_items before add_module restores self.imports.
                     ctx.env.function_aliases = base_function_aliases.clone();
+                    if let Some(mod_imports) = self.module_imports.get("") {
+                        for (short, qualified) in mod_imports {
+                            ctx.env.function_aliases.insert(short.clone(), qualified.clone());
+                        }
+                    }
                     let _ = ctx.infer_function(fn_def);
                 }
             }
@@ -1755,8 +1770,11 @@ impl Compiler {
             self.current_source_name = Some(source_name.clone());
 
             // Continue compiling other functions even if one fails
-            if let Err(e) = self.compile_fn_def(&fn_def) {
-                errors.push((fn_name, e, source_name.clone(), source.clone()));
+            match self.compile_fn_def(&fn_def) {
+                Ok(()) => {}
+                Err(e) => {
+                    errors.push((fn_name, e, source_name.clone(), source.clone()));
+                }
             }
 
             self.module_path = saved_path;
@@ -2258,6 +2276,15 @@ impl Compiler {
                             .collect();
                         let saved_path = std::mem::replace(&mut self.module_path, module_path);
 
+                        // Restore the function's original imports so that names like "span"
+                        // resolve to the correct module (e.g., stdlib.rhtml.span, not stdlib.list.span).
+                        // Without this, self.imports reflects whichever module was compiled last,
+                        // which may have different aliases than the function's defining module.
+                        let saved_imports = self.imports.clone();
+                        if let Some(fn_imports) = self.fn_ast_imports.get(fn_name).cloned() {
+                            self.imports = fn_imports;
+                        }
+
                         // Try HM inference again now that all dependencies are compiled
                         // Clone the fn_ast to avoid borrow conflict with &mut self in try_hm_inference
                         let inferred = self.fn_asts.get(fn_name).cloned()
@@ -2277,6 +2304,7 @@ impl Compiler {
                             }
                         }
 
+                        self.imports = saved_imports;
                         self.module_path = saved_path;
                     }
                 }
