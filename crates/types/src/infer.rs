@@ -9472,11 +9472,31 @@ impl<'a> InferCtx<'a> {
             None
         };
 
+        // Check which type_aliases values are known (for preferring imported stdlib types).
+        // Determine which stdlib module prefixes were explicitly imported via `use` statements.
+        // We use function_aliases (which is populated per-module from module_imports) to identify
+        // which stdlib modules are in scope. For example, if function_aliases has
+        // "span" -> "stdlib.rhtml.span", then "stdlib.rhtml" is an explicitly imported module.
+        // We prefer constructors from explicitly imported modules over non-imported ones.
+        // This handles the case where both Html and RNode have an Empty constructor:
+        // when `use stdlib.rhtml.*` is in scope, Empty should resolve to RNode.Empty.
+        let explicitly_imported_module_prefixes: std::collections::HashSet<String> =
+            self.env.function_aliases.values()
+                .filter_map(|qualified| {
+                    // Extract the module prefix: "stdlib.rhtml.span" -> "stdlib.rhtml"
+                    let last_dot = qualified.rfind('.')?;
+                    Some(qualified[..last_dot].to_string())
+                })
+                .collect();
         type_names.sort_by(|a, b| {
             // Priority: preferred type (from declared return type) first,
-            // then current module's types, then other user types, then built-in types, then stdlib types.
+            // then current module's types, then other user types, then built-in types,
+            // then stdlib types from explicitly imported modules, then other stdlib types.
             // This ensures that within a single file, Node(v, StrLeaf, StrLeaf) in a function
             // returning StrTree finds StrTree.Node, not IntTree.Node.
+            // Also, when both Html and RNode have Empty constructor, prefer whichever
+            // stdlib type came from an explicitly imported module (e.g. stdlib.rhtml when
+            // `use stdlib.rhtml.*` is in scope, rhtml wins over html for Empty/Element/Text).
             let builtin_types = ["List", "Option", "Result"];
             let a_is_stdlib = a.starts_with("stdlib.");
             let b_is_stdlib = b.starts_with("stdlib.");
@@ -9486,9 +9506,16 @@ impl<'a> InferCtx<'a> {
             let b_is_current = current_module.as_ref().map(|m| b.starts_with(m.as_str())).unwrap_or(false);
             let a_is_preferred = preferred_type.as_ref().map(|p| a.as_str() == p.as_str()).unwrap_or(false);
             let b_is_preferred = preferred_type.as_ref().map(|p| b.as_str() == p.as_str()).unwrap_or(false);
+            // Check if this stdlib type's module was explicitly imported via a use statement.
+            // e.g., "stdlib.rhtml.RNode" is explicitly imported if "stdlib.rhtml" is in the set.
+            let a_module = if a_is_stdlib { a.rfind('.').map(|pos| &a[..pos]) } else { None };
+            let b_module = if b_is_stdlib { b.rfind('.').map(|pos| &b[..pos]) } else { None };
+            let a_is_explicitly_imported = a_module.map(|m| explicitly_imported_module_prefixes.contains(m)).unwrap_or(false);
+            let b_is_explicitly_imported = b_module.map(|m| explicitly_imported_module_prefixes.contains(m)).unwrap_or(false);
             // Lower number = higher priority (sorted ascending)
-            let a_priority = if a_is_preferred { 0 } else if a_is_current { 1 } else if !a_is_stdlib && !a_is_builtin { 2 } else if a_is_builtin { 3 } else { 4 };
-            let b_priority = if b_is_preferred { 0 } else if b_is_current { 1 } else if !b_is_stdlib && !b_is_builtin { 2 } else if b_is_builtin { 3 } else { 4 };
+            // Priority 4 = stdlib from explicitly imported module, priority 5 = other stdlib
+            let a_priority = if a_is_preferred { 0 } else if a_is_current { 1 } else if !a_is_stdlib && !a_is_builtin { 2 } else if a_is_builtin { 3 } else if a_is_explicitly_imported { 4 } else { 5 };
+            let b_priority = if b_is_preferred { 0 } else if b_is_current { 1 } else if !b_is_stdlib && !b_is_builtin { 2 } else if b_is_builtin { 3 } else if b_is_explicitly_imported { 4 } else { 5 };
             a_priority.cmp(&b_priority).then(a.cmp(b))
         });
         for type_name in type_names {
