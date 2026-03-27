@@ -1008,7 +1008,12 @@ impl<'a> InferCtx<'a> {
                     Type::List(inner) | Type::Set(inner) | Type::Array(inner) | Type::IO(inner) => is_fully_generic(inner),
                     Type::Map(k, v) => is_fully_generic(k) && is_fully_generic(v),
                     Type::Tuple(elems) => elems.iter().all(is_fully_generic),
-                    Type::Named { args, .. } => args.iter().all(is_fully_generic),
+                    // Named types are only generic if they have type args AND all args are generic.
+                    // A Named type with no args (like Html, Bool) is a concrete type, not generic.
+                    // Previously, empty args vacuously returned true from .all(), treating concrete
+                    // types like Html as "fully generic" — this prevented conflict detection between
+                    // overloads like td(String) vs td(List[Html]).
+                    Type::Named { args, .. } => !args.is_empty() && args.iter().all(is_fully_generic),
                     Type::Function(ft) => ft.params.iter().all(is_fully_generic) && is_fully_generic(&ft.ret),
                     _ => false,
                 }
@@ -3055,6 +3060,27 @@ impl<'a> InferCtx<'a> {
                 let resolved_args: Vec<Type> = arg_types.iter()
                     .map(|t| self.env.apply_subst(t))
                     .collect();
+
+                // Skip overload resolution if all arguments are still unresolved Vars.
+                // Committing to the first overload would wrongly constrain free variables.
+                // Example: td(x) where td has overloads td(List[Html]) and td(String):
+                // if x is Var, trying List[Html] first would incorrectly set x=List[Html].
+                // Leave the call unresolved; runtime dispatch will handle it.
+                let all_args_unresolved = resolved_args.iter().all(|a| matches!(a, Type::Var(_)));
+                // Also check if ANY concrete-type overload would work vs a Var arg:
+                // only skip when ALL args are Var and there are conflicting concrete overloads.
+                let has_conflicting_overloads = overloads.len() >= 2 && {
+                    let first_params: Vec<&Type> = overloads[0].params.iter().take(resolved_args.len()).collect();
+                    let second_params: Vec<&Type> = overloads[1].params.iter().take(resolved_args.len()).collect();
+                    first_params.iter().zip(second_params.iter()).any(|(p1, p2)| {
+                        !matches!(p1, Type::Var(_) | Type::TypeParam(_)) &&
+                        !matches!(p2, Type::Var(_) | Type::TypeParam(_)) &&
+                        p1 != p2
+                    })
+                };
+                if all_args_unresolved && has_conflicting_overloads {
+                    continue; // Skip — cannot determine correct overload with unresolved args
+                }
 
                 let mut call_resolved = false;
                 for sig in overloads {

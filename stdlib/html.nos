@@ -111,10 +111,10 @@ pub th(children: List[Html], class = "", id = "", style = "", attrs = []) =
 pub th(str: String, class = "", id = "", style = "", attrs = []) =
     Element("th", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
 
-pub td(children: List[Html], class = "", id = "", style = "", attrs = []) =
-    Element("td", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
 pub td(str: String, class = "", id = "", style = "", attrs = []) =
     Element("td", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), [Text(str)])
+pub td(children: List[Html], class = "", id = "", style = "", attrs = []) =
+    Element("td", buildAttrs([("class", class), ("id", id), ("style", style)], attrs), children)
 
 # --- Semantic elements ---
 
@@ -305,7 +305,7 @@ pub renderToBuffer(node, buf) = match node {
     Empty -> ()
 }
 
-pub render(node: Html) = {
+pub render(node: Html) -> String = {
     buf = Buffer.new()
     renderToBuffer(node, buf)
     Buffer.toString(buf)

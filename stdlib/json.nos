@@ -95,9 +95,21 @@ pub parse_number(chars) = match chars {
 }
 # --- String parsing ---
 
+pub unescape_char(c) = match c {
+    'n' -> '\n'
+    't' -> '\t'
+    'r' -> '\r'
+    'b' -> '\x08'
+    'f' -> '\x0C'
+    '"' -> '"'
+    '\\' -> '\\'
+    '/' -> '/'
+    _ -> c
+}
+
 pub collect_string_chars(chars, acc) = match chars {
     ['"' | rest]  -> (acc, rest)
-    ['\\', c | rest] -> collect_string_chars(rest, acc ++ [c])
+    ['\\', c | rest] -> collect_string_chars(rest, acc ++ [unescape_char(c)])
     [c | rest]    -> collect_string_chars(rest, acc ++ [c])
     []            -> (acc, [])
 
