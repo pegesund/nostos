@@ -6214,6 +6214,7 @@ impl<'a> InferCtx<'a> {
         let t1 = if let Some(expanded) = self.expand_type_alias(&t1) { expanded } else { t1 };
         let t2 = if let Some(expanded) = self.expand_type_alias(&t2) { expanded } else { t2 };
 
+
         match (&t1, &t2) {
             // Same type - nothing to do
             _ if t1 == t2 => Ok(()),

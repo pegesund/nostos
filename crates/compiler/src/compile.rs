@@ -6244,6 +6244,33 @@ impl Compiler {
 
     /// Check if a function clause's parameter types match the given argument types.
     /// Used for overload resolution - returns true if this clause could accept these args.
+    /// Check if a type string represents a function type at the OUTERMOST level.
+    /// e.g., "(String, String) -> Option[String]" → true
+    ///       "List[(String, String) -> Option[String]]" → false (it's a List, not a function)
+    fn is_outermost_function_type(s: &str) -> bool {
+        // If the string starts with a generic container like "List[", "Map[", "Set[", it's not a function
+        if s.starts_with("List[") || s.starts_with("Map[") || s.starts_with("Set[")
+            || s.starts_with("Array[") || s.starts_with("IO[") {
+            return false;
+        }
+        // Check for "->" at depth 0 (outside all brackets/parens)
+        let mut depth = 0i32;
+        let chars: Vec<char> = s.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            match chars[i] {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth -= 1,
+                '-' if depth == 0 && i + 1 < chars.len() && chars[i + 1] == '>' => {
+                    return true;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
     fn clause_matches_args(
         &self,
         clause_types: &[Option<TypeExpr>],
@@ -6275,8 +6302,8 @@ impl Compiler {
                 let is_type_param = |s: &str| s.len() == 1 && s.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false);
                 // Helper to check if a type is a type variable (from HM inference)
                 let is_type_variable = |s: &str| s.starts_with('?');
-                // Helper to check if a type is a function type
-                let is_function_type = |s: &str| s.contains("->");
+                // Helper to check if a type is a function type at the outermost level
+                let is_function_type = |s: &str| Self::is_outermost_function_type(s);
                 // Helper to extract base type name from generic (e.g., "Map[K,V]" -> "Map")
                 fn get_base_type(s: &str) -> &str {
                     if let Some(bracket_pos) = s.find('[') {
@@ -6381,7 +6408,7 @@ impl Compiler {
                 let is_primitive = |s: &str| matches!(s, "Int" | "Float" | "String" | "Bool" | "Char");
                 let is_type_param = |s: &str| s.len() == 1 && s.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false);
                 let is_type_variable = |s: &str| s.starts_with('?');
-                let is_function_type = |s: &str| s.contains("->");
+                let is_function_type = |s: &str| Self::is_outermost_function_type(s);
                 fn get_base_type(s: &str) -> &str {
                     if let Some(bracket_pos) = s.find('[') {
                         &s[..bracket_pos]
@@ -7424,7 +7451,18 @@ impl Compiler {
                         if let Some(resolved) = imported {
                             resolved
                         } else {
-                            qualified
+                            // Last resort: find type by suffix in known types
+                            // e.g., "Option" → "stdlib.list.Option" even if not imported
+                            let suffix = format!(".{}", name);
+                            let found_in_types = self.types.keys()
+                                .find(|k| k.ends_with(&suffix))
+                                .cloned();
+                            let found_in_vis = if found_in_types.is_none() {
+                                self.type_visibility.keys()
+                                    .find(|k| k.ends_with(&suffix))
+                                    .cloned()
+                            } else { None };
+                            found_in_types.or(found_in_vis).unwrap_or(qualified)
                         }
                     } else {
                         name.clone()
@@ -9159,11 +9197,20 @@ impl Compiler {
         // Also, inside the defining module itself, the function is `ops.listSum`
         // but the recursive call uses the bare name `listSum`.
         let qualified = self.qualify_name(name);
+        let stdlib_import: Option<String> = self.imports.get(name).and_then(|imported| {
+            if imported.starts_with("stdlib.") {
+                Some(imported.clone())
+            } else {
+                None
+            }
+        });
         let names_to_check: Vec<&str> = {
             let mut names = vec![name];
             if let Some(imported) = self.imports.get(name) {
                 // Only consider imports from user modules, not stdlib.
                 // Stdlib functions should not prevent builtin dispatch.
+                // Exception: if the stdlib function was actually compiled and registered
+                // (e.g., stdlib.validation.range shadows the builtin range), we check it below.
                 if imported.as_str() != name && !imported.starts_with("stdlib.") {
                     names.push(imported.as_str());
                 }
@@ -9174,6 +9221,30 @@ impl Compiler {
             names
         };
 
+        // Special case: if the name is EXPLICITLY imported from stdlib (via `use` statement,
+        // not via prelude) AND that stdlib function exists in our compiled functions registry,
+        // it should take precedence over builtin dispatch. This handles cases like
+        // `use stdlib.validation.{range}` where `range` would otherwise be intercepted
+        // by builtin range dispatch.
+        // We check `!self.prelude_functions.contains(stdlib_qualified)` to exclude prelude
+        // imports (which are added automatically, not by user `use` statements).
+        if let Some(stdlib_qualified) = &stdlib_import {
+            let is_explicit_import = !self.prelude_functions.contains(stdlib_qualified.as_str());
+            if is_explicit_import {
+                let prefix = format!("{}/", stdlib_qualified);
+                if let Some(keys) = self.functions_by_base.get(stdlib_qualified.as_str()) {
+                    for key in keys {
+                        if let Some(suffix) = key.strip_prefix(&prefix) {
+                            let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
+                            if param_count == arity {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         for check_name in &names_to_check {
             let prefix = format!("{}/", check_name);
 
@@ -9183,7 +9254,33 @@ impl Compiler {
                     if let Some(suffix) = key.strip_prefix(&prefix) {
                         let param_count = if suffix.is_empty() { 0 } else { suffix.split(',').count() };
                         if param_count == arity {
-                            return true;
+                            // Don't count stdlib alias functions as "user functions" that override builtins.
+                            // e.g., `stdlib.validation.range` creates a local alias `range/String,String`
+                            // which should NOT prevent the builtin integer range(start, end) dispatch.
+                            // A function is a stdlib alias if its module starts with "stdlib." AND
+                            // it was NOT explicitly imported by the user.
+                            let is_stdlib_alias = if check_name.starts_with("stdlib.") {
+                                // Qualified stdlib name - might be legitimately called
+                                false
+                            } else if let Some(fn_val) = self.functions.get(key) {
+                                // Short alias: check if the function's module is a stdlib module
+                                // AND this name is not in the user's imports (i.e., not explicitly imported)
+                                let from_stdlib = fn_val.module.as_ref()
+                                    .map(|m| m.starts_with("stdlib."))
+                                    .unwrap_or(false);
+                                // "not explicitly imported" means either not in imports at all,
+                                // OR only there via prelude (automatic, not user `use` statement).
+                                let not_explicitly_imported = match self.imports.get(*check_name) {
+                                    None => true,
+                                    Some(qualified) => self.prelude_functions.contains(qualified.as_str()),
+                                };
+                                from_stdlib && not_explicitly_imported
+                            } else {
+                                false
+                            };
+                            if !is_stdlib_alias {
+                                return true;
+                            }
                         }
                     }
                 }
@@ -17595,11 +17692,13 @@ impl Compiler {
                         self.chunk.emit(Instruction::RangeInt64List(dst, arg_regs[0]), line);
                         return Ok(dst);
                     }
-                    "range" if arg_regs.len() == 2 && !self.has_user_function("range", 2) => {
-                        // range(start, end) - create list [start..end)
-                        let dst = self.alloc_reg();
-                        self.emit_call_native(dst, "range", vec![arg_regs[0], arg_regs[1]].into(), line);
-                        return Ok(dst);
+                    "range" if arg_regs.len() == 2 => {
+                        if !self.has_user_function("range", 2) {
+                            // range(start, end) - create list [start..end)
+                            let dst = self.alloc_reg();
+                            self.emit_call_native(dst, "range", vec![arg_regs[0], arg_regs[1]].into(), line);
+                            return Ok(dst);
+                        }
                     }
                     "length" | "len" if arg_regs.len() == 1 && !self.has_user_function("length", 1) && !self.has_user_function("len", 1) => {
                         let dst = self.alloc_reg();
@@ -25992,7 +26091,17 @@ scope_depth: self.block_depth,
                     .collect();
                 TypeInfoKind::ReactiveVariant { constructors }
             }
-            TypeKind::Primitive | TypeKind::Alias { .. } => return,
+            TypeKind::Primitive => return,
+            TypeKind::Alias { target } => {
+                // Register the alias in type_alias_targets so HM inference can expand it
+                // This is critical when stdlib is loaded from cache (type_alias_targets is not cached directly)
+                if !self.type_alias_targets.contains_key(name) {
+                    self.type_alias_targets.insert(name.to_string(), target.clone());
+                    // Also register in type_visibility so `use module.{AliasType}` can find it
+                    self.type_visibility.insert(name.to_string(), Visibility::Public);
+                }
+                return;
+            }
         };
         let type_info = TypeInfo { name: name.to_string(), kind, visibility: Visibility::Public, type_param_names: type_val.type_params.clone() };
         self.types.insert(name.to_string(), type_info);
@@ -26350,6 +26459,24 @@ scope_depth: self.block_depth,
             };
             vm_types.insert(name.clone(), Arc::new(type_value));
         }
+
+        // Also include type aliases (they are NOT in self.types, they're in type_alias_targets)
+        for (alias_name, target_name) in &self.type_alias_targets {
+            if !vm_types.contains_key(alias_name) {
+                vm_types.insert(alias_name.clone(), Arc::new(nostos_vm::value::TypeValue {
+                    name: alias_name.clone(),
+                    kind: nostos_vm::value::TypeKind::Alias { target: target_name.clone() },
+                    fields: vec![],
+                    constructors: vec![],
+                    traits: vec![],
+                    source_code: None,
+                    source_file: None,
+                    doc: None,
+                    type_params: vec![],
+                }));
+            }
+        }
+
         vm_types
     }
 
@@ -28440,7 +28567,9 @@ scope_depth: self.block_depth,
 
         // Register type aliases from imports (module-specific)
         for (short_name, qualified_name) in &self.imports {
-            if self.types.contains_key(qualified_name) || self.type_alias_targets.contains_key(qualified_name) {
+            let in_types = self.types.contains_key(qualified_name);
+            let in_aliases = self.type_alias_targets.contains_key(qualified_name);
+            if in_types || in_aliases {
                 env.add_type_alias(short_name.clone(), qualified_name.clone());
             }
         }
