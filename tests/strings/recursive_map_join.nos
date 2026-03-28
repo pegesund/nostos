@@ -1,0 +1,13 @@
+# expect: "[1,2,3]"
+# Regression test: recursive function used in .map().join() chain
+# Previously failed with "no method `join` found for type `[b]`"
+# because List[Var(N)] was not recognized as "List" for dispatch
+
+type Tree = Leaf(Int) | Branch([Tree])
+
+tree_str(t: Tree) = match t {
+  Leaf(n) -> n.toString()
+  Branch(children) -> "[" ++ children.map(tree_str).join(",") ++ "]"
+}
+
+main() = tree_str(Branch([Leaf(1), Leaf(2), Leaf(3)]))

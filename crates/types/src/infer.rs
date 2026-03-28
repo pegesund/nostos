@@ -4497,6 +4497,14 @@ impl<'a> InferCtx<'a> {
                             }).or_else(|| {
                                 let qualified = format!("List.{}", call.method_name);
                                 self.env.functions.get(&qualified).cloned()
+                            }).or_else(|| {
+                                // Special case: "join" on a List dispatches to String.join
+                                // String.join has signature [a] -> String -> String (list first)
+                                if call.method_name == "join" {
+                                    self.env.functions.get("String.join").cloned()
+                                } else {
+                                    None
+                                }
                             })
                         }
                         "Map" => {

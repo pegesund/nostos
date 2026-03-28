@@ -272,7 +272,10 @@ impl ExprTypeInfo {
             }
             ExprTypeInfo::NameOnly(name) => {
                 // Extract base name from parameterized type strings
-                if let Some(bracket) = name.find('[') {
+                if name.starts_with('[') {
+                    // List display format: "[T]" or "[b]" - the base type is "List"
+                    Some("List")
+                } else if let Some(bracket) = name.find('[') {
                     Some(&name[..bracket])
                 } else if let Some(space) = name.find(' ') {
                     // Handle "Map k v" style (from builtins)
