@@ -2542,7 +2542,33 @@ impl Compiler {
             }
 
             if let Some(vis) = fn_visibility.get(name) {
-                self.function_visibility.insert(full_name, *vis);
+                self.function_visibility.insert(full_name.clone(), *vis);
+            }
+
+            // Pre-register in pending_fn_signatures so that try_hm_inference can find
+            // the correct arity for this function even before it's compiled.
+            // This fixes cross-module arity overload resolution when the calling module
+            // is compiled alphabetically before the module defining these overloads.
+            // compile_all() will later overwrite these with properly typed entries.
+            if !self.pending_fn_signatures.contains_key(&full_name) {
+                let clauses2 = fn_clauses.get(name).unwrap();
+                let fn_arity = clauses2[0].params.len();
+                let req_params = clauses2[0].params.iter().filter(|p| p.default.is_none()).count();
+                let required_params = if req_params < fn_arity { Some(req_params) } else { None };
+                // Use unique variable IDs based on a hash of the function name to avoid collisions
+                // between different functions. These are wildcard entries - types will be refined
+                // when compile_all runs.
+                let base_id: u32 = full_name.bytes().fold(900_000u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
+                let fn_type = nostos_types::FunctionType {
+                    required_params,
+                    type_params: vec![],
+                    params: (0..fn_arity).map(|i| {
+                        nostos_types::Type::Var(base_id.wrapping_add(i as u32 + 1))
+                    }).collect(),
+                    ret: Box::new(nostos_types::Type::Var(base_id)),
+                    var_bounds: vec![],
+                };
+                self.pending_fn_signatures.insert(full_name, fn_type);
             }
         }
 
@@ -30079,16 +30105,29 @@ scope_depth: self.block_depth,
                     .map(|existing| existing.type_params.iter().any(|tp| !tp.constraints.is_empty()))
                     .unwrap_or(false)
                     || {
-                        // Also check typed overloads with the same base name.
+                        // Also check typed overloads with the same base name AND SAME ARITY.
                         // e.g., pending has "stdlib.list.contains/_,_" (wildcard, no Eq)
                         // but self.functions registered "stdlib.list.contains/List[T],T" (typed, WITH Eq).
                         // The wildcard key doesn't match the typed key, so the exact check above misses it.
                         // lookup_function_with_arity tries wildcards FIRST, so registering a
                         // constraint-free wildcard shadows the typed entry with constraints.
+                        // IMPORTANT: Only check keys with THE SAME ARITY as fn_name.
+                        // Different-arity overloads (e.g., myadd/_,_ vs myadd/_,_,_) must both
+                        // be registered independently even if one has constraints.
+                        let fn_arity = fn_name.find('/').map(|p| {
+                            let suffix = &fn_name[p+1..];
+                            if suffix.is_empty() { 0 } else { suffix.split(',').count() }
+                        }).unwrap_or(0);
                         let base = fn_name.split('/').next().unwrap_or(fn_name);
                         env.functions_by_base.get(base)
                             .map(|keys| keys.iter().any(|k| {
-                                k != fn_name && env.functions.get(k)
+                                if k == fn_name { return false; }
+                                // Only apply constraint check for keys with the SAME arity
+                                let k_arity = k.find('/').map(|p| {
+                                    let suffix = &k[p+1..];
+                                    if suffix.is_empty() { 0 } else { suffix.split(',').count() }
+                                }).unwrap_or(0);
+                                k_arity == fn_arity && env.functions.get(k)
                                     .map(|ft| ft.type_params.iter().any(|tp| !tp.constraints.is_empty()))
                                     .unwrap_or(false)
                             }))
