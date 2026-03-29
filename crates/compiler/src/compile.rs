@@ -15675,6 +15675,29 @@ impl Compiler {
                             Expr::Var(method.clone())
                         }
                     } else {
+                        // No HM type found for the object in inferred_expr_types.
+                        // This can happen in lambda bodies where the parameter type
+                        // was not stored in the span map (e.g., when the lambda is
+                        // compiled via compile_lambda_with_types but the param span
+                        // doesn't match an entry). In a lambda (current_function_name
+                        // is None), use runtime dispatch to avoid wrong UFCS resolution.
+                        if self.current_function_name.is_none() {
+                            match method.node.as_str() {
+                                "take" | "drop" | "reverse" | "contains" => {
+                                    let dispatch_fn = format!("__dispatch_{}", method.node);
+                                    let obj_reg = self.compile_expr_tail(obj, false)?;
+                                    let mut arg_regs = vec![obj_reg];
+                                    for arg in args {
+                                        let reg = self.compile_expr_tail(Self::call_arg_expr(arg), false)?;
+                                        arg_regs.push(reg);
+                                    }
+                                    let dst = self.alloc_reg();
+                                    self.emit_call_native(dst, &dispatch_fn, arg_regs.into(), line);
+                                    return Ok(dst);
+                                }
+                                _ => {}
+                            }
+                        }
                         Expr::Var(method.clone())
                     }
                 } else {
