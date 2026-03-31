@@ -11752,7 +11752,14 @@ impl Compiler {
                         | "toFloat" | "toFloat32" | "toFloat64"
                         | "toInt" | "toInt8" | "toInt16" | "toInt32" | "toInt64"
                         | "toUInt8" | "toUInt16" | "toUInt32" | "toUInt64"
-                        | "toBigInt") {
+                        | "toBigInt"
+                        // Instruction-based builtins that can be used as first-class function values
+                        | "length" | "len"
+                        | "head" | "tail" | "isEmpty"
+                        | "sum" | "product" | "listSum" | "listProduct"
+                        | "maximum" | "minimum" | "listMax" | "listMin"
+                        | "abs" | "sqrt" | "sin" | "cos" | "tan"
+                        | "floor" | "ceil" | "round" | "log" | "log10") {
                         // In a generic context, defer to monomorphization
                         if self.current_fn_generic_hm
                             || !self.current_fn_type_params.is_empty()
@@ -11801,8 +11808,8 @@ impl Compiler {
                         // The wrapper takes 1 arg (reg 0) and calls the native, returning result in reg 1
                         let dst_reg: Reg = 1;
                         let arg_reg: Reg = 0;
-                        // For numeric conversion builtins, emit the direct conversion instruction
-                        // instead of CallNative, since these are handled as instructions not natives
+                        // For builtins that compile to specific instructions, emit those instructions
+                        // directly instead of CallNative, since they are not registered as native functions.
                         let conversion_instr: Option<Instruction> = match native_name.as_str() {
                             "toFloat" | "toFloat64" => Some(Instruction::IntToFloat(dst_reg, arg_reg)),
                             "toFloat32" => Some(Instruction::ToFloat32(dst_reg, arg_reg)),
@@ -11815,6 +11822,26 @@ impl Compiler {
                             "toUInt32" => Some(Instruction::ToUInt32(dst_reg, arg_reg)),
                             "toUInt64" => Some(Instruction::ToUInt64(dst_reg, arg_reg)),
                             "toBigInt" => Some(Instruction::ToBigInt(dst_reg, arg_reg)),
+                            // List and collection builtins compile to VM instructions
+                            "length" | "len" => Some(Instruction::Length(dst_reg, arg_reg)),
+                            "head" => Some(Instruction::ListHead(dst_reg, arg_reg)),
+                            "tail" => Some(Instruction::ListTail(dst_reg, arg_reg)),
+                            "isEmpty" => Some(Instruction::ListIsEmpty(dst_reg, arg_reg)),
+                            "sum" | "listSum" => Some(Instruction::ListSum(dst_reg, arg_reg)),
+                            "product" | "listProduct" => Some(Instruction::ListProduct(dst_reg, arg_reg)),
+                            "maximum" | "listMax" => Some(Instruction::ListMax(dst_reg, arg_reg)),
+                            "minimum" | "listMin" => Some(Instruction::ListMin(dst_reg, arg_reg)),
+                            // Math builtins compile to VM instructions
+                            "abs" => Some(Instruction::AbsInt(dst_reg, arg_reg)), // defaults to Int; Float users should use lambda
+                            "sqrt" => Some(Instruction::SqrtFloat(dst_reg, arg_reg)),
+                            "sin" => Some(Instruction::SinFloat(dst_reg, arg_reg)),
+                            "cos" => Some(Instruction::CosFloat(dst_reg, arg_reg)),
+                            "tan" => Some(Instruction::TanFloat(dst_reg, arg_reg)),
+                            "floor" => Some(Instruction::FloorFloat(dst_reg, arg_reg)),
+                            "ceil" => Some(Instruction::CeilFloat(dst_reg, arg_reg)),
+                            "round" => Some(Instruction::RoundFloat(dst_reg, arg_reg)),
+                            "log" => Some(Instruction::LogFloat(dst_reg, arg_reg)),
+                            "log10" => Some(Instruction::Log10Float(dst_reg, arg_reg)),
                             _ => None,
                         };
                         if let Some(instr) = conversion_instr {
@@ -11822,7 +11849,9 @@ impl Compiler {
                         } else if let Some(&idx) = self.native_indices.get(native_name.as_str()) {
                             wrapper_chunk.emit(Instruction::CallNativeIdx(dst_reg, idx, vec![arg_reg].into()), 0);
                         } else {
-                            let name_idx = wrapper_chunk.add_constant(Value::String(Arc::new(native_name.clone())));
+                            // toString is an alias for show at the native level
+                            let effective_name = if native_name == "toString" { "show".to_string() } else { native_name.clone() };
+                            let name_idx = wrapper_chunk.add_constant(Value::String(Arc::new(effective_name)));
                             wrapper_chunk.emit(Instruction::CallNative(dst_reg, name_idx, vec![arg_reg].into()), 0);
                         }
                         wrapper_chunk.emit(Instruction::Return(dst_reg), 0);
