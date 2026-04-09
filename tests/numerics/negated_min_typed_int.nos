@@ -1,0 +1,4 @@
+# expect: true
+# Negated min-value typed int literals must parse correctly.
+# -128i8 is the minimum value for Int8 and must not be rejected as out-of-range.
+main() = -128i8 == -128i8 && -32768i16 == -32768i16

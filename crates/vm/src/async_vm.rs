@@ -5052,7 +5052,7 @@ impl AsyncProcess {
                                         if let GcValue::Int8(n) = item { sum += *n as i64; }
                                         else { return Err(RuntimeError::Panic(format!("listSum: mixed types, expected Int8, got {:?}", item.type_name(&self.heap)))); }
                                     }
-                                    set_reg!(dst, GcValue::Int64(sum));
+                                    set_reg!(dst, GcValue::Int8(sum as i8));
                                 }
                                 GcValue::Int16(_) => {
                                     let mut sum: i64 = 0;
@@ -5060,7 +5060,7 @@ impl AsyncProcess {
                                         if let GcValue::Int16(n) = item { sum += *n as i64; }
                                         else { return Err(RuntimeError::Panic(format!("listSum: mixed types, expected Int16, got {:?}", item.type_name(&self.heap)))); }
                                     }
-                                    set_reg!(dst, GcValue::Int64(sum));
+                                    set_reg!(dst, GcValue::Int16(sum as i16));
                                 }
                                 GcValue::Int32(_) => {
                                     let mut sum: i64 = 0;
@@ -5068,7 +5068,7 @@ impl AsyncProcess {
                                         if let GcValue::Int32(n) = item { sum += *n as i64; }
                                         else { return Err(RuntimeError::Panic(format!("listSum: mixed types, expected Int32, got {:?}", item.type_name(&self.heap)))); }
                                     }
-                                    set_reg!(dst, GcValue::Int64(sum));
+                                    set_reg!(dst, GcValue::Int32(sum as i32));
                                 }
                                 GcValue::UInt8(_) => {
                                     let mut sum: i64 = 0;
@@ -5076,7 +5076,7 @@ impl AsyncProcess {
                                         if let GcValue::UInt8(n) = item { sum += *n as i64; }
                                         else { return Err(RuntimeError::Panic(format!("listSum: mixed types, expected UInt8, got {:?}", item.type_name(&self.heap)))); }
                                     }
-                                    set_reg!(dst, GcValue::Int64(sum));
+                                    set_reg!(dst, GcValue::UInt8(sum as u8));
                                 }
                                 GcValue::UInt16(_) => {
                                     let mut sum: i64 = 0;
@@ -5084,7 +5084,7 @@ impl AsyncProcess {
                                         if let GcValue::UInt16(n) = item { sum += *n as i64; }
                                         else { return Err(RuntimeError::Panic(format!("listSum: mixed types, expected UInt16, got {:?}", item.type_name(&self.heap)))); }
                                     }
-                                    set_reg!(dst, GcValue::Int64(sum));
+                                    set_reg!(dst, GcValue::UInt16(sum as u16));
                                 }
                                 GcValue::UInt32(_) => {
                                     let mut sum: i64 = 0;
@@ -5092,7 +5092,7 @@ impl AsyncProcess {
                                         if let GcValue::UInt32(n) = item { sum += *n as i64; }
                                         else { return Err(RuntimeError::Panic(format!("listSum: mixed types, expected UInt32, got {:?}", item.type_name(&self.heap)))); }
                                     }
-                                    set_reg!(dst, GcValue::Int64(sum));
+                                    set_reg!(dst, GcValue::UInt32(sum as u32));
                                 }
                                 GcValue::UInt64(_) => {
                                     let mut sum: u64 = 0;

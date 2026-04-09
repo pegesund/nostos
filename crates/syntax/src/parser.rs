@@ -2858,12 +2858,53 @@ fn extract_out_of_range_int_errors(tokens: &[(Token, std::ops::Range<usize>)]) -
     }).collect()
 }
 
+/// Transform token stream: merge `Minus` + `OutOfRangeInt` into a single negative typed int
+/// token when the negated value is in range (e.g., `-128i8` is valid).
+fn merge_negated_out_of_range_ints(tokens: Vec<(Token, std::ops::Range<usize>)>) -> Vec<(Token, std::ops::Range<usize>)> {
+    let mut result = Vec::with_capacity(tokens.len());
+    let mut i = 0;
+    while i < tokens.len() {
+        if tokens[i].0 == Token::Minus && i + 1 < tokens.len() {
+            if let Token::OutOfRangeInt(ref s) = tokens[i + 1].0 {
+                if negated_in_range(s) {
+                    // Merge the two tokens into a single negative typed int token
+                    let merged_span = tokens[i].1.start..tokens[i + 1].1.end;
+                    let new_tok = if let Some(d) = s.strip_suffix("i8") {
+                        let n: i64 = d.replace('_', "").parse().unwrap_or(0);
+                        Token::Int8((-n) as i8)
+                    } else if let Some(d) = s.strip_suffix("i16") {
+                        let n: i64 = d.replace('_', "").parse().unwrap_or(0);
+                        Token::Int16((-n) as i16)
+                    } else if let Some(d) = s.strip_suffix("i32") {
+                        let n: i64 = d.replace('_', "").parse().unwrap_or(0);
+                        Token::Int32((-n) as i32)
+                    } else {
+                        // Shouldn't happen if negated_in_range returned true
+                        result.push(tokens[i].clone());
+                        i += 1;
+                        continue;
+                    };
+                    result.push((new_tok, merged_span));
+                    i += 2;
+                    continue;
+                }
+            }
+        }
+        result.push(tokens[i].clone());
+        i += 1;
+    }
+    result
+}
+
 /// Parse source code into a module.
 pub fn parse(source: &str) -> (Option<Module>, Vec<Simple<Token>>) {
     // Filter out comment tokens - they're kept for syntax highlighting only
     let tokens: Vec<_> = crate::lexer::lex(source)
         .filter(|(tok, _)| !matches!(tok, Token::Comment | Token::MultiLineComment))
         .collect();
+
+    // Merge `-128i8` style negated out-of-range literals into single tokens
+    let tokens = merge_negated_out_of_range_ints(tokens);
     let len = source.len();
 
     // Pre-check for out-of-range typed integer literals and report them immediately
@@ -2888,6 +2929,9 @@ pub fn parse_expr(source: &str) -> (Option<Expr>, Vec<Simple<Token>>) {
     let tokens: Vec<_> = crate::lexer::lex(source)
         .filter(|(tok, _)| !matches!(tok, Token::Comment | Token::MultiLineComment))
         .collect();
+
+    // Merge `-128i8` style negated out-of-range literals into single tokens
+    let tokens = merge_negated_out_of_range_ints(tokens);
     let len = source.len();
 
     // Pre-check for out-of-range typed integer literals
