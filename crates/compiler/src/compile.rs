@@ -9982,11 +9982,10 @@ impl Compiler {
         // or directly registered function. This handles cross-module dispatch where a
         // generic wrapper function (applyFoo(x: a) = x.foo()) is called with a concrete
         // type that implements a trait in a different module.
-        if trait_name.starts_with("HasMethod(") {
+        if let Some(inner) = trait_name.strip_prefix("HasMethod(") {
             // Extract method name: HasMethod(sumUp|a,b) -> "sumUp"
-            let inner = &trait_name["HasMethod(".len()..];
             let method_name = inner
-                .find(|c| c == '|' || c == ',' || c == ')')
+                .find(['|', ',', ')'])
                 .map(|i| &inner[..i])
                 .unwrap_or(inner.trim_end_matches(')'));
 
@@ -14534,7 +14533,7 @@ impl Compiler {
                                             resolved[pos] = Some(arg);
                                         } else {
                                             let valid_names: Vec<String> = param_names.iter()
-                                                .filter_map(|p| p.as_ref().map(|s| s.clone()))
+                                                .filter_map(|p| p.clone())
                                                 .collect();
                                             return Err(CompileError::TypeError {
                                                 message: format!(
@@ -15165,7 +15164,7 @@ impl Compiler {
                                             resolved[pos] = Some(expr);
                                         } else {
                                             let valid_names: Vec<String> = non_self_names.iter()
-                                                .filter_map(|p| p.as_ref().map(|s| s.clone()))
+                                                .filter_map(|p| p.clone())
                                                 .collect();
                                             return Err(CompileError::TypeError {
                                                 message: format!(
@@ -16222,11 +16221,7 @@ impl Compiler {
                     // no_match_jumps will be patched to timeout body position (same as timeout_jump target).
                     // We'll collect them here and patch after emitting the timeout body.
                     // Store them for patching after timeout body is set up.
-                    end_jumps.extend(no_match_jumps.iter().copied().map(|j| {
-                        // We want these to jump to the timeout body, not end.
-                        // We'll handle this below.
-                        j
-                    }));
+                    end_jumps.extend(no_match_jumps.iter().copied());
                     // Actually clear end_jumps additions - handle separately
                     let no_match_count = no_match_jumps.len();
                     // Remove the ones we just added from end_jumps
@@ -17366,7 +17361,7 @@ impl Compiler {
                             result[pos] = Some(arg);
                         } else {
                             let valid_names: Vec<String> = param_names.iter()
-                                .filter_map(|p| p.as_ref().map(|s| s.clone()))
+                                .filter_map(|p| p.clone())
                                 .collect();
                             return Err(CompileError::TypeError {
                                 message: format!(
@@ -21364,7 +21359,7 @@ impl Compiler {
         let prefix = format!("{}/", resolved);
 
         // Collect all matching overload keys
-        let mut candidates: Vec<(&str, &FnDef)> = self.fn_asts.iter()
+        let candidates: Vec<(&str, &FnDef)> = self.fn_asts.iter()
             .filter(|(key, _)| key.starts_with(&prefix) || key.as_str() == fn_name)
             .filter(|(_, def)| !def.clauses.is_empty())
             .map(|(key, def)| (key.as_str(), def))
@@ -30364,7 +30359,7 @@ scope_depth: self.block_depth,
                     effective_imports.insert(short.clone(), qualified.clone());
                 }
             }
-            if module_path != "" {
+            if !module_path.is_empty() {
                 if let Some(mod_imports) = self.module_imports.get(module_path) {
                     for (short, qualified) in mod_imports {
                         effective_imports.insert(short.clone(), qualified.clone());
@@ -30631,7 +30626,7 @@ scope_depth: self.block_depth,
                     env.function_aliases.insert(short.clone(), qualified.clone());
                 }
             }
-            if module_path != "" {
+            if !module_path.is_empty() {
                 if let Some(mod_imports) = self.module_imports.get(module_path) {
                     for (short, qualified) in mod_imports {
                         env.function_aliases.insert(short.clone(), qualified.clone());
@@ -34438,7 +34433,7 @@ mod tests {
         // Find the function key (could be fact, fact/, or fact/Int64)
         let func_names = compiler.get_function_names();
         let fact_name = func_names.iter().find(|n| n.starts_with("fact"))
-            .expect(&format!("fact function should exist in {:?}", func_names));
+            .unwrap_or_else(|| panic!("fact function should exist in {:?}", func_names));
 
         // The function should have the doc comment
         let doc = compiler.get_function_doc(fact_name);
@@ -34456,7 +34451,7 @@ mod tests {
         // Find the function key
         let func_names = compiler.get_function_names();
         let double_name = func_names.iter().find(|n| n.starts_with("double"))
-            .expect(&format!("double function should exist in {:?}", func_names));
+            .unwrap_or_else(|| panic!("double function should exist in {:?}", func_names));
 
         let doc = compiler.get_function_doc(double_name);
         assert_eq!(doc, Some("Doubles a number\nWorks with any numeric type".to_string()));

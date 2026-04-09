@@ -787,6 +787,7 @@ impl Compiler {
 
     /// Compile a pattern test and return (success_reg, bindings).
     /// Bindings are (name, reg, is_float) tuples.
+    #[allow(unreachable_patterns)]
     pub(super) fn compile_pattern_test(&mut self, pattern: &Pattern, scrut_reg: Reg) -> Result<(Reg, Vec<(String, Reg, bool)>), CompileError> {
         let success_reg = self.alloc_reg();
         let mut bindings: Vec<(String, Reg, bool)> = Vec::new();

@@ -3553,7 +3553,7 @@ main() = {
         // Verify methods would be returned for Int
         let methods = ReplEngine::get_builtin_methods_for_type("Int");
         println!("Int methods count: {}", methods.len());
-        assert!(methods.len() > 0, "Int should have methods");
+        assert!(!methods.is_empty(), "Int should have methods");
 
         // Check some expected methods exist
         let method_names: Vec<&str> = methods.iter().map(|(n, _, _)| *n).collect();
@@ -3601,7 +3601,7 @@ main() = {
 
         // Verify methods would be returned for Int
         let methods = ReplEngine::get_builtin_methods_for_type("Int");
-        assert!(methods.len() > 0, "Int should have methods for autocomplete");
+        assert!(!methods.is_empty(), "Int should have methods for autocomplete");
     }
 
     /// Test with untyped (polymorphic) function - should infer from arguments

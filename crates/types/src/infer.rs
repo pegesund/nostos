@@ -43,12 +43,12 @@ fn expr_references_name(expr: &Expr, name: &str) -> bool {
         Expr::Match(scrutinee, arms, _) | Expr::Try(scrutinee, arms, _, _) => {
             expr_references_name(scrutinee, name)
                 || arms.iter().any(|arm| expr_references_name(&arm.body, name)
-                    || arm.guard.as_ref().map_or(false, |g| expr_references_name(g, name)))
+                    || arm.guard.as_ref().is_some_and(|g| expr_references_name(g, name)))
         }
         Expr::Receive(arms, timeout, _) => {
             arms.iter().any(|arm| expr_references_name(&arm.body, name)
-                || arm.guard.as_ref().map_or(false, |g| expr_references_name(g, name)))
-            || timeout.as_ref().map_or(false, |(t, b)| {
+                || arm.guard.as_ref().is_some_and(|g| expr_references_name(g, name)))
+            || timeout.as_ref().is_some_and(|(t, b)| {
                 expr_references_name(t, name) || expr_references_name(b, name)
             })
         }
@@ -213,10 +213,10 @@ fn has_unresolved_vars(ty: &Type) -> bool {
             has_unresolved_vars(inner)
         }
         Type::Map(k, v) => has_unresolved_vars(k) || has_unresolved_vars(v),
-        Type::Tuple(elems) => elems.iter().any(|e| has_unresolved_vars(e)),
-        Type::Named { args, .. } => args.iter().any(|a| has_unresolved_vars(a)),
+        Type::Tuple(elems) => elems.iter().any(has_unresolved_vars),
+        Type::Named { args, .. } => args.iter().any(has_unresolved_vars),
         Type::Function(ft) => {
-            ft.params.iter().any(|p| has_unresolved_vars(p)) || has_unresolved_vars(&ft.ret)
+            ft.params.iter().any(has_unresolved_vars) || has_unresolved_vars(&ft.ret)
         }
         _ => false,
     }
@@ -1539,6 +1539,7 @@ impl<'a> InferCtx<'a> {
 
     /// Apply a variable substitution map to a type, replacing Var(id) with the
     /// mapped type if present. Used to replicate body constraints with fresh vars.
+    #[allow(clippy::only_used_in_recursion)]
     fn apply_var_subst(&self, ty: &Type, subst: &HashMap<u32, Type>) -> Type {
         match ty {
             Type::Var(id) => subst.get(id).cloned().unwrap_or_else(|| ty.clone()),
@@ -3468,7 +3469,7 @@ impl<'a> InferCtx<'a> {
                 Type::Array(arr_elem_ty) => {
                     // Typed array indexing: index must be Int, result is element type
                     let _ = self.unify_types(&self.env.apply_subst(&index_ty), &Type::Int);
-                    let _ = self.unify_types(&self.env.apply_subst(&elem_ty), &arr_elem_ty);
+                    let _ = self.unify_types(&self.env.apply_subst(&elem_ty), arr_elem_ty);
                 }
                 Type::Named { .. } => {
                     // Custom type indexing: index must be Int
@@ -5752,7 +5753,6 @@ impl<'a> InferCtx<'a> {
             // enabling chained UFCS calls (e.g., [1,2,3].double().myReverse()).
             let newly_added = std::mem::take(&mut self.pending_method_calls);
             if !newly_added.is_empty() {
-                made_progress = true;
                 deferred.extend(newly_added);
             }
 
@@ -6184,6 +6184,7 @@ impl<'a> InferCtx<'a> {
     }
 
     /// Substitute a named type parameter in a type with a concrete type.
+    #[allow(clippy::only_used_in_recursion)]
     fn substitute_type_param_in_type(&self, ty: &Type, param_name: &str, replacement: &Type) -> Type {
         match ty {
             Type::TypeParam(name) if name == param_name => replacement.clone(),
@@ -6598,7 +6599,7 @@ impl<'a> InferCtx<'a> {
 
             // Named type with args that might be a type alias (e.g., Queue[Int] -> ([Int], [Int]))
             // Try expanding the Named type alias before giving up
-            (Type::Named { .. }, other) | (other, Type::Named { .. }) => {
+            (Type::Named { .. }, _other) | (_other, Type::Named { .. }) => {
                 let (named, non_named) = match (&t1, &t2) {
                     (Type::Named { .. }, _) => (&t1, &t2),
                     _ => (&t2, &t1),
@@ -7524,6 +7525,7 @@ impl<'a> InferCtx<'a> {
                             let typedef = self.env.lookup_type(&resolved_type_name).cloned();
 
                             // Extract (params, def_fields) from either Record or single-Named-constructor Variant
+                            #[allow(clippy::type_complexity)]
                             let record_info: Option<(Vec<TypeParam>, Vec<(String, Type, bool)>)> = match &typedef {
                                 Some(TypeDef::Record { params, fields: def_fields, .. }) => {
                                     Some((params.clone(), def_fields.clone()))
@@ -9395,7 +9397,7 @@ impl<'a> InferCtx<'a> {
 
         let mut matching_type_names: Vec<String> = Vec::new();
         for (tn, def) in &types_clone {
-            let local_tn = tn.rsplit('.').next().unwrap_or(tn);
+            let _local_tn = tn.rsplit('.').next().unwrap_or(tn);
             // Record type with matching name (for record types)
             let record_matches = if tn.as_str() == name {
                 true
@@ -9404,10 +9406,8 @@ impl<'a> InferCtx<'a> {
             } else {
                 false
             };
-            if record_matches {
-                if matches!(def, TypeDef::Record { .. }) {
-                    matching_type_names.push(tn.clone());
-                }
+            if record_matches && matches!(def, TypeDef::Record { .. }) {
+                matching_type_names.push(tn.clone());
             }
             // Check variant constructors
             if let TypeDef::Variant { constructors, .. } = def {
@@ -9891,7 +9891,7 @@ impl<'a> InferCtx<'a> {
                 // so that a concrete return type doesn't prevent generalization of params.
                 // E.g., Equal(Function(?25 -> String), Function(?24 -> ?26)) decomposes into
                 // Equal(?25, ?24) [internal] and Equal(String, ?26) [external: constrains ?26].
-                let mut analyze_constraint_pair = |a: &Type, b: &Type, constrained_vars: &mut HashSet<u32>, internal_equals: &mut Vec<(Vec<u32>, Vec<u32>)>| {
+                let analyze_constraint_pair = |a: &Type, b: &Type, constrained_vars: &mut HashSet<u32>, internal_equals: &mut Vec<(Vec<u32>, Vec<u32>)>| {
                     // If both sides are Function types, decompose into component constraints
                     if let (Type::Function(ft_a), Type::Function(ft_b)) = (a, b) {
                         // Analyze each param pair separately
@@ -10654,11 +10654,11 @@ impl<'a> InferCtx<'a> {
         let mut mixed_type_annotation_positions: std::collections::HashSet<usize> =
             std::collections::HashSet::new();
         for i in 0..arity {
-            let has_typed = func.clauses.iter().any(|c| c.params.get(i).map_or(false, |p| p.ty.is_some()));
+            let has_typed = func.clauses.iter().any(|c| c.params.get(i).is_some_and(|p| p.ty.is_some()));
             // Only count variable/wildcard patterns as "untyped dispatch" - structural patterns
             // ([], Some(x), etc.) are just pattern-matched variants of the same typed dispatch.
             let has_variable_untyped = func.clauses.iter().any(|c| {
-                c.params.get(i).map_or(false, |p| {
+                c.params.get(i).is_some_and(|p| {
                     if p.ty.is_some() { return false; }
                     // Variable or wildcard pattern = true untyped dispatch
                     matches!(&p.pattern, Pattern::Wildcard(_) | Pattern::Var(_))

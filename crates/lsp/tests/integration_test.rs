@@ -56,10 +56,7 @@ impl LspClient {
             use std::io::Read;
             let mut buf = [0u8; 8192];
             // Set a short deadline - just read what's there
-            match stderr.read(&mut buf) {
-                Ok(n) => output = String::from_utf8_lossy(&buf[..n]).to_string(),
-                Err(_) => {}
-            }
+            if let Ok(n) = stderr.read(&mut buf) { output = String::from_utf8_lossy(&buf[..n]).to_string() }
             output
         } else {
             String::new()
@@ -3125,13 +3122,13 @@ fn test_lsp_all_examples_compile() {
         println!("\n=== Testing: {} ===", file_name);
 
         // Read the file content
-        let content = fs::read_to_string(&example_path)
-            .expect(&format!("Failed to read {}", file_name));
+        let content = fs::read_to_string(example_path)
+            .unwrap_or_else(|_| panic!("Failed to read {}", file_name));
 
         // First, check if the actual compiler reports errors
         let compiler_result = Command::new(get_nostos_binary())
             .arg("--check")
-            .arg(&example_path)
+            .arg(example_path)
             .output();
 
         let compiler_has_error = match compiler_result {

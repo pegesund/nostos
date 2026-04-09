@@ -923,6 +923,7 @@ impl FnDef {
     ///
     /// Examples:
     /// - `add(x: Int, y: Int) -> Int` -> "Int -> Int -> Int"
+    ///
     /// Replace declared type param names in a TypeExpr with their assigned letters.
     fn subst_type_params_in_type_expr(ty: &TypeExpr, map: &std::collections::HashMap<String, char>) -> String {
         match ty {

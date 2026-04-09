@@ -13736,7 +13736,7 @@ mod call_graph_tests {
         // Check that the error status contains meaningful information
         if let Some(CompileStatus::CompileError(msg)) = engine.get_compile_status("broken") {
             // The error message should contain something about undefined
-            assert!(msg.len() > 0, "Error message should not be empty");
+            assert!(!msg.is_empty(), "Error message should not be empty");
         } else {
             panic!("broken should have CompileError status");
         }
@@ -15273,7 +15273,7 @@ mod call_graph_tests {
         
         // Check filtering
         // Note: compiler will prefix with module path "IO" => "IO.println"
-        assert_eq!(engine.is_project_function("IO.println"), false, "IO.println (in stdlib) should NOT be a project function");
+        assert!(!engine.is_project_function("IO.println"), "IO.println (in stdlib) should NOT be a project function");
 
         // 2. Simulate a project function in a module
         let main_src = "main() = ()";
@@ -15294,7 +15294,7 @@ mod call_graph_tests {
         // Force compilation of pending functions
         let _ = engine.compiler.compile_all();
         
-        assert_eq!(engine.is_project_function("Main.main"), true, "Main.main (in project module) SHOULD be a project function");
+        assert!(engine.is_project_function("Main.main"), "Main.main (in project module) SHOULD be a project function");
         
         // 3. Simulate a REPL function
         let repl_src = "f() = ()";
@@ -15311,7 +15311,7 @@ mod call_graph_tests {
         // Compile REPL function
         let _ = engine.compiler.compile_all();
         
-        assert_eq!(engine.is_project_function("f"), true, "REPL function (<repl>) SHOULD be a project function");
+        assert!(engine.is_project_function("f"), "REPL function (<repl>) SHOULD be a project function");
         
         // 4. Simulate a REPL function with "repl" source file
         let repl_src2 = "f2() = ()";
@@ -15328,7 +15328,7 @@ mod call_graph_tests {
         // Compile REPL function 2
         let _ = engine.compiler.compile_all();
         
-        assert_eq!(engine.is_project_function("f2"), true, "REPL function (repl) SHOULD be a project function");
+        assert!(engine.is_project_function("f2"), "REPL function (repl) SHOULD be a project function");
     }
 
     #[test]
@@ -17940,7 +17940,7 @@ main() = {
         assert_eq!(found_module, Some("main".to_string()), "Should find 'main' function in 'main' module");
 
         // Now test check_module_compiles with the CORRECT module name (as the editor would do)
-        let module_name = found_module.as_ref().map(|s| s.as_str()).unwrap_or("");
+        let module_name = found_module.as_deref().unwrap_or("");
         let result = engine.check_module_compiles(module_name, &main_source);
         println!("check_module_compiles('{}', source) = {:?}", module_name, result);
 
@@ -20907,10 +20907,10 @@ mod lsp_integration_tests {
             let mut f = std::fs::File::create(temp_dir.join("mymodule.nos")).unwrap();
             writeln!(f, "# Record type").unwrap();
             writeln!(f, "type Person = {{ name: String, age: Int }}").unwrap();
-            writeln!(f, "").unwrap();
+            writeln!(f).unwrap();
             writeln!(f, "# Variant type").unwrap();
             writeln!(f, "type MyResult = Success(Int) | Failure(String)").unwrap();
-            writeln!(f, "").unwrap();
+            writeln!(f).unwrap();
             writeln!(f, "main() = Person(name: \"test\", age: 25)").unwrap();
         }
 
@@ -21545,7 +21545,7 @@ main() = {
             let mut f = std::fs::File::create(temp_dir.join("test_types.nos")).unwrap();
             writeln!(f, "# Variant type for testing").unwrap();
             writeln!(f, "type MyResult = Success(Int) | Failure(String)").unwrap();
-            writeln!(f, "").unwrap();
+            writeln!(f).unwrap();
             writeln!(f, "# Record type for testing").unwrap();
             writeln!(f, "pub type Person = {{ name: String, age: Int }}").unwrap();
         }
@@ -21604,7 +21604,7 @@ main() = {
             let mut f = std::fs::File::create(temp_dir.join("test_types.nos")).unwrap();
             writeln!(f, "# Variant type for testing").unwrap();
             writeln!(f, "type MyResult = Success(Int) | Failure(String)").unwrap();
-            writeln!(f, "").unwrap();
+            writeln!(f).unwrap();
             writeln!(f, "# Record type for testing").unwrap();
             writeln!(f, "pub type Person = {{ name: String, age: Int }}").unwrap();
         }
@@ -22080,9 +22080,9 @@ main() = {
         {
             let mut f = std::fs::File::create(temp_dir.join("test_types.nos")).unwrap();
             writeln!(f, "use good.*").unwrap();
-            writeln!(f, "").unwrap();
+            writeln!(f).unwrap();
             writeln!(f, "type MyResult = Success(Int) | Failure(String)").unwrap();
-            writeln!(f, "").unwrap();
+            writeln!(f).unwrap();
             writeln!(f, "main() = {{").unwrap();
             writeln!(f, "    x = good.addff(3, 2)").unwrap();
             writeln!(f, "    g2 = [[\"a\", \"b\"]]").unwrap();
@@ -22605,18 +22605,18 @@ main() = {
         {
             let mut f = std::fs::File::create(temp_dir.join("test_types.nos")).unwrap();
             writeln!(f, "use good.*").unwrap();
-            writeln!(f, "").unwrap();
+            writeln!(f).unwrap();
             writeln!(f, "# Variant type for testing").unwrap();
             writeln!(f, "type MyResult = Success(Int) | Failure(String)").unwrap();
-            writeln!(f, "").unwrap();
+            writeln!(f).unwrap();
             writeln!(f, "# Record type for testing").unwrap();
             writeln!(f, "pub type Person = {{ name: String, age: Int }}").unwrap();
-            writeln!(f, "").unwrap();
+            writeln!(f).unwrap();
             writeln!(f, "# Trait for testing").unwrap();
             writeln!(f, "trait Describable").unwrap();
             writeln!(f, "    describe(self) -> String").unwrap();
             writeln!(f, "end").unwrap();
-            writeln!(f, "").unwrap();
+            writeln!(f).unwrap();
             writeln!(f, "main() = {{").unwrap();
             writeln!(f, "    x = good.addff(3, 2)").unwrap();           // line 15: Int
             writeln!(f, "    y = good.multiply(2,3)").unwrap();         // line 16: Int
@@ -22627,7 +22627,7 @@ main() = {
             writeln!(f, "    good.addff(11, 22)").unwrap();             // line 21
             writeln!(f, "    ").unwrap();                               // line 22
             writeln!(f, "    y1.asInt32()").unwrap();                   // line 23
-            writeln!(f, "").unwrap();                                   // line 24
+            writeln!(f).unwrap();                                   // line 24
             writeln!(f, "    gg = [[0,1]]").unwrap();                   // line 25: List[List[Int]]
             writeln!(f, "    gg.map(m => m.map(n => n.asFloat32()))").unwrap(); // line 26
             writeln!(f, "    # test").unwrap();                         // line 27
@@ -22635,7 +22635,7 @@ main() = {
             writeln!(f, "    x2 = g2[0][0]").unwrap();                  // line 29: String
             writeln!(f, "    y3 = \"ffff\"").unwrap();                  // line 30: String
             writeln!(f, "    x2.chars().drop(1).get(1).show()").unwrap(); // line 31: THIS IS THE PROBLEM LINE
-            writeln!(f, "").unwrap();                                   // line 32
+            writeln!(f).unwrap();                                   // line 32
             writeln!(f, "    p = Person(name: \"petter\", age: 11)").unwrap(); // line 33: Person
             writeln!(f, "    # p.").unwrap();                           // line 34
             writeln!(f, "    a = p.age").unwrap();                      // line 35: Int

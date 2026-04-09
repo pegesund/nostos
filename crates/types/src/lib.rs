@@ -1132,7 +1132,7 @@ impl TypeEnv {
     /// Check if a type implements a trait.
     pub fn implements(&self, ty: &Type, trait_name: &str) -> bool {
         // Expand type aliases before checking trait implementation
-        if let Type::Named { name, args } = ty {
+        if let Type::Named { name, args: _ } = ty {
             let resolved_name = self.resolve_type_name(name);
             if let Some(TypeDef::Alias { target, .. }) = self.types.get(&resolved_name) {
                 return self.implements(target, trait_name);
@@ -1245,7 +1245,7 @@ impl TypeEnv {
     /// types may be partially resolved.
     pub fn definitely_not_implements(&self, ty: &Type, trait_name: &str) -> bool {
         // Expand type aliases before checking
-        if let Type::Named { name, args } = ty {
+        if let Type::Named { name, args: _ } = ty {
             let resolved_name = self.resolve_type_name(name);
             if let Some(TypeDef::Alias { target, .. }) = self.types.get(&resolved_name) {
                 return self.definitely_not_implements(target, trait_name);
@@ -1306,6 +1306,7 @@ impl TypeEnv {
     }
 
     /// Check if two types match (simple equality for now).
+    #[allow(clippy::only_used_in_recursion)]
     fn types_match(&self, a: &Type, b: &Type) -> bool {
         if a == b {
             return true;

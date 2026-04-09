@@ -1922,7 +1922,7 @@ impl AsyncProcess {
                         GcValue::Int8(x.wrapping_pow(*y as u32))
                     }
                     (GcValue::UInt64(x), GcValue::UInt64(y)) => GcValue::UInt64(x.wrapping_pow(*y as u32)),
-                    (GcValue::UInt32(x), GcValue::UInt32(y)) => GcValue::UInt32(x.wrapping_pow(*y as u32)),
+                    (GcValue::UInt32(x), GcValue::UInt32(y)) => GcValue::UInt32(x.wrapping_pow(*y)),
                     (GcValue::UInt16(x), GcValue::UInt16(y)) => GcValue::UInt16(x.wrapping_pow(*y as u32)),
                     (GcValue::UInt8(x), GcValue::UInt8(y)) => GcValue::UInt8(x.wrapping_pow(*y as u32)),
                     (GcValue::BigInt(px), GcValue::BigInt(py)) => {
@@ -1938,6 +1938,7 @@ impl AsyncProcess {
                         use rust_decimal::prelude::ToPrimitive;
                         let exp = y.to_i64().ok_or_else(|| RuntimeError::Panic("PowInt Decimal: exponent must be an integer value".into()))?;
                         let base = *x;
+                        #[allow(clippy::comparison_chain)]
                         let result = if exp == 0 {
                             rust_decimal::Decimal::ONE
                         } else if exp > 0 {
@@ -11392,23 +11393,20 @@ impl AsyncProcess {
         if type_name.starts_with("Option[") {
             let inner_type = type_name[7..type_name.len()-1].to_string();
             // Null Json -> None, anything else -> Some(converted)
-            match &json {
-                GcValue::Variant(var_ptr) => {
-                    let ctor = {
-                        let variant = self.heap.get_variant(*var_ptr)
-                            .ok_or_else(|| RuntimeError::Panic("Invalid variant".to_string()))?;
-                        variant.constructor.clone()
-                    };
-                    if ctor.as_ref() == "Null" {
-                        let none_ptr = self.heap.alloc_variant(
-                            Arc::new("Option".to_string()),
-                            Arc::new("None".to_string()),
-                            vec![],
-                        );
-                        return Ok(GcValue::Variant(none_ptr));
-                    }
+            if let GcValue::Variant(var_ptr) = &json {
+                let ctor = {
+                    let variant = self.heap.get_variant(*var_ptr)
+                        .ok_or_else(|| RuntimeError::Panic("Invalid variant".to_string()))?;
+                    variant.constructor.clone()
+                };
+                if ctor.as_ref() == "Null" {
+                    let none_ptr = self.heap.alloc_variant(
+                        Arc::new("Option".to_string()),
+                        Arc::new("None".to_string()),
+                        vec![],
+                    );
+                    return Ok(GcValue::Variant(none_ptr));
                 }
-                _ => {}
             }
             let converted = self.json_to_primitive(&json, &inner_type)?;
             let some_ptr = self.heap.alloc_variant(

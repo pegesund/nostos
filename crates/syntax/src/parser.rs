@@ -108,7 +108,7 @@ fn expr_to_type_expr(expr: &Expr) -> Option<TypeExpr> {
         // Generic type: List[Int] → TypeExpr::Generic("List", [Int])
         // Multi-arg: Map[K, V] is encoded as Index(Map, List([K, V], None, span))
         // Single tuple arg: List[(Int, String)] is encoded as Index(List, Tuple([Int, String]))
-        Expr::Index(base, idx, span) => {
+        Expr::Index(base, idx, _span) => {
             let base_name = match base.as_ref() {
                 Expr::Var(id) => Some(id.clone()),
                 Expr::Record(id, fields, _) if fields.is_empty() => Some(id.clone()),
@@ -920,11 +920,11 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                 let end_plus_one = Expr::BinOp(
                     Box::new(end),
                     BinOp::Add,
-                    Box::new(Expr::Int(1, s.clone())),
-                    s.clone(),
+                    Box::new(Expr::Int(1, s)),
+                    s,
                 );
                 Expr::Call(
-                    Box::new(Expr::Var(Ident { node: "range".to_string(), span: s.clone() })),
+                    Box::new(Expr::Var(Ident { node: "range".to_string(), span: s })),
                     vec![],
                     vec![
                         CallArg::Positional(start),
@@ -1238,7 +1238,7 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                                                         }
                                                     }).collect();
                                                     if let Some(param_patterns) = params {
-                                                        let lambda = Expr::Lambda(param_patterns, Box::new(rhs), call_span.clone());
+                                                        let lambda = Expr::Lambda(param_patterns, Box::new(rhs), call_span);
                                                         Stmt::Let(Binding {
                                                             visibility: Visibility::Private,
                                                             mutable: false,
@@ -2733,14 +2733,14 @@ fn module() -> impl Parser<Token, Module, Error = Simple<Token>> + Clone {
 /// Check whether the negated value of a typed int literal text is in range.
 /// For example, "32768i16" negated is -32768 which IS in range for Int16.
 fn negated_in_range(text: &str) -> bool {
-    if text.ends_with("i8") {
-        let n: i64 = text[..text.len()-2].replace('_', "").parse().unwrap_or(i64::MAX);
+    if let Some(d) = text.strip_suffix("i8") {
+        let n: i64 = d.replace('_', "").parse().unwrap_or(i64::MAX);
         n <= 128  // -128 is valid for i8
-    } else if text.ends_with("i16") {
-        let n: i64 = text[..text.len()-3].replace('_', "").parse().unwrap_or(i64::MAX);
+    } else if let Some(d) = text.strip_suffix("i16") {
+        let n: i64 = d.replace('_', "").parse().unwrap_or(i64::MAX);
         n <= 32768  // -32768 is valid for i16
-    } else if text.ends_with("i32") {
-        let n: i64 = text[..text.len()-3].replace('_', "").parse().unwrap_or(i64::MAX);
+    } else if let Some(d) = text.strip_suffix("i32") {
+        let n: i64 = d.replace('_', "").parse().unwrap_or(i64::MAX);
         n <= 2147483648  // -2147483648 is valid for i32
     } else {
         false  // unsigned types can't be negated into range

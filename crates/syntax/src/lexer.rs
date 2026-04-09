@@ -659,20 +659,20 @@ impl fmt::Display for Token {
 /// Returns a human-readable error description if so, or None if the text is not a typed int literal.
 pub fn typed_int_overflow_error(text: &str) -> Option<String> {
     // Patterns: <digits><suffix> where suffix is i8, i16, i32, u8, u16, u32, u64
-    let (digits, suffix) = if text.ends_with("i8") {
-        (&text[..text.len()-2], "i8")
-    } else if text.ends_with("i16") {
-        (&text[..text.len()-3], "i16")
-    } else if text.ends_with("i32") {
-        (&text[..text.len()-3], "i32")
-    } else if text.ends_with("u8") {
-        (&text[..text.len()-2], "u8")
-    } else if text.ends_with("u16") {
-        (&text[..text.len()-3], "u16")
-    } else if text.ends_with("u32") {
-        (&text[..text.len()-3], "u32")
-    } else if text.ends_with("u64") {
-        (&text[..text.len()-3], "u64")
+    let (digits, suffix) = if let Some(d) = text.strip_suffix("i8") {
+        (d, "i8")
+    } else if let Some(d) = text.strip_suffix("i16") {
+        (d, "i16")
+    } else if let Some(d) = text.strip_suffix("i32") {
+        (d, "i32")
+    } else if let Some(d) = text.strip_suffix("u8") {
+        (d, "u8")
+    } else if let Some(d) = text.strip_suffix("u16") {
+        (d, "u16")
+    } else if let Some(d) = text.strip_suffix("u32") {
+        (d, "u32")
+    } else if let Some(d) = text.strip_suffix("u64") {
+        (d, "u64")
     } else {
         return None;
     };

@@ -2517,7 +2517,7 @@ impl PartialEq for Value {
                 if a.len() != b.len() {
                     return false;
                 }
-                a.iter().all(|(k, v)| b.get(k).map_or(false, |bv| v == bv))
+                a.iter().all(|(k, v)| b.get(k).is_some_and(|bv| v == bv))
             }
             (Value::Set(a), Value::Set(b)) => a == b,
             (Value::Pid(a), Value::Pid(b)) => a == b,
