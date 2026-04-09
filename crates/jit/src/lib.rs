@@ -803,7 +803,15 @@ impl JitCompiler {
                 Instruction::JumpIfTrue(_, _) => {}
                 Instruction::JumpIfFalse(_, _) => {}
                 Instruction::Return(_) => {}
-                Instruction::CallSelf(_, _) => {}
+                Instruction::CallSelf(_, _) => {
+                    // Non-tail self-recursion: reject from JIT compilation.
+                    // JIT-compiled recursive calls bypass the VM's stack overflow check,
+                    // causing a native Rust stack overflow crash instead of a clean error.
+                    // TailCallSelf is fine because return_call reuses the stack frame (TCO).
+                    return Err(JitError::NotSuitable(
+                        "non-tail self-recursion (CallSelf) not supported - would bypass stack overflow check".to_string()
+                    ));
+                }
                 Instruction::TailCallSelf(_) => {}
                 // Pattern matching - TestConst compares value against integer constant
                 Instruction::TestConst(_, _, idx) => {
