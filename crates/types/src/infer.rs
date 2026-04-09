@@ -9372,6 +9372,13 @@ impl<'a> InferCtx<'a> {
     }
 
     fn lookup_constructor(&mut self, name: &str) -> Option<Type> {
+        // Resolve constructor name through type aliases (handles import aliases
+        // like `use stdlib.json.{Integer as JInt}` → JInt resolves to stdlib.json.Integer)
+        let resolved_name = self.env.type_aliases.get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string());
+        let name = resolved_name.as_str();
+
         // Search through all types for this constructor.
         // Sort type names to prioritize user-defined types over stdlib types,
         // and types from the current module/declared return type over others.
@@ -9653,6 +9660,11 @@ impl<'a> InferCtx<'a> {
 
     /// Look up a variant constructor's named fields AND return type, using shared fresh vars.
     fn lookup_constructor_named_fields_with_ret(&mut self, name: &str) -> Option<(Vec<(String, Type)>, Type)> {
+        // Resolve through type aliases (handles import aliases like JInt -> stdlib.json.Integer)
+        let resolved_name = self.env.type_aliases.get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string());
+        let name = resolved_name.as_str();
         let types_clone = self.env.types.clone();
         for (type_name, def) in &types_clone {
             if let TypeDef::Variant { params, constructors } = def {

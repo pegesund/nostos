@@ -26172,6 +26172,9 @@ scope_depth: self.block_depth,
             return;
         }
         use nostos_vm::value::TypeKind;
+        // Compute module prefix for qualified constructor names
+        // e.g., for type "stdlib.json.Json", module_prefix is "stdlib.json"
+        let module_prefix = name.rsplit('.').skip(1).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(".");
         let kind = match &type_val.kind {
             TypeKind::Record { mutable } => {
                 let fields = type_val.fields.iter()
@@ -26181,8 +26184,13 @@ scope_depth: self.block_depth,
             }
             TypeKind::Variant => {
                 // Also register variant constructor names as known constructors
+                // Register both local name (e.g., "Integer") and qualified name
+                // (e.g., "stdlib.json.Integer") so import aliases can resolve them
                 for c in &type_val.constructors {
                     self.known_constructors.insert(c.name.clone());
+                    if !module_prefix.is_empty() {
+                        self.known_constructors.insert(format!("{}.{}", module_prefix, c.name));
+                    }
                 }
                 let constructors = type_val.constructors.iter()
                     .map(|c| {
@@ -26212,8 +26220,12 @@ scope_depth: self.block_depth,
             }
             TypeKind::ReactiveVariant => {
                 // Also register variant constructor names as known constructors
+                // (same qualified name logic as Variant above)
                 for c in &type_val.constructors {
                     self.known_constructors.insert(c.name.clone());
+                    if !module_prefix.is_empty() {
+                        self.known_constructors.insert(format!("{}.{}", module_prefix, c.name));
+                    }
                 }
                 let constructors = type_val.constructors.iter()
                     .map(|c| {
@@ -28710,10 +28722,14 @@ scope_depth: self.block_depth,
         }
 
         // Register type aliases from imports (module-specific)
+        // This handles type names, type alias targets, AND constructor aliases
+        // (e.g., `use stdlib.json.{Integer as JInt}` needs JInt -> stdlib.json.Integer
+        //  so HM inference can resolve JInt in Record/constructor expressions)
         for (short_name, qualified_name) in &self.imports {
             let in_types = self.types.contains_key(qualified_name);
             let in_aliases = self.type_alias_targets.contains_key(qualified_name);
-            if in_types || in_aliases {
+            let in_constructors = self.known_constructors.contains(qualified_name);
+            if in_types || in_aliases || in_constructors {
                 env.add_type_alias(short_name.clone(), qualified_name.clone());
             }
         }
@@ -29861,9 +29877,11 @@ scope_depth: self.block_depth,
 
         // Register type aliases from imports (e.g., "Option" -> "stdlib.list.Option")
         // This allows type annotations like "-> Option[Int]" to resolve correctly
+        // Also handles constructor aliases (e.g., "JInt" -> "stdlib.json.Integer")
         for (short_name, qualified_name) in &self.imports {
-            // Only add alias if the qualified name is a known type
-            if self.types.contains_key(qualified_name) || self.type_alias_targets.contains_key(qualified_name) {
+            // Add alias if the qualified name is a known type or constructor
+            if self.types.contains_key(qualified_name) || self.type_alias_targets.contains_key(qualified_name)
+                || self.known_constructors.contains(qualified_name) {
                 env.add_type_alias(short_name.clone(), qualified_name.clone());
             }
         }

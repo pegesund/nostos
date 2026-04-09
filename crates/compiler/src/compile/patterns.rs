@@ -921,15 +921,17 @@ impl Compiler {
                 self.chunk.emit(Instruction::TestConst(success_reg, scrut_reg, const_idx), 0);
             }
             Pattern::Variant(ctor, fields, _) => {
+                // Resolve constructor name through imports (handles aliases like JInt -> stdlib.json.Integer)
+                let resolved_ctor = self.resolve_name(&ctor.node);
                 // Store constructor name in constants for exact string matching
                 // Use local constructor name (without module path) to match how variants are created
                 // Variants are created with local tags, so patterns must also use local tags
-                let local_ctor = ctor.node.rsplit('.').next().unwrap_or(&ctor.node).to_string();
+                let local_ctor = resolved_ctor.rsplit('.').next().unwrap_or(&resolved_ctor).to_string();
                 let ctor_idx = self.chunk.add_constant(Value::String(Arc::new(local_ctor.clone())));
                 self.chunk.emit(Instruction::TestTag(success_reg, scrut_reg, ctor_idx), 0);
 
                 // Look up field types for this constructor - try both qualified and local names
-                let qualified_ctor = self.qualify_name(&ctor.node);
+                let qualified_ctor = self.qualify_name(&resolved_ctor);
                 let field_types = {
                     let qt = self.get_constructor_field_types(&qualified_ctor);
                     if !qt.is_empty() { qt } else { self.get_constructor_field_types(&local_ctor) }
