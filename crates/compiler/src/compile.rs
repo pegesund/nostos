@@ -10986,6 +10986,13 @@ impl Compiler {
                     // Mark as polymorphic if the function has type parameters
                     // (either explicit from AST, inferred from HM via pending_fn_signatures,
                     // or has a generic HM signature with unresolved type vars)
+                    //
+                    // BUT: if the unresolved method is a module-qualified call to a function
+                    // that doesn't exist in any form (e.g., Option.unwrap when no such function
+                    // exists), this is a real error. Monomorphization won't help because the
+                    // function simply doesn't exist. Without this check, the function gets marked
+                    // polymorphic with empty code, and calling it (e.g., via .map()) causes a
+                    // runtime crash ("instruction pointer out of bounds") instead of a compile error.
                     if !self.current_fn_type_params.is_empty() || has_generic_hm_signature {
                         // Mark this function as needing monomorphization
                         self.polymorphic_fns.insert(name.clone());
@@ -11606,7 +11613,12 @@ impl Compiler {
                                                 self.chunk.emit(Instruction::LoadFunctionByName(dst, name_idx), line);
                                                 return Ok(dst);
                                             }
-                                                Err(_) => {
+                                                Err(e) => {
+                                                    // Propagate real compilation errors from monomorphization.
+                                                    // Without this, errors like "unknown function Option.unwrap"
+                                                    // inside a polymorphic function are silently swallowed when
+                                                    // the function is used as a first-class value (e.g., .map(f)).
+                                                    return Err(e);
                                                 }
                                             }
                                         }

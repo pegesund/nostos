@@ -1356,6 +1356,18 @@ impl AsyncProcess {
             // Check bounds - the compiler should ensure code ends with Return,
             // but if IP goes out of bounds, provide a helpful error message
             if frame.ip >= frame.function.code.code.len() {
+                // Empty code (len=0) at ip=0 typically means the function had a
+                // compile error but was still referenced (e.g., passed to .map()).
+                // Give a more helpful error message in this case.
+                if frame.function.code.code.is_empty() {
+                    let fn_name = frame.function.name.split('/').next().unwrap_or(&frame.function.name);
+                    return Err(RuntimeError::Panic(format!(
+                        "Function '{}' failed to compile (empty bytecode). \
+                        This usually means there is a compile error inside '{}' that was not reported. \
+                        Check for calls to undefined functions or type errors in its body.",
+                        fn_name, fn_name
+                    )));
+                }
                 return Err(RuntimeError::Panic(format!(
                     "Instruction pointer out of bounds: ip={} but code.len={} in function '{}'",
                     frame.ip, frame.function.code.code.len(), frame.function.name

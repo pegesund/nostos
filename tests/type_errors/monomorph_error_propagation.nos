@@ -1,0 +1,7 @@
+# expect_error: unknown function
+# Monomorphization errors must be reported, not silently swallowed.
+# Previously, calling a non-existent function inside a polymorphic function
+# that was used as a first-class value (e.g., passed to .map()) would crash
+# at runtime with "code.len=0" instead of giving a compile error.
+process(s: String) = s.split(" ").map(x => Option.unwrap(x))
+main() = process("hello world")

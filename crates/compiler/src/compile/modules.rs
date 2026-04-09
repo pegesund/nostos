@@ -2565,7 +2565,6 @@ impl Compiler {
             ));
         }
 
-
         errors
     }
 
