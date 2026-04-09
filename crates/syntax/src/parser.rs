@@ -135,6 +135,77 @@ fn expr_to_type_expr(expr: &Expr) -> Option<TypeExpr> {
     }
 }
 
+/// Build an else-branch expression from a chain of (expr, Option<assign_rhs>) pairs.
+/// Handles chained `if cond then VAR = expr else if ... else VAR = expr` patterns.
+/// Each pair represents an `else expr (= assign_rhs)?` that was parsed.
+///
+/// Examples:
+///   [(x, Some(2))] → Block[x = 2]
+///   [(if c then y, Some(e)), (z, Some(e2))] → if c then {y = e} else {z = e2}
+fn build_else_chain_expr(chain: &[(Expr, Option<Expr>)]) -> Expr {
+    if chain.is_empty() {
+        return Expr::Unit(Span::new(0, 0));
+    }
+
+    let (ref else_expr, ref maybe_assign) = chain[0];
+    let rest = &chain[1..];
+
+    match maybe_assign {
+        Some(assign_rhs) => {
+            if let Expr::If(cond, then_branch, _default_else, if_span) = else_expr {
+                // else if cond then VAR = assign_rhs (else ...)
+                // Rewrite: if cond then { VAR = assign_rhs } else <rest>
+                let new_then = make_assign_block(then_branch, assign_rhs);
+                let new_else = if rest.is_empty() {
+                    // Use default else (Unit)
+                    Box::new(Expr::Unit(Span::new(if_span.end, if_span.end)))
+                } else {
+                    Box::new(build_else_chain_expr(rest))
+                };
+                Expr::If(cond.clone(), Box::new(new_then), new_else, *if_span)
+            } else {
+                // else VAR = assign_rhs → { VAR = assign_rhs }
+                make_assign_block(else_expr, assign_rhs)
+            }
+        }
+        None => {
+            // No assignment on this else branch - it's a plain expression
+            // (e.g., `else someExpr` or `else if cond then { ... } else { ... }`)
+            else_expr.clone()
+        }
+    }
+}
+
+/// Create a Block expression wrapping an assignment: `{ lhs = rhs }`.
+fn make_assign_block(lhs: &Expr, rhs: &Expr) -> Expr {
+    let lhs_span = get_span(lhs);
+    let rhs_span = get_span(rhs);
+    let block_span = Span::new(lhs_span.start, rhs_span.end);
+
+    let stmt = if let Some(pat) = expr_to_pattern(lhs.clone()) {
+        Stmt::Let(Binding {
+            visibility: Visibility::Private,
+            mutable: false,
+            pattern: pat,
+            ty: None,
+            value: rhs.clone(),
+            span: block_span,
+        })
+    } else {
+        let target = match lhs {
+            Expr::FieldAccess(obj, field, _) => Some(AssignTarget::Field(obj.clone(), field.clone())),
+            Expr::Index(coll, idx, _) => Some(AssignTarget::Index(coll.clone(), idx.clone())),
+            Expr::Var(name) => Some(AssignTarget::Var(name.clone())),
+            _ => None,
+        };
+        match target {
+            Some(t) => Stmt::Assign(t, rhs.clone(), block_span),
+            None => Stmt::Expr(lhs.clone()),
+        }
+    };
+    Expr::Block(vec![stmt], block_span)
+}
+
 /// Convert an expression to a pattern (for when we parsed something as an expression
 /// but it turned out to be a let binding with `=`).
 fn expr_to_pattern(expr: Expr) -> Option<Pattern> {
@@ -1055,21 +1126,37 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                     .ignore_then(type_expr())
                     .or_not()
             )
-            .then(
+            .then({
+                // Parse `= expr` followed by optional chained `else` branches.
+                // Handles `if cond then VAR = expr else ...` patterns where the parser
+                // splits as `(if cond then VAR) = expr else ...`.
+                // Each else branch: `else expr (= expr)?`
+                // We support up to 4 levels of else-chaining for practical code.
+                // The chain is collected into a Vec<(Expr, Option<Expr>)>.
+                let else_assign = skip_newlines()
+                    .ignore_then(just(Token::Else))
+                    .ignore_then(skip_newlines())
+                    .ignore_then(expr.clone())
+                    .then(just(Token::Eq).ignore_then(expr.clone()).or_not());
+
                 just(Token::Eq)
                     .ignore_then(expr.clone())
                     .then(
-                        // Optionally consume `else expr` after assignment.
-                        // This handles `if cond then VAR = expr else body` where
-                        // the parser split it as `(if cond then VAR) = expr else body`.
-                        skip_newlines()
-                            .ignore_then(just(Token::Else))
-                            .ignore_then(skip_newlines())
-                            .ignore_then(expr.clone())
+                        else_assign.clone()
+                            .then(else_assign.clone().or_not())
+                            .then(else_assign.clone().or_not())
+                            .then(else_assign.clone().or_not())
+                            .map(|(((first, second), third), fourth)| {
+                                let mut chain = vec![first];
+                                if let Some(s) = second { chain.push(s); }
+                                if let Some(t) = third { chain.push(t); }
+                                if let Some(f) = fourth { chain.push(f); }
+                                chain
+                            })
                             .or_not()
                     )
                     .or_not()
-            )
+            })
             .map_with_span(|((lhs, maybe_return_type), maybe_rhs_else), span| {
                 match maybe_rhs_else {
                     Some((rhs, maybe_else)) => {
@@ -1139,7 +1226,13 @@ pub fn expr() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
                                             // Use explicit else branch if consumed, otherwise use
                                             // the original (default () from no-else desugaring).
                                             let final_else = match maybe_else {
-                                                Some(e) => Box::new(e),
+                                                Some(else_chain) => {
+                                                    // Build the else-branch from the chain of
+                                                    // (expr, Option<assign_rhs>) pairs.
+                                                    // Process from last to first (right-to-left)
+                                                    // to build nested if-else-if correctly.
+                                                    Box::new(build_else_chain_expr(&else_chain))
+                                                },
                                                 None => else_branch,
                                             };
                                             Stmt::Expr(Expr::If(cond, Box::new(new_then), final_else, if_span))
