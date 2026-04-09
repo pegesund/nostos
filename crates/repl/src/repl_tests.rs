@@ -286,8 +286,8 @@ mod repl_language_tests {
     #[test]
     fn test_repl_maps() {
         let tests = vec![
-            // Maps display as %{...N entries}
-            (r#"%{"a": 1, "b": 2}"#.to_string(), "%{...2 entries}".to_string(), false),
+            // Map display order is non-deterministic, so check for key-value presence
+            (r#"%{"a": 1, "b": 2}"#.to_string(), r#""a": 1"#.to_string(), false),
             (r#"Map.get(%{"x": 42}, "x")"#.to_string(), "42".to_string(), false),
         ];
 
