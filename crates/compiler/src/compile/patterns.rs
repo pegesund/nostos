@@ -541,7 +541,17 @@ impl Compiler {
                 for arm in arms {
                     extract_variant_names(&arm.pattern, &mut covered_names);
                 }
-                let covered_ctors: std::collections::HashSet<&str> = covered_names.into_iter().collect();
+                // Resolve import aliases: if a pattern uses `R` which is an alias
+                // for `defs.Red`, resolve it to `Red` so exhaustiveness check works.
+                let resolved_names: Vec<String> = covered_names.into_iter().map(|name| {
+                    if let Some(qualified) = self.imports.get(name) {
+                        // Extract the last component: "defs.Red" -> "Red"
+                        qualified.rsplit('.').next().unwrap_or(qualified).to_string()
+                    } else {
+                        name.to_string()
+                    }
+                }).collect();
+                let covered_ctors: std::collections::HashSet<&str> = resolved_names.iter().map(|s| s.as_str()).collect();
 
                 let missing: Vec<String> = all_ctors
                     .difference(&covered_ctors)
