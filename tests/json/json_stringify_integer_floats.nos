@@ -1,0 +1,37 @@
+# expect: 0
+# jsonStringify should write Integer as int and Number as float
+
+use stdlib.json.{Json, Null, Bool, Number, Integer, String, Array, Object, jsonStringify}
+
+main() = {
+    var errors = 0
+
+    # Integer variant stringifies without decimal
+    r1 = jsonStringify(Integer(1))
+    errors = if r1 != "1" then { println("FAIL: Integer(1) -> " ++ r1), errors + 1 } else errors
+
+    r2 = jsonStringify(Integer(0))
+    errors = if r2 != "0" then { println("FAIL: Integer(0) -> " ++ r2), errors + 1 } else errors
+
+    r3 = jsonStringify(Integer(-5))
+    errors = if r3 != "-5" then { println("FAIL: Integer(-5) -> " ++ r3), errors + 1 } else errors
+
+    # Number variant keeps decimal
+    r4 = jsonStringify(Number(3.14))
+    errors = if r4 != "3.14" then { println("FAIL: Number(3.14) -> " ++ r4), errors + 1 } else errors
+
+    r5 = jsonStringify(Number(-0.5))
+    errors = if r5 != "-0.5" then { println("FAIL: Number(-0.5) -> " ++ r5), errors + 1 } else errors
+
+    # Object with integer field
+    json = Object([("count", Integer(1)), ("name", String("test"))])
+    r6 = jsonStringify(json)
+    errors = if r6 != "{\"count\":1,\"name\":\"test\"}" then { println("FAIL: object -> " ++ r6), errors + 1 } else errors
+
+    # Array of integers
+    arr = Array([Integer(3), Integer(5), Integer(2)])
+    r7 = jsonStringify(arr)
+    errors = if r7 != "[3,5,2]" then { println("FAIL: array -> " ++ r7), errors + 1 } else errors
+
+    errors
+}

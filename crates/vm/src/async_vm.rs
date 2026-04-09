@@ -10768,6 +10768,13 @@ impl AsyncProcess {
                             Err(RuntimeError::IOError("Invalid Number variant".to_string()))
                         }
                     }
+                    "Integer" => {
+                        if let Some(GcValue::Int64(n)) = var.fields.first() {
+                            Ok(n.to_string())
+                        } else {
+                            Err(RuntimeError::IOError("Invalid Integer variant".to_string()))
+                        }
+                    }
                     "String" => {
                         if let Some(GcValue::String(ptr)) = var.fields.first() {
                             if let Some(s) = self.heap.get_string(*ptr) {
@@ -10938,35 +10945,35 @@ impl AsyncProcess {
                 Ok(GcValue::Variant(ptr))
             }
             GcValue::Int64(n) => {
-                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Integer".to_string()), vec![GcValue::Int64(n)]);
                 Ok(GcValue::Variant(ptr))
             }
             GcValue::Int8(n) => {
-                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Integer".to_string()), vec![GcValue::Int64(n as i64)]);
                 Ok(GcValue::Variant(ptr))
             }
             GcValue::Int16(n) => {
-                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Integer".to_string()), vec![GcValue::Int64(n as i64)]);
                 Ok(GcValue::Variant(ptr))
             }
             GcValue::Int32(n) => {
-                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Integer".to_string()), vec![GcValue::Int64(n as i64)]);
                 Ok(GcValue::Variant(ptr))
             }
             GcValue::UInt8(n) => {
-                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Integer".to_string()), vec![GcValue::Int64(n as i64)]);
                 Ok(GcValue::Variant(ptr))
             }
             GcValue::UInt16(n) => {
-                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Integer".to_string()), vec![GcValue::Int64(n as i64)]);
                 Ok(GcValue::Variant(ptr))
             }
             GcValue::UInt32(n) => {
-                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Integer".to_string()), vec![GcValue::Int64(n as i64)]);
                 Ok(GcValue::Variant(ptr))
             }
             GcValue::UInt64(n) => {
-                let ptr = self.heap.alloc_variant(json_type, Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                let ptr = self.heap.alloc_variant(json_type, Arc::new("Integer".to_string()), vec![GcValue::Int64(n as i64)]);
                 Ok(GcValue::Variant(ptr))
             }
             GcValue::Float64(f) => {
@@ -11157,7 +11164,7 @@ impl AsyncProcess {
                     .unwrap_or_default();
                 let mut json_items = Vec::new();
                 for n in items {
-                    let ptr = self.heap.alloc_variant(json_type.clone(), Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                    let ptr = self.heap.alloc_variant(json_type.clone(), Arc::new("Integer".to_string()), vec![GcValue::Int64(n)]);
                     json_items.push(GcValue::Variant(ptr));
                 }
                 let list = GcList::from_vec(json_items);
@@ -11216,10 +11223,10 @@ impl AsyncProcess {
                 Ok(GcValue::Variant(ptr))
             }
             GcValue::Int64List(list) => {
-                // Convert to JSON array of numbers
+                // Convert to JSON array of integers
                 let mut json_items = Vec::new();
                 for n in list.iter() {
-                    let ptr = self.heap.alloc_variant(json_type.clone(), Arc::new("Number".to_string()), vec![GcValue::Float64(n as f64)]);
+                    let ptr = self.heap.alloc_variant(json_type.clone(), Arc::new("Integer".to_string()), vec![GcValue::Int64(n)]);
                     json_items.push(GcValue::Variant(ptr));
                 }
                 let list = GcList::from_vec(json_items);
@@ -11679,6 +11686,29 @@ impl AsyncProcess {
                             }
                             GcValue::Int64(n) => Ok(GcValue::Int64(*n)),
                             _ => Ok(GcValue::Float64(0.0)),
+                        }
+                    }
+                } else if ctor == "Integer" {
+                    if variant.fields.is_empty() {
+                        Ok(GcValue::Int64(0))
+                    } else {
+                        match &variant.fields[0] {
+                            GcValue::Int64(n) => {
+                                match expected_type {
+                                    "Int" | "Int64" => Ok(GcValue::Int64(*n)),
+                                    "Int32" => Ok(GcValue::Int32(*n as i32)),
+                                    "Int16" => Ok(GcValue::Int16(*n as i16)),
+                                    "Int8" => Ok(GcValue::Int8(*n as i8)),
+                                    "UInt64" => Ok(GcValue::UInt64(*n as u64)),
+                                    "UInt32" => Ok(GcValue::UInt32(*n as u32)),
+                                    "UInt16" => Ok(GcValue::UInt16(*n as u16)),
+                                    "UInt8" => Ok(GcValue::UInt8(*n as u8)),
+                                    "Float32" => Ok(GcValue::Float32(*n as f32)),
+                                    "Float" | "Float64" => Ok(GcValue::Float64(*n as f64)),
+                                    _ => Ok(GcValue::Int64(*n)),
+                                }
+                            }
+                            _ => Ok(GcValue::Int64(0)),
                         }
                     }
                 } else if ctor == "String" {
@@ -16598,9 +16628,14 @@ impl AsyncVM {
                             GcValue::Variant(ptr)
                         }
                         serde_json::Value::Number(n) => {
-                            let f = n.as_f64().unwrap_or(0.0);
-                            let ptr = heap.alloc_variant(json_type.clone(), Arc::new("Number".to_string()), vec![GcValue::Float64(f)]);
-                            GcValue::Variant(ptr)
+                            if let Some(i) = n.as_i64() {
+                                let ptr = heap.alloc_variant(json_type.clone(), Arc::new("Integer".to_string()), vec![GcValue::Int64(i)]);
+                                GcValue::Variant(ptr)
+                            } else {
+                                let f = n.as_f64().unwrap_or(0.0);
+                                let ptr = heap.alloc_variant(json_type.clone(), Arc::new("Number".to_string()), vec![GcValue::Float64(f)]);
+                                GcValue::Variant(ptr)
+                            }
                         }
                         serde_json::Value::String(s) => {
                             let str_ptr = heap.alloc_string(s.clone());
@@ -16673,6 +16708,13 @@ impl AsyncVM {
                                             ))
                                         } else {
                                             Err(RuntimeError::Panic("Invalid Number variant".to_string()))
+                                        }
+                                    }
+                                    "Integer" => {
+                                        if let Some(GcValue::Int64(n)) = var.fields.first() {
+                                            Ok(serde_json::Value::Number(serde_json::Number::from(*n)))
+                                        } else {
+                                            Err(RuntimeError::Panic("Invalid Integer variant".to_string()))
                                         }
                                     }
                                     "String" => {

@@ -7,6 +7,7 @@ pub type Json =
     | Null
     | Bool(Bool)
     | Number(Float)
+    | Integer(Int)
     | String(String)
     | Array(List[Json])
     | Object(List[(String, Json)])
@@ -73,22 +74,34 @@ pub collect_number_chars(chars, acc) = {
     match after_int {
         ['.' | rest] -> {
             (frac_digits, after_frac) = collect_digits(rest, int_digits ++ ['.'])
-            (frac_digits, after_frac)
+            (frac_digits, after_frac, true)
         }
-        _ -> (int_digits, after_int)
+        _ -> (int_digits, after_int, false)
     }
 }
 
 pub parse_number(chars) = match chars {
     ['-' | rest] -> {
-        (num_chars, remaining) = collect_number_chars(rest, [])
-        num = optUnwrapOr(String.toFloat(String.from_chars(num_chars)), 0.0)
-        (Number(0.0 - num), remaining)
+        (num_chars, remaining, has_dot) = collect_number_chars(rest, [])
+        str = String.from_chars(num_chars)
+        if has_dot then {
+            num = optUnwrapOr(String.toFloat(str), 0.0)
+            (Number(0.0 - num), remaining)
+        } else {
+            num = optUnwrapOr(String.toInt(str), 0)
+            (Integer(0 - num), remaining)
+        }
     }
     _ -> {
-        (num_chars, rest) = collect_number_chars(chars, [])
-        num = optUnwrapOr(String.toFloat(String.from_chars(num_chars)), 0.0)
-        (Number(num), rest)
+        (num_chars, rest, has_dot) = collect_number_chars(chars, [])
+        str = String.from_chars(num_chars)
+        if has_dot then {
+            num = optUnwrapOr(String.toFloat(str), 0.0)
+            (Number(num), rest)
+        } else {
+            num = optUnwrapOr(String.toInt(str), 0)
+            (Integer(num), rest)
+        }
     }
 
 
@@ -223,6 +236,7 @@ pub stringify(json) -> String = match json {
     Bool(true) -> "true"
     Bool(false) -> "false"
     Number(n) -> show(n)
+    Integer(n) -> show(n)
     String(s) -> "\"" ++ s ++ "\""
     Array(items) -> "[" ++ stringify_array(items, "") ++ "]"
     Object(pairs) -> "{" ++ stringify_object(pairs, "") ++ "}"
@@ -264,6 +278,7 @@ pub convertPrimitive(json, typeName) =
     if isNumericType(typeName) then
         match json {
             Number(n) -> convertNumber(n, typeName)
+            Integer(n) -> convertNumber(n.toFloat(), typeName)
             _ -> throw("Expected Number for " ++ typeName ++ ", got " ++ show(json))
         }
     else if typeName == "String" then

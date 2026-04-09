@@ -28,7 +28,7 @@ test_json_variant(conn) = {
     Pg.execute(conn, "DELETE FROM test_json", [])
 
     # Create a Json variant
-    json = Object([("city", String("Oslo")), ("population", Number(700000.0))])
+    json = Object([("city", String("Oslo")), ("population", Integer(700000))])
 
     # Insert the Json variant directly
     Pg.execute(conn, "INSERT INTO test_json (data) VALUES ($1)", [json])

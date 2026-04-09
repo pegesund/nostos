@@ -82,6 +82,12 @@ impl Compiler {
             if !used_structural {
                 if let Some(ref ty) = scrut_type {
                     binding_types = self.extract_pattern_binding_types(&arm.pattern, ty);
+                } else {
+                    // Fallback: even without a known scrutinee type, try to extract
+                    // binding types from variant patterns by looking up constructor
+                    // field types directly. This is critical for stdlib functions where
+                    // HM inference is skipped and parameters have no type annotations.
+                    self.extract_variant_binding_types_from_constructor(&arm.pattern, &mut binding_types);
                 }
             }
             for (var_name, var_type) in binding_types {
@@ -147,6 +153,37 @@ impl Compiler {
         }
 
         Ok(dst)
+    }
+
+    /// Extract binding types from variant patterns by looking up constructor field types
+    /// directly, without requiring the scrutinee type to be known.
+    /// This handles the case where a match is inside an if/else chain in a function
+    /// without type annotations (e.g., stdlib functions where HM inference is skipped).
+    fn extract_variant_binding_types_from_constructor(&self, pattern: &Pattern, result: &mut Vec<(String, String)>) {
+        use nostos_syntax::ast::VariantPatternFields;
+        match pattern {
+            Pattern::Variant(ctor_ident, fields, _) => {
+                let ctor_name = &ctor_ident.node;
+                if let VariantPatternFields::Positional(patterns) = fields {
+                    // Look up the constructor in all known types to find field types
+                    for (_ty_name, info) in &self.types {
+                        if let crate::TypeInfoKind::Variant { constructors } = &info.kind {
+                            if let Some((_, field_types)) = constructors.iter().find(|(name, _)| name == ctor_name) {
+                                for (i, pat) in patterns.iter().enumerate() {
+                                    if let Some(raw_field_ty) = field_types.get_type(i) {
+                                        // Recurse into sub-patterns with the field type
+                                        self.extract_pattern_binding_types_inner(pat, &raw_field_ty, result);
+                                    }
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            // For non-variant patterns, we can't determine types without the scrutinee type
+            _ => {}
+        }
     }
 
     /// Extract type bindings for pattern variables given the scrutinee type.
