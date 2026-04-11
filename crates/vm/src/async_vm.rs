@@ -13959,19 +13959,12 @@ impl AsyncVM {
                     }
                     GcValue::List(list) => {
                         let needle = &args[1];
-                        // For string elements, compare by content (not pointer)
-                        // since GcValue::PartialEq for String only compares GcPtr
-                        let needle_str = if let GcValue::String(ptr) = needle {
-                            heap.get_string(*ptr).map(|s| s.data.clone())
-                        } else {
-                            None
-                        };
+                        // Use gc_values_equal for structural equality (not pointer equality).
+                        // GcValue::PartialEq compares GcPtr indices, which fails for
+                        // heap-allocated values (records, strings) with identical content
+                        // but different allocations.
                         let found = list.iter().any(|item| {
-                            if let (Some(ref ns), GcValue::String(item_ptr)) = (&needle_str, item) {
-                                heap.get_string(*item_ptr).map(|s| s.data == *ns).unwrap_or(false)
-                            } else {
-                                item == needle
-                            }
+                            heap.gc_values_equal(item, needle)
                         });
                         Ok(GcValue::Bool(found))
                     }
