@@ -438,6 +438,28 @@ impl LspClient {
         None
     }
 
+    /// Request completions at a specific position, returning full completion items as JSON
+    /// Each item has at least: label, kind (number), detail (optional)
+    fn completion_items(&mut self, uri: &str, line: u32, character: u32) -> Vec<Value> {
+        let response = self.send_request("textDocument/completion", json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": line, "character": character }
+        }));
+
+        if let Some(result) = response.get("result") {
+            if result.is_null() {
+                return vec![];
+            }
+            if let Some(items) = result.as_array() {
+                return items.clone();
+            }
+            if let Some(items) = result.get("items").and_then(|i| i.as_array()) {
+                return items.clone();
+            }
+        }
+        vec![]
+    }
+
     fn shutdown(&mut self) -> Value {
         self.send_request("shutdown", json!(null))
     }
@@ -2053,8 +2075,8 @@ main() = {
 fn test_lsp_autocomplete_cross_module_field_access() {
     let project_path = create_test_project("cross_module_field");
 
-    // types.nos - defines Person type
-    let types_content = r#"type Person = { name: String, age: Int }
+    // types.nos - defines Person type (pub so it can be imported)
+    let types_content = r#"pub type Person = { name: String, age: Int }
 "#;
     fs::write(project_path.join("types.nos"), types_content).unwrap();
 
@@ -4686,4 +4708,143 @@ fn get_nostos_binary() -> String {
         .join("target/release/nostos")
         .to_string_lossy()
         .to_string()
+}
+
+/// Test that dot completion on a record variable returns its fields
+/// with kind=Field (5) and that fields appear before trait methods.
+#[test]
+fn test_dot_completion_record_fields() {
+    let project_path = create_test_project("dot_completion_record_fields");
+
+    let content = r#"type GameState = { colourInTurn: String, scoreBoard: List[Int], board: List[String] }
+
+main() = {
+    state = GameState(colourInTurn: "red", scoreBoard: [0, 0], board: ["a", "b"])
+    state.
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // line 4 (0-based), col 10: after "state."
+    let items = client.completion_items(&main_uri, 4, 10);
+
+    println!("=== Completion items for GameState ===");
+    for item in &items {
+        let label = item.get("label").and_then(|l| l.as_str()).unwrap_or("?");
+        let kind = item.get("kind").and_then(|k| k.as_u64()).unwrap_or(0);
+        let detail = item.get("detail").and_then(|d| d.as_str()).unwrap_or("");
+        println!("  label='{}', kind={}, detail='{}'", label, kind, detail);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // Collect labels for easy checking
+    let labels: Vec<&str> = items.iter()
+        .filter_map(|i| i.get("label").and_then(|l| l.as_str()))
+        .collect();
+
+    // Should contain the three record fields
+    assert!(labels.contains(&"colourInTurn"), "Expected 'colourInTurn' field. Got: {:?}", labels);
+    assert!(labels.contains(&"scoreBoard"), "Expected 'scoreBoard' field. Got: {:?}", labels);
+    assert!(labels.contains(&"board"), "Expected 'board' field. Got: {:?}", labels);
+
+    // Record fields should have kind=5 (Field)
+    for item in &items {
+        let label = item.get("label").and_then(|l| l.as_str()).unwrap_or("");
+        if label == "colourInTurn" || label == "scoreBoard" || label == "board" {
+            let kind = item.get("kind").and_then(|k| k.as_u64()).unwrap_or(0);
+            assert_eq!(kind, 5, "Field '{}' should have kind=5 (Field), got {}", label, kind);
+        }
+    }
+
+    // Fields should appear before trait methods (show, hash)
+    // Find positions of first field and first trait method
+    let first_field_pos = labels.iter().position(|l| *l == "colourInTurn" || *l == "scoreBoard" || *l == "board");
+    let first_trait_method_pos = labels.iter().position(|l| *l == "show" || *l == "hash");
+    if let (Some(field_pos), Some(method_pos)) = (first_field_pos, first_trait_method_pos) {
+        assert!(field_pos < method_pos,
+            "Record fields should appear before trait methods. First field at {}, first method at {}. Labels: {:?}",
+            field_pos, method_pos, labels);
+    }
+}
+
+/// Test that dot completion works for record types defined in another module.
+#[test]
+fn test_dot_completion_record_fields_cross_module() {
+    let project_path = create_test_project("dot_completion_cross_module");
+
+    let types_content = r#"pub type Point = { x: Int, y: Int }
+"#;
+
+    let main_content = r#"use types
+
+main() = {
+    p = types.Point(x: 10, y: 20)
+    p.
+}
+"#;
+    fs::write(project_path.join("types.nos"), types_content).unwrap();
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, main_content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // line 4 (0-based), col 6: after "p."
+    let items = client.completion_items(&main_uri, 4, 6);
+
+    println!("=== Completion items for cross-module Point ===");
+    for item in &items {
+        let label = item.get("label").and_then(|l| l.as_str()).unwrap_or("?");
+        let kind = item.get("kind").and_then(|k| k.as_u64()).unwrap_or(0);
+        let detail = item.get("detail").and_then(|d| d.as_str()).unwrap_or("");
+        println!("  label='{}', kind={}, detail='{}'", label, kind, detail);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    let labels: Vec<&str> = items.iter()
+        .filter_map(|i| i.get("label").and_then(|l| l.as_str()))
+        .collect();
+
+    // Should contain the record fields from the other module
+    assert!(labels.contains(&"x"), "Expected 'x' field from cross-module Point. Got: {:?}", labels);
+    assert!(labels.contains(&"y"), "Expected 'y' field from cross-module Point. Got: {:?}", labels);
+
+    // Fields should have kind=5 (Field) and show their types
+    for item in &items {
+        let label = item.get("label").and_then(|l| l.as_str()).unwrap_or("");
+        if label == "x" || label == "y" {
+            let kind = item.get("kind").and_then(|k| k.as_u64()).unwrap_or(0);
+            assert_eq!(kind, 5, "Field '{}' should have kind=5 (Field), got {}", label, kind);
+
+            let detail = item.get("detail").and_then(|d| d.as_str()).unwrap_or("");
+            assert_eq!(detail, "Int", "Field '{}' should have detail='Int', got '{}'", label, detail);
+        }
+    }
+
+    // Fields should appear before trait methods
+    let first_field_pos = labels.iter().position(|l| *l == "x" || *l == "y");
+    let first_trait_method_pos = labels.iter().position(|l| *l == "show" || *l == "hash");
+    if let (Some(field_pos), Some(method_pos)) = (first_field_pos, first_trait_method_pos) {
+        assert!(field_pos < method_pos,
+            "Record fields should appear before trait methods in cross-module scenario. Labels: {:?}",
+            labels);
+    }
 }

@@ -530,6 +530,44 @@ pub fn infer_rhs_type(
         }
     }
 
+    // Qualified constructor call: module.TypeName(...) e.g. types.Point(x: 10, y: 20)
+    if trimmed.contains('.') {
+        if let Some(dot_pos) = trimmed.find('.') {
+            let after_dot = &trimmed[dot_pos + 1..];
+            // Check if what follows the dot starts with uppercase (constructor)
+            if after_dot.chars().next().map_or(false, |c| c.is_uppercase()) {
+                let ctor_name: String = after_dot.chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                let rest_after_ctor = after_dot[ctor_name.len()..].trim_start();
+                if rest_after_ctor.starts_with('(') || rest_after_ctor.is_empty() {
+                    if let Some(engine) = engine {
+                        // Check if it's a known constructor
+                        if let Some(type_name) = engine.get_type_for_constructor(&ctor_name) {
+                            return Some(type_name);
+                        }
+                        // Check if it's a record type itself (module-qualified)
+                        let qualified = format!("{}.{}", &trimmed[..dot_pos], ctor_name);
+                        let types = engine.get_types();
+                        if types.contains(&qualified) {
+                            return Some(qualified);
+                        }
+                        // Also try just the short name
+                        if types.contains(&ctor_name) {
+                            return Some(ctor_name);
+                        }
+                        // Check if any registered type ends with .CtorName
+                        for t in &types {
+                            if t.ends_with(&format!(".{}", ctor_name)) {
+                                return Some(t.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Method chain or field access: x.method().field, server.accept(), req.path
     if trimmed.contains('.') {
         if let Some(inferred) = infer_method_chain_type(trimmed, current_bindings, engine) {
@@ -1238,6 +1276,16 @@ pub fn infer_field_access_type(
     // Engine field lookup
     if let Some(field_type) = engine.get_field_type(base_type, field_name) {
         return Some(field_type);
+    }
+
+    // Try module-qualified type names (e.g., "Person" -> "types.Person")
+    let all_types = engine.get_types();
+    for t in &all_types {
+        if t.ends_with(&format!(".{}", base_type)) || t == base_type {
+            if let Some(field_type) = engine.get_field_type(t, field_name) {
+                return Some(field_type);
+            }
+        }
     }
 
     // Fallback: extract from source

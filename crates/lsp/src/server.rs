@@ -2141,6 +2141,43 @@ impl NostosLanguageServer {
 
             let mut seen = std::collections::HashSet::new();
 
+            // Add record fields FIRST for lambda parameter types too
+            let all_types = engine.get_types();
+            let fields = engine.get_type_fields(param_type);
+            let fields = if fields.is_empty() {
+                let mut found_fields = Vec::new();
+                for t in &all_types {
+                    if t.ends_with(&format!(".{}", param_type)) || t == param_type {
+                        found_fields = engine.get_type_fields(t);
+                        if !found_fields.is_empty() {
+                            break;
+                        }
+                    }
+                }
+                found_fields
+            } else {
+                fields
+            };
+
+            for field in &fields {
+                if !seen.insert(field.clone()) {
+                    continue;
+                }
+                let (field_name, field_type) = if let Some(colon_pos) = field.find(':') {
+                    (field[..colon_pos].trim().to_string(), Some(field[colon_pos + 1..].trim().to_string()))
+                } else {
+                    (field.clone(), None)
+                };
+                items.push(CompletionItem {
+                    label: field_name,
+                    kind: Some(CompletionItemKind::FIELD),
+                    detail: field_type,
+                    documentation: Some(Documentation::String(format!("Field of {}", param_type))),
+                    sort_text: Some("!1".to_string()),
+                    ..Default::default()
+                });
+            }
+
             for (method_name, signature, doc) in nostos_repl::ReplEngine::get_builtin_methods_for_type(param_type) {
                 if !seen.insert(method_name.to_string()) {
                     continue;
@@ -2150,6 +2187,7 @@ impl NostosLanguageServer {
                     kind: Some(CompletionItemKind::METHOD),
                     detail: Some(signature.to_string()),
                     documentation: Some(Documentation::String(doc.to_string())),
+                    sort_text: Some("!2".to_string()),
                     ..Default::default()
                 });
             }
@@ -2163,6 +2201,22 @@ impl NostosLanguageServer {
                     kind: Some(CompletionItemKind::METHOD),
                     detail: Some(signature),
                     documentation: doc.map(|d| Documentation::String(d)),
+                    sort_text: Some("!2".to_string()),
+                    ..Default::default()
+                });
+            }
+
+            // Add trait methods for lambda parameter types
+            for (method_name, signature, doc) in engine.get_trait_methods_for_type(param_type) {
+                if !seen.insert(method_name.clone()) {
+                    continue;
+                }
+                items.push(CompletionItem {
+                    label: method_name,
+                    kind: Some(CompletionItemKind::METHOD),
+                    detail: Some(signature),
+                    documentation: doc.map(|d| Documentation::String(d)),
+                    sort_text: Some("!2".to_string()),
                     ..Default::default()
                 });
             }
@@ -2326,52 +2380,7 @@ impl NostosLanguageServer {
             let mut seen = std::collections::HashSet::new();
 
             if let Some(ref type_name) = inferred_type {
-                // Show builtin methods for the inferred type
-                for (method_name, signature, doc) in nostos_repl::ReplEngine::get_builtin_methods_for_type(type_name) {
-                    if !seen.insert(method_name.to_string()) {
-                        continue;
-                    }
-
-                    items.push(CompletionItem {
-                        label: method_name.to_string(),
-                        kind: Some(CompletionItemKind::METHOD),
-                        detail: Some(signature.to_string()),
-                        documentation: Some(Documentation::String(doc.to_string())),
-                        ..Default::default()
-                    });
-                }
-
-                // Also add UFCS methods from user-defined functions
-                for (method_name, signature, doc) in engine.get_ufcs_methods_for_type(type_name) {
-                    if !seen.insert(method_name.clone()) {
-                        continue;
-                    }
-
-                    items.push(CompletionItem {
-                        label: method_name,
-                        kind: Some(CompletionItemKind::METHOD),
-                        detail: Some(signature),
-                        documentation: doc.map(|d| Documentation::String(d)),
-                        ..Default::default()
-                    });
-                }
-
-                // Add trait methods implemented for the type
-                for (method_name, signature, doc) in engine.get_trait_methods_for_type(type_name) {
-                    if !seen.insert(method_name.clone()) {
-                        continue;
-                    }
-
-                    items.push(CompletionItem {
-                        label: method_name,
-                        kind: Some(CompletionItemKind::METHOD),
-                        detail: Some(signature),
-                        documentation: doc.map(|d| Documentation::String(d)),
-                        ..Default::default()
-                    });
-                }
-
-                // Add record fields for the type
+                // Add record fields FIRST so they appear before methods
                 let all_types = engine.get_types();
                 let fields = engine.get_type_fields(type_name);
                 if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
@@ -2419,7 +2428,7 @@ impl NostosLanguageServer {
                     fields
                 };
 
-                for field in fields {
+                for field in &fields {
                     if !seen.insert(field.clone()) {
                         continue;
                     }
@@ -2437,6 +2446,54 @@ impl NostosLanguageServer {
                         detail: field_type,
                         documentation: Some(Documentation::String(format!("Field of {}", type_name))),
                         sort_text: Some("!1".to_string()), // Sort after type indicator but before methods
+                        ..Default::default()
+                    });
+                }
+
+                // Show builtin methods for the inferred type
+                for (method_name, signature, doc) in nostos_repl::ReplEngine::get_builtin_methods_for_type(type_name) {
+                    if !seen.insert(method_name.to_string()) {
+                        continue;
+                    }
+
+                    items.push(CompletionItem {
+                        label: method_name.to_string(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        detail: Some(signature.to_string()),
+                        documentation: Some(Documentation::String(doc.to_string())),
+                        sort_text: Some("!2".to_string()), // Sort after fields
+                        ..Default::default()
+                    });
+                }
+
+                // Also add UFCS methods from user-defined functions
+                for (method_name, signature, doc) in engine.get_ufcs_methods_for_type(type_name) {
+                    if !seen.insert(method_name.clone()) {
+                        continue;
+                    }
+
+                    items.push(CompletionItem {
+                        label: method_name,
+                        kind: Some(CompletionItemKind::METHOD),
+                        detail: Some(signature),
+                        documentation: doc.map(|d| Documentation::String(d)),
+                        sort_text: Some("!2".to_string()), // Sort after fields
+                        ..Default::default()
+                    });
+                }
+
+                // Add trait methods implemented for the type
+                for (method_name, signature, doc) in engine.get_trait_methods_for_type(type_name) {
+                    if !seen.insert(method_name.clone()) {
+                        continue;
+                    }
+
+                    items.push(CompletionItem {
+                        label: method_name,
+                        kind: Some(CompletionItemKind::METHOD),
+                        detail: Some(signature),
+                        documentation: doc.map(|d| Documentation::String(d)),
+                        sort_text: Some("!2".to_string()), // Sort after fields
                         ..Default::default()
                     });
                 }
