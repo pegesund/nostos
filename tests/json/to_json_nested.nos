@@ -1,0 +1,7 @@
+# expect: [{"name":"Alice","age":30},{"name":"Bob","age":25}]
+# Test toJson with nested structures (list of records)
+use stdlib.json.{toJson}
+
+type Person = { name: String, age: Int }
+
+main() = toJson([Person("Alice", 30), Person("Bob", 25)])

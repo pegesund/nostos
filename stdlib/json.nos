@@ -629,4 +629,10 @@ pub jsonParse(input) -> Json = {
 # Convert a Json value back to a JSON string
 pub jsonStringify(json) -> String = stringify(json)
 
+# Convert any Nostos value to a Json value (variant type)
+pub toJsonValue(value) -> Json = reflect(value)
+
+# Convert any Nostos value to a JSON string
+pub toJson(value) -> String = stringify(reflect(value))
+
 

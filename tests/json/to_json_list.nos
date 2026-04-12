@@ -1,0 +1,5 @@
+# expect: [1,2,3]
+# Test toJson with list
+use stdlib.json.{toJson}
+
+main() = toJson([1, 2, 3])

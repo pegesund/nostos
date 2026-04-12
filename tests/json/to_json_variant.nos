@@ -1,0 +1,8 @@
+# expect: true
+# Test toJson with variant types
+use stdlib.json.{toJson}
+
+main() = {
+    toJson(Some(42)) == "{\"Some\":42}" &&
+    toJson(None) == "{\"None\":null}"
+}

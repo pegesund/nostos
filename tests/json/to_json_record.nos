@@ -1,0 +1,10 @@
+# expect: {"name":"Alice","age":30}
+# Test toJson with record type
+use stdlib.json.{toJson}
+
+type Person = { name: String, age: Int }
+
+main() = {
+    p = Person("Alice", 30)
+    toJson(p)
+}

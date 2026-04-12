@@ -1,0 +1,11 @@
+# expect: true
+# Test toJson with primitive types
+use stdlib.json.{toJson}
+
+main() = {
+    toJson(42) == "42" &&
+    toJson("hello") == "\"hello\"" &&
+    toJson(true) == "true" &&
+    toJson(false) == "false" &&
+    toJson(3.14) == "3.14"
+}

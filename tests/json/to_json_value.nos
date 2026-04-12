@@ -1,0 +1,8 @@
+# expect: 42
+# Test toJsonValue returns a Json value that can be stringified
+use stdlib.json.{toJsonValue, stringify}
+
+main() = {
+    j = toJsonValue(42)
+    stringify(j)
+}
