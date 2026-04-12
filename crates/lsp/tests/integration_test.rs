@@ -25,6 +25,15 @@ struct Diagnostic {
     message: String,
 }
 
+#[derive(Debug, Clone)]
+struct SemanticTokenData {
+    delta_line: u32,
+    delta_start: u32,
+    length: u32,
+    token_type: u32,
+    token_modifiers: u32,
+}
+
 #[allow(dead_code)]
 impl LspClient {
     fn new(lsp_binary: &str) -> Self {
@@ -395,6 +404,38 @@ impl LspClient {
             }
         }
         refs
+    }
+
+    /// Request semantic tokens for a document
+    fn semantic_tokens_full(&mut self, uri: &str) -> Option<Vec<SemanticTokenData>> {
+        let response = self.send_request("textDocument/semanticTokens/full", json!({
+            "textDocument": { "uri": uri }
+        }));
+
+        if let Some(result) = response.get("result") {
+            if result.is_null() {
+                return None;
+            }
+            if let Some(data) = result.get("data").and_then(|d| d.as_array()) {
+                // Data is a flat array of groups of 5 integers:
+                // [deltaLine, deltaStartChar, length, tokenType, tokenModifiers, ...]
+                let mut tokens = Vec::new();
+                let chunks: Vec<&Value> = data.iter().collect();
+                for chunk in chunks.chunks(5) {
+                    if chunk.len() == 5 {
+                        tokens.push(SemanticTokenData {
+                            delta_line: chunk[0].as_u64().unwrap_or(0) as u32,
+                            delta_start: chunk[1].as_u64().unwrap_or(0) as u32,
+                            length: chunk[2].as_u64().unwrap_or(0) as u32,
+                            token_type: chunk[3].as_u64().unwrap_or(0) as u32,
+                            token_modifiers: chunk[4].as_u64().unwrap_or(0) as u32,
+                        });
+                    }
+                }
+                return Some(tokens);
+            }
+        }
+        None
     }
 
     fn shutdown(&mut self) -> Value {
@@ -4447,6 +4488,195 @@ fn test_lsp_hover_builtin_field_access() {
         "Hover on req.path should not show '?', got: {}", hover_text);
     assert!(hover_text.contains("String"),
         "Hover on req.path should show String type, got: {}", hover_text);
+}
+
+/// Test that semantic tokens are returned for a simple Nostos file.
+/// Verifies the server advertises the capability and returns delta-encoded tokens.
+#[test]
+fn test_semantic_tokens_basic() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("semantic_tokens_basic");
+
+    // Create a file with various token types
+    let content = "# A comment\ntype Color = Red | Green\nmain() = 42\n";
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    let init_response = client.initialize(project_path.to_str().unwrap());
+
+    // Verify semantic tokens capability is advertised
+    let capabilities = &init_response["result"]["capabilities"];
+    assert!(
+        capabilities.get("semanticTokensProvider").is_some(),
+        "Server should advertise semanticTokensProvider capability"
+    );
+    let legend = &capabilities["semanticTokensProvider"]["legend"];
+    let token_types = legend["tokenTypes"].as_array().expect("tokenTypes should be an array");
+    assert!(token_types.len() >= 12, "Should have at least 12 token types, got {}", token_types.len());
+    // Verify specific type names
+    assert_eq!(token_types[7], "keyword");
+    assert_eq!(token_types[8], "string");
+    assert_eq!(token_types[9], "number");
+    assert_eq!(token_types[11], "comment");
+
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+
+    // Request semantic tokens
+    let tokens = client.semantic_tokens_full(&main_uri);
+    assert!(tokens.is_some(), "Expected semantic tokens result");
+    let tokens = tokens.unwrap();
+    assert!(!tokens.is_empty(), "Expected non-empty semantic tokens");
+
+    println!("Semantic tokens ({} total):", tokens.len());
+
+    // Decode delta-encoded tokens to absolute positions for verification
+    // Token type constants (must match server legend order):
+    //   0=namespace, 1=type, 2=function, 3=variable, 4=parameter,
+    //   5=property, 6=enum_member, 7=keyword, 8=string, 9=number,
+    //   10=operator, 11=comment
+    let token_type_name = |t: u32| -> &str {
+        match t {
+            0 => "namespace", 1 => "type", 2 => "function", 3 => "variable",
+            4 => "parameter", 5 => "property", 6 => "enum_member", 7 => "keyword",
+            8 => "string", 9 => "number", 10 => "operator", 11 => "comment",
+            _ => "unknown",
+        }
+    };
+
+    // Convert delta encoding to absolute positions
+    let mut abs_tokens: Vec<(u32, u32, u32, u32)> = Vec::new(); // (line, col, len, type)
+    let mut cur_line = 0u32;
+    let mut cur_col = 0u32;
+    for t in &tokens {
+        if t.delta_line > 0 {
+            cur_line += t.delta_line;
+            cur_col = t.delta_start;
+        } else {
+            cur_col += t.delta_start;
+        }
+        abs_tokens.push((cur_line, cur_col, t.length, t.token_type));
+        println!("  line={} col={} len={} type={} ({})",
+            cur_line, cur_col, t.length, t.token_type, token_type_name(t.token_type));
+    }
+
+    // Source:
+    //   Line 0: "# A comment"
+    //   Line 1: "type Color = Red | Green"
+    //   Line 2: "main() = 42"
+
+    // Verify comment on line 0
+    let comment_tokens: Vec<_> = abs_tokens.iter().filter(|t| t.0 == 0 && t.3 == 11).collect();
+    assert!(!comment_tokens.is_empty(), "Expected a comment token on line 0");
+
+    // Verify "type" keyword on line 1
+    let keyword_tokens_line1: Vec<_> = abs_tokens.iter()
+        .filter(|t| t.0 == 1 && t.3 == 7 && t.1 == 0 && t.2 == 4) // "type" at col 0, len 4
+        .collect();
+    assert!(!keyword_tokens_line1.is_empty(), "Expected 'type' keyword token on line 1 col 0");
+
+    // Verify "Color" as type on line 1
+    let type_tokens: Vec<_> = abs_tokens.iter()
+        .filter(|t| t.0 == 1 && t.3 == 1 && t.2 == 5) // type, len 5
+        .collect();
+    assert!(!type_tokens.is_empty(), "Expected 'Color' type token on line 1");
+
+    // Verify "Red" and "Green" as enum_member (type 6) on line 1
+    let enum_tokens: Vec<_> = abs_tokens.iter()
+        .filter(|t| t.0 == 1 && t.3 == 6)
+        .collect();
+    assert!(enum_tokens.len() >= 2, "Expected at least 2 enum_member tokens (Red, Green), got {}", enum_tokens.len());
+
+    // Verify "main" as function on line 2
+    let fn_tokens: Vec<_> = abs_tokens.iter()
+        .filter(|t| t.0 == 2 && t.3 == 2 && t.1 == 0) // function at col 0
+        .collect();
+    assert!(!fn_tokens.is_empty(), "Expected 'main' function token on line 2 col 0");
+
+    // Verify "42" as number on line 2
+    let num_tokens: Vec<_> = abs_tokens.iter()
+        .filter(|t| t.0 == 2 && t.3 == 9)
+        .collect();
+    assert!(!num_tokens.is_empty(), "Expected number token '42' on line 2");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test semantic tokens for a more complex file with strings, operators, and variables
+#[test]
+fn test_semantic_tokens_complex() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("semantic_tokens_complex");
+
+    let content = r#"use stdlib
+greet(name: String) = "Hello, " ++ name
+main() = {
+    x = 10 + 20
+    greet("World")
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+
+    let tokens = client.semantic_tokens_full(&main_uri);
+    assert!(tokens.is_some(), "Expected semantic tokens result");
+    let tokens = tokens.unwrap();
+
+    // Convert to absolute positions
+    let mut abs_tokens: Vec<(u32, u32, u32, u32)> = Vec::new();
+    let mut cur_line = 0u32;
+    let mut cur_col = 0u32;
+    for t in &tokens {
+        if t.delta_line > 0 {
+            cur_line += t.delta_line;
+            cur_col = t.delta_start;
+        } else {
+            cur_col += t.delta_start;
+        }
+        abs_tokens.push((cur_line, cur_col, t.length, t.token_type));
+    }
+
+    // Line 0: "use stdlib"
+    //   "use" = keyword (7), "stdlib" = namespace (0)
+    let use_kw: Vec<_> = abs_tokens.iter().filter(|t| t.0 == 0 && t.3 == 7).collect();
+    assert!(!use_kw.is_empty(), "Expected 'use' keyword on line 0");
+
+    let namespace: Vec<_> = abs_tokens.iter().filter(|t| t.0 == 0 && t.3 == 0).collect();
+    assert!(!namespace.is_empty(), "Expected namespace token for 'stdlib' on line 0");
+
+    // Line 1: "greet(name: String) = ..."
+    //   "greet" = function (2), "name" = variable (3), "String" = type (1)
+    let greet_fn: Vec<_> = abs_tokens.iter()
+        .filter(|t| t.0 == 1 && t.3 == 2 && t.1 == 0)
+        .collect();
+    assert!(!greet_fn.is_empty(), "Expected 'greet' function token on line 1");
+
+    // String literal "Hello, " should be present
+    let string_tokens: Vec<_> = abs_tokens.iter().filter(|t| t.0 == 1 && t.3 == 8).collect();
+    assert!(!string_tokens.is_empty(), "Expected string token on line 1");
+
+    // ++ operator
+    let op_tokens: Vec<_> = abs_tokens.iter().filter(|t| t.0 == 1 && t.3 == 10).collect();
+    assert!(!op_tokens.is_empty(), "Expected operator token (++) on line 1");
+
+    // Line 3: "    x = 10 + 20"
+    //   "x" = variable (3), 10 = number (9), + = operator (10), 20 = number (9)
+    let numbers_line3: Vec<_> = abs_tokens.iter().filter(|t| t.0 == 3 && t.3 == 9).collect();
+    assert!(numbers_line3.len() >= 2, "Expected at least 2 number tokens on line 3, got {}", numbers_line3.len());
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
 }
 
 fn get_nostos_binary() -> String {

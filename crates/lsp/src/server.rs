@@ -585,6 +585,36 @@ impl LanguageServer for NostosLanguageServer {
                 document_symbol_provider: Some(OneOf::Left(true)),
                 // Find references
                 references_provider: Some(OneOf::Left(true)),
+                // Semantic tokens for syntax highlighting
+                semantic_tokens_provider: Some(
+                    SemanticTokensServerCapabilities::SemanticTokensOptions(
+                        SemanticTokensOptions {
+                            legend: SemanticTokensLegend {
+                                token_types: vec![
+                                    SemanticTokenType::NAMESPACE,    // 0
+                                    SemanticTokenType::TYPE,          // 1
+                                    SemanticTokenType::FUNCTION,      // 2
+                                    SemanticTokenType::VARIABLE,      // 3
+                                    SemanticTokenType::PARAMETER,     // 4
+                                    SemanticTokenType::PROPERTY,      // 5
+                                    SemanticTokenType::ENUM_MEMBER,   // 6
+                                    SemanticTokenType::KEYWORD,       // 7
+                                    SemanticTokenType::STRING,        // 8
+                                    SemanticTokenType::NUMBER,        // 9
+                                    SemanticTokenType::OPERATOR,      // 10
+                                    SemanticTokenType::COMMENT,       // 11
+                                ],
+                                token_modifiers: vec![
+                                    SemanticTokenModifier::DECLARATION,
+                                    SemanticTokenModifier::DEFINITION,
+                                ],
+                            },
+                            full: Some(SemanticTokensFullOptions::Bool(true)),
+                            range: None,
+                            ..Default::default()
+                        },
+                    )
+                ),
                 // Inlay hints disabled for now - needs more work
                 // inlay_hint_provider: Some(OneOf::Right(InlayHintServerCapabilities::Options(
                 //     InlayHintOptions {
@@ -1704,6 +1734,235 @@ impl LanguageServer for NostosLanguageServer {
         } else {
             Ok(Some(locations))
         }
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let uri = &params.text_document.uri;
+
+        // Get document content
+        let content = match self.documents.get(uri) {
+            Some(c) => c.clone(),
+            None => return Ok(None),
+        };
+
+        let tokens = Self::compute_semantic_tokens(&content);
+
+        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+            result_id: None,
+            data: tokens,
+        })))
+    }
+}
+
+impl NostosLanguageServer {
+    // Semantic token type indices (must match the legend in initialize())
+    const TOKEN_TYPE_NAMESPACE: u32 = 0;
+    const TOKEN_TYPE_TYPE: u32 = 1;
+    const TOKEN_TYPE_FUNCTION: u32 = 2;
+    const TOKEN_TYPE_VARIABLE: u32 = 3;
+    const TOKEN_TYPE_PARAMETER: u32 = 4;
+    const TOKEN_TYPE_PROPERTY: u32 = 5;
+    const TOKEN_TYPE_ENUM_MEMBER: u32 = 6;
+    const TOKEN_TYPE_KEYWORD: u32 = 7;
+    const TOKEN_TYPE_STRING: u32 = 8;
+    const TOKEN_TYPE_NUMBER: u32 = 9;
+    const TOKEN_TYPE_OPERATOR: u32 = 10;
+    const TOKEN_TYPE_COMMENT: u32 = 11;
+
+    /// Convert a byte offset in source to (line, column) where both are 0-based.
+    /// Column is in UTF-16 code units (as LSP requires).
+    fn offset_to_line_col(source: &str, offset: usize) -> (u32, u32) {
+        let mut line = 0u32;
+        let mut line_start = 0usize;
+
+        for (i, ch) in source.char_indices() {
+            if i >= offset {
+                break;
+            }
+            if ch == '\n' {
+                line += 1;
+                line_start = i + 1;
+            }
+        }
+
+        // Convert byte column to UTF-16 code units
+        let line_slice = &source[line_start..offset.min(source.len())];
+        let col_utf16 = line_slice.encode_utf16().count() as u32;
+
+        (line, col_utf16)
+    }
+
+    /// Compute semantic tokens from source content using the lexer.
+    fn compute_semantic_tokens(source: &str) -> Vec<SemanticToken> {
+        use nostos_syntax::lexer::{lex, Token};
+
+        let lexer_tokens: Vec<(Token, std::ops::Range<usize>)> = lex(source).collect();
+        let mut result = Vec::new();
+        let mut prev_line = 0u32;
+        let mut prev_start = 0u32;
+
+        for (i, (token, span)) in lexer_tokens.iter().enumerate() {
+            let token_type = match token {
+                // Keywords
+                Token::Type | Token::Reactive | Token::Var | Token::Mvar |
+                Token::Const | Token::If | Token::Then | Token::Else |
+                Token::Match | Token::When | Token::Trait | Token::Module |
+                Token::End | Token::Use | Token::Import | Token::Private |
+                Token::Pub | Token::SelfKw | Token::SelfType |
+                Token::Try | Token::Catch | Token::Finally | Token::Do |
+                Token::While | Token::For | Token::To | Token::Break |
+                Token::Continue | Token::Return |
+                Token::Spawn | Token::SpawnLink | Token::SpawnMonitor |
+                Token::Receive | Token::After |
+                Token::Panic | Token::Not | Token::Extern | Token::From |
+                Token::Test | Token::Quote | Token::Template =>
+                    Self::TOKEN_TYPE_KEYWORD,
+
+                // Boolean literals as keywords
+                Token::True | Token::False => Self::TOKEN_TYPE_KEYWORD,
+
+                // Comments
+                Token::Comment | Token::MultiLineComment =>
+                    Self::TOKEN_TYPE_COMMENT,
+
+                // Strings
+                Token::String(_) | Token::SingleQuoteString(_) | Token::Char(_) =>
+                    Self::TOKEN_TYPE_STRING,
+
+                // Numbers
+                Token::Int(_) | Token::Float(_) | Token::HexInt(_) | Token::BinInt(_) |
+                Token::Int8(_) | Token::Int16(_) | Token::Int32(_) |
+                Token::UInt8(_) | Token::UInt16(_) | Token::UInt32(_) | Token::UInt64(_) |
+                Token::BigInt(_) | Token::Float32(_) | Token::Decimal(_) |
+                Token::OutOfRangeInt(_) =>
+                    Self::TOKEN_TYPE_NUMBER,
+
+                // Operators
+                Token::Plus | Token::Minus | Token::Star | Token::Slash |
+                Token::Percent | Token::StarStar |
+                Token::EqEq | Token::NotEq | Token::Lt | Token::Gt |
+                Token::LtEq | Token::GtEq |
+                Token::AndAnd | Token::OrOr | Token::Bang |
+                Token::PlusPlus | Token::PipeRight |
+                Token::Eq | Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq |
+                Token::LeftArrow | Token::RightArrow | Token::FatArrow |
+                Token::Caret | Token::Dollar | Token::Question |
+                Token::DotDot | Token::DotDotEq =>
+                    Self::TOKEN_TYPE_OPERATOR,
+
+                // Uppercase identifiers - type names or constructors
+                Token::UpperIdent(_name) => {
+                    // Heuristic: if preceded by "type" keyword or "|", it's a type/enum_member
+                    // Check if this looks like a variant constructor (preceded by | or =)
+                    let is_constructor = Self::is_variant_constructor(&lexer_tokens, i);
+                    if is_constructor {
+                        Self::TOKEN_TYPE_ENUM_MEMBER
+                    } else {
+                        Self::TOKEN_TYPE_TYPE
+                    }
+                }
+
+                // Lowercase identifiers - need context to classify
+                Token::LowerIdent(_name) => {
+                    // Check if this is a function definition: ident followed by "("
+                    let next_token = lexer_tokens.get(i + 1).map(|(t, _)| t);
+                    let is_fn_def = matches!(next_token, Some(Token::LParen));
+                    // Check if preceded by dot (property access)
+                    let prev_non_ws = Self::prev_significant_token(&lexer_tokens, i);
+                    let is_property = matches!(prev_non_ws, Some(Token::Dot));
+                    // Check if preceded by "use" or "import" (namespace)
+                    let is_namespace_ref = matches!(prev_non_ws, Some(Token::Use | Token::Import));
+
+                    if is_namespace_ref {
+                        Self::TOKEN_TYPE_NAMESPACE
+                    } else if is_property && is_fn_def {
+                        Self::TOKEN_TYPE_FUNCTION
+                    } else if is_property {
+                        Self::TOKEN_TYPE_PROPERTY
+                    } else if is_fn_def {
+                        Self::TOKEN_TYPE_FUNCTION
+                    } else {
+                        Self::TOKEN_TYPE_VARIABLE
+                    }
+                }
+
+                // Skip newlines, delimiters, and other non-semantic tokens
+                Token::Newline | Token::LParen | Token::RParen |
+                Token::LBracket | Token::RBracket | Token::LBrace | Token::RBrace |
+                Token::Comma | Token::Semicolon | Token::Colon | Token::ColonColon |
+                Token::Dot | Token::Pipe | Token::Underscore | Token::Hash |
+                Token::Tilde | Token::At => continue,
+            };
+
+            let (line, start_char) = Self::offset_to_line_col(source, span.start);
+            let length = {
+                let token_text = &source[span.clone()];
+                token_text.encode_utf16().count() as u32
+            };
+
+            let delta_line = line - prev_line;
+            let delta_start = if delta_line == 0 {
+                start_char - prev_start
+            } else {
+                start_char
+            };
+
+            result.push(SemanticToken {
+                delta_line,
+                delta_start,
+                length,
+                token_type: token_type,
+                token_modifiers_bitset: 0,
+            });
+
+            prev_line = line;
+            prev_start = start_char;
+        }
+
+        result
+    }
+
+    /// Check if the uppercase ident at index `i` looks like a variant constructor
+    /// (preceded by `|` or `=` in a type definition context).
+    fn is_variant_constructor(tokens: &[(nostos_syntax::Token, std::ops::Range<usize>)], i: usize) -> bool {
+        // Look backwards for the previous significant token
+        for j in (0..i).rev() {
+            match &tokens[j].0 {
+                nostos_syntax::Token::Newline => continue,
+                nostos_syntax::Token::Pipe => return true,
+                nostos_syntax::Token::Eq => {
+                    // Check if there's a "type" keyword before this
+                    for k in (0..j).rev() {
+                        match &tokens[k].0 {
+                            nostos_syntax::Token::Newline => continue,
+                            nostos_syntax::Token::Type => return true,
+                            nostos_syntax::Token::UpperIdent(_) => continue,
+                            nostos_syntax::Token::LowerIdent(_) => continue,
+                            nostos_syntax::Token::LBracket | nostos_syntax::Token::RBracket |
+                            nostos_syntax::Token::Comma => continue,
+                            _ => return false,
+                        }
+                    }
+                    return false;
+                }
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// Get the previous non-whitespace/newline token before index `i`.
+    fn prev_significant_token(tokens: &[(nostos_syntax::Token, std::ops::Range<usize>)], i: usize) -> Option<nostos_syntax::Token> {
+        for j in (0..i).rev() {
+            match &tokens[j].0 {
+                nostos_syntax::Token::Newline => continue,
+                t => return Some(t.clone()),
+            }
+        }
+        None
     }
 }
 

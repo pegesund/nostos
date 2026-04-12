@@ -16,6 +16,7 @@ tokio = { version = "1", features = ["full"] }
 # Nostos crates
 nostos-repl = { path = "../repl" }
 nostos-compiler = { path = "../compiler" }
+nostos-syntax = { path = "../syntax" }
 
 # Utilities
 serde = { version = "1.0", features = ["derive"] }

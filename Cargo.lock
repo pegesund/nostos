@@ -2209,6 +2209,7 @@ dependencies = [
  "dashmap",
  "nostos-compiler",
  "nostos-repl",
+ "nostos-syntax",
  "serde",
  "serde_json",
  "tempfile",
