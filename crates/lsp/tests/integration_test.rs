@@ -5081,6 +5081,93 @@ main() = climber_select_move(GameState(board: [1], score: 0))
         "Expected 'score' field for HM-inferred GameState param. Got: {:?}", completions);
 }
 
+/// Test dot completion for unannotated function params where the type is inferred
+/// from a call site with a known constructor argument.
+/// `get_x(p) = p.` with `main() = get_x(Point(1, 2))` should resolve p as Point.
+#[test]
+fn test_dot_completion_unannotated_param_inferred() {
+    let project_path = create_test_project("dot_completion_unannot_inferred");
+
+    // The function param `p` has no type annotation.
+    // The call site `get_x(Point(1, 2))` tells us p is a Point.
+    // Completion on `p.` should show x, y fields.
+    let content = r#"type Point = { x: Int, y: Int }
+
+get_x(p) = {
+    p.
+}
+
+main() = get_x(Point(1, 2))
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // line 3 (0-based), col 6: after "p." in "    p."
+    let completions = client.completion(&main_uri, 3, 6);
+
+    println!("=== Completions for unannotated param inferred from call site ===");
+    for c in &completions {
+        println!("  '{}'", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    assert!(completions.iter().any(|c| c == "x"),
+        "Expected 'x' field for Point param inferred from call site. Got: {:?}", completions);
+    assert!(completions.iter().any(|c| c == "y"),
+        "Expected 'y' field for Point param inferred from call site. Got: {:?}", completions);
+}
+
+/// Test dot completion for a local binding assigned via named constructor call.
+/// `pt = Point(x: 10, y: 20); pt.` should show x, y fields.
+#[test]
+fn test_dot_completion_named_constructor_binding() {
+    let project_path = create_test_project("dot_completion_named_ctor_bind");
+
+    let content = r#"type Point = { x: Int, y: Int }
+
+main() = {
+    pt = Point(x: 10, y: 20)
+    pt.
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // line 4 (0-based), col 7: after "pt." in "    pt."
+    let completions = client.completion(&main_uri, 4, 7);
+
+    println!("=== Completions for named constructor binding ===");
+    for c in &completions {
+        println!("  '{}'", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    assert!(completions.iter().any(|c| c == "x"),
+        "Expected 'x' field for Point named constructor binding. Got: {:?}", completions);
+    assert!(completions.iter().any(|c| c == "y"),
+        "Expected 'y' field for Point named constructor binding. Got: {:?}", completions);
+}
+
 /// Helper: decode delta-encoded semantic tokens to (line, col, len, type, modifiers) tuples
 fn decode_semantic_tokens(tokens: &[SemanticTokenData]) -> Vec<(u32, u32, u32, u32, u32)> {
     let mut abs = Vec::new();
