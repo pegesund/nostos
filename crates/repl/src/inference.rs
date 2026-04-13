@@ -218,6 +218,102 @@ pub fn split_call_args(args: &str) -> Vec<String> {
     result
 }
 
+/// Resolve unresolved function parameters by scanning the function body for field access
+/// patterns like `param.fieldName`. If we find field accesses on a parameter, we look up
+/// which type has ALL those fields and use that as the parameter's type.
+///
+/// This handles the case where there's no call site in the same file and no type annotation,
+/// but the function body reveals the type through field usage.
+fn resolve_params_from_field_access(
+    content: &str,
+    fn_name: &str,
+    unresolved: &[(usize, String)],
+    engine: Option<&ReplEngine>,
+    bindings: &mut HashMap<String, String>,
+) {
+    let engine = match engine {
+        Some(e) => e,
+        None => return,
+    };
+
+    // Find the function body: lines after the definition until next top-level definition
+    let fn_pattern = format!("{}(", fn_name);
+    let mut in_body = false;
+    let mut body_lines = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if !in_body {
+            // Look for the function definition line
+            let check = if trimmed.starts_with("pub ") { &trimmed[4..] } else { trimmed };
+            if check.starts_with(&fn_pattern) && check.contains('=') {
+                in_body = true;
+                // Include the part after = on the definition line
+                if let Some(eq_pos) = check.find('=') {
+                    let after_eq = &check[eq_pos + 1..];
+                    if !after_eq.starts_with('=') {
+                        body_lines.push(after_eq.to_string());
+                    }
+                }
+            }
+        } else {
+            // End of function body: next top-level definition (no leading whitespace + has `=` or starts with `type`/`trait`)
+            if !trimmed.is_empty() && !line.starts_with(' ') && !line.starts_with('\t') {
+                let is_new_def = trimmed.contains('=') && !trimmed.starts_with('#')
+                    || trimmed.starts_with("type ")
+                    || trimmed.starts_with("pub type ")
+                    || trimmed.starts_with("trait ")
+                    || trimmed.starts_with("pub trait ")
+                    || trimmed.starts_with("mvar ");
+                if is_new_def {
+                    break;
+                }
+            }
+            body_lines.push(trimmed.to_string());
+        }
+    }
+
+    let body = body_lines.join("\n");
+
+    // For each unresolved param, collect field names accessed on it
+    for (_, param_name) in unresolved {
+        if bindings.contains_key(param_name) {
+            continue; // Already resolved by call-site analysis
+        }
+
+        let dot_prefix = format!("{}.", param_name);
+        let mut field_names: Vec<String> = Vec::new();
+
+        for segment in body.split(&dot_prefix).skip(1) {
+            // Extract the field name after the dot
+            let field: String = segment.chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !field.is_empty() && field.chars().next().map_or(false, |c| c.is_lowercase()) {
+                if !field_names.contains(&field) {
+                    field_names.push(field);
+                }
+            }
+        }
+
+        if field_names.is_empty() {
+            continue;
+        }
+
+        // Find a type that has ALL these fields
+        let all_types = engine.get_types();
+        for type_name in &all_types {
+            let type_fields = engine.get_type_fields(type_name);
+            if !type_fields.is_empty() && field_names.iter().all(|f| type_fields.contains(f)) {
+                // Strip module prefix for cleaner display
+                let short_name = type_name.rsplit('.').next().unwrap_or(type_name);
+                bindings.insert(param_name.clone(), short_name.to_string());
+                break;
+            }
+        }
+    }
+}
+
 /// Build bindings for the scope surrounding a call site line.
 /// Finds the enclosing function and extracts bindings from it.
 fn extract_call_site_bindings(
@@ -401,6 +497,23 @@ pub fn extract_local_bindings(
                                     engine,
                                     &mut bindings,
                                 );
+
+                                // If still unresolved after call-site analysis,
+                                // infer from field access patterns in the body
+                                let still_unresolved: Vec<(usize, String)> = unresolved_params
+                                    .iter()
+                                    .filter(|(_, name)| !bindings.contains_key(name))
+                                    .cloned()
+                                    .collect();
+                                if !still_unresolved.is_empty() {
+                                    resolve_params_from_field_access(
+                                        content,
+                                        fn_name,
+                                        &still_unresolved,
+                                        engine,
+                                        &mut bindings,
+                                    );
+                                }
                             }
                         }
                     }

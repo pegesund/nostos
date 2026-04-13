@@ -2684,7 +2684,7 @@ impl NostosLanguageServer {
                 use std::io::Write;
                 let _ = writeln!(f, "About to check identifier '{}' in local_vars, receiver_expr='{}', literal_type={:?}", identifier, receiver_expr, literal_type);
             }
-            let inferred_type = if let Some(lt) = literal_type {
+            let mut inferred_type = if let Some(lt) = literal_type {
                 // Use literal type directly
                 Some(lt.to_string())
             } else if let Some(ty) = local_vars.get(identifier) {
@@ -2719,6 +2719,90 @@ impl NostosLanguageServer {
                 // which handles method chains, index expressions, and local bindings
                 engine.infer_expression_type(expr_to_infer, &local_vars)
             };
+
+            // Fallback: if type is still unknown, scan the document for field access
+            // patterns like `identifier.fieldName` and find which type has those fields.
+            // This handles the case where the file has parse errors (common during editing)
+            // and extract_local_bindings couldn't resolve the function parameters.
+            if inferred_type.is_none() && !identifier.is_empty() {
+                let dot_prefix = format!("{}.", identifier);
+                let mut field_names: Vec<String> = Vec::new();
+
+                for line in document_content.lines() {
+                    let trimmed = line.trim();
+                    for segment in trimmed.split(&dot_prefix).skip(1) {
+                        let field: String = segment.chars()
+                            .take_while(|c| c.is_alphanumeric() || *c == '_')
+                            .collect();
+                        if !field.is_empty()
+                            && field.chars().next().map_or(false, |c| c.is_lowercase())
+                            && !field_names.contains(&field)
+                        {
+                            field_names.push(field);
+                        }
+                    }
+                }
+
+                if !field_names.is_empty() {
+                    // First try compiled types from the engine
+                    let all_types = engine.get_types();
+                    for type_name in &all_types {
+                        let type_fields = engine.get_type_fields(type_name);
+                        if !type_fields.is_empty()
+                            && field_names.iter().all(|f| type_fields.contains(f))
+                        {
+                            let short = type_name.rsplit('.').next().unwrap_or(type_name);
+                            inferred_type = Some(short.to_string());
+                            break;
+                        }
+                    }
+
+                    // If no compiled type matched, scan source text for type definitions
+                    // This handles the case where the file has parse errors and types aren't compiled
+                    if inferred_type.is_none() {
+                        // Also check other open documents (for multi-file projects)
+                        let mut all_sources = vec![document_content.to_string()];
+                        for entry in self.documents.iter() {
+                            let doc = entry.value().clone();
+                            if doc != document_content {
+                                all_sources.push(doc);
+                            }
+                        }
+
+                        for source in &all_sources {
+                            for line in source.lines() {
+                                let trimmed = line.trim();
+                                let check = if trimmed.starts_with("pub ") { &trimmed[4..] } else { trimmed };
+                                // Match: type TypeName = { field1: Type1, field2: Type2 }
+                                if check.starts_with("type ") && check.contains('{') {
+                                    let after_type = &check[5..];
+                                    let type_name_end = after_type.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '[' && c != ']')
+                                        .unwrap_or(after_type.len());
+                                    let type_name = after_type[..type_name_end].split('[').next().unwrap_or("").trim();
+
+                                    if let Some(brace_start) = check.find('{') {
+                                        if let Some(brace_end) = check.rfind('}') {
+                                            let fields_str = &check[brace_start + 1..brace_end];
+                                            let source_fields: Vec<&str> = fields_str.split(',')
+                                                .map(|f| f.trim())
+                                                .filter_map(|f| f.split(':').next())
+                                                .map(|f| f.trim())
+                                                .filter(|f| !f.is_empty())
+                                                .collect();
+
+                                            if field_names.iter().all(|f| source_fields.contains(&f.as_str())) {
+                                                inferred_type = Some(type_name.to_string());
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if inferred_type.is_some() { break; }
+                        }
+                    }
+                }
+            }
             eprintln!("Inferred type: {:?}", inferred_type);
 
             // Add type indicator at top of list

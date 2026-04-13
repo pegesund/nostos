@@ -4934,6 +4934,51 @@ main() = {
         "Expected 'y' field for constructor binding. Got: {:?}", completions);
 }
 
+/// Test that dot completion works for function parameters WITHOUT a call site
+/// in the same file. The type is inferred from field access patterns in the body.
+/// This is the exact scenario from GitHub issue #32.
+#[test]
+fn test_dot_completion_param_no_call_site() {
+    let project_path = create_test_project("dot_completion_no_call_site");
+
+    // No call to get_x anywhere — the clue is p.x usage elsewhere in the function body
+    let content = r#"type Point = { x: Int, y: Int }
+
+get_sum(p) = {
+    result = p.x + p.y
+    p.
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // line 4 (0-based), col 6: after "p." in "    p."
+    let items = client.completion_items(&main_uri, 4, 6);
+
+    println!("=== Completions for param without call site ===");
+    for item in &items {
+        println!("  label='{}', kind={:?}", item["label"], item["kind"]);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    let has_x = items.iter().any(|i| i["label"] == "x");
+    let has_y = items.iter().any(|i| i["label"] == "y");
+    assert!(has_x, "Expected 'x' field for param inferred from body field access. Got: {:?}",
+        items.iter().map(|i| i["label"].as_str().unwrap_or("?")).collect::<Vec<_>>());
+    assert!(has_y, "Expected 'y' field. Got: {:?}",
+        items.iter().map(|i| i["label"].as_str().unwrap_or("?")).collect::<Vec<_>>());
+}
+
 /// Test that dot completion works for unannotated function parameters
 /// when the function is called with a known type elsewhere in the file.
 /// `process(p) = p.` with `main() = process(Point(1,2))` should resolve p as Point.
