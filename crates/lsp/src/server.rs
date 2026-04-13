@@ -603,6 +603,11 @@ impl LanguageServer for NostosLanguageServer {
                                     SemanticTokenType::NUMBER,        // 9
                                     SemanticTokenType::OPERATOR,      // 10
                                     SemanticTokenType::COMMENT,       // 11
+                                    SemanticTokenType::METHOD,        // 12
+                                    SemanticTokenType::STRUCT,        // 13
+                                    SemanticTokenType::ENUM,          // 14
+                                    SemanticTokenType::INTERFACE,     // 15
+                                    SemanticTokenType::new("typeParameter"), // 16
                                 ],
                                 token_modifiers: vec![
                                     SemanticTokenModifier::DECLARATION,
@@ -1771,6 +1776,14 @@ impl NostosLanguageServer {
     const TOKEN_TYPE_NUMBER: u32 = 9;
     const TOKEN_TYPE_OPERATOR: u32 = 10;
     const TOKEN_TYPE_COMMENT: u32 = 11;
+    const TOKEN_TYPE_METHOD: u32 = 12;
+    const TOKEN_TYPE_STRUCT: u32 = 13;
+    const TOKEN_TYPE_ENUM: u32 = 14;
+    const TOKEN_TYPE_INTERFACE: u32 = 15;
+    const TOKEN_TYPE_TYPE_PARAMETER: u32 = 16;
+
+    // Semantic token modifier bits (must match the legend in initialize())
+    const TOKEN_MOD_DECLARATION: u32 = 1; // bit 0
 
     /// Convert a byte offset in source to (line, column) where both are 0-based.
     /// Column is in UTF-16 code units (as LSP requires).
@@ -1800,12 +1813,22 @@ impl NostosLanguageServer {
         use nostos_syntax::lexer::{lex, Token};
 
         let lexer_tokens: Vec<(Token, std::ops::Range<usize>)> = lex(source).collect();
+
+        // Pre-compute parameter positions.
+        // A parameter is a lowercase identifier inside the parameter list of a function definition,
+        // or before `=>` in a lambda.
+        let param_indices = Self::find_parameter_indices(&lexer_tokens);
+
+        // Pre-compute which type definitions are struct vs enum.
+        // Also determine trait names for interface classification.
+        let type_classifications = Self::classify_type_definitions(&lexer_tokens);
+
         let mut result = Vec::new();
         let mut prev_line = 0u32;
         let mut prev_start = 0u32;
 
         for (i, (token, span)) in lexer_tokens.iter().enumerate() {
-            let token_type = match token {
+            let (token_type, modifiers) = match token {
                 // Keywords
                 Token::Type | Token::Reactive | Token::Var | Token::Mvar |
                 Token::Const | Token::If | Token::Then | Token::Else |
@@ -1819,18 +1842,18 @@ impl NostosLanguageServer {
                 Token::Receive | Token::After |
                 Token::Panic | Token::Not | Token::Extern | Token::From |
                 Token::Test | Token::Quote | Token::Template =>
-                    Self::TOKEN_TYPE_KEYWORD,
+                    (Self::TOKEN_TYPE_KEYWORD, 0u32),
 
                 // Boolean literals as keywords
-                Token::True | Token::False => Self::TOKEN_TYPE_KEYWORD,
+                Token::True | Token::False => (Self::TOKEN_TYPE_KEYWORD, 0),
 
                 // Comments
                 Token::Comment | Token::MultiLineComment =>
-                    Self::TOKEN_TYPE_COMMENT,
+                    (Self::TOKEN_TYPE_COMMENT, 0),
 
                 // Strings
                 Token::String(_) | Token::SingleQuoteString(_) | Token::Char(_) =>
-                    Self::TOKEN_TYPE_STRING,
+                    (Self::TOKEN_TYPE_STRING, 0),
 
                 // Numbers
                 Token::Int(_) | Token::Float(_) | Token::HexInt(_) | Token::BinInt(_) |
@@ -1838,7 +1861,7 @@ impl NostosLanguageServer {
                 Token::UInt8(_) | Token::UInt16(_) | Token::UInt32(_) | Token::UInt64(_) |
                 Token::BigInt(_) | Token::Float32(_) | Token::Decimal(_) |
                 Token::OutOfRangeInt(_) =>
-                    Self::TOKEN_TYPE_NUMBER,
+                    (Self::TOKEN_TYPE_NUMBER, 0),
 
                 // Operators
                 Token::Plus | Token::Minus | Token::Star | Token::Slash |
@@ -1851,41 +1874,78 @@ impl NostosLanguageServer {
                 Token::LeftArrow | Token::RightArrow | Token::FatArrow |
                 Token::Caret | Token::Dollar | Token::Question |
                 Token::DotDot | Token::DotDotEq =>
-                    Self::TOKEN_TYPE_OPERATOR,
+                    (Self::TOKEN_TYPE_OPERATOR, 0),
 
                 // Uppercase identifiers - type names or constructors
                 Token::UpperIdent(_name) => {
-                    // Heuristic: if preceded by "type" keyword or "|", it's a type/enum_member
-                    // Check if this looks like a variant constructor (preceded by | or =)
                     let is_constructor = Self::is_variant_constructor(&lexer_tokens, i);
                     if is_constructor {
-                        Self::TOKEN_TYPE_ENUM_MEMBER
+                        (Self::TOKEN_TYPE_ENUM_MEMBER, 0)
                     } else {
-                        Self::TOKEN_TYPE_TYPE
+                        let prev = Self::prev_significant_token(&lexer_tokens, i);
+                        let is_type_def_name = matches!(prev, Some(Token::Type));
+                        let is_trait_name = matches!(prev, Some(Token::Trait));
+
+                        if is_trait_name {
+                            // trait Printable - classify as interface with declaration modifier
+                            (Self::TOKEN_TYPE_INTERFACE, Self::TOKEN_MOD_DECLARATION)
+                        } else if is_type_def_name {
+                            // Check for struct/enum/interface classification
+                            let modifiers = Self::TOKEN_MOD_DECLARATION;
+                            match type_classifications.get(&i) {
+                                Some(TypeClassification::Struct) => (Self::TOKEN_TYPE_STRUCT, modifiers),
+                                Some(TypeClassification::Enum) => (Self::TOKEN_TYPE_ENUM, modifiers),
+                                _ => (Self::TOKEN_TYPE_TYPE, modifiers),
+                            }
+                        } else {
+                            // Check if this is a type parameter (single uppercase letter in brackets
+                            // within a type definition, e.g., type List[T])
+                            let name_text = &source[span.clone()];
+                            let is_type_param = Self::is_type_parameter(&lexer_tokens, i, name_text);
+                            if is_type_param {
+                                (Self::TOKEN_TYPE_TYPE_PARAMETER, 0)
+                            } else {
+                                (Self::TOKEN_TYPE_TYPE, 0)
+                            }
+                        }
                     }
                 }
 
                 // Lowercase identifiers - need context to classify
                 Token::LowerIdent(_name) => {
-                    // Check if this is a function definition: ident followed by "("
-                    let next_token = lexer_tokens.get(i + 1).map(|(t, _)| t);
-                    let is_fn_def = matches!(next_token, Some(Token::LParen));
-                    // Check if preceded by dot (property access)
-                    let prev_non_ws = Self::prev_significant_token(&lexer_tokens, i);
-                    let is_property = matches!(prev_non_ws, Some(Token::Dot));
-                    // Check if preceded by "use" or "import" (namespace)
-                    let is_namespace_ref = matches!(prev_non_ws, Some(Token::Use | Token::Import));
-
-                    if is_namespace_ref {
-                        Self::TOKEN_TYPE_NAMESPACE
-                    } else if is_property && is_fn_def {
-                        Self::TOKEN_TYPE_FUNCTION
-                    } else if is_property {
-                        Self::TOKEN_TYPE_PROPERTY
-                    } else if is_fn_def {
-                        Self::TOKEN_TYPE_FUNCTION
+                    if param_indices.contains(&i) {
+                        // This is a parameter in a function definition or lambda
+                        (Self::TOKEN_TYPE_PARAMETER, 0)
                     } else {
-                        Self::TOKEN_TYPE_VARIABLE
+                        let next_token = lexer_tokens.get(i + 1).map(|(t, _)| t);
+                        let is_fn_call = matches!(next_token, Some(Token::LParen));
+                        let prev_non_ws = Self::prev_significant_token(&lexer_tokens, i);
+                        let is_after_dot = matches!(prev_non_ws, Some(Token::Dot));
+                        let is_namespace_ref = matches!(prev_non_ws, Some(Token::Use | Token::Import));
+                        let is_after_trait = matches!(prev_non_ws, Some(Token::Trait));
+
+                        if is_after_trait {
+                            // trait name: `trait Printable` (lowercase trait names)
+                            (Self::TOKEN_TYPE_INTERFACE, Self::TOKEN_MOD_DECLARATION)
+                        } else if is_namespace_ref {
+                            (Self::TOKEN_TYPE_NAMESPACE, 0)
+                        } else if is_after_dot && is_fn_call {
+                            // .method() call
+                            (Self::TOKEN_TYPE_METHOD, 0)
+                        } else if is_after_dot {
+                            (Self::TOKEN_TYPE_PROPERTY, 0)
+                        } else if is_fn_call {
+                            // Check if this is a function DEFINITION (has `=` after closing paren)
+                            let is_def = Self::is_function_definition(&lexer_tokens, i);
+                            let modifiers = if is_def { Self::TOKEN_MOD_DECLARATION } else { 0 };
+                            (Self::TOKEN_TYPE_FUNCTION, modifiers)
+                        } else {
+                            // Check if this is a variable binding: `x = ...`
+                            // (identifier followed by `=` but NOT `==`)
+                            let is_binding = Self::is_variable_binding(&lexer_tokens, i);
+                            let modifiers = if is_binding { Self::TOKEN_MOD_DECLARATION } else { 0 };
+                            (Self::TOKEN_TYPE_VARIABLE, modifiers)
+                        }
                     }
                 }
 
@@ -1915,7 +1975,7 @@ impl NostosLanguageServer {
                 delta_start,
                 length,
                 token_type: token_type,
-                token_modifiers_bitset: 0,
+                token_modifiers_bitset: modifiers,
             });
 
             prev_line = line;
@@ -1964,6 +2024,303 @@ impl NostosLanguageServer {
         }
         None
     }
+
+    /// Find indices of tokens that are function parameters or lambda parameters.
+    ///
+    /// Detects two patterns:
+    /// 1. Function definition: `name(param1, param2: Type) = ...`
+    ///    - lowercase ident followed by `(`, then idents before `)` before `=`
+    /// 2. Lambda: `param => body` or `(param1, param2) => body`
+    fn find_parameter_indices(tokens: &[(nostos_syntax::Token, std::ops::Range<usize>)]) -> std::collections::HashSet<usize> {
+        use nostos_syntax::Token;
+        let mut params = std::collections::HashSet::new();
+
+        // Pass 1: Find function definition parameters.
+        // Pattern: LowerIdent LParen ... RParen ... Eq (where Eq is `=` not `==`)
+        // The idents before `:` or between commas inside the parens are parameters.
+        let mut i = 0;
+        while i < tokens.len() {
+            // Look for: LowerIdent followed by LParen
+            if matches!(&tokens[i].0, Token::LowerIdent(_)) {
+                if let Some((Token::LParen, _)) = tokens.get(i + 1) {
+                    // Could be a function definition or a function call.
+                    // Scan ahead to find matching RParen then check for `=`.
+                    let fn_name_idx = i;
+                    let paren_start = i + 1;
+                    if let Some(paren_end) = Self::find_matching_paren(tokens, paren_start) {
+                        // Check if after RParen (skipping newlines) there's `=`
+                        let mut after = paren_end + 1;
+                        while after < tokens.len() && matches!(&tokens[after].0, Token::Newline) {
+                            after += 1;
+                        }
+                        let is_def = after < tokens.len() && matches!(&tokens[after].0, Token::Eq);
+                        if is_def {
+                            // Collect parameter names inside the parens
+                            let mut j = paren_start + 1;
+                            while j < paren_end {
+                                if matches!(&tokens[j].0, Token::LowerIdent(_)) {
+                                    // Check it's a param name (not a type annotation after `:`)
+                                    // Params appear right after `(` or `,`
+                                    let prev = Self::prev_significant_token(tokens, j);
+                                    let is_param = matches!(prev,
+                                        Some(Token::LParen) | Some(Token::Comma));
+                                    if is_param {
+                                        params.insert(j);
+                                    }
+                                }
+                                j += 1;
+                            }
+                            // Skip past the `=` to avoid treating `=` as binding
+                            let _ = fn_name_idx; // fn_name_idx used for context only
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+
+        // Pass 2: Find lambda parameters.
+        // Pattern: ident => ... (single param lambda)
+        // Pattern: (ident, ident) => ... (multi param lambda)
+        i = 0;
+        while i < tokens.len() {
+            if matches!(&tokens[i].0, Token::FatArrow) {
+                // Look backwards for lambda params
+                let mut j = i.saturating_sub(1);
+                // Skip newlines
+                while j > 0 && matches!(&tokens[j].0, Token::Newline) {
+                    j -= 1;
+                }
+                if matches!(&tokens[j].0, Token::RParen) {
+                    // Multi-param lambda: (x, y) =>
+                    // Find matching LParen
+                    if let Some(lparen) = Self::find_matching_paren_backwards(tokens, j) {
+                        let mut k = lparen + 1;
+                        while k < j {
+                            if matches!(&tokens[k].0, Token::LowerIdent(_)) {
+                                let prev = Self::prev_significant_token(tokens, k);
+                                if matches!(prev, Some(Token::LParen) | Some(Token::Comma)) {
+                                    params.insert(k);
+                                }
+                            }
+                            k += 1;
+                        }
+                    }
+                } else if matches!(&tokens[j].0, Token::LowerIdent(_)) {
+                    // Single param lambda: x =>
+                    params.insert(j);
+                }
+            }
+            i += 1;
+        }
+
+        params
+    }
+
+    /// Find the index of the matching RParen for the LParen at `start`.
+    fn find_matching_paren(tokens: &[(nostos_syntax::Token, std::ops::Range<usize>)], start: usize) -> Option<usize> {
+        use nostos_syntax::Token;
+        if !matches!(&tokens[start].0, Token::LParen) {
+            return None;
+        }
+        let mut depth = 1;
+        let mut j = start + 1;
+        while j < tokens.len() && depth > 0 {
+            match &tokens[j].0 {
+                Token::LParen => depth += 1,
+                Token::RParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(j);
+                    }
+                }
+                _ => {}
+            }
+            j += 1;
+        }
+        None
+    }
+
+    /// Find the index of the matching LParen for the RParen at `end`.
+    fn find_matching_paren_backwards(tokens: &[(nostos_syntax::Token, std::ops::Range<usize>)], end: usize) -> Option<usize> {
+        use nostos_syntax::Token;
+        if !matches!(&tokens[end].0, Token::RParen) {
+            return None;
+        }
+        let mut depth = 1;
+        let mut j = end;
+        while j > 0 && depth > 0 {
+            j -= 1;
+            match &tokens[j].0 {
+                Token::RParen => depth += 1,
+                Token::LParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(j);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Check if a lowercase ident at index `i` is a function definition name.
+    /// Pattern: `name(...)  =` (followed by LParen, matching RParen, then `=`)
+    fn is_function_definition(tokens: &[(nostos_syntax::Token, std::ops::Range<usize>)], i: usize) -> bool {
+        use nostos_syntax::Token;
+        // Must be followed by LParen
+        if let Some((Token::LParen, _)) = tokens.get(i + 1) {
+            if let Some(paren_end) = Self::find_matching_paren(tokens, i + 1) {
+                let mut after = paren_end + 1;
+                while after < tokens.len() && matches!(&tokens[after].0, Token::Newline) {
+                    after += 1;
+                }
+                return after < tokens.len() && matches!(&tokens[after].0, Token::Eq);
+            }
+        }
+        false
+    }
+
+    /// Check if a lowercase ident at index `i` is a variable binding.
+    /// Pattern: `x = ...` (ident followed by `=` but not `==`, and not preceded by `.`)
+    fn is_variable_binding(tokens: &[(nostos_syntax::Token, std::ops::Range<usize>)], i: usize) -> bool {
+        use nostos_syntax::Token;
+        // Must NOT be preceded by dot (that would be property access)
+        let prev = Self::prev_significant_token(tokens, i);
+        if matches!(prev, Some(Token::Dot)) {
+            return false;
+        }
+        // Next significant token must be `=`
+        let mut j = i + 1;
+        while j < tokens.len() && matches!(&tokens[j].0, Token::Newline) {
+            j += 1;
+        }
+        if j < tokens.len() && matches!(&tokens[j].0, Token::Eq) {
+            // Make sure the next token after `=` is NOT `=` (to avoid matching `==`)
+            // Actually, Token::Eq is `=` and Token::EqEq is `==`, so they're distinct.
+            return true;
+        }
+        false
+    }
+
+    /// Classify type definitions as struct (record with {}) or enum (variants with |).
+    /// Returns a map from the index of the type name token to its classification.
+    fn classify_type_definitions(tokens: &[(nostos_syntax::Token, std::ops::Range<usize>)]) -> std::collections::HashMap<usize, TypeClassification> {
+        use nostos_syntax::Token;
+        let mut result = std::collections::HashMap::new();
+
+        let mut i = 0;
+        while i < tokens.len() {
+            if matches!(&tokens[i].0, Token::Type) {
+                // Find the type name (next UpperIdent after `type`)
+                let mut j = i + 1;
+                while j < tokens.len() && matches!(&tokens[j].0, Token::Newline) {
+                    j += 1;
+                }
+                if j < tokens.len() && matches!(&tokens[j].0, Token::UpperIdent(_)) {
+                    let type_name_idx = j;
+                    // Scan forward to find `=` then look at the body
+                    let mut k = j + 1;
+                    // Skip type parameters [T, U] etc.
+                    while k < tokens.len() && !matches!(&tokens[k].0, Token::Eq | Token::Newline) {
+                        k += 1;
+                    }
+                    if k < tokens.len() && matches!(&tokens[k].0, Token::Eq) {
+                        // Scan the body (until next top-level definition or EOF)
+                        let mut has_pipe = false;
+                        let mut has_lbrace = false;
+                        let mut depth = 0i32;
+                        let mut m = k + 1;
+                        while m < tokens.len() {
+                            match &tokens[m].0 {
+                                Token::LBrace => { has_lbrace = true; depth += 1; }
+                                Token::RBrace => { depth -= 1; }
+                                Token::Pipe if depth == 0 => { has_pipe = true; }
+                                // Stop at next top-level definition
+                                Token::Type | Token::Trait => {
+                                    // Check if this is at line start (not nested)
+                                    let prev = Self::prev_significant_token(tokens, m);
+                                    if matches!(prev, None | Some(Token::Newline)) || prev.is_none() {
+                                        // Actually, check if the prev token is a newline
+                                        let mut preceded_by_newline = false;
+                                        if m > 0 {
+                                            for p in (0..m).rev() {
+                                                match &tokens[p].0 {
+                                                    Token::Newline => { preceded_by_newline = true; break; }
+                                                    _ => break,
+                                                }
+                                            }
+                                        }
+                                        if preceded_by_newline || m == k + 1 {
+                                            break;
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                            m += 1;
+                        }
+
+                        if has_pipe {
+                            result.insert(type_name_idx, TypeClassification::Enum);
+                        } else if has_lbrace {
+                            result.insert(type_name_idx, TypeClassification::Struct);
+                        }
+                        // If neither, it stays as regular Type
+                    }
+                }
+            } else if matches!(&tokens[i].0, Token::Trait) {
+                // Find the trait name - could be UpperIdent or LowerIdent
+                let mut j = i + 1;
+                while j < tokens.len() && matches!(&tokens[j].0, Token::Newline) {
+                    j += 1;
+                }
+                if j < tokens.len() && matches!(&tokens[j].0, Token::UpperIdent(_)) {
+                    result.insert(j, TypeClassification::Interface);
+                }
+                // LowerIdent trait names are handled in the main loop
+            }
+            i += 1;
+        }
+
+        result
+    }
+
+    /// Check if an uppercase identifier at index `i` is a type parameter.
+    /// Type parameters are single-letter uppercase names inside `[...]` in type definitions.
+    fn is_type_parameter(tokens: &[(nostos_syntax::Token, std::ops::Range<usize>)], i: usize, name_text: &str) -> bool {
+        use nostos_syntax::Token;
+        // Heuristic: single uppercase letter (T, U, V, A, B) inside brackets
+        if name_text.len() > 2 {
+            return false; // Type params are typically 1-2 chars
+        }
+        // Check if we're inside brackets
+        let mut depth = 0i32;
+        for j in (0..i).rev() {
+            match &tokens[j].0 {
+                Token::RBracket => depth += 1,
+                Token::LBracket => {
+                    if depth == 0 {
+                        // We're inside brackets - check if this is in a type context
+                        // (preceded by type name or another type param context)
+                        return true;
+                    }
+                    depth -= 1;
+                }
+                Token::Newline => continue,
+                _ => {}
+            }
+        }
+        false
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum TypeClassification {
+    Struct,
+    Enum,
+    Interface,
 }
 
 impl NostosLanguageServer {

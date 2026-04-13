@@ -4564,6 +4564,8 @@ fn test_semantic_tokens_basic() {
             0 => "namespace", 1 => "type", 2 => "function", 3 => "variable",
             4 => "parameter", 5 => "property", 6 => "enum_member", 7 => "keyword",
             8 => "string", 9 => "number", 10 => "operator", 11 => "comment",
+            12 => "method", 13 => "struct", 14 => "enum", 15 => "interface",
+            16 => "typeParameter",
             _ => "unknown",
         }
     };
@@ -4599,11 +4601,11 @@ fn test_semantic_tokens_basic() {
         .collect();
     assert!(!keyword_tokens_line1.is_empty(), "Expected 'type' keyword token on line 1 col 0");
 
-    // Verify "Color" as type on line 1
+    // Verify "Color" as enum type on line 1 (type 14 = enum, since it has `|` variants)
     let type_tokens: Vec<_> = abs_tokens.iter()
-        .filter(|t| t.0 == 1 && t.3 == 1 && t.2 == 5) // type, len 5
+        .filter(|t| t.0 == 1 && (t.3 == 1 || t.3 == 14) && t.2 == 5) // type or enum, len 5
         .collect();
-    assert!(!type_tokens.is_empty(), "Expected 'Color' type token on line 1");
+    assert!(!type_tokens.is_empty(), "Expected 'Color' type/enum token on line 1");
 
     // Verify "Red" and "Green" as enum_member (type 6) on line 1
     let enum_tokens: Vec<_> = abs_tokens.iter()
@@ -4847,4 +4849,488 @@ main() = {
             "Record fields should appear before trait methods in cross-module scenario. Labels: {:?}",
             labels);
     }
+}
+
+/// Test that dot completion works for function parameters with type annotations.
+/// `process(p: Point) = p.` should show Point's fields.
+#[test]
+fn test_dot_completion_function_param() {
+    let project_path = create_test_project("dot_completion_fn_param");
+
+    let content = r#"type Point = { x: Int, y: Int }
+
+process(p: Point) = {
+    p.x
+}
+
+main() = process(Point(1, 2))
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // line 3 (0-based), col 6: after "p." in "    p.x"
+    let completions = client.completion(&main_uri, 3, 6);
+
+    println!("=== Completions for function param (Point) ===");
+    for c in &completions {
+        println!("  '{}'", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    assert!(completions.iter().any(|c| c == "x"),
+        "Expected 'x' field for Point param. Got: {:?}", completions);
+    assert!(completions.iter().any(|c| c == "y"),
+        "Expected 'y' field for Point param. Got: {:?}", completions);
+}
+
+/// Test that dot completion works for constructor bindings.
+/// `p = Point(1, 2); p.` should show Point's fields.
+#[test]
+fn test_dot_completion_constructor_binding() {
+    let project_path = create_test_project("dot_completion_ctor_binding");
+
+    let content = r#"type Point = { x: Int, y: Int }
+
+main() = {
+    p = Point(1, 2)
+    p.x
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // line 4 (0-based), col 6: after "p." in "    p.x"
+    let completions = client.completion(&main_uri, 4, 6);
+
+    println!("=== Completions for constructor binding (Point) ===");
+    for c in &completions {
+        println!("  '{}'", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    assert!(completions.iter().any(|c| c == "x"),
+        "Expected 'x' field for constructor binding. Got: {:?}", completions);
+    assert!(completions.iter().any(|c| c == "y"),
+        "Expected 'y' field for constructor binding. Got: {:?}", completions);
+}
+
+/// Test that dot completion works for unannotated function parameters
+/// when the function is called with a known type elsewhere in the file.
+/// `process(p) = p.` with `main() = process(Point(1,2))` should resolve p as Point.
+#[test]
+fn test_dot_completion_unannotated_param() {
+    let project_path = create_test_project("dot_completion_unannotated_param");
+
+    let content = r#"type GameState = { board: List[Int], score: Int }
+
+climber_select_move(state) = {
+    state.score
+}
+
+main() = climber_select_move(GameState(board: [1, 2], score: 0))
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // line 3 (0-based), col after "state." in "    state.score"
+    let completions = client.completion(&main_uri, 3, 10);
+
+    println!("=== Completions for unannotated param (GameState) ===");
+    for c in &completions {
+        println!("  '{}'", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // Should resolve state's type from call site and show GameState fields
+    assert!(completions.iter().any(|c| c == "board"),
+        "Expected 'board' field for GameState param. Got: {:?}", completions);
+    assert!(completions.iter().any(|c| c == "score"),
+        "Expected 'score' field for GameState param. Got: {:?}", completions);
+}
+
+/// Test dot completion on function params in a multi-module project.
+/// The type is defined in one module, the function in another.
+#[test]
+fn test_dot_completion_param_cross_module() {
+    let project_path = create_test_project("dot_completion_param_cross_mod");
+
+    let types_content = r#"pub type GameState = { board: List[Int], score: Int }
+"#;
+    let logic_content = r#"use types
+
+climber_select_move(state: GameState) = {
+    state.score
+}
+"#;
+    let main_content = r#"use types
+use logic
+
+main() = logic.climber_select_move(types.GameState(board: [1], score: 0))
+"#;
+
+    fs::write(project_path.join("types.nos"), types_content).unwrap();
+    fs::write(project_path.join("logic.nos"), logic_content).unwrap();
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let logic_uri = format!("file://{}/logic.nos", project_path.display());
+    client.did_open(&logic_uri, logic_content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // In logic.nos, line 3 (0-based), after "state." in "    state.score"
+    let completions = client.completion(&logic_uri, 3, 10);
+
+    println!("=== Completions for cross-module param (GameState) ===");
+    for c in &completions {
+        println!("  '{}'", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    assert!(completions.iter().any(|c| c == "board"),
+        "Expected 'board' field for GameState param in cross-module. Got: {:?}", completions);
+    assert!(completions.iter().any(|c| c == "score"),
+        "Expected 'score' field for GameState param in cross-module. Got: {:?}", completions);
+}
+
+/// Test dot completion on unannotated function params with HM-inferred types.
+/// The compiler should have resolved the param type from usage context.
+#[test]
+fn test_dot_completion_unannotated_param_from_hm() {
+    let project_path = create_test_project("dot_completion_unannotated_hm");
+
+    let types_content = r#"pub type GameState = { board: List[Int], score: Int }
+"#;
+    // Function has NO type annotation on state -- relies on HM inference
+    let logic_content = r#"use types
+
+pub climber_select_move(state) = {
+    state.score
+}
+"#;
+    let main_content = r#"use types
+use logic
+
+main() = logic.climber_select_move(types.GameState(board: [1], score: 0))
+"#;
+
+    fs::write(project_path.join("types.nos"), types_content).unwrap();
+    fs::write(project_path.join("logic.nos"), logic_content).unwrap();
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let logic_uri = format!("file://{}/logic.nos", project_path.display());
+    client.did_open(&logic_uri, logic_content);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // In logic.nos, line 3 (0-based), after "state." in "    state.score"
+    let completions = client.completion(&logic_uri, 3, 10);
+
+    println!("=== Completions for HM-inferred unannotated param ===");
+    for c in &completions {
+        println!("  '{}'", c);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    // The HM inference should resolve state as GameState from the call site in main.nos
+    // OR from field access (state.score) which constrains the type
+    assert!(completions.iter().any(|c| c == "board"),
+        "Expected 'board' field for HM-inferred GameState param. Got: {:?}", completions);
+    assert!(completions.iter().any(|c| c == "score"),
+        "Expected 'score' field for HM-inferred GameState param. Got: {:?}", completions);
+}
+
+/// Helper: decode delta-encoded semantic tokens to (line, col, len, type, modifiers) tuples
+fn decode_semantic_tokens(tokens: &[SemanticTokenData]) -> Vec<(u32, u32, u32, u32, u32)> {
+    let mut abs = Vec::new();
+    let mut cur_line = 0u32;
+    let mut cur_col = 0u32;
+    for t in tokens {
+        if t.delta_line > 0 {
+            cur_line += t.delta_line;
+            cur_col = t.delta_start;
+        } else {
+            cur_col += t.delta_start;
+        }
+        abs.push((cur_line, cur_col, t.length, t.token_type, t.token_modifiers));
+    }
+    abs
+}
+
+fn token_type_name(t: u32) -> &'static str {
+    match t {
+        0 => "namespace", 1 => "type", 2 => "function", 3 => "variable",
+        4 => "parameter", 5 => "property", 6 => "enum_member", 7 => "keyword",
+        8 => "string", 9 => "number", 10 => "operator", 11 => "comment",
+        12 => "method", 13 => "struct", 14 => "enum", 15 => "interface",
+        16 => "typeParameter",
+        _ => "unknown",
+    }
+}
+
+/// Test: parameters in function definitions are classified as `parameter` (type 4),
+/// function names get declaration modifier, and body variables remain `variable` (type 3).
+#[test]
+fn test_semantic_tokens_parameters() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("semantic_tokens_params");
+
+    // add(x, y) = x + y
+    // Line 0: add=function(decl), x=param, y=param, x=variable, y=variable
+    let content = "add(x, y) = x + y\n";
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+
+    let tokens = client.semantic_tokens_full(&main_uri);
+    assert!(tokens.is_some(), "Expected semantic tokens result");
+    let tokens = tokens.unwrap();
+    let abs = decode_semantic_tokens(&tokens);
+
+    for t in &abs {
+        println!("  line={} col={} len={} type={} ({}) mod={}",
+            t.0, t.1, t.2, t.3, token_type_name(t.3), t.4);
+    }
+
+    // "add" at col 0, len 3 should be function (2) with declaration modifier (1)
+    let add_tokens: Vec<_> = abs.iter()
+        .filter(|t| t.0 == 0 && t.1 == 0 && t.2 == 3 && t.3 == 2)
+        .collect();
+    assert!(!add_tokens.is_empty(), "Expected 'add' as function token at line 0 col 0");
+    assert_eq!(add_tokens[0].4 & 1, 1, "Expected declaration modifier on 'add' function definition");
+
+    // "x" at col 4, len 1 should be parameter (4) in the param list
+    let x_param: Vec<_> = abs.iter()
+        .filter(|t| t.0 == 0 && t.1 == 4 && t.2 == 1 && t.3 == 4)
+        .collect();
+    assert!(!x_param.is_empty(), "Expected 'x' as parameter (type 4) at col 4, got types: {:?}",
+        abs.iter().filter(|t| t.0 == 0 && t.1 == 4).collect::<Vec<_>>());
+
+    // "y" at col 7, len 1 should be parameter (4) in the param list
+    let y_param: Vec<_> = abs.iter()
+        .filter(|t| t.0 == 0 && t.1 == 7 && t.2 == 1 && t.3 == 4)
+        .collect();
+    assert!(!y_param.is_empty(), "Expected 'y' as parameter (type 4) at col 7, got types: {:?}",
+        abs.iter().filter(|t| t.0 == 0 && t.1 == 7).collect::<Vec<_>>());
+
+    // "x" in the body (after =) should be variable (3), not parameter
+    let x_body: Vec<_> = abs.iter()
+        .filter(|t| t.0 == 0 && t.1 == 12 && t.2 == 1 && t.3 == 3)
+        .collect();
+    assert!(!x_body.is_empty(), "Expected 'x' in body as variable (type 3) at col 12, got types: {:?}",
+        abs.iter().filter(|t| t.0 == 0 && t.1 == 12).collect::<Vec<_>>());
+
+    // "y" in the body should be variable (3)
+    let y_body: Vec<_> = abs.iter()
+        .filter(|t| t.0 == 0 && t.1 == 16 && t.2 == 1 && t.3 == 3)
+        .collect();
+    assert!(!y_body.is_empty(), "Expected 'y' in body as variable (type 3) at col 16, got types: {:?}",
+        abs.iter().filter(|t| t.0 == 0 && t.1 == 16).collect::<Vec<_>>());
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test: methods after `.` classified as `method` (12), enum type names as `enum` (14),
+/// enum members as `enum_member` (6), lambda params as `parameter` (4),
+/// trait names as `interface` (15), and declaration modifiers.
+#[test]
+fn test_semantic_tokens_methods_and_types() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("semantic_tokens_methods_types");
+
+    // Line 0: type Color = Red | Green | Blue
+    // Line 1: xs = [1,2,3]
+    // Line 2: xs.map(x => x + 1)
+    let content = "type Color = Red | Green | Blue\nxs = [1,2,3]\nxs.map(x => x + 1)\n";
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+
+    let tokens = client.semantic_tokens_full(&main_uri);
+    assert!(tokens.is_some(), "Expected semantic tokens result");
+    let tokens = tokens.unwrap();
+    let abs = decode_semantic_tokens(&tokens);
+
+    for t in &abs {
+        println!("  line={} col={} len={} type={} ({}) mod={}",
+            t.0, t.1, t.2, t.3, token_type_name(t.3), t.4);
+    }
+
+    // Line 0: "Color" should be enum (14) with declaration modifier (since body has `|`)
+    let color_tokens: Vec<_> = abs.iter()
+        .filter(|t| t.0 == 0 && t.2 == 5 && t.3 == 14) // "Color" len=5, type=enum
+        .collect();
+    assert!(!color_tokens.is_empty(), "Expected 'Color' as enum (type 14), got: {:?}",
+        abs.iter().filter(|t| t.0 == 0 && t.2 == 5).collect::<Vec<_>>());
+    assert_eq!(color_tokens[0].4 & 1, 1, "Expected declaration modifier on 'Color'");
+
+    // "Red", "Green", "Blue" should be enum_member (6)
+    let enum_members: Vec<_> = abs.iter()
+        .filter(|t| t.0 == 0 && t.3 == 6)
+        .collect();
+    assert!(enum_members.len() >= 3, "Expected 3 enum_member tokens (Red, Green, Blue), got {}",
+        enum_members.len());
+
+    // Line 1: "xs" should be variable (3) with declaration modifier (binding: xs = ...)
+    let xs_binding: Vec<_> = abs.iter()
+        .filter(|t| t.0 == 1 && t.1 == 0 && t.2 == 2 && t.3 == 3)
+        .collect();
+    assert!(!xs_binding.is_empty(), "Expected 'xs' as variable at line 1 col 0");
+    assert_eq!(xs_binding[0].4 & 1, 1, "Expected declaration modifier on 'xs' binding");
+
+    // Line 2: "map" after "xs." should be method (12), not function
+    let map_tokens: Vec<_> = abs.iter()
+        .filter(|t| t.0 == 2 && t.2 == 3 && t.3 == 12) // "map" len=3, type=method
+        .collect();
+    assert!(!map_tokens.is_empty(), "Expected 'map' as method (type 12), got: {:?}",
+        abs.iter().filter(|t| t.0 == 2 && t.2 == 3).collect::<Vec<_>>());
+
+    // Line 2: lambda param "x" before "=>" should be parameter (4)
+    // "x => x + 1" -- the first x is the lambda param
+    // xs.map(x => x + 1)
+    // col:  0123456789...
+    // xs=col0, .=col2, map=col3, (=col6, x=col7, =>=col9, x=col12, +=col14, 1=col16, )=col17
+    let lambda_param: Vec<_> = abs.iter()
+        .filter(|t| t.0 == 2 && t.1 == 7 && t.2 == 1 && t.3 == 4)
+        .collect();
+    assert!(!lambda_param.is_empty(), "Expected lambda param 'x' as parameter (type 4) at col 7, got: {:?}",
+        abs.iter().filter(|t| t.0 == 2 && t.1 == 7).collect::<Vec<_>>());
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test: trait names (both upper and lowercase) get classified as `interface` (15)
+/// with declaration modifier, and struct types get classified as `struct` (13).
+#[test]
+fn test_semantic_tokens_trait_and_struct() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("semantic_tokens_trait_struct");
+
+    // Line 0: trait Printable
+    // Line 1:   show(self) = "..."
+    // Line 2: type Point = { x: Int, y: Int }
+    let content = "trait Printable\n  show(self) = \"hello\"\ntype Point = { x: Int, y: Int }\n";
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+
+    let tokens = client.semantic_tokens_full(&main_uri);
+    assert!(tokens.is_some(), "Expected semantic tokens result");
+    let tokens = tokens.unwrap();
+    let abs = decode_semantic_tokens(&tokens);
+
+    for t in &abs {
+        println!("  line={} col={} len={} type={} ({}) mod={}",
+            t.0, t.1, t.2, t.3, token_type_name(t.3), t.4);
+    }
+
+    // Line 0: "Printable" should be interface (15) with declaration modifier
+    let printable: Vec<_> = abs.iter()
+        .filter(|t| t.0 == 0 && t.2 == 9 && t.3 == 15) // "Printable" len=9, type=interface
+        .collect();
+    assert!(!printable.is_empty(), "Expected 'Printable' as interface (type 15), got: {:?}",
+        abs.iter().filter(|t| t.0 == 0 && t.2 == 9).collect::<Vec<_>>());
+    assert_eq!(printable[0].4 & 1, 1, "Expected declaration modifier on 'Printable'");
+
+    // Line 2: "Point" should be struct (13) with declaration modifier (body has {})
+    let point: Vec<_> = abs.iter()
+        .filter(|t| t.0 == 2 && t.2 == 5 && t.3 == 13) // "Point" len=5, type=struct
+        .collect();
+    assert!(!point.is_empty(), "Expected 'Point' as struct (type 13), got: {:?}",
+        abs.iter().filter(|t| t.0 == 2 && t.2 == 5).collect::<Vec<_>>());
+    assert_eq!(point[0].4 & 1, 1, "Expected declaration modifier on 'Point'");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test: new token types appear in the legend
+#[test]
+fn test_semantic_tokens_legend_includes_new_types() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("semantic_tokens_legend");
+    fs::write(project_path.join("main.nos"), "main() = 1\n").unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    let init_response = client.initialize(project_path.to_str().unwrap());
+
+    let legend = &init_response["result"]["capabilities"]["semanticTokensProvider"]["legend"];
+    let token_types = legend["tokenTypes"].as_array().expect("tokenTypes should be an array");
+
+    println!("Token types in legend: {:?}", token_types);
+
+    // Should have at least 17 token types (0..16)
+    assert!(token_types.len() >= 17, "Expected at least 17 token types, got {}", token_types.len());
+
+    // Verify the new types by name
+    assert_eq!(token_types[12], "method", "Index 12 should be 'method'");
+    assert_eq!(token_types[13], "struct", "Index 13 should be 'struct'");
+    assert_eq!(token_types[14], "enum", "Index 14 should be 'enum'");
+    assert_eq!(token_types[15], "interface", "Index 15 should be 'interface'");
+    assert_eq!(token_types[16], "typeParameter", "Index 16 should be 'typeParameter'");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
 }
