@@ -4986,16 +4986,16 @@ fn test_dot_completion_param_cross_module() {
 
     let types_content = r#"pub type GameState = { board: List[Int], score: Int }
 "#;
-    let logic_content = r#"use types
+    let logic_content = r#"use types.*
 
 climber_select_move(state: GameState) = {
     state.score
 }
 "#;
-    let main_content = r#"use types
-use logic
+    let main_content = r#"use types.*
+use logic.*
 
-main() = logic.climber_select_move(types.GameState(board: [1], score: 0))
+main() = climber_select_move(GameState(board: [1], score: 0))
 "#;
 
     fs::write(project_path.join("types.nos"), types_content).unwrap();
@@ -5037,16 +5037,16 @@ fn test_dot_completion_unannotated_param_from_hm() {
     let types_content = r#"pub type GameState = { board: List[Int], score: Int }
 "#;
     // Function has NO type annotation on state -- relies on HM inference
-    let logic_content = r#"use types
+    let logic_content = r#"use types.*
 
 pub climber_select_move(state) = {
     state.score
 }
 "#;
-    let main_content = r#"use types
-use logic
+    let main_content = r#"use types.*
+use logic.*
 
-main() = logic.climber_select_move(types.GameState(board: [1], score: 0))
+main() = climber_select_move(GameState(board: [1], score: 0))
 "#;
 
     fs::write(project_path.join("types.nos"), types_content).unwrap();

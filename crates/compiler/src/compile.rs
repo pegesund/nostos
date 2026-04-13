@@ -27369,6 +27369,27 @@ scope_depth: self.block_depth,
                 }
             }
         }
+        // If name doesn't contain '.', try module-qualified names (module.name or module.name/arity)
+        if !name.contains('.') {
+            let suffix_exact = format!(".{}", name);
+            let suffix_arity = format!(".{}/", name);
+            for (key, func) in &self.functions {
+                // Check for exact module.name match
+                if key.ends_with(&suffix_exact) {
+                    let prefix = &key[..key.len() - suffix_exact.len()];
+                    if !prefix.contains('.') {
+                        return Some(func);
+                    }
+                }
+                // Check for module.name/arity match
+                if key.contains(&suffix_arity) {
+                    let parts: Vec<&str> = key.splitn(2, &suffix_arity).collect();
+                    if parts.len() == 2 && !parts[0].contains('.') {
+                        return Some(func);
+                    }
+                }
+            }
+        }
         None
     }
 
