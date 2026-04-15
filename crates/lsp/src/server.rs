@@ -2428,6 +2428,9 @@ impl NostosLanguageServer {
     fn get_dot_completions(&self, before_dot: &str, local_vars: &std::collections::HashMap<String, String>, lambda_param_type: Option<&str>, document_content: &str) -> Vec<CompletionItem> {
         let mut items = Vec::new();
 
+        // Collect intermediate data under the lock, then build CompletionItems after dropping it.
+        // This minimizes how long the engine mutex is held.
+
         let engine_guard = self.engine.lock().unwrap();
         let Some(engine) = engine_guard.as_ref() else {
             return items;
@@ -2437,18 +2440,7 @@ impl NostosLanguageServer {
         if let Some(param_type) = lambda_param_type {
             trace!("Using lambda param type: {}", param_type);
 
-            // Add type indicator at top of list
-            items.push(CompletionItem {
-                label: format!(": {}", param_type),
-                kind: Some(CompletionItemKind::TYPE_PARAMETER),
-                detail: Some("Lambda parameter type".to_string()),
-                documentation: Some(Documentation::String(format!("Parameter type: {}", param_type))),
-                sort_text: Some("!0".to_string()), // Sort first
-                filter_text: Some("".to_string()), // Don't filter this item
-                ..Default::default()
-            });
-
-            let mut seen = std::collections::HashSet::new();
+            // --- Collect data under lock ---
 
             // Add record fields FIRST for lambda parameter types too
             let all_types = engine.get_types();
@@ -2467,6 +2459,27 @@ impl NostosLanguageServer {
             } else {
                 fields
             };
+
+            let ufcs_methods = engine.get_ufcs_methods_for_type(param_type);
+
+            // Add trait methods for lambda parameter types
+            let trait_methods = engine.get_trait_methods_for_type(param_type);
+
+            // --- Drop the lock before building CompletionItems ---
+            drop(engine_guard);
+
+            // Add type indicator at top of list
+            items.push(CompletionItem {
+                label: format!(": {}", param_type),
+                kind: Some(CompletionItemKind::TYPE_PARAMETER),
+                detail: Some("Lambda parameter type".to_string()),
+                documentation: Some(Documentation::String(format!("Parameter type: {}", param_type))),
+                sort_text: Some("!0".to_string()), // Sort first
+                filter_text: Some("".to_string()), // Don't filter this item
+                ..Default::default()
+            });
+
+            let mut seen = std::collections::HashSet::new();
 
             for field in &fields {
                 if !seen.insert(field.clone()) {
@@ -2487,6 +2500,7 @@ impl NostosLanguageServer {
                 });
             }
 
+            // Static method - doesn't need engine reference
             for (method_name, signature, doc) in nostos_repl::ReplEngine::get_builtin_methods_for_type(param_type) {
                 if !seen.insert(method_name.to_string()) {
                     continue;
@@ -2501,7 +2515,7 @@ impl NostosLanguageServer {
                 });
             }
 
-            for (method_name, signature, doc) in engine.get_ufcs_methods_for_type(param_type) {
+            for (method_name, signature, doc) in ufcs_methods {
                 if !seen.insert(method_name.clone()) {
                     continue;
                 }
@@ -2515,8 +2529,7 @@ impl NostosLanguageServer {
                 });
             }
 
-            // Add trait methods for lambda parameter types
-            for (method_name, signature, doc) in engine.get_trait_methods_for_type(param_type) {
+            for (method_name, signature, doc) in trait_methods {
                 if !seen.insert(method_name.clone()) {
                     continue;
                 }
@@ -2550,8 +2563,9 @@ impl NostosLanguageServer {
             String::new()
         };
 
-        // Check if it matches a module
-        let known_modules: Vec<String> = engine.get_functions()
+        // Check if it matches a module - call get_functions() once and reuse
+        let all_functions = engine.get_functions();
+        let known_modules: Vec<String> = all_functions
             .iter()
             .filter_map(|f| f.split('.').next().map(|s| s.to_string()))
             .collect::<std::collections::HashSet<_>>()
@@ -2572,27 +2586,37 @@ impl NostosLanguageServer {
 
             trace!("Found module: {}", module_name);
 
-            for fn_name in engine.get_functions() {
-                if fn_name.starts_with(&format!("{}.", module_name)) {
+            // --- Collect data under lock ---
+            let module_functions: Vec<(String, Option<String>, Option<String>)> = all_functions
+                .iter()
+                .filter(|fn_name| fn_name.starts_with(&format!("{}.", module_name)))
+                .filter_map(|fn_name| {
                     let short_name = fn_name.strip_prefix(&format!("{}.", module_name))
-                        .unwrap_or(&fn_name);
+                        .unwrap_or(fn_name);
 
                     // Skip internal functions (starting with underscore)
                     if short_name.starts_with('_') {
-                        continue;
+                        return None;
                     }
 
-                    let signature = engine.get_function_signature(&fn_name);
-                    let doc = engine.get_function_doc(&fn_name);
+                    let signature = engine.get_function_signature(fn_name);
+                    let doc = engine.get_function_doc(fn_name);
 
-                    items.push(CompletionItem {
-                        label: short_name.to_string(),
-                        kind: Some(CompletionItemKind::FUNCTION),
-                        detail: signature,
-                        documentation: doc.map(|d| Documentation::String(d)),
-                        ..Default::default()
-                    });
-                }
+                    Some((short_name.to_string(), signature, doc))
+                })
+                .collect();
+
+            // --- Drop the lock before building CompletionItems ---
+            drop(engine_guard);
+
+            for (short_name, signature, doc) in module_functions {
+                items.push(CompletionItem {
+                    label: short_name,
+                    kind: Some(CompletionItemKind::FUNCTION),
+                    detail: signature,
+                    documentation: doc.map(|d| Documentation::String(d)),
+                    ..Default::default()
+                });
             }
         } else {
             // Not a module - try to infer the type and show methods
@@ -2739,22 +2763,8 @@ impl NostosLanguageServer {
             }
             trace!("Inferred type: {:?}", inferred_type);
 
-            // Add type indicator at top of list
-            if let Some(ref type_name) = inferred_type {
-                items.push(CompletionItem {
-                    label: format!(": {}", type_name),
-                    kind: Some(CompletionItemKind::TYPE_PARAMETER),
-                    detail: Some("Inferred type".to_string()),
-                    documentation: Some(Documentation::String(format!("Expression type: {}", type_name))),
-                    sort_text: Some("!0".to_string()), // Sort first (! comes before letters)
-                    filter_text: Some("".to_string()), // Don't filter this item
-                    ..Default::default()
-                });
-            }
-
-            let mut seen = std::collections::HashSet::new();
-
-            if let Some(ref type_name) = inferred_type {
+            // --- Collect remaining data under lock ---
+            let fields = if let Some(ref type_name) = inferred_type {
                 // Add record fields FIRST so they appear before methods
                 let all_types = engine.get_types();
                 let fields = engine.get_type_fields(type_name);
@@ -2784,7 +2794,42 @@ impl NostosLanguageServer {
                 } else {
                     fields
                 };
+                fields
+            } else {
+                Vec::new()
+            };
 
+            let ufcs_methods = if let Some(ref type_name) = inferred_type {
+                engine.get_ufcs_methods_for_type(type_name)
+            } else {
+                Vec::new()
+            };
+
+            let trait_methods = if let Some(ref type_name) = inferred_type {
+                engine.get_trait_methods_for_type(type_name)
+            } else {
+                Vec::new()
+            };
+
+            // --- Drop the lock before building CompletionItems ---
+            drop(engine_guard);
+
+            // Add type indicator at top of list
+            if let Some(ref type_name) = inferred_type {
+                items.push(CompletionItem {
+                    label: format!(": {}", type_name),
+                    kind: Some(CompletionItemKind::TYPE_PARAMETER),
+                    detail: Some("Inferred type".to_string()),
+                    documentation: Some(Documentation::String(format!("Expression type: {}", type_name))),
+                    sort_text: Some("!0".to_string()), // Sort first (! comes before letters)
+                    filter_text: Some("".to_string()), // Don't filter this item
+                    ..Default::default()
+                });
+            }
+
+            let mut seen = std::collections::HashSet::new();
+
+            if let Some(ref type_name) = inferred_type {
                 for field in &fields {
                     if !seen.insert(field.clone()) {
                         continue;
@@ -2808,6 +2853,7 @@ impl NostosLanguageServer {
                 }
 
                 // Show builtin methods for the inferred type
+                // Static method - doesn't need engine reference
                 for (method_name, signature, doc) in nostos_repl::ReplEngine::get_builtin_methods_for_type(type_name) {
                     if !seen.insert(method_name.to_string()) {
                         continue;
@@ -2824,7 +2870,7 @@ impl NostosLanguageServer {
                 }
 
                 // Also add UFCS methods from user-defined functions
-                for (method_name, signature, doc) in engine.get_ufcs_methods_for_type(type_name) {
+                for (method_name, signature, doc) in ufcs_methods {
                     if !seen.insert(method_name.clone()) {
                         continue;
                     }
@@ -2840,7 +2886,7 @@ impl NostosLanguageServer {
                 }
 
                 // Add trait methods implemented for the type
-                for (method_name, signature, doc) in engine.get_trait_methods_for_type(type_name) {
+                for (method_name, signature, doc) in trait_methods {
                     if !seen.insert(method_name.clone()) {
                         continue;
                     }
@@ -2857,6 +2903,7 @@ impl NostosLanguageServer {
             }
 
             // If no type inferred, show generic methods
+            // Static method - doesn't need engine reference
             if inferred_type.is_none() {
                 for (method_name, signature, doc) in nostos_repl::ReplEngine::get_builtin_methods_for_type("Unknown") {
                     items.push(CompletionItem {
