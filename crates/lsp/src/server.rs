@@ -41,6 +41,8 @@ pub struct NostosLanguageServer {
     dirty_files: DashMap<String, bool>,
     /// Generation counter for debouncing check_file in didChange
     check_generation: AtomicU64,
+    /// Notifies waiters when the engine has been initialized
+    engine_ready: tokio::sync::Notify,
 }
 
 impl NostosLanguageServer {
@@ -54,6 +56,7 @@ impl NostosLanguageServer {
             initializing: AtomicBool::new(false),
             dirty_files: DashMap::new(),
             check_generation: AtomicU64::new(0),
+            engine_ready: tokio::sync::Notify::new(),
         }
     }
 
@@ -72,6 +75,7 @@ impl NostosLanguageServer {
                 }
                 *self.engine.lock().unwrap() = Some(engine);
                 *self.root_path.lock().unwrap() = Some(root_path.clone());
+                self.engine_ready.notify_waiters();
             }
             Err(e) => {
                 warn!("Warning: Failed to initialize engine: {}", e);
@@ -81,6 +85,7 @@ impl NostosLanguageServer {
                 let _ = engine.load_stdlib();
                 *self.engine.lock().unwrap() = Some(engine);
                 *self.root_path.lock().unwrap() = Some(root_path.clone());
+                self.engine_ready.notify_waiters();
             }
         }
     }
@@ -168,18 +173,16 @@ impl NostosLanguageServer {
         let file_path_str = file_path.to_string_lossy().to_string();
         debug!("Checking file (analysis only): {}", file_path_str);
 
-        // Wait for engine to be initialized (async wait doesn't block the tokio runtime)
-        // Engine init can take several seconds as it compiles stdlib
-        let mut attempts = 0;
-        while attempts < 50 {
-            {
-                let guard = self.engine.lock().unwrap();
-                if guard.is_some() {
-                    break;
+        // Wait for engine to be initialized
+        let engine_is_ready = self.engine.lock().unwrap().is_some();
+        if !engine_is_ready {
+            tokio::select! {
+                _ = self.engine_ready.notified() => {}
+                _ = tokio::time::sleep(tokio::time::Duration::from_secs(10)) => {
+                    warn!("Engine not ready after 10s, skipping check_file");
+                    return;
                 }
             }
-            attempts += 1;
-            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         }
 
         // Extract module name from file path
@@ -677,6 +680,7 @@ impl LanguageServer for NostosLanguageServer {
                     let root = self.root_path.lock().unwrap().clone();
 
                     *self.engine.lock().unwrap() = Some(engine);
+                    self.engine_ready.notify_waiters();
                     info!("Engine initialized in {:?}", start.elapsed());
 
                     // Publish diagnostics for files with errors at startup
@@ -928,6 +932,7 @@ impl LanguageServer for NostosLanguageServer {
                             let mut engine_guard = self.engine.lock().unwrap();
                             *engine_guard = Some(engine);
                         }
+                        self.engine_ready.notify_waiters();
 
                         match result {
                             Ok((output, captured)) => {
@@ -1093,18 +1098,9 @@ impl LanguageServer for NostosLanguageServer {
 
         debug!("Completion request at {:?}", position);
 
-        // Wait for engine to be initialized (async wait doesn't block the tokio runtime)
-        // Engine init can take several seconds as it compiles stdlib
-        let mut attempts = 0;
-        while attempts < 50 {
-            {
-                let guard = self.engine.lock().unwrap();
-                if guard.is_some() {
-                    break;
-                }
-            }
-            attempts += 1;
-            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        // Return immediately if engine isn't ready — don't block the completion popup
+        if self.engine.lock().unwrap().is_none() {
+            return Ok(None);
         }
 
         // Get document content
