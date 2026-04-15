@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::io::Write;
 
 use dashmap::DashMap;
@@ -52,6 +52,8 @@ pub struct NostosLanguageServer {
     initializing: AtomicBool,
     /// Files that have been modified but not yet compiled (dirty)
     dirty_files: DashMap<String, bool>,
+    /// Generation counter for debouncing check_file in didChange
+    check_generation: AtomicU64,
 }
 
 impl NostosLanguageServer {
@@ -64,6 +66,7 @@ impl NostosLanguageServer {
             root_path: Mutex::new(None),
             initializing: AtomicBool::new(false),
             dirty_files: DashMap::new(),
+            check_generation: AtomicU64::new(0),
         }
     }
 
@@ -1084,12 +1087,22 @@ impl LanguageServer for NostosLanguageServer {
             // Mark file as dirty (modified but not compiled)
             if let Ok(file_path) = uri.to_file_path() {
                 self.dirty_files.insert(file_path.to_string_lossy().to_string(), true);
-                // Send file status notification
-                self.send_file_status_notification().await;
             }
 
+            // Bump generation to cancel any pending check
+            let gen = self.check_generation.fetch_add(1, Ordering::SeqCst) + 1;
+
+            // Wait 300ms, then check if we're still the latest keystroke
+            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+            if self.check_generation.load(Ordering::SeqCst) != gen {
+                return; // A newer keystroke arrived, skip this check
+            }
+
+            // Send file status notification (debounced together with check)
+            self.send_file_status_notification().await;
+
             // Check for errors (analysis only, no state change)
-            // Real-time feedback while typing
             self.check_file(&uri, &content).await;
         }
     }
