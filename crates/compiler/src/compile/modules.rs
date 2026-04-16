@@ -2565,6 +2565,9 @@ impl Compiler {
             ));
         }
 
+        // Rebuild UFCS index after compilation
+        self.build_ufcs_index();
+
         errors
     }
 
