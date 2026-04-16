@@ -1935,7 +1935,7 @@ impl NostosLanguageServer {
                 delta_line,
                 delta_start,
                 length,
-                token_type: token_type,
+                token_type,
                 token_modifiers_bitset: modifiers,
             });
 
@@ -2204,15 +2204,7 @@ impl NostosLanguageServer {
                                     let prev = Self::prev_significant_token(tokens, m);
                                     if matches!(prev, None | Some(Token::Newline)) || prev.is_none() {
                                         // Actually, check if the prev token is a newline
-                                        let mut preceded_by_newline = false;
-                                        if m > 0 {
-                                            for p in (0..m).rev() {
-                                                match &tokens[p].0 {
-                                                    Token::Newline => { preceded_by_newline = true; break; }
-                                                    _ => break,
-                                                }
-                                            }
-                                        }
+                                        let preceded_by_newline = m > 0 && matches!(tokens[m - 1].0, Token::Newline);
                                         if preceded_by_newline || m == k + 1 {
                                             break;
                                         }
@@ -2770,7 +2762,7 @@ impl NostosLanguageServer {
                 let fields = engine.get_type_fields(type_name);
 
                 // Also try with different name formats if direct lookup fails
-                let fields = if fields.is_empty() {
+                if fields.is_empty() {
                     // Try looking up with possible module prefixes
                     let mut found_fields = Vec::new();
                     for t in &all_types {
@@ -2786,15 +2778,12 @@ impl NostosLanguageServer {
                     // This works even when the file has parse errors
                     if found_fields.is_empty() {
                         found_fields = inference::extract_type_fields_from_source(document_content, type_name);
-                        if !found_fields.is_empty() {
-                        }
                     }
 
                     found_fields
                 } else {
                     fields
-                };
-                fields
+                }
             } else {
                 Vec::new()
             };
