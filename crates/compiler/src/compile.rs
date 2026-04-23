@@ -1757,6 +1757,9 @@ pub struct Compiler {
     /// Type alias targets: qualified alias name -> target type name string
     /// e.g., "base.Id" -> "Int", "mymod.Ids" -> "List[Int]"
     type_alias_targets: HashMap<String, String>,
+    /// UFCS index: maps normalized first-parameter type name to function names.
+    /// Built after compile_all to make get_ufcs_methods_for_type O(1) instead of O(N).
+    ufcs_index: HashMap<String, Vec<String>>,
     /// Known module prefixes (for distinguishing module.func from value.field)
     /// Contains all module path prefixes, e.g., "String", "utils", "math.vector"
     known_modules: HashSet<String>,
@@ -2157,6 +2160,7 @@ impl Compiler {
             current_source_name: None,
             type_defs: HashMap::new(),
             type_alias_targets: HashMap::new(),
+            ufcs_index: HashMap::new(),
             known_modules: builtin_modules,
             imported_modules: HashSet::new(),
             module_use_stmts: Vec::new(),
@@ -2854,6 +2858,7 @@ impl Compiler {
             current_source_name: Some("unknown".to_string()),
             type_defs: HashMap::new(),
             type_alias_targets: HashMap::new(),
+            ufcs_index: HashMap::new(),
             known_modules: builtin_modules,
             imported_modules: HashSet::new(),
             module_use_stmts: Vec::new(),
@@ -27746,113 +27751,116 @@ scope_depth: self.block_depth,
     /// Get all functions that can be called as UFCS methods on a given type.
     /// Returns a list of (local_name, signature, doc) tuples for functions
     /// whose first parameter matches the given type.
-    pub fn get_ufcs_methods_for_type(&self, type_name: &str) -> Vec<(String, String, Option<String>)> {
-        let mut methods = Vec::new();
-        let mut seen_names = std::collections::HashSet::new();
-
-        // Normalize type name - strip module prefix for matching
-        // e.g., "nalgebra.Vec" should match functions with first param "Vec" or "nalgebra.Vec"
-        let type_base = type_name.rsplit('.').next().unwrap_or(type_name);
-        let type_module = if type_name.contains('.') {
-            type_name.rsplit('.').skip(1).next()
-        } else {
-            None
-        };
-
-        // Helper to check if a param type matches the target type
-        let param_matches_type = |first_param: &str| -> bool {
-            // Direct matches
-            if first_param == type_name || first_param == type_base {
-                return true;
-            }
-
-            // Handle list syntax: [a], [Int], etc. should match "List"
-            if type_base == "List" && first_param.starts_with('[') && first_param.ends_with(']') {
-                return true;
-            }
-
-            // Handle Map syntax: Map k v should match "Map"
-            if type_base == "Map" && (first_param == "Map" || first_param.starts_with("Map ")) {
-                return true;
-            }
-
-            // Handle Set syntax: Set a should match "Set"
-            if type_base == "Set" && (first_param == "Set" || first_param.starts_with("Set ")) {
-                return true;
-            }
-
-            // Handle Option syntax: Option a, Maybe a should match "Option"
-            if type_base == "Option" && (first_param == "Option" || first_param.starts_with("Option ")
-                || first_param == "Maybe" || first_param.starts_with("Maybe ")) {
-                return true;
-            }
-
-            // Handle Result syntax
-            if type_base == "Result" && (first_param == "Result" || first_param.starts_with("Result ")) {
-                return true;
-            }
-
-            // Module-qualified match
-            let first_param_base = first_param.rsplit('.').next().unwrap_or(first_param);
-            if first_param_base == type_base && type_module.map_or(false, |m| first_param.starts_with(&format!("{}.", m))) {
-                return true;
-            }
-
-            false
-        };
+    /// Build the UFCS index: maps normalized first-parameter type names to function names.
+    /// Call this after compile_all to enable O(1) lookups in get_ufcs_methods_for_type.
+    pub fn build_ufcs_index(&mut self) {
+        self.ufcs_index.clear();
 
         for (fn_name, func) in &self.functions {
-            // Skip if no param types or if it takes no arguments
             if func.param_types.is_empty() {
                 continue;
             }
 
-            // Skip private functions (unless in prelude or same module context)
-            // For autocomplete, we only want to show functions that are actually callable
+            // Skip private functions (unless prelude)
             if let Some(visibility) = self.function_visibility.get(fn_name) {
                 if *visibility == Visibility::Private && !self.prelude_functions.contains(fn_name) {
                     continue;
                 }
             }
 
-            // Get the first parameter type
             let first_param = &func.param_types[0];
 
-            let matches = param_matches_type(first_param);
+            // Index under multiple normalized keys so lookups from any form match
+            let mut keys = Vec::new();
 
-            if matches {
-                // Extract local function name (remove module prefix and signature suffix)
-                // e.g., "nalgebra.vecLen/Vec" -> "vecLen"
-                let local_name = fn_name
-                    .rsplit('.')
-                    .next()
-                    .unwrap_or(fn_name)
-                    .split('/')
-                    .next()
-                    .unwrap_or(fn_name)
-                    .to_string();
+            // The raw first param type
+            keys.push(first_param.clone());
 
-                // Skip if we've already seen this name (avoid duplicates from overloads)
-                if seen_names.contains(&local_name) {
-                    continue;
-                }
-                seen_names.insert(local_name.clone());
+            // The base name (without module prefix)
+            let base = first_param.rsplit('.').next().unwrap_or(first_param);
+            if base != first_param {
+                keys.push(base.to_string());
+            }
 
-                // Build a UFCS-style signature (without the first param since it's the receiver)
-                let ufcs_sig = if func.param_types.len() > 1 {
-                    let rest_params: Vec<&str> = func.param_types[1..].iter().map(|s| s.as_str()).collect();
-                    let ret = func.return_type.as_deref().unwrap_or("?");
-                    format!("({}) -> {}", rest_params.join(", "), ret)
-                } else {
-                    let ret = func.return_type.as_deref().unwrap_or("?");
-                    format!("() -> {}", ret)
-                };
+            // Map container syntax to canonical names
+            if first_param.starts_with('[') && first_param.ends_with(']') {
+                keys.push("List".to_string());
+            }
+            if first_param == "Map" || first_param.starts_with("Map ") {
+                keys.push("Map".to_string());
+            }
+            if first_param == "Set" || first_param.starts_with("Set ") {
+                keys.push("Set".to_string());
+            }
+            if first_param == "Option" || first_param.starts_with("Option ")
+                || first_param == "Maybe" || first_param.starts_with("Maybe ") {
+                keys.push("Option".to_string());
+            }
+            if first_param == "Result" || first_param.starts_with("Result ") {
+                keys.push("Result".to_string());
+            }
 
-                methods.push((local_name, ufcs_sig, func.doc.clone()));
+            // Deduplicate keys
+            keys.sort();
+            keys.dedup();
+
+            for key in keys {
+                self.ufcs_index.entry(key).or_default().push(fn_name.clone());
+            }
+        }
+    }
+
+    pub fn get_ufcs_methods_for_type(&self, type_name: &str) -> Vec<(String, String, Option<String>)> {
+        let mut methods = Vec::new();
+        let mut seen_names = std::collections::HashSet::new();
+
+        let type_base = type_name.rsplit('.').next().unwrap_or(type_name);
+
+        // Collect candidate function names from the index using all possible lookup keys
+        let mut candidate_fn_names = Vec::new();
+        if let Some(fns) = self.ufcs_index.get(type_name) {
+            candidate_fn_names.extend(fns.iter());
+        }
+        if type_base != type_name {
+            if let Some(fns) = self.ufcs_index.get(type_base) {
+                candidate_fn_names.extend(fns.iter());
             }
         }
 
-        // Sort by name for consistent ordering
+        // Deduplicate candidates
+        candidate_fn_names.sort();
+        candidate_fn_names.dedup();
+
+        for fn_name in &candidate_fn_names {
+            let Some(func) = self.functions.get(*fn_name) else { continue };
+
+            // Extract local function name (remove module prefix and signature suffix)
+            let local_name = fn_name
+                .rsplit('.')
+                .next()
+                .unwrap_or(fn_name)
+                .split('/')
+                .next()
+                .unwrap_or(fn_name)
+                .to_string();
+
+            if !seen_names.insert(local_name.clone()) {
+                continue;
+            }
+
+            // Build UFCS signature (without the receiver param)
+            let ufcs_sig = if func.param_types.len() > 1 {
+                let rest_params: Vec<&str> = func.param_types[1..].iter().map(|s| s.as_str()).collect();
+                let ret = func.return_type.as_deref().unwrap_or("?");
+                format!("({}) -> {}", rest_params.join(", "), ret)
+            } else {
+                let ret = func.return_type.as_deref().unwrap_or("?");
+                format!("() -> {}", ret)
+            };
+
+            methods.push((local_name, ufcs_sig, func.doc.clone()));
+        }
+
         methods.sort_by(|a, b| a.0.cmp(&b.0));
         methods
     }
