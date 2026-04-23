@@ -1,9 +1,8 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::io::Write;
-
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use dashmap::DashMap;
+use log::{info, warn, debug, trace};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
@@ -18,18 +17,6 @@ pub struct FileStatusNotification;
 impl Notification for FileStatusNotification {
     type Params = serde_json::Value;
     const METHOD: &'static str = "nostos/fileStatus";
-}
-
-fn log(msg: &str) {
-    eprintln!("{}", msg);
-    std::io::stderr().flush().ok();
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/nostos_lsp.log")
-    {
-        let _ = writeln!(f, "{}", msg);
-    }
 }
 
 /// Information about a binding extracted from a line (for inlay hints)
@@ -52,6 +39,10 @@ pub struct NostosLanguageServer {
     initializing: AtomicBool,
     /// Files that have been modified but not yet compiled (dirty)
     dirty_files: DashMap<String, bool>,
+    /// Generation counter for debouncing check_file in didChange
+    check_generation: AtomicU64,
+    /// Notifies waiters when the engine has been initialized
+    engine_ready: tokio::sync::Notify,
 }
 
 impl NostosLanguageServer {
@@ -64,6 +55,8 @@ impl NostosLanguageServer {
             root_path: Mutex::new(None),
             initializing: AtomicBool::new(false),
             dirty_files: DashMap::new(),
+            check_generation: AtomicU64::new(0),
+            engine_ready: tokio::sync::Notify::new(),
         }
     }
 
@@ -78,19 +71,21 @@ impl NostosLanguageServer {
         match ReplEngine::init_with_project(config, Some(root_path)) {
             Ok(engine) => {
                 if engine.get_prelude_imports_count() == 0 {
-                    eprintln!("Warning: Stdlib loaded but 0 prelude imports registered - stdlib may not have been found");
+                    warn!("Warning: Stdlib loaded but 0 prelude imports registered - stdlib may not have been found");
                 }
                 *self.engine.lock().unwrap() = Some(engine);
                 *self.root_path.lock().unwrap() = Some(root_path.clone());
+                self.engine_ready.notify_waiters();
             }
             Err(e) => {
-                eprintln!("Warning: Failed to initialize engine: {}", e);
+                warn!("Warning: Failed to initialize engine: {}", e);
                 // Create engine without project loading
                 let fallback_config = ReplConfig { enable_jit: false, num_threads: 1 };
                 let mut engine = ReplEngine::new(fallback_config);
                 let _ = engine.load_stdlib();
                 *self.engine.lock().unwrap() = Some(engine);
                 *self.root_path.lock().unwrap() = Some(root_path.clone());
+                self.engine_ready.notify_waiters();
             }
         }
     }
@@ -176,20 +171,18 @@ impl NostosLanguageServer {
         };
 
         let file_path_str = file_path.to_string_lossy().to_string();
-        eprintln!("Checking file (analysis only): {}", file_path_str);
+        debug!("Checking file (analysis only): {}", file_path_str);
 
-        // Wait for engine to be initialized (async wait doesn't block the tokio runtime)
-        // Engine init can take several seconds as it compiles stdlib
-        let mut attempts = 0;
-        while attempts < 50 {
-            {
-                let guard = self.engine.lock().unwrap();
-                if guard.is_some() {
-                    break;
+        // Wait for engine to be initialized
+        let engine_is_ready = self.engine.lock().unwrap().is_some();
+        if !engine_is_ready {
+            tokio::select! {
+                _ = self.engine_ready.notified() => {}
+                _ = tokio::time::sleep(tokio::time::Duration::from_secs(10)) => {
+                    warn!("Engine not ready after 10s, skipping check_file");
+                    return;
                 }
             }
-            attempts += 1;
-            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         }
 
         // Extract module name from file path
@@ -204,14 +197,14 @@ impl NostosLanguageServer {
         let result = {
             let engine_guard = self.engine.lock().unwrap();
             let Some(engine) = engine_guard.as_ref() else {
-                eprintln!("check_file: engine not ready yet after waiting, skipping check");
+                debug!("check_file: engine not ready yet after waiting, skipping check");
                 return;
             };
 
             engine.check_module_compiles(&module_name, content)
         };
 
-        eprintln!("Check result for {}: {:?}", module_name, result);
+        trace!("Check result for {}: {:?}", module_name, result);
 
         // Build diagnostics from the check result
         let error_diagnostics = if let Err(errors) = &result {
@@ -248,7 +241,7 @@ impl NostosLanguageServer {
         };
 
         let file_path_str = file_path.to_string_lossy().to_string();
-        eprintln!("Committing file to live system: {}", file_path_str);
+        info!("Committing file to live system: {}", file_path_str);
 
         // Extract module name from file path
         let module_name = file_path
@@ -268,7 +261,7 @@ impl NostosLanguageServer {
             engine.recompile_module_with_content(&module_name, content)
         };
 
-        eprintln!("Compile result for {}: {:?}", module_name, result);
+        debug!("Compile result for {}: {:?}", module_name, result);
 
         // Publish diagnostics based on result AND actual compile status
         // (recompile_module_with_content might return Ok("No changes detected") even if
@@ -347,7 +340,7 @@ impl NostosLanguageServer {
             .collect();
 
         for (uri, content) in open_docs {
-            eprintln!("Recompiling dependent file: {}", uri);
+            debug!("Recompiling dependent file: {}", uri);
 
             let file_path = match uri.to_file_path() {
                 Ok(p) => p,
@@ -397,7 +390,7 @@ impl NostosLanguageServer {
     /// - From engine status: "Error: file:line: message" or "Error: message"
     /// - "<repl>:N: message" or "file:N: message"
     fn parse_error_location(error: &str, content: Option<&str>) -> (u32, String) {
-        eprintln!("Parsing error: {}", error);
+        trace!("Parsing error: {}", error);
 
         // Strip "Error: " prefix if present
         let error = error.strip_prefix("Error: ").unwrap_or(error);
@@ -407,7 +400,7 @@ impl NostosLanguageServer {
             if let Some(colon_pos) = rest.find(':') {
                 if let Ok(line) = rest[..colon_pos].trim().parse::<u32>() {
                     let message = rest[colon_pos + 1..].trim().to_string();
-                    eprintln!("Parsed line {} message: {}", line, message);
+                    trace!("Parsed line {} message: {}", line, message);
                     return (line.saturating_sub(1), message); // LSP lines are 0-indexed
                 }
             }
@@ -419,7 +412,7 @@ impl NostosLanguageServer {
             if let Some(second_colon) = after_first.find(':') {
                 if let Ok(line) = after_first[..second_colon].trim().parse::<u32>() {
                     let message = after_first[second_colon + 1..].trim().to_string();
-                    eprintln!("Parsed (format 2) line {} message: {}", line, message);
+                    trace!("Parsed (format 2) line {} message: {}", line, message);
                     return (line.saturating_sub(1), message);
                 }
             }
@@ -433,7 +426,7 @@ impl NostosLanguageServer {
             if let Some(content) = content {
                 let fn_name = fn_name.trim();
                 let line = Self::find_function_call_line(content, &[fn_name.to_string()]);
-                eprintln!("Found undefined function {} at line {}", fn_name, line);
+                trace!("Found undefined function {} at line {}", fn_name, line);
                 return (line, error_msg.to_string());
             }
         }
@@ -457,7 +450,7 @@ impl NostosLanguageServer {
             if !re_pattern.is_empty() {
                 let search_terms: Vec<String> = re_pattern.iter().map(|s| s.to_string()).collect();
                 let line = Self::find_function_call_line(content, &search_terms);
-                eprintln!("Found function reference {:?} at line {}", re_pattern, line);
+                trace!("Found function reference {:?} at line {}", re_pattern, line);
                 return (line, error_msg.to_string());
             }
         }
@@ -471,14 +464,14 @@ impl NostosLanguageServer {
                 // Search for patterns like .X() with empty parentheses
                 let line = Self::find_empty_call_line(content);
                 if line > 0 {
-                    eprintln!("Found likely empty call at line {}", line);
+                    trace!("Found likely empty call at line {}", line);
                     return (line - 1, error_msg.to_string()); // Convert to 0-based
                 }
             }
         }
 
         // Fallback: no line number found
-        eprintln!("Could not parse line number, using line 0");
+        trace!("Could not parse line number, using line 0");
         (0, error_msg.to_string())
     }
 
@@ -498,7 +491,7 @@ impl NostosLanguageServer {
                 let call_pattern = format!("{}(", fn_name);
                 let qualified_call = format!("{}(", dep);
                 if line.contains(&call_pattern) || line.contains(&qualified_call) || line.contains(dep) {
-                    eprintln!("Found function call {} on line {}: {}", fn_name, line_num, line);
+                    trace!("Found function call {} on line {}: {}", fn_name, line_num, line);
                     return line_num as u32;
                 }
             }
@@ -523,7 +516,7 @@ impl NostosLanguageServer {
             for func in &hot_functions {
                 let pattern = format!(".{}()", func);
                 if line.contains(&pattern) {
-                    eprintln!("Found empty call {} at line {}: {}", func, line_num + 1, line);
+                    trace!("Found empty call {} at line {}: {}", func, line_num + 1, line);
                     return (line_num + 1) as u32; // Return 1-based line number
                 }
             }
@@ -539,26 +532,26 @@ const LSP_BUILD_ID: &str = "2026-01-13-show-inferred-type";
 #[tower_lsp::async_trait]
 impl LanguageServer for NostosLanguageServer {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-        log(&format!("Nostos LSP v{} (build: {})", LSP_VERSION, LSP_BUILD_ID));
-        log("initialize() called - fast path");
+        info!("Nostos LSP v{} (build: {})", LSP_VERSION, LSP_BUILD_ID);
+        info!("initialize() called - fast path");
 
         // Store workspace root for lazy initialization - do NOT block here
         // Heavy init will happen on first file open or in initialized() notification
         if let Some(root_uri) = params.root_uri {
             if let Ok(path) = root_uri.to_file_path() {
-                eprintln!("Workspace root: {:?}", path);
+                trace!("Workspace root: {:?}", path);
                 *self.root_path.lock().unwrap() = Some(path);
             }
         } else if let Some(folders) = params.workspace_folders {
             if let Some(folder) = folders.first() {
                 if let Ok(path) = folder.uri.to_file_path() {
-                    eprintln!("Workspace folder: {:?}", path);
+                    trace!("Workspace folder: {:?}", path);
                     *self.root_path.lock().unwrap() = Some(path);
                 }
             }
         }
 
-        log("initialize() returning response (engine will init lazily)");
+        info!("initialize() returning response (engine will init lazily)");
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -642,34 +635,21 @@ impl LanguageServer for NostosLanguageServer {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        log("initialized() notification received");
+        info!("initialized() notification received");
 
         // Get path before any await - must not hold MutexGuard across await
         let path_opt = self.root_path.lock().unwrap().clone();
-
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-            use std::io::Write;
-            let _ = writeln!(f, "initialized(): path_opt={:?}", path_opt);
-        }
 
         // Do the heavy engine initialization in a blocking thread pool
         // This prevents blocking the async message loop
         if let Some(path) = path_opt {
             // Set initializing flag to prevent double init from did_open
             if self.initializing.swap(true, Ordering::SeqCst) {
-                eprintln!("Engine initialization already in progress, skipping");
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-                    use std::io::Write;
-                    let _ = writeln!(f, "initialized(): Skipping - already initializing");
-                }
+                info!("Engine initialization already in progress, skipping");
                 return;
             }
 
-            eprintln!("Starting engine initialization for {:?}...", path);
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-                use std::io::Write;
-                let _ = writeln!(f, "initialized(): Starting spawn_blocking for {:?}", path);
-            }
+            info!("Starting engine initialization for {:?}...", path);
             let start = std::time::Instant::now();
 
             // Use spawn_blocking to run in a separate thread pool, returning the engine
@@ -682,21 +662,16 @@ impl LanguageServer for NostosLanguageServer {
 
                 // Load stdlib
                 if let Err(e) = engine.load_stdlib() {
-                    eprintln!("Warning: Failed to load stdlib: {}", e);
+                    warn!("Warning: Failed to load stdlib: {}", e);
                 }
 
                 // Load the project directory
                 if let Err(e) = engine.load_directory(path.to_str().unwrap_or(".")) {
-                    eprintln!("Warning: Failed to load directory: {}", e);
+                    warn!("Warning: Failed to load directory: {}", e);
                 }
 
                 engine
             }).await;
-
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-                use std::io::Write;
-                let _ = writeln!(f, "initialized(): spawn_blocking returned, init_result.is_ok={}", init_result.is_ok());
-            }
 
             match init_result {
                 Ok(engine) => {
@@ -705,15 +680,12 @@ impl LanguageServer for NostosLanguageServer {
                     let root = self.root_path.lock().unwrap().clone();
 
                     *self.engine.lock().unwrap() = Some(engine);
-                    eprintln!("Engine initialized in {:?}", start.elapsed());
-                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-                        use std::io::Write;
-                        let _ = writeln!(f, "initialized(): Engine set to Some, elapsed={:?}", start.elapsed());
-                    }
+                    self.engine_ready.notify_waiters();
+                    info!("Engine initialized in {:?}", start.elapsed());
 
                     // Publish diagnostics for files with errors at startup
                     if !error_defs.is_empty() {
-                        eprintln!("Publishing {} startup errors...", error_defs.len());
+                        info!("Publishing {} startup errors...", error_defs.len());
                         for (fn_name, error_msg) in error_defs {
                             // Extract module name from function name (e.g., "main.main" -> "main")
                             let module_name = if let Some(dot_pos) = fn_name.find('.') {
@@ -748,7 +720,7 @@ impl LanguageServer for NostosLanguageServer {
 
                                         // Publish to client
                                         self.client.publish_diagnostics(uri, vec![diagnostic], None).await;
-                                        eprintln!("Published startup error for {}", file_path.display());
+                                        info!("Published startup error for {}", file_path.display());
                                     }
                                 }
                             }
@@ -756,7 +728,7 @@ impl LanguageServer for NostosLanguageServer {
                     }
                 }
                 Err(e) => {
-                    eprintln!("Engine initialization failed: {}", e);
+                    warn!("Engine initialization failed: {}", e);
                 }
             }
 
@@ -766,19 +738,19 @@ impl LanguageServer for NostosLanguageServer {
             self.send_file_status_notification().await;
         }
 
-        eprintln!("Nostos LSP fully initialized!");
-        eprintln!("Server is now ready and waiting for requests...");
+        info!("Nostos LSP fully initialized!");
+        info!("Server is now ready and waiting for requests...");
     }
 
     async fn shutdown(&self) -> Result<()> {
-        log("!!! SHUTDOWN REQUEST RECEIVED !!!");
+        info!("Shutdown request received");
 
         // Persist module cache on shutdown
         if let Some(ref mut engine) = *self.engine.lock().unwrap() {
             match engine.persist_module_cache() {
                 Ok(0) => {} // No modules to persist
-                Ok(n) => eprintln!("Persisted {} module(s) to cache", n),
-                Err(e) => eprintln!("Warning: Failed to persist module cache: {}", e),
+                Ok(n) => info!("Persisted {} module(s) to cache", n),
+                Err(e) => warn!("Warning: Failed to persist module cache: {}", e),
             }
         }
 
@@ -786,7 +758,7 @@ impl LanguageServer for NostosLanguageServer {
     }
 
     async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<serde_json::Value>> {
-        eprintln!("Execute command: {}", params.command);
+        debug!("Execute command: {}", params.command);
 
         match params.command.as_str() {
             "nostos.buildCache" => {
@@ -849,13 +821,13 @@ impl LanguageServer for NostosLanguageServer {
 
                             let msg = format!("Committed to live system: {}", uri.path());
                             self.client.show_message(MessageType::INFO, &msg).await;
-                            eprintln!("{}", msg);
+                            debug!("{}", msg);
                             Ok(Some(serde_json::json!({ "success": true, "message": msg })))
                         }
                         Err(error) => {
                             let msg = format!("Commit failed: {}", error);
                             self.client.show_message(MessageType::ERROR, &msg).await;
-                            eprintln!("{}", msg);
+                            debug!("{}", msg);
                             Ok(Some(serde_json::json!({ "success": false, "error": error })))
                         }
                     }
@@ -897,14 +869,14 @@ impl LanguageServer for NostosLanguageServer {
                 if error_count == 0 {
                     let msg = format!("Committed {} file(s) to live system", success_count);
                     self.client.show_message(MessageType::INFO, &msg).await;
-                    eprintln!("{}", msg);
+                    debug!("{}", msg);
                     Ok(Some(serde_json::json!({ "success": true, "message": msg, "count": success_count })))
                 } else {
                     let msg = format!("Commit failed: {} error(s), {} succeeded", error_count, success_count);
                     self.client.show_message(MessageType::ERROR, &msg).await;
-                    eprintln!("{}", msg);
+                    debug!("{}", msg);
                     for err in &errors {
-                        eprintln!("  {}", err);
+                        debug!("  {}", err);
                     }
                     Ok(Some(serde_json::json!({ "success": false, "error": msg, "errors": errors })))
                 }
@@ -923,7 +895,7 @@ impl LanguageServer for NostosLanguageServer {
                     })));
                 }
 
-                eprintln!("REPL eval: {}", expr);
+                debug!("REPL eval: {}", expr);
 
                 // We need to run eval in a separate thread because the VM creates
                 // its own tokio runtime, and we can't nest runtimes.
@@ -946,7 +918,7 @@ impl LanguageServer for NostosLanguageServer {
                 std::thread::spawn(move || {
                     // Debug: log known modules
                     let known_mods = engine.get_known_modules();
-                    eprintln!("REPL eval thread - known modules: {:?}", known_mods);
+                    trace!("REPL eval thread - known modules: {:?}", known_mods);
                     // Use eval_with_capture to capture println output
                     let result = engine.eval_with_capture(&expr_owned);
                     let _ = tx.send((engine, result));
@@ -960,10 +932,11 @@ impl LanguageServer for NostosLanguageServer {
                             let mut engine_guard = self.engine.lock().unwrap();
                             *engine_guard = Some(engine);
                         }
+                        self.engine_ready.notify_waiters();
 
                         match result {
                             Ok((output, captured)) => {
-                                eprintln!("REPL result: {}, captured: {}", output, captured);
+                                trace!("REPL result: {}, captured: {}", output, captured);
                                 // Combine captured output with result
                                 let full_output = if captured.is_empty() {
                                     output
@@ -978,7 +951,7 @@ impl LanguageServer for NostosLanguageServer {
                                 })))
                             }
                             Err(error) => {
-                                eprintln!("REPL error: {}", error);
+                                trace!("REPL error: {}", error);
                                 Ok(Some(serde_json::json!({
                                     "success": false,
                                     "error": error
@@ -987,7 +960,7 @@ impl LanguageServer for NostosLanguageServer {
                         }
                     }
                     Err(_) => {
-                        eprintln!("REPL eval timeout or thread panic");
+                        trace!("REPL eval timeout or thread panic");
                         Ok(Some(serde_json::json!({
                             "success": false,
                             "error": "Evaluation timed out or failed"
@@ -1005,7 +978,7 @@ impl LanguageServer for NostosLanguageServer {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(text.len() as u64) as usize;
 
-                eprintln!("REPL complete: text='{}', cursor={}", text, cursor_pos);
+                debug!("REPL complete: text='{}', cursor={}", text, cursor_pos);
 
                 let completions = {
                     let engine_guard = self.engine.lock().unwrap();
@@ -1023,14 +996,14 @@ impl LanguageServer for NostosLanguageServer {
                 })))
             }
             _ => {
-                eprintln!("Unknown command: {}", params.command);
+                debug!("Unknown command: {}", params.command);
                 Ok(None)
             }
         }
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        eprintln!("Opened: {}", params.text_document.uri);
+        info!("Opened: {}", params.text_document.uri);
 
         let uri = params.text_document.uri;
         let content = params.text_document.text;
@@ -1050,16 +1023,16 @@ impl LanguageServer for NostosLanguageServer {
                     if let Some(parent) = file_path.parent() {
                         // Try to set the initializing flag
                         if !self.initializing.swap(true, Ordering::SeqCst) {
-                            eprintln!("Lazy init: using file's parent as root: {:?}", parent);
+                            info!("Lazy init: using file's parent as root: {:?}", parent);
                             self.init_engine(&parent.to_path_buf());
                             self.initializing.store(false, Ordering::SeqCst);
                         } else {
-                            eprintln!("Skipping lazy init - initialization already in progress");
+                            info!("Skipping lazy init - initialization already in progress");
                         }
                     }
                 }
             } else if needs_init && init_in_progress {
-                eprintln!("Waiting for background initialization to complete...");
+                info!("Waiting for background initialization to complete...");
             }
         }
 
@@ -1084,18 +1057,28 @@ impl LanguageServer for NostosLanguageServer {
             // Mark file as dirty (modified but not compiled)
             if let Ok(file_path) = uri.to_file_path() {
                 self.dirty_files.insert(file_path.to_string_lossy().to_string(), true);
-                // Send file status notification
-                self.send_file_status_notification().await;
             }
 
+            // Bump generation to cancel any pending check
+            let gen = self.check_generation.fetch_add(1, Ordering::SeqCst) + 1;
+
+            // Wait 300ms, then check if we're still the latest keystroke
+            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+            if self.check_generation.load(Ordering::SeqCst) != gen {
+                return; // A newer keystroke arrived, skip this check
+            }
+
+            // Send file status notification (debounced together with check)
+            self.send_file_status_notification().await;
+
             // Check for errors (analysis only, no state change)
-            // Real-time feedback while typing
             self.check_file(&uri, &content).await;
         }
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
-        eprintln!("Saved: {} (use Ctrl+Alt+C to commit to live)", params.text_document.uri);
+        debug!("Saved: {} (use Ctrl+Alt+C to commit to live)", params.text_document.uri);
 
         // Save does NOT commit to live system
         // User must explicitly use nostos.commit command (Ctrl+Alt+C)
@@ -1103,7 +1086,7 @@ impl LanguageServer for NostosLanguageServer {
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        eprintln!("Closed: {}", params.text_document.uri);
+        info!("Closed: {}", params.text_document.uri);
 
         // Remove from our document cache
         self.documents.remove(&params.text_document.uri);
@@ -1113,20 +1096,11 @@ impl LanguageServer for NostosLanguageServer {
         let uri = &params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
 
-        eprintln!("Completion request at {:?}", position);
+        debug!("Completion request at {:?}", position);
 
-        // Wait for engine to be initialized (async wait doesn't block the tokio runtime)
-        // Engine init can take several seconds as it compiles stdlib
-        let mut attempts = 0;
-        while attempts < 50 {
-            {
-                let guard = self.engine.lock().unwrap();
-                if guard.is_some() {
-                    break;
-                }
-            }
-            attempts += 1;
-            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        // Return immediately if engine isn't ready — don't block the completion popup
+        if self.engine.lock().unwrap().is_none() {
+            return Ok(None);
         }
 
         // Get document content
@@ -1150,44 +1124,31 @@ impl LanguageServer for NostosLanguageServer {
             line
         };
 
-        eprintln!("Line prefix: '{}'", prefix);
+        trace!("Line prefix: '{}'", prefix);
 
         // Extract local variable bindings from the document (lines before cursor)
         let engine_guard = self.engine.lock().unwrap();
         let engine_ref = engine_guard.as_ref();
         let mut local_vars = inference::extract_local_bindings(&content, line_num, engine_ref);
         drop(engine_guard);
-        eprintln!("Local vars: {:?}", local_vars);
+        trace!("Local vars: {:?}", local_vars);
 
         // Extract lambda parameters visible at the current position and add them to local_vars
         // This allows field access on lambda params like `people.map(p => p.age.)`
         inference::extract_lambda_params_to_local_vars(prefix, &mut local_vars);
-        eprintln!("Local vars after lambda params: {:?}", local_vars);
+        trace!("Local vars after lambda params: {:?}", local_vars);
 
         // Determine completion context
         let items = if let Some(dot_pos) = prefix.rfind('.') {
             // After a dot - could be module or UFCS call
             let before_dot = prefix[..dot_pos].trim();
-            eprintln!("After dot, before: '{}'", before_dot);
+            trace!("After dot, before: '{}'", before_dot);
 
             // Check if we're inside a lambda - look for lambda parameter context
             // Pattern: "receiver.method(param =>" where we're completing "param."
-            {
-                use std::io::Write;
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-                    let _ = writeln!(f, "DEBUG: Checking lambda context. prefix='{}', before_dot='{}'", prefix, before_dot);
-                    let _ = writeln!(f, "DEBUG: local_vars={:?}", local_vars);
-                }
-            }
             let lambda_type = inference::infer_lambda_param_type(prefix, before_dot, &local_vars);
-            {
-                use std::io::Write;
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-                    let _ = writeln!(f, "DEBUG: Lambda type result: {:?}", lambda_type);
-                }
-            }
             if let Some(ref lt) = lambda_type {
-                eprintln!("Detected lambda parameter with type: {}", lt);
+                trace!("Detected lambda parameter with type: {}", lt);
             }
 
             self.get_dot_completions(before_dot, &local_vars, lambda_type.as_deref(), &content)
@@ -1196,7 +1157,7 @@ impl LanguageServer for NostosLanguageServer {
             let partial = prefix.split(|c: char| !c.is_alphanumeric() && c != '_')
                 .last()
                 .unwrap_or("");
-            eprintln!("Identifier completion, partial: '{}'", partial);
+            trace!("Identifier completion, partial: '{}'", partial);
             self.get_identifier_completions(partial)
         };
 
@@ -1207,7 +1168,7 @@ impl LanguageServer for NostosLanguageServer {
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
-        eprintln!("Hover request at {:?}", position);
+        debug!("Hover request at {:?}", position);
 
         // Get document content
         let content = match self.documents.get(uri) {
@@ -1231,7 +1192,7 @@ impl LanguageServer for NostosLanguageServer {
             return Ok(None);
         }
 
-        eprintln!("Hover word: '{}' at {}..{}", word, word_start, word_end);
+        trace!("Hover word: '{}' at {}..{}", word, word_start, word_end);
 
         // Debug: write hover details to file for debugging VS Code issues
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_hover_debug.log") {
@@ -1412,7 +1373,7 @@ impl LanguageServer for NostosLanguageServer {
         let uri = &params.text_document.uri;
         let range = params.range;
 
-        eprintln!("Inlay hint request for range {:?}", range);
+        debug!("Inlay hint request for range {:?}", range);
 
         // Get document content
         let content = match self.documents.get(uri) {
@@ -1477,7 +1438,7 @@ impl LanguageServer for NostosLanguageServer {
                             data: None,
                         });
                         seen_lines.insert(line_idx);
-                        eprintln!("Inlay hint: {} : {} at line {}", binding.name, ty, line_idx);
+                        trace!("Inlay hint: {} : {} at line {}", binding.name, ty, line_idx);
                     }
                 }
             }
@@ -1496,7 +1457,7 @@ impl LanguageServer for NostosLanguageServer {
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
-        eprintln!("Goto definition at {:?}", position);
+        debug!("Goto definition at {:?}", position);
 
         // Get document content
         let content = match self.documents.get(uri) {
@@ -1519,7 +1480,7 @@ impl LanguageServer for NostosLanguageServer {
             return Ok(None);
         }
 
-        eprintln!("Goto definition for: '{}'", word);
+        debug!("Goto definition for: '{}'", word);
 
         // Try to find the definition
         let engine_guard = self.engine.lock().unwrap();
@@ -1587,7 +1548,7 @@ impl LanguageServer for NostosLanguageServer {
             return Ok(None);
         }
 
-        eprintln!("Signature help for: '{}', param {}", fn_name, active_param);
+        debug!("Signature help for: '{}', param {}", fn_name, active_param);
 
         let engine_guard = self.engine.lock().unwrap();
         let Some(engine) = engine_guard.as_ref() else {
@@ -1658,7 +1619,7 @@ impl LanguageServer for NostosLanguageServer {
     async fn document_symbol(&self, params: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
         let uri = &params.text_document.uri;
 
-        eprintln!("Document symbols for: {:?}", uri);
+        debug!("Document symbols for: {:?}", uri);
 
         // Get document content
         let content = match self.documents.get(uri) {
@@ -1679,7 +1640,7 @@ impl LanguageServer for NostosLanguageServer {
         let uri = &params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
 
-        eprintln!("Find references at {:?}", position);
+        debug!("Find references at {:?}", position);
 
         // Get document content
         let content = match self.documents.get(uri) {
@@ -1702,7 +1663,7 @@ impl LanguageServer for NostosLanguageServer {
             return Ok(None);
         }
 
-        eprintln!("Find references for: '{}'", word);
+        debug!("Find references for: '{}'", word);
 
         // Get all documents and search for references
         let mut locations = Vec::new();
@@ -1974,7 +1935,7 @@ impl NostosLanguageServer {
                 delta_line,
                 delta_start,
                 length,
-                token_type: token_type,
+                token_type,
                 token_modifiers_bitset: modifiers,
             });
 
@@ -2243,15 +2204,7 @@ impl NostosLanguageServer {
                                     let prev = Self::prev_significant_token(tokens, m);
                                     if matches!(prev, None | Some(Token::Newline)) || prev.is_none() {
                                         // Actually, check if the prev token is a newline
-                                        let mut preceded_by_newline = false;
-                                        if m > 0 {
-                                            for p in (0..m).rev() {
-                                                match &tokens[p].0 {
-                                                    Token::Newline => { preceded_by_newline = true; break; }
-                                                    _ => break,
-                                                }
-                                            }
-                                        }
+                                        let preceded_by_newline = m > 0 && matches!(tokens[m - 1].0, Token::Newline);
                                         if preceded_by_newline || m == k + 1 {
                                             break;
                                         }
@@ -2467,36 +2420,19 @@ impl NostosLanguageServer {
     fn get_dot_completions(&self, before_dot: &str, local_vars: &std::collections::HashMap<String, String>, lambda_param_type: Option<&str>, document_content: &str) -> Vec<CompletionItem> {
         let mut items = Vec::new();
 
+        // Collect intermediate data under the lock, then build CompletionItems after dropping it.
+        // This minimizes how long the engine mutex is held.
+
         let engine_guard = self.engine.lock().unwrap();
         let Some(engine) = engine_guard.as_ref() else {
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-                use std::io::Write;
-                let _ = writeln!(f, "ERROR: engine is None in get_dot_completions (after async wait)!");
-            }
             return items;
         };
 
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-            use std::io::Write;
-            let _ = writeln!(f, "get_dot_completions: engine available, before_dot='{}', lambda_param_type={:?}", before_dot, lambda_param_type);
-        }
-
         // If we have a lambda parameter type, use that directly
         if let Some(param_type) = lambda_param_type {
-            eprintln!("Using lambda param type: {}", param_type);
+            trace!("Using lambda param type: {}", param_type);
 
-            // Add type indicator at top of list
-            items.push(CompletionItem {
-                label: format!(": {}", param_type),
-                kind: Some(CompletionItemKind::TYPE_PARAMETER),
-                detail: Some("Lambda parameter type".to_string()),
-                documentation: Some(Documentation::String(format!("Parameter type: {}", param_type))),
-                sort_text: Some("!0".to_string()), // Sort first
-                filter_text: Some("".to_string()), // Don't filter this item
-                ..Default::default()
-            });
-
-            let mut seen = std::collections::HashSet::new();
+            // --- Collect data under lock ---
 
             // Add record fields FIRST for lambda parameter types too
             let all_types = engine.get_types();
@@ -2515,6 +2451,27 @@ impl NostosLanguageServer {
             } else {
                 fields
             };
+
+            let ufcs_methods = engine.get_ufcs_methods_for_type(param_type);
+
+            // Add trait methods for lambda parameter types
+            let trait_methods = engine.get_trait_methods_for_type(param_type);
+
+            // --- Drop the lock before building CompletionItems ---
+            drop(engine_guard);
+
+            // Add type indicator at top of list
+            items.push(CompletionItem {
+                label: format!(": {}", param_type),
+                kind: Some(CompletionItemKind::TYPE_PARAMETER),
+                detail: Some("Lambda parameter type".to_string()),
+                documentation: Some(Documentation::String(format!("Parameter type: {}", param_type))),
+                sort_text: Some("!0".to_string()), // Sort first
+                filter_text: Some("".to_string()), // Don't filter this item
+                ..Default::default()
+            });
+
+            let mut seen = std::collections::HashSet::new();
 
             for field in &fields {
                 if !seen.insert(field.clone()) {
@@ -2535,6 +2492,7 @@ impl NostosLanguageServer {
                 });
             }
 
+            // Static method - doesn't need engine reference
             for (method_name, signature, doc) in nostos_repl::ReplEngine::get_builtin_methods_for_type(param_type) {
                 if !seen.insert(method_name.to_string()) {
                     continue;
@@ -2549,7 +2507,7 @@ impl NostosLanguageServer {
                 });
             }
 
-            for (method_name, signature, doc) in engine.get_ufcs_methods_for_type(param_type) {
+            for (method_name, signature, doc) in ufcs_methods {
                 if !seen.insert(method_name.clone()) {
                     continue;
                 }
@@ -2563,8 +2521,7 @@ impl NostosLanguageServer {
                 });
             }
 
-            // Add trait methods for lambda parameter types
-            for (method_name, signature, doc) in engine.get_trait_methods_for_type(param_type) {
+            for (method_name, signature, doc) in trait_methods {
                 if !seen.insert(method_name.clone()) {
                     continue;
                 }
@@ -2587,13 +2544,7 @@ impl NostosLanguageServer {
             .last()
             .unwrap_or("");
 
-        eprintln!("Identifier before dot: '{}'", identifier);
-
-        // Debug log
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-            use std::io::Write;
-            let _ = writeln!(f, "get_dot_completions: identifier='{}', local_vars={:?}", identifier, local_vars);
-        }
+        trace!("Identifier before dot: '{}'", identifier);
 
         // Check if it's a known module name (capitalize first letter to match module convention)
         let potential_module = if !identifier.is_empty() {
@@ -2604,8 +2555,9 @@ impl NostosLanguageServer {
             String::new()
         };
 
-        // Check if it matches a module
-        let known_modules: Vec<String> = engine.get_functions()
+        // Check if it matches a module - call get_functions() once and reuse
+        let all_functions = engine.get_functions();
+        let known_modules: Vec<String> = all_functions
             .iter()
             .filter_map(|f| f.split('.').next().map(|s| s.to_string()))
             .collect::<std::collections::HashSet<_>>()
@@ -2624,33 +2576,43 @@ impl NostosLanguageServer {
                 identifier
             };
 
-            eprintln!("Found module: {}", module_name);
+            trace!("Found module: {}", module_name);
 
-            for fn_name in engine.get_functions() {
-                if fn_name.starts_with(&format!("{}.", module_name)) {
+            // --- Collect data under lock ---
+            let module_functions: Vec<(String, Option<String>, Option<String>)> = all_functions
+                .iter()
+                .filter(|fn_name| fn_name.starts_with(&format!("{}.", module_name)))
+                .filter_map(|fn_name| {
                     let short_name = fn_name.strip_prefix(&format!("{}.", module_name))
-                        .unwrap_or(&fn_name);
+                        .unwrap_or(fn_name);
 
                     // Skip internal functions (starting with underscore)
                     if short_name.starts_with('_') {
-                        continue;
+                        return None;
                     }
 
-                    let signature = engine.get_function_signature(&fn_name);
-                    let doc = engine.get_function_doc(&fn_name);
+                    let signature = engine.get_function_signature(fn_name);
+                    let doc = engine.get_function_doc(fn_name);
 
-                    items.push(CompletionItem {
-                        label: short_name.to_string(),
-                        kind: Some(CompletionItemKind::FUNCTION),
-                        detail: signature,
-                        documentation: doc.map(|d| Documentation::String(d)),
-                        ..Default::default()
-                    });
-                }
+                    Some((short_name.to_string(), signature, doc))
+                })
+                .collect();
+
+            // --- Drop the lock before building CompletionItems ---
+            drop(engine_guard);
+
+            for (short_name, signature, doc) in module_functions {
+                items.push(CompletionItem {
+                    label: short_name,
+                    kind: Some(CompletionItemKind::FUNCTION),
+                    detail: signature,
+                    documentation: doc.map(|d| Documentation::String(d)),
+                    ..Default::default()
+                });
             }
         } else {
             // Not a module - try to infer the type and show methods
-            eprintln!("Not a module, trying to infer type of: '{}'", before_dot);
+            trace!("Not a module, trying to infer type of: '{}'", before_dot);
 
             // Extract just the expression part if before_dot contains an assignment
             // e.g., "x2 = g2[0][0]" -> "g2[0][0]"
@@ -2665,54 +2627,42 @@ impl NostosLanguageServer {
             } else {
                 before_dot
             };
-            eprintln!("Expression to infer: '{}'", expr_to_infer);
+            trace!("Expression to infer: '{}'", expr_to_infer);
 
             // Extract the full receiver expression (handles literals like [1,2,3], "hello", etc.)
             let receiver_expr = inference::extract_receiver_expression(expr_to_infer);
-            eprintln!("Receiver expression: '{}'", receiver_expr);
+            trace!("Receiver expression: '{}'", receiver_expr);
 
             // First check for literal types (string, list, etc.)
             let literal_type = inference::detect_literal_type(receiver_expr);
             if let Some(lt) = literal_type {
-                eprintln!("Detected literal type: {}", lt);
+                trace!("Detected literal type: {}", lt);
             }
 
             // IMPORTANT: First check if the last identifier (extracted earlier) is a simple
             // variable in local_vars. This handles cases like "self.name ++ self." where
             // the expression is complex but we just need the type of "self".
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-                use std::io::Write;
-                let _ = writeln!(f, "About to check identifier '{}' in local_vars, receiver_expr='{}', literal_type={:?}", identifier, receiver_expr, literal_type);
-            }
             let mut inferred_type = if let Some(lt) = literal_type {
                 // Use literal type directly
                 Some(lt.to_string())
             } else if let Some(ty) = local_vars.get(identifier) {
-                eprintln!("Found identifier '{}' directly in local_vars with type: {}", identifier, ty);
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-                    use std::io::Write;
-                    let _ = writeln!(f, "Found identifier '{}' in local_vars with type: {}", identifier, ty);
-                }
+                trace!("Found identifier '{}' directly in local_vars with type: {}", identifier, ty);
                 Some(ty.clone())
             } else if let Some(field_type) = inference::infer_field_access_type(before_dot, identifier, local_vars, engine, document_content) {
                 // Check if this is a field access like self.age where self is in local_vars
-                eprintln!("Inferred field access type for '{}': {}", identifier, field_type);
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-                    use std::io::Write;
-                    let _ = writeln!(f, "Inferred field access type for '{}': {}", identifier, field_type);
-                }
+                trace!("Inferred field access type for '{}': {}", identifier, field_type);
                 Some(field_type)
             } else if let Some(idx_literal_type) = inference::infer_indexed_list_literal_type(expr_to_infer) {
                 // Check if it's an indexed list literal like [["a","b"]][0][0]
-                eprintln!("Inferred indexed list literal type: {}", idx_literal_type);
+                trace!("Inferred indexed list literal type: {}", idx_literal_type);
                 Some(idx_literal_type)
             } else if let Some(idx_type) = inference::infer_index_expr_type(expr_to_infer, local_vars) {
                 // Check if it's an index expression like g2[0] or g2[0][0]
-                eprintln!("Inferred index expression type: {}", idx_type);
+                trace!("Inferred index expression type: {}", idx_type);
                 Some(idx_type)
             } else if let Some(func_ret_type) = inference::infer_rhs_type(expr_to_infer, Some(engine), local_vars) {
                 // Check if it's a function call like good.addff(3,2)
-                eprintln!("Inferred function call return type: {}", func_ret_type);
+                trace!("Inferred function call return type: {}", func_ret_type);
                 Some(func_ret_type)
             } else {
                 // Use the engine's general expression type inference
@@ -2803,7 +2753,55 @@ impl NostosLanguageServer {
                     }
                 }
             }
-            eprintln!("Inferred type: {:?}", inferred_type);
+            trace!("Inferred type: {:?}", inferred_type);
+
+            // --- Collect remaining data under lock ---
+            let fields = if let Some(ref type_name) = inferred_type {
+                // Add record fields FIRST so they appear before methods
+                let all_types = engine.get_types();
+                let fields = engine.get_type_fields(type_name);
+
+                // Also try with different name formats if direct lookup fails
+                if fields.is_empty() {
+                    // Try looking up with possible module prefixes
+                    let mut found_fields = Vec::new();
+                    for t in &all_types {
+                        if t.ends_with(&format!(".{}", type_name)) || t == type_name {
+                            found_fields = engine.get_type_fields(t);
+                            if !found_fields.is_empty() {
+                                break;
+                            }
+                        }
+                    }
+
+                    // If still no fields found, try extracting directly from source code
+                    // This works even when the file has parse errors
+                    if found_fields.is_empty() {
+                        found_fields = inference::extract_type_fields_from_source(document_content, type_name);
+                    }
+
+                    found_fields
+                } else {
+                    fields
+                }
+            } else {
+                Vec::new()
+            };
+
+            let ufcs_methods = if let Some(ref type_name) = inferred_type {
+                engine.get_ufcs_methods_for_type(type_name)
+            } else {
+                Vec::new()
+            };
+
+            let trait_methods = if let Some(ref type_name) = inferred_type {
+                engine.get_trait_methods_for_type(type_name)
+            } else {
+                Vec::new()
+            };
+
+            // --- Drop the lock before building CompletionItems ---
+            drop(engine_guard);
 
             // Add type indicator at top of list
             if let Some(ref type_name) = inferred_type {
@@ -2821,54 +2819,6 @@ impl NostosLanguageServer {
             let mut seen = std::collections::HashSet::new();
 
             if let Some(ref type_name) = inferred_type {
-                // Add record fields FIRST so they appear before methods
-                let all_types = engine.get_types();
-                let fields = engine.get_type_fields(type_name);
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-                    use std::io::Write;
-                    let _ = writeln!(f, "");
-                    let _ = writeln!(f, "=== get_dot_completions for type '{}' ===", type_name);
-                    let _ = writeln!(f, "Total types count: {}", all_types.len());
-                    // Filter to show user types (non-stdlib)
-                    let user_types: Vec<_> = all_types.iter().filter(|t| !t.starts_with("stdlib.")).collect();
-                    let _ = writeln!(f, "User types (non-stdlib): {:?}", user_types);
-                    let _ = writeln!(f, "Fields for '{}': {:?}", type_name, fields);
-                }
-
-                // Also try with different name formats if direct lookup fails
-                let fields = if fields.is_empty() {
-                    // Try looking up with possible module prefixes
-                    let mut found_fields = Vec::new();
-                    for t in &all_types {
-                        if t.ends_with(&format!(".{}", type_name)) || t == type_name {
-                            found_fields = engine.get_type_fields(t);
-                            if !found_fields.is_empty() {
-                                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-                                    use std::io::Write;
-                                    let _ = writeln!(f, "Found fields via '{}': {:?}", t, found_fields);
-                                }
-                                break;
-                            }
-                        }
-                    }
-
-                    // If still no fields found, try extracting directly from source code
-                    // This works even when the file has parse errors
-                    if found_fields.is_empty() {
-                        found_fields = inference::extract_type_fields_from_source(document_content, type_name);
-                        if !found_fields.is_empty() {
-                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_lsp_debug.log") {
-                                use std::io::Write;
-                                let _ = writeln!(f, "Found fields from source for '{}': {:?}", type_name, found_fields);
-                            }
-                        }
-                    }
-
-                    found_fields
-                } else {
-                    fields
-                };
-
                 for field in &fields {
                     if !seen.insert(field.clone()) {
                         continue;
@@ -2892,6 +2842,7 @@ impl NostosLanguageServer {
                 }
 
                 // Show builtin methods for the inferred type
+                // Static method - doesn't need engine reference
                 for (method_name, signature, doc) in nostos_repl::ReplEngine::get_builtin_methods_for_type(type_name) {
                     if !seen.insert(method_name.to_string()) {
                         continue;
@@ -2908,7 +2859,7 @@ impl NostosLanguageServer {
                 }
 
                 // Also add UFCS methods from user-defined functions
-                for (method_name, signature, doc) in engine.get_ufcs_methods_for_type(type_name) {
+                for (method_name, signature, doc) in ufcs_methods {
                     if !seen.insert(method_name.clone()) {
                         continue;
                     }
@@ -2924,7 +2875,7 @@ impl NostosLanguageServer {
                 }
 
                 // Add trait methods implemented for the type
-                for (method_name, signature, doc) in engine.get_trait_methods_for_type(type_name) {
+                for (method_name, signature, doc) in trait_methods {
                     if !seen.insert(method_name.clone()) {
                         continue;
                     }
@@ -2941,6 +2892,7 @@ impl NostosLanguageServer {
             }
 
             // If no type inferred, show generic methods
+            // Static method - doesn't need engine reference
             if inferred_type.is_none() {
                 for (method_name, signature, doc) in nostos_repl::ReplEngine::get_builtin_methods_for_type("Unknown") {
                     items.push(CompletionItem {
@@ -3212,7 +3164,7 @@ impl NostosLanguageServer {
                     if let Some(full_type_name) = matching_type {
                         let fields = engine.get_type_fields(full_type_name);
                         if !fields.is_empty() {
-                            eprintln!("REPL constructor completion: type='{}', fields={:?}", full_type_name, fields);
+                            trace!("REPL constructor completion: type='{}', fields={:?}", full_type_name, fields);
 
                             for field_info in &fields {
                                 // field_info is "name: type" format
@@ -3242,7 +3194,7 @@ impl NostosLanguageServer {
             let before_dot = &text_to_cursor[..dot_pos];
             let partial_after = &text_to_cursor[dot_pos + 1..];
 
-            eprintln!("REPL dot completion: before='{}', partial='{}'", before_dot, partial_after);
+            trace!("REPL dot completion: before='{}', partial='{}'", before_dot, partial_after);
             {
                 use std::io::Write;
                 if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_repl_complete.log") {
@@ -3255,7 +3207,7 @@ impl NostosLanguageServer {
 
             // Extract the full receiver expression (handles [1,2,3], "hello", etc.)
             let expr = inference::extract_receiver_expression(before_dot);
-            eprintln!("REPL receiver expr: '{}'", expr);
+            trace!("REPL receiver expr: '{}'", expr);
             {
                 use std::io::Write;
                 if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_repl_complete.log") {
@@ -3279,7 +3231,7 @@ impl NostosLanguageServer {
             // Try lambda parameter inference first
             let lambda_type = inference::infer_lambda_param_type(text_to_cursor, before_dot, &local_vars);
             if let Some(ref lt) = lambda_type {
-                eprintln!("REPL lambda param type: {}", lt);
+                trace!("REPL lambda param type: {}", lt);
             }
 
             if is_module {
@@ -3366,7 +3318,7 @@ impl NostosLanguageServer {
                     if is_simple_ident {
                         // Check REPL variable type first
                         if let Some(var_type) = engine.get_variable_type(expr) {
-                            eprintln!("REPL variable type for '{}': {}", expr, var_type);
+                            trace!("REPL variable type for '{}': {}", expr, var_type);
                             Some(var_type)
                         } else {
                             None
@@ -3384,7 +3336,7 @@ impl NostosLanguageServer {
                         }
                     }
                     literal_type.map(|s| {
-                        eprintln!("REPL detected literal type: {}", s);
+                        trace!("REPL detected literal type: {}", s);
                         s.to_string()
                     })
                 }).or_else(|| {
@@ -3393,7 +3345,7 @@ impl NostosLanguageServer {
                 });
 
                 if let Some(ref type_name) = type_name {
-                    eprintln!("REPL inferred type: {}", type_name);
+                    trace!("REPL inferred type: {}", type_name);
                     {
                         use std::io::Write;
                         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nostos_repl_complete.log") {
@@ -3510,7 +3462,7 @@ impl NostosLanguageServer {
             let partial = &text_to_cursor[word_start..];
             let partial_lower = partial.to_lowercase();
 
-            eprintln!("REPL identifier completion: partial='{}'", partial);
+            trace!("REPL identifier completion: partial='{}'", partial);
 
             // Add keywords
             let keywords = [
