@@ -614,6 +614,7 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     BuiltinInfo { name: "WebSocket.isUpgrade", signature: "HttpRequest -> Bool", doc: "Check if request is a WebSocket upgrade request" },
     BuiltinInfo { name: "WebSocket.accept", signature: "Int -> WebSocket", doc: "Accept WebSocket upgrade for request ID, returns WebSocket handle" },
     BuiltinInfo { name: "WebSocket.connect", signature: "String -> WebSocket", doc: "Connect to WebSocket server at URL, returns WebSocket handle" },
+    BuiltinInfo { name: "WebSocket.connectWithHeaders", signature: "String -> [(String, String)] -> WebSocket", doc: "Connect to WebSocket server with custom HTTP headers on the upgrade request (e.g. for X-API-Key or Authorization)" },
     BuiltinInfo { name: "WebSocket.send", signature: "WebSocket -> String -> ()", doc: "Send message on WebSocket handle" },
     BuiltinInfo { name: "WebSocket.recv", signature: "WebSocket -> String", doc: "Receive message from WebSocket handle (blocks until message arrives)" },
     BuiltinInfo { name: "WebSocket.close", signature: "WebSocket -> ()", doc: "Close WebSocket connection" },
@@ -12616,6 +12617,13 @@ impl Compiler {
                             self.chunk.emit(Instruction::WebSocketConnect(dst, url_reg), line);
                             return Ok(dst);
                         }
+                        "WebSocket.connectWithHeaders" if args.len() == 2 => {
+                            let url_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let headers_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::WebSocketConnectWithHeaders(dst, url_reg, headers_reg), line);
+                            return Ok(dst);
+                        }
                         "WebSocket.send" if args.len() == 2 => {
                             let request_id_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let message_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
@@ -13721,6 +13729,13 @@ impl Compiler {
                             let url_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
                             let dst = self.alloc_reg();
                             self.chunk.emit(Instruction::WebSocketConnect(dst, url_reg), line);
+                            return Ok(dst);
+                        }
+                        "WebSocket.connectWithHeaders" if args.len() == 2 => {
+                            let url_reg = self.compile_expr_tail(Self::call_arg_expr(&args[0]), false)?;
+                            let headers_reg = self.compile_expr_tail(Self::call_arg_expr(&args[1]), false)?;
+                            let dst = self.alloc_reg();
+                            self.chunk.emit(Instruction::WebSocketConnectWithHeaders(dst, url_reg, headers_reg), line);
                             return Ok(dst);
                         }
                         "WebSocket.send" if args.len() == 2 => {

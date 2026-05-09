@@ -1953,6 +1953,10 @@ pub enum Instruction {
     WebSocketAccept(Reg, Reg),
     /// Connect to WebSocket server: dst = WebSocket.connect(url)
     WebSocketConnect(Reg, Reg),
+    /// Connect to WebSocket server with custom HTTP headers on the upgrade:
+    /// dst = WebSocket.connectWithHeaders(url, headers)
+    /// headers: list of (name, value) tuples
+    WebSocketConnectWithHeaders(Reg, Reg, Reg),
     /// Send message on WebSocket: dst = WebSocket.send(request_id, message)
     WebSocketSend(Reg, Reg, Reg),
     /// Receive message from WebSocket: dst = WebSocket.receive(request_id)
