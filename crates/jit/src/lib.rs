@@ -4848,63 +4848,25 @@ mod tests {
     }
 
     #[test]
-    fn test_jit_fib_function() {
+    fn test_jit_rejects_non_tail_fib() {
+        // fib uses non-tail self-recursion (CallSelf). The JIT must refuse to
+        // compile it, because JIT-compiled recursive calls bypass the VM's
+        // stack overflow check and would crash with a native Rust stack
+        // overflow instead of a clean error.
         let config = JitConfig::default();
         let mut jit = JitCompiler::new(config).unwrap();
 
         let func = make_fib_function();
-        jit.compile_int_function(0, &func).expect("JIT compilation failed");
-
-        // Get the compiled function and call it
-        let native_fn = jit.get_int_function(0).expect("Function not compiled");
-
-        // Test fibonacci sequence
-        assert_eq!(native_fn(0), 0);
-        assert_eq!(native_fn(1), 1);
-        assert_eq!(native_fn(2), 1);
-        assert_eq!(native_fn(3), 2);
-        assert_eq!(native_fn(4), 3);
-        assert_eq!(native_fn(5), 5);
-        assert_eq!(native_fn(10), 55);
-        assert_eq!(native_fn(20), 6765);
-    }
-
-    #[test]
-    fn test_jit_fib_35() {
-        let config = JitConfig::default();
-        let mut jit = JitCompiler::new(config).unwrap();
-
-        let func = make_fib_function();
-        jit.compile_int_function(0, &func).expect("JIT compilation failed");
-
-        let native_fn = jit.get_int_function(0).expect("Function not compiled");
-
-        // Time fib(35)
-        let start = std::time::Instant::now();
-        let result = native_fn(35);
-        let elapsed = start.elapsed();
-
-        assert_eq!(result, 9227465);
-        eprintln!("[JIT] fib(35) = {} in {:?}", result, elapsed);
-    }
-
-    #[test]
-    fn test_jit_fib_40() {
-        let config = JitConfig::default();
-        let mut jit = JitCompiler::new(config).unwrap();
-
-        let func = make_fib_function();
-        jit.compile_int_function(0, &func).expect("JIT compilation failed");
-
-        let native_fn = jit.get_int_function(0).expect("Function not compiled");
-
-        // Time fib(40)
-        let start = std::time::Instant::now();
-        let result = native_fn(40);
-        let elapsed = start.elapsed();
-
-        assert_eq!(result, 102334155);
-        eprintln!("[JIT] fib(40) = {} in {:?}", result, elapsed);
+        match jit.compile_int_function(0, &func) {
+            Err(JitError::NotSuitable(msg)) => {
+                assert!(
+                    msg.contains("non-tail self-recursion"),
+                    "unexpected NotSuitable reason: {}",
+                    msg
+                );
+            }
+            other => panic!("expected NotSuitable for non-tail recursion, got {:?}", other),
+        }
     }
 
     /// Create fib function matching what the compiler generates
@@ -4971,22 +4933,21 @@ mod tests {
     }
 
     #[test]
-    fn test_jit_fib_40_compiler_style() {
+    fn test_jit_rejects_non_tail_fib_compiler_style() {
+        // Same as test_jit_rejects_non_tail_fib, but using the bytecode shape
+        // the compiler actually emits for fib. Still non-tail recursion, so
+        // the JIT must reject it.
         let config = JitConfig::default();
         let mut jit = JitCompiler::new(config).unwrap();
 
         let func = make_fib_function_compiler_style();
-        jit.compile_int_function(0, &func).expect("JIT compilation failed");
-
-        let native_fn = jit.get_int_function(0).expect("Function not compiled");
-
-        // Time fib(40)
-        let start = std::time::Instant::now();
-        let result = native_fn(40);
-        let elapsed = start.elapsed();
-
-        assert_eq!(result, 102334155);
-        eprintln!("[JIT] fib_compiler(40) = {} in {:?}", result, elapsed);
+        assert!(
+            matches!(
+                jit.compile_int_function(0, &func),
+                Err(JitError::NotSuitable(_))
+            ),
+            "expected NotSuitable for non-tail recursion"
+        );
     }
 
     /// Create a sumArray function: sumArray(arr, i, acc) =
