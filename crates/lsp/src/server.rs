@@ -521,7 +521,7 @@ impl NostosLanguageServer {
             return diagnostics;
         }
 
-        diagnostics.into_iter().filter_map(|mut d| {
+        diagnostics.into_iter().map(|mut d| {
             // Pattern: "`symbol` is not defined in module `modulename`"
             if d.message.contains("is not defined in module") {
                 // Extract the module name from the error message
@@ -534,20 +534,17 @@ impl NostosLanguageServer {
                             // Replace with a clearer message
                             d.message = format!("module `{}` failed to compile — see errors in {}.nos", module_name, module_name);
                             d.severity = Some(DiagnosticSeverity::WARNING);
-                            return Some(d);
-                        }
-                        if unanalyzed_modules.contains(module_name) {
+                        } else if unanalyzed_modules.contains(module_name) {
                             d.message = format!(
                                 "module `{}` has not been fully analyzed yet — this import is probably valid; rebuilding usually clears this",
                                 module_name
                             );
                             d.severity = Some(DiagnosticSeverity::WARNING);
-                            return Some(d);
                         }
                     }
                 }
             }
-            Some(d)
+            d
         }).collect()
     }
 

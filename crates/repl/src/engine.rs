@@ -7972,7 +7972,7 @@ impl ReplEngine {
         // import-existence check consults only function_visibility — so without this, every
         // cross-module `use mod.{func}` import would be wrongly flagged as undefined.
         for (name, visibility) in self.compiler.get_all_function_visibility() {
-            check_compiler.register_function_visibility(name, visibility.clone());
+            check_compiler.register_function_visibility(name, *visibility);
         }
 
         // Register external types from the main compiler
