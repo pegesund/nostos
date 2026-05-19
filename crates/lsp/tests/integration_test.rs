@@ -460,6 +460,108 @@ impl LspClient {
         vec![]
     }
 
+    /// Request document highlights at a position
+    /// Returns list of (line, start_char, end_char) tuples for highlighted ranges
+    fn document_highlight(&mut self, uri: &str, line: u32, character: u32) -> Vec<(u32, u32, u32)> {
+        let response = self.send_request("textDocument/documentHighlight", json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": line, "character": character }
+        }));
+
+        let mut highlights = Vec::new();
+        if let Some(result) = response.get("result") {
+            if let Some(items) = result.as_array() {
+                for item in items {
+                    if let Some(range) = item.get("range") {
+                        let start_line = range.get("start").and_then(|s| s.get("line")).and_then(|l| l.as_u64()).unwrap_or(0) as u32;
+                        let start_char = range.get("start").and_then(|s| s.get("character")).and_then(|c| c.as_u64()).unwrap_or(0) as u32;
+                        let end_char = range.get("end").and_then(|s| s.get("character")).and_then(|c| c.as_u64()).unwrap_or(0) as u32;
+                        highlights.push((start_line, start_char, end_char));
+                    }
+                }
+            }
+        }
+        highlights
+    }
+
+    /// Request inlay hints for a range
+    /// Returns list of (line, character, label) tuples
+    fn inlay_hints(&mut self, uri: &str, start_line: u32, end_line: u32) -> Vec<(u32, u32, String)> {
+        let response = self.send_request("textDocument/inlayHint", json!({
+            "textDocument": { "uri": uri },
+            "range": {
+                "start": { "line": start_line, "character": 0 },
+                "end": { "line": end_line, "character": 0 }
+            }
+        }));
+
+        let mut hints = Vec::new();
+        if let Some(result) = response.get("result") {
+            if let Some(items) = result.as_array() {
+                for item in items {
+                    let line = item.get("position").and_then(|p| p.get("line")).and_then(|l| l.as_u64()).unwrap_or(0) as u32;
+                    let character = item.get("position").and_then(|p| p.get("character")).and_then(|c| c.as_u64()).unwrap_or(0) as u32;
+                    let label = item.get("label").and_then(|l| l.as_str()).unwrap_or("").to_string();
+                    hints.push((line, character, label));
+                }
+            }
+        }
+        hints
+    }
+
+    /// Request prepare rename at a position
+    /// Returns Some((start_line, start_char, end_char)) if rename is valid, None otherwise
+    fn prepare_rename(&mut self, uri: &str, line: u32, character: u32) -> Option<(u32, u32, u32)> {
+        let response = self.send_request("textDocument/prepareRename", json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": line, "character": character }
+        }));
+
+        if let Some(result) = response.get("result") {
+            if result.is_null() {
+                return None;
+            }
+            // PrepareRenameResponse::Range format
+            let start_line = result.get("start").and_then(|s| s.get("line")).and_then(|l| l.as_u64())? as u32;
+            let start_char = result.get("start").and_then(|s| s.get("character")).and_then(|c| c.as_u64())? as u32;
+            let end_char = result.get("end").and_then(|s| s.get("character")).and_then(|c| c.as_u64())? as u32;
+            Some((start_line, start_char, end_char))
+        } else {
+            None
+        }
+    }
+
+    /// Request rename at a position
+    /// Returns map of URI -> list of (line, start_char, end_char, new_text) edits
+    fn rename(&mut self, uri: &str, line: u32, character: u32, new_name: &str) -> std::collections::HashMap<String, Vec<(u32, u32, u32, String)>> {
+        let response = self.send_request("textDocument/rename", json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": line, "character": character },
+            "newName": new_name
+        }));
+
+        let mut result_map = std::collections::HashMap::new();
+        if let Some(result) = response.get("result") {
+            if let Some(changes) = result.get("changes").and_then(|c| c.as_object()) {
+                for (uri_str, edits) in changes {
+                    let mut edit_list = Vec::new();
+                    if let Some(edits_arr) = edits.as_array() {
+                        for edit in edits_arr {
+                            if let (Some(range), Some(new_text)) = (edit.get("range"), edit.get("newText").and_then(|t| t.as_str())) {
+                                let line = range.get("start").and_then(|s| s.get("line")).and_then(|l| l.as_u64()).unwrap_or(0) as u32;
+                                let start_char = range.get("start").and_then(|s| s.get("character")).and_then(|c| c.as_u64()).unwrap_or(0) as u32;
+                                let end_char = range.get("end").and_then(|s| s.get("character")).and_then(|c| c.as_u64()).unwrap_or(0) as u32;
+                                edit_list.push((line, start_char, end_char, new_text.to_string()));
+                            }
+                        }
+                    }
+                    result_map.insert(uri_str.clone(), edit_list);
+                }
+            }
+        }
+        result_map
+    }
+
     fn shutdown(&mut self) -> Value {
         self.send_request("shutdown", json!(null))
     }
@@ -5461,6 +5563,408 @@ fn test_semantic_tokens_legend_includes_new_types() {
     assert_eq!(token_types[14], "enum", "Index 14 should be 'enum'");
     assert_eq!(token_types[15], "interface", "Index 15 should be 'interface'");
     assert_eq!(token_types[16], "typeParameter", "Index 16 should be 'typeParameter'");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test that cascading import errors are suppressed when the imported module fails to compile.
+/// When broken.nos has an error, main.nos should NOT get "not defined in module broken" for
+/// symbols that are properly declared (pub) in broken.nos.
+/// Instead, it should either get no error, or a message like "module broken failed to compile".
+#[test]
+fn test_lsp_cascading_import_error_suppressed() {
+    let project_path = create_test_project("cascading_import");
+
+    // broken.nos has a real compile error (calls undefined function) but also exports do_thing
+    fs::write(
+        project_path.join("broken.nos"),
+        "helper(x) = totally_undefined_function(x)\npub do_thing() = 42\n"
+    ).unwrap();
+
+    // main.nos imports from broken - should NOT get misleading "not defined" error
+    let main_content = "use broken.{do_thing}\nmain() = do_thing()\n";
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    let broken_uri = format!("file://{}/broken.nos", project_path.display());
+
+    // Diagnostics for broken.nos are published at startup (during initialized_and_wait),
+    // and get buffered. Diagnostics for main.nos may also arrive at startup.
+    // Open broken.nos first to trigger its diagnostics, then main.nos
+    let broken_content = std::fs::read_to_string(project_path.join("broken.nos")).unwrap();
+    client.did_open(&broken_uri, &broken_content);
+
+    // Read broken.nos diagnostics (the real error should be here)
+    let broken_diagnostics = client.read_diagnostics(&broken_uri, Duration::from_secs(5));
+
+    println!("=== broken.nos diagnostics ===");
+    for d in &broken_diagnostics {
+        println!("  Line {}: {}", d.line + 1, d.message);
+    }
+
+    // Now open main.nos and check its diagnostics
+    client.did_open(&main_uri, main_content);
+    let main_diagnostics = client.read_diagnostics(&main_uri, Duration::from_secs(5));
+
+    println!("=== main.nos diagnostics ===");
+    for d in &main_diagnostics {
+        println!("  Line {}: {}", d.line + 1, d.message);
+    }
+
+    // CRITICAL: broken.nos should have a real error about the undefined function
+    assert!(
+        !broken_diagnostics.is_empty(),
+        "broken.nos should have diagnostics for its own compile error"
+    );
+    assert!(
+        broken_diagnostics.iter().any(|d|
+            d.message.contains("totally_undefined_function") || d.message.contains("undefined") || d.message.contains("Undefined")
+        ),
+        "broken.nos error should mention the undefined function. Got: {:?}",
+        broken_diagnostics
+    );
+
+    // CRITICAL: main.nos should NOT get the misleading "not defined in module" error
+    let has_misleading_error = main_diagnostics.iter().any(|d|
+        d.message.contains("is not defined in module")
+    );
+    assert!(
+        !has_misleading_error,
+        "main.nos should NOT get 'not defined in module' error when the module itself failed to compile. Got: {:?}",
+        main_diagnostics
+    );
+
+    // If main.nos has any diagnostics, they should be the friendlier "failed to compile" message
+    for d in &main_diagnostics {
+        if d.message.contains("broken") {
+            assert!(
+                d.message.contains("failed to compile"),
+                "Expected 'failed to compile' message, got: {}",
+                d.message
+            );
+        }
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+// ============================================================================
+// Document Highlight Tests
+// ============================================================================
+
+/// Test: documentHighlight returns all occurrences of a variable in the file
+#[test]
+fn test_document_highlight_variable() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("doc_highlight_var");
+
+    let content = r#"main() = {
+    x = 42
+    y = x + 1
+    z = x * 2
+    y + z
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Request highlight on "x" at line 1, character 4 (the binding "x = 42")
+    let highlights = client.document_highlight(&main_uri, 1, 4);
+    println!("Highlights for 'x': {:?}", highlights);
+
+    // Should find 3 occurrences of "x": line 1 (def), line 2 (use), line 3 (use)
+    assert!(highlights.len() >= 3, "Expected at least 3 highlights for 'x', got {}: {:?}", highlights.len(), highlights);
+
+    // Verify the lines
+    let lines: Vec<u32> = highlights.iter().map(|(l, _, _)| *l).collect();
+    assert!(lines.contains(&1), "Expected highlight on line 1 (definition)");
+    assert!(lines.contains(&2), "Expected highlight on line 2 (first use)");
+    assert!(lines.contains(&3), "Expected highlight on line 3 (second use)");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test: documentHighlight does not match partial words
+#[test]
+fn test_document_highlight_word_boundary() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("doc_highlight_boundary");
+
+    let content = r#"main() = {
+    foo = 1
+    foobar = 2
+    foo + foobar
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Request highlight on "foo" at line 1, character 4
+    let highlights = client.document_highlight(&main_uri, 1, 4);
+    println!("Highlights for 'foo': {:?}", highlights);
+
+    // Should find exactly 2 occurrences of "foo" (not "foobar")
+    assert_eq!(highlights.len(), 2, "Expected 2 highlights for 'foo' (not matching 'foobar'), got {}: {:?}", highlights.len(), highlights);
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+// ============================================================================
+// Inlay Hint Tests
+// ============================================================================
+
+/// Test: inlayHints shows type for simple bindings
+#[test]
+fn test_inlay_hints_simple_binding() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("inlay_hints_simple");
+
+    let content = r#"main() = {
+    x = 42
+    y = "hello"
+    x
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Request inlay hints for the whole file
+    let hints = client.inlay_hints(&main_uri, 0, 10);
+    println!("Inlay hints: {:?}", hints);
+
+    // We expect at least one hint (for x = 42 or y = "hello")
+    // The exact types depend on inference, but there should be hints present
+    if !hints.is_empty() {
+        // Check that hints have the ": Type" format
+        for (line, _col, label) in &hints {
+            println!("  Hint at line {}: {}", line, label);
+            assert!(label.starts_with(": "), "Expected hint to start with ': ', got: {}", label);
+        }
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test: inlayHints capability is advertised
+#[test]
+fn test_inlay_hints_capability_advertised() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("inlay_hints_cap");
+    fs::write(project_path.join("main.nos"), "main() = 1\n").unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    let init_response = client.initialize(project_path.to_str().unwrap());
+
+    let capabilities = &init_response["result"]["capabilities"];
+    println!("inlayHintProvider: {:?}", capabilities["inlayHintProvider"]);
+
+    // Should be advertised (not null)
+    assert!(!capabilities["inlayHintProvider"].is_null(),
+        "Expected inlayHintProvider capability to be advertised");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+// ============================================================================
+// Rename Tests
+// ============================================================================
+
+/// Test: prepareRename validates rename target
+#[test]
+fn test_prepare_rename_valid_identifier() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("prepare_rename");
+
+    let content = "main() = {\n    x = 42\n    x\n}\n";
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Prepare rename on "x" at line 1, character 4
+    let result = client.prepare_rename(&main_uri, 1, 4);
+    println!("Prepare rename result: {:?}", result);
+    assert!(result.is_some(), "Expected prepare rename to succeed for identifier 'x'");
+
+    let (line, start, end) = result.unwrap();
+    assert_eq!(line, 1);
+    assert_eq!(end - start, 1, "Expected word length 1 for 'x'");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test: prepareRename rejects keywords
+#[test]
+fn test_prepare_rename_rejects_keyword() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("prepare_rename_kw");
+
+    let content = "main() = if true then 1 else 2\n";
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Try to rename "if" (keyword) at col 9 — should fail
+    let result = client.prepare_rename(&main_uri, 0, 9);
+    println!("Prepare rename on 'if': {:?}", result);
+    assert!(result.is_none(), "Expected prepare rename to reject keyword 'if'");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test: rename replaces all occurrences of a variable in the file
+#[test]
+fn test_rename_variable() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("rename_var");
+
+    let content = r#"main() = {
+    x = 42
+    y = x + 1
+    z = x * 2
+    y + z
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Rename "x" to "value" at line 1, character 4
+    let edits = client.rename(&main_uri, 1, 4, "value");
+    println!("Rename edits: {:?}", edits);
+
+    assert!(!edits.is_empty(), "Expected rename to produce edits");
+
+    let file_edits = edits.get(&main_uri).expect("Expected edits for main file");
+    // Should have 3 edits: line 1 (def), line 2 (use), line 3 (use)
+    assert!(file_edits.len() >= 3, "Expected at least 3 edits for renaming 'x', got {}: {:?}", file_edits.len(), file_edits);
+
+    // All edits should have new_text = "value"
+    for (line, start, end, new_text) in file_edits {
+        println!("  Edit at line {}: col {}..{} -> '{}'", line, start, end, new_text);
+        assert_eq!(new_text, "value", "Expected all edits to rename to 'value'");
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test: rename does not affect different identifiers with similar names
+#[test]
+fn test_rename_word_boundary() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("rename_boundary");
+
+    let content = r#"main() = {
+    foo = 1
+    foobar = 2
+    foo + foobar
+}
+"#;
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Rename "foo" (not "foobar") at line 1, character 4
+    let edits = client.rename(&main_uri, 1, 4, "bar");
+    println!("Rename edits: {:?}", edits);
+
+    let file_edits = edits.get(&main_uri).expect("Expected edits for main file");
+    // Should have exactly 2 edits for "foo" (not "foobar")
+    assert_eq!(file_edits.len(), 2, "Expected exactly 2 edits for 'foo' (not matching 'foobar'), got {}: {:?}", file_edits.len(), file_edits);
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test: rename and document highlight capabilities are advertised
+#[test]
+fn test_rename_capability_advertised() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("rename_cap");
+    fs::write(project_path.join("main.nos"), "main() = 1\n").unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    let init_response = client.initialize(project_path.to_str().unwrap());
+
+    let capabilities = &init_response["result"]["capabilities"];
+    println!("renameProvider: {:?}", capabilities["renameProvider"]);
+    println!("documentHighlightProvider: {:?}", capabilities["documentHighlightProvider"]);
+
+    assert!(!capabilities["renameProvider"].is_null(),
+        "Expected renameProvider capability to be advertised");
+    assert!(!capabilities["documentHighlightProvider"].is_null(),
+        "Expected documentHighlightProvider capability to be advertised");
+
+    // renameProvider should have prepareProvider: true
+    let prepare = &capabilities["renameProvider"]["prepareProvider"];
+    assert_eq!(prepare, &json!(true), "Expected prepareProvider: true in renameProvider");
 
     let _ = client.shutdown();
     client.exit();

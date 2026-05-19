@@ -194,20 +194,22 @@ impl NostosLanguageServer {
 
         // Use check_module_compiles which does NOT modify the engine state
         // This is a read-only analysis for real-time feedback
-        let result = {
+        let (result, failed_modules) = {
             let engine_guard = self.engine.lock().unwrap();
             let Some(engine) = engine_guard.as_ref() else {
                 debug!("check_file: engine not ready yet after waiting, skipping check");
                 return;
             };
 
-            engine.check_module_compiles(&module_name, content)
+            let r = engine.check_module_compiles(&module_name, content);
+            let fm = engine.get_failed_modules();
+            (r, fm)
         };
 
         trace!("Check result for {}: {:?}", module_name, result);
 
         // Build diagnostics from the check result
-        let error_diagnostics = if let Err(errors) = &result {
+        let error_diagnostics: Vec<Diagnostic> = if let Err(errors) = &result {
             errors.iter().map(|e| {
                 let (line, message) = Self::parse_error_location(e, Some(content));
                 Diagnostic {
@@ -224,6 +226,9 @@ impl NostosLanguageServer {
         } else {
             vec![]
         };
+
+        // Filter out cascading import errors from failed modules
+        let error_diagnostics = Self::filter_cascading_import_errors(error_diagnostics, &failed_modules);
 
         // Store error diagnostics for this file
         self.file_errors.insert(uri.clone(), error_diagnostics.clone());
@@ -315,6 +320,13 @@ impl NostosLanguageServer {
             errors
         };
 
+        // Filter out cascading import errors from failed modules
+        let failed_modules = {
+            let engine_guard = self.engine.lock().unwrap();
+            engine_guard.as_ref().map(|e| e.get_failed_modules()).unwrap_or_default()
+        };
+        let error_diagnostics = Self::filter_cascading_import_errors(error_diagnostics, &failed_modules);
+
         // Store error diagnostics for this file (so we can merge with stale warnings later)
         self.file_errors.insert(uri.clone(), error_diagnostics.clone());
 
@@ -378,6 +390,13 @@ impl NostosLanguageServer {
                     }]
                 }
             };
+
+            // Filter cascading import errors from failed modules
+            let failed_modules = {
+                let engine_guard = self.engine.lock().unwrap();
+                engine_guard.as_ref().map(|e| e.get_failed_modules()).unwrap_or_default()
+            };
+            let error_diagnostics = Self::filter_cascading_import_errors(error_diagnostics, &failed_modules);
 
             self.file_errors.insert(uri.clone(), error_diagnostics.clone());
             self.client.publish_diagnostics(uri, error_diagnostics, None).await;
@@ -473,6 +492,37 @@ impl NostosLanguageServer {
         // Fallback: no line number found
         trace!("Could not parse line number, using line 0");
         (0, error_msg.to_string())
+    }
+
+    /// Filter out cascading import errors caused by a dependency module failing to compile.
+    /// When module B has errors, importing from B produces "`X` is not defined in module `B`".
+    /// This is misleading — the real problem is in B, not in the import statement.
+    /// We replace such diagnostics with a clearer message pointing at the failed module.
+    fn filter_cascading_import_errors(diagnostics: Vec<Diagnostic>, failed_modules: &std::collections::HashSet<String>) -> Vec<Diagnostic> {
+        if failed_modules.is_empty() {
+            return diagnostics;
+        }
+
+        diagnostics.into_iter().filter_map(|mut d| {
+            // Pattern: "`symbol` is not defined in module `modulename`"
+            if d.message.contains("is not defined in module") {
+                // Extract the module name from the error message
+                // Format: `X` is not defined in module `Y`
+                if let Some(mod_start) = d.message.rfind("module `") {
+                    let after = &d.message[mod_start + 8..]; // skip "module `"
+                    if let Some(mod_end) = after.find('`') {
+                        let module_name = &after[..mod_end];
+                        if failed_modules.contains(module_name) {
+                            // Replace with a clearer message
+                            d.message = format!("module `{}` failed to compile — see errors in {}.nos", module_name, module_name);
+                            d.severity = Some(DiagnosticSeverity::WARNING);
+                            return Some(d);
+                        }
+                    }
+                }
+            }
+            Some(d)
+        }).collect()
     }
 
     /// Find the line number where a function from depends_on is called
@@ -613,13 +663,20 @@ impl LanguageServer for NostosLanguageServer {
                         },
                     )
                 ),
-                // Inlay hints disabled for now - needs more work
-                // inlay_hint_provider: Some(OneOf::Right(InlayHintServerCapabilities::Options(
-                //     InlayHintOptions {
-                //         resolve_provider: Some(false),
-                //         work_done_progress_options: Default::default(),
-                //     }
-                // ))),
+                // Inlay hints for type annotations
+                inlay_hint_provider: Some(OneOf::Right(InlayHintServerCapabilities::Options(
+                    InlayHintOptions {
+                        resolve_provider: Some(false),
+                        work_done_progress_options: Default::default(),
+                    }
+                ))),
+                // Document highlight (highlight all occurrences of symbol under cursor)
+                document_highlight_provider: Some(OneOf::Left(true)),
+                // Rename support (rename symbol in current file)
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: Default::default(),
+                })),
                 // Don't advertise commands here - the extension registers them
                 // and forwards via workspace/executeCommand. Advertising them
                 // causes vscode-languageclient to also try registering them,
@@ -675,8 +732,9 @@ impl LanguageServer for NostosLanguageServer {
 
             match init_result {
                 Ok(engine) => {
-                    // Collect errors before storing engine
+                    // Collect errors and failed modules before storing engine
                     let error_defs = engine.get_error_definitions();
+                    let failed_modules = engine.get_failed_modules();
                     let root = self.root_path.lock().unwrap().clone();
 
                     *self.engine.lock().unwrap() = Some(engine);
@@ -715,11 +773,14 @@ impl LanguageServer for NostosLanguageServer {
                                             ..Default::default()
                                         };
 
+                                        // Filter cascading import errors
+                                        let filtered = Self::filter_cascading_import_errors(vec![diagnostic], &failed_modules);
+
                                         // Store in file_errors for persistence
-                                        self.file_errors.insert(uri.clone(), vec![diagnostic.clone()]);
+                                        self.file_errors.insert(uri.clone(), filtered.clone());
 
                                         // Publish to client
-                                        self.client.publish_diagnostics(uri, vec![diagnostic], None).await;
+                                        self.client.publish_diagnostics(uri, filtered, None).await;
                                         info!("Published startup error for {}", file_path.display());
                                     }
                                 }
@@ -1700,6 +1761,180 @@ impl LanguageServer for NostosLanguageServer {
         } else {
             Ok(Some(locations))
         }
+    }
+
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> Result<Option<Vec<DocumentHighlight>>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        // Get document content
+        let content = match self.documents.get(uri) {
+            Some(c) => c.clone(),
+            None => return Ok(None),
+        };
+
+        // Get the word at cursor position
+        let lines: Vec<&str> = content.lines().collect();
+        let line_num = position.line as usize;
+        if line_num >= lines.len() {
+            return Ok(None);
+        }
+
+        let line = lines[line_num];
+        let cursor = position.character as usize;
+
+        let (word, _, _) = Self::extract_word_at_cursor(line, cursor);
+        if word.is_empty() {
+            return Ok(None);
+        }
+
+        debug!("Document highlight for: '{}'", word);
+
+        // Find all occurrences in this document only
+        let mut highlights = Vec::new();
+        for (ln, line_text) in content.lines().enumerate() {
+            let mut search_start = 0;
+            while let Some(pos) = line_text[search_start..].find(&word) {
+                let actual_pos = search_start + pos;
+
+                // Check word boundaries
+                let before_ok = actual_pos == 0
+                    || !line_text.chars().nth(actual_pos - 1).map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false);
+                let after_ok = actual_pos + word.len() >= line_text.len()
+                    || !line_text.chars().nth(actual_pos + word.len()).map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false);
+
+                if before_ok && after_ok {
+                    highlights.push(DocumentHighlight {
+                        range: Range {
+                            start: Position { line: ln as u32, character: actual_pos as u32 },
+                            end: Position { line: ln as u32, character: (actual_pos + word.len()) as u32 },
+                        },
+                        kind: Some(DocumentHighlightKind::TEXT),
+                    });
+                }
+
+                search_start = actual_pos + word.len();
+            }
+        }
+
+        if highlights.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(highlights))
+        }
+    }
+
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> Result<Option<PrepareRenameResponse>> {
+        let uri = &params.text_document.uri;
+        let position = params.position;
+
+        // Get document content
+        let content = match self.documents.get(uri) {
+            Some(c) => c.clone(),
+            None => return Ok(None),
+        };
+
+        let lines: Vec<&str> = content.lines().collect();
+        let line_num = position.line as usize;
+        if line_num >= lines.len() {
+            return Ok(None);
+        }
+
+        let line = lines[line_num];
+        let cursor = position.character as usize;
+
+        // Extract word, but for rename we don't want qualified names (no dots)
+        let (word, start, end) = Self::extract_simple_word_at_cursor(line, cursor);
+        if word.is_empty() {
+            return Ok(None);
+        }
+
+        // Don't allow renaming keywords
+        if Self::is_keyword(&word) {
+            return Ok(None);
+        }
+
+        Ok(Some(PrepareRenameResponse::Range(Range {
+            start: Position { line: position.line, character: start as u32 },
+            end: Position { line: position.line, character: end as u32 },
+        })))
+    }
+
+    async fn rename(
+        &self,
+        params: RenameParams,
+    ) -> Result<Option<WorkspaceEdit>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let new_name = &params.new_name;
+
+        // Get document content
+        let content = match self.documents.get(uri) {
+            Some(c) => c.clone(),
+            None => return Ok(None),
+        };
+
+        let lines: Vec<&str> = content.lines().collect();
+        let line_num = position.line as usize;
+        if line_num >= lines.len() {
+            return Ok(None);
+        }
+
+        let line = lines[line_num];
+        let cursor = position.character as usize;
+
+        let (word, _, _) = Self::extract_simple_word_at_cursor(line, cursor);
+        if word.is_empty() {
+            return Ok(None);
+        }
+
+        debug!("Rename '{}' -> '{}' in {}", word, new_name, uri);
+
+        // Find all occurrences in this file and build text edits
+        let mut edits = Vec::new();
+        for (ln, line_text) in content.lines().enumerate() {
+            let mut search_start = 0;
+            while let Some(pos) = line_text[search_start..].find(&word) {
+                let actual_pos = search_start + pos;
+
+                // Check word boundaries (simple identifier, no dots)
+                let before_ok = actual_pos == 0
+                    || !line_text.chars().nth(actual_pos - 1).map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false);
+                let after_ok = actual_pos + word.len() >= line_text.len()
+                    || !line_text.chars().nth(actual_pos + word.len()).map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false);
+
+                if before_ok && after_ok {
+                    edits.push(TextEdit {
+                        range: Range {
+                            start: Position { line: ln as u32, character: actual_pos as u32 },
+                            end: Position { line: ln as u32, character: (actual_pos + word.len()) as u32 },
+                        },
+                        new_text: new_name.clone(),
+                    });
+                }
+
+                search_start = actual_pos + word.len();
+            }
+        }
+
+        if edits.is_empty() {
+            return Ok(None);
+        }
+
+        let mut changes = std::collections::HashMap::new();
+        changes.insert(uri.clone(), edits);
+
+        Ok(Some(WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        }))
     }
 
     async fn semantic_tokens_full(
@@ -3739,6 +3974,49 @@ impl NostosLanguageServer {
 
         let word: String = chars[start..end].iter().collect();
         (word, start, end)
+    }
+
+    /// Extract a simple word at cursor (no dots — for rename operations)
+    /// Returns (word, start_index, end_index)
+    fn extract_simple_word_at_cursor(line: &str, cursor: usize) -> (String, usize, usize) {
+        let chars: Vec<char> = line.chars().collect();
+        let cursor = cursor.min(chars.len());
+
+        // Find start of word (alphanumeric + underscore only, no dots)
+        let mut start = cursor;
+        while start > 0 {
+            let c = chars[start - 1];
+            if c.is_alphanumeric() || c == '_' {
+                start -= 1;
+            } else {
+                break;
+            }
+        }
+
+        // Find end of word
+        let mut end = cursor;
+        while end < chars.len() {
+            let c = chars[end];
+            if c.is_alphanumeric() || c == '_' {
+                end += 1;
+            } else {
+                break;
+            }
+        }
+
+        let word: String = chars[start..end].iter().collect();
+        (word, start, end)
+    }
+
+    /// Check if a word is a Nostos keyword (cannot be renamed)
+    fn is_keyword(word: &str) -> bool {
+        matches!(word,
+            "if" | "then" | "else" | "match" | "with" | "let" | "in" | "do" |
+            "type" | "trait" | "impl" | "pub" | "use" | "import" | "module" |
+            "true" | "false" | "try" | "catch" | "throw" | "fn" | "main" |
+            "and" | "or" | "not" | "for" | "while" | "return" | "where" |
+            "of" | "as" | "from" | "to" | "by" | "deriving"
+        )
     }
 
     /// Get hover information for a word

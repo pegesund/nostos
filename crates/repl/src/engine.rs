@@ -8168,6 +8168,23 @@ impl ReplEngine {
             .collect()
     }
 
+    /// Get set of module names that have compile errors.
+    /// A module is considered failed if any of its definitions have a CompileError status.
+    pub fn get_failed_modules(&self) -> std::collections::HashSet<String> {
+        let mut failed = std::collections::HashSet::new();
+        for (name, status) in &self.compile_status {
+            if matches!(status, CompileStatus::CompileError(_)) {
+                // Extract module name from "module.function" format
+                if let Some(dot_pos) = name.find('.') {
+                    failed.insert(name[..dot_pos].to_string());
+                } else {
+                    failed.insert(name.clone());
+                }
+            }
+        }
+        failed
+    }
+
     /// Get all stale definitions
     pub fn get_stale_definitions(&self) -> Vec<(String, String, Vec<String>)> {
         self.compile_status
