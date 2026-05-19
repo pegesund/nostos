@@ -15,6 +15,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+// Shared counter for client-side WebSocket handles. Both `WebSocket.connect`
+// and `WebSocket.connectWithHeaders` allocate from this counter so handles
+// remain unique across the two code paths (they share the same connection map).
+static WS_CLIENT_COUNTER: AtomicU64 = AtomicU64::new(1000000);
+
 use chrono::Timelike;
 use std::future::poll_fn;
 use tokio::runtime::Runtime;
@@ -405,6 +410,12 @@ pub enum IoRequest {
     /// Connect to a WebSocket server
     WebSocketConnect {
         url: String,
+        response: IoResponse,
+    },
+    /// Connect to a WebSocket server with custom HTTP headers on the upgrade
+    WebSocketConnectWithHeaders {
+        url: String,
+        headers: Vec<(String, String)>,
         response: IoResponse,
     },
     /// Send a message on a WebSocket connection
@@ -1469,14 +1480,74 @@ impl IoRuntime {
                                 let (sender, receiver) = ws_stream.split();
 
                                 // Generate a unique handle for this connection
-                                use std::sync::atomic::{AtomicU64, Ordering};
-                                static WS_CLIENT_COUNTER: AtomicU64 = AtomicU64::new(1000000);
                                 let handle = WS_CLIENT_COUNTER.fetch_add(1, Ordering::SeqCst);
 
                                 // Store the connection
                                 ws_client_conns.lock().await.insert(handle, (sender, receiver));
 
                                 // Return the handle
+                                let _ = response.send(Ok(IoResponseValue::Int(handle as i64)));
+                            }
+                            Err(e) => {
+                                let _ = response.send(Err(IoError::IoError(format!("WebSocket connect failed: {}", e))));
+                            }
+                        }
+                    });
+                }
+
+                IoRequest::WebSocketConnectWithHeaders { url, headers, response } => {
+                    let ws_client_conns = ws_client_connections.clone();
+                    tokio::spawn(async move {
+                        use tokio_tungstenite::connect_async;
+                        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+                        use tokio_tungstenite::tungstenite::http::HeaderName;
+                        use tokio_tungstenite::tungstenite::http::HeaderValue;
+
+                        // Build the upgrade request from the URL, then attach headers.
+                        // IntoClientRequest fills in the standard WS handshake headers
+                        // (Host, Upgrade, Connection, Sec-WebSocket-Key/Version, ...)
+                        // so we just append the user-supplied ones on top.
+                        let mut request = match url.as_str().into_client_request() {
+                            Ok(req) => req,
+                            Err(e) => {
+                                let _ = response.send(Err(IoError::IoError(
+                                    format!("WebSocket connect failed: invalid URL: {}", e),
+                                )));
+                                return;
+                            }
+                        };
+                        let req_headers = request.headers_mut();
+                        for (name, value) in &headers {
+                            let header_name = match HeaderName::from_bytes(name.as_bytes()) {
+                                Ok(n) => n,
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::IoError(
+                                        format!("WebSocket connect failed: invalid header name '{}': {}", name, e),
+                                    )));
+                                    return;
+                                }
+                            };
+                            let header_value = match HeaderValue::from_str(value) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    let _ = response.send(Err(IoError::IoError(
+                                        format!("WebSocket connect failed: invalid header value for '{}': {}", name, e),
+                                    )));
+                                    return;
+                                }
+                            };
+                            req_headers.append(header_name, header_value);
+                        }
+
+                        match connect_async(request).await {
+                            Ok((ws_stream, _)) => {
+                                use futures::StreamExt;
+                                let (sender, receiver) = ws_stream.split();
+
+                                let handle = WS_CLIENT_COUNTER.fetch_add(1, Ordering::SeqCst);
+
+                                ws_client_conns.lock().await.insert(handle, (sender, receiver));
+
                                 let _ = response.send(Ok(IoResponseValue::Int(handle as i64)));
                             }
                             Err(e) => {
@@ -3585,6 +3656,150 @@ mod tests {
         match result.unwrap() {
             IoResponseValue::HttpResponse { status, .. } => assert_eq!(status, 200),
             _ => panic!("Expected HttpResponse"),
+        }
+    }
+
+    /// Spawn a one-shot tungstenite WebSocket server on a free localhost port that
+    /// only completes the upgrade if the client sent `X-Test-Auth: secret`. Returns
+    /// the bound port and a JoinHandle for the dedicated tokio runtime thread that
+    /// runs the server.
+    ///
+    /// Used by the `connectWithHeaders` tests below. Lives in its own thread + tokio
+    /// runtime so it can run alongside the `IoRuntime`'s runtime without nesting.
+    fn spawn_header_checking_ws_server() -> (u16, std::thread::JoinHandle<bool>) {
+        use std::net::TcpListener as StdTcpListener;
+        use std::sync::mpsc;
+
+        // Bind synchronously so we know the port before the test thread proceeds.
+        let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.set_nonblocking(true).expect("nonblock");
+        let port = listener.local_addr().unwrap().port();
+
+        let (ready_tx, ready_rx) = mpsc::channel::<()>();
+        let handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("server runtime");
+            rt.block_on(async move {
+                let listener = tokio::net::TcpListener::from_std(listener).expect("from_std");
+                let _ = ready_tx.send(());
+
+                // Accept a single TCP connection, then attempt the WS handshake
+                // while inspecting headers via accept_hdr_async.
+                let (stream, _) = match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    listener.accept(),
+                ).await {
+                    Ok(Ok(pair)) => pair,
+                    _ => return false,
+                };
+
+                use tokio_tungstenite::tungstenite::handshake::server::{Request, Response, ErrorResponse};
+                use tokio_tungstenite::tungstenite::http::StatusCode;
+
+                let mut saw_header = false;
+                let callback = |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
+                    let auth = req.headers().get("X-Test-Auth").and_then(|v| v.to_str().ok());
+                    if auth == Some("secret") {
+                        saw_header = true;
+                        Ok(resp)
+                    } else {
+                        let mut err = ErrorResponse::new(Some("missing X-Test-Auth".into()));
+                        *err.status_mut() = StatusCode::UNAUTHORIZED;
+                        Err(err)
+                    }
+                };
+
+                match tokio_tungstenite::accept_hdr_async(stream, callback).await {
+                    Ok(_ws) => saw_header,
+                    Err(_) => false,
+                }
+            })
+        });
+
+        // Wait until the server thread has the listener attached.
+        let _ = ready_rx.recv_timeout(std::time::Duration::from_secs(2));
+        (port, handle)
+    }
+
+    #[test]
+    fn test_websocket_connect_rejected_without_required_header() {
+        let (port, server) = spawn_header_checking_ws_server();
+
+        let io = IoRuntime::new();
+        let tx = io.request_sender();
+
+        let (resp_tx, resp_rx) = oneshot::channel();
+        tx.send(IoRequest::WebSocketConnect {
+            url: format!("ws://127.0.0.1:{}/", port),
+            response: resp_tx,
+        }).unwrap();
+
+        let result = io.runtime.as_ref().unwrap().block_on(async {
+            resp_rx.await.unwrap()
+        });
+
+        // Without the header the server rejects with 401 and tungstenite turns
+        // that into a connect error.
+        assert!(result.is_err(), "expected WebSocketConnect to be rejected by header-checking server");
+
+        // The server returns false because it never saw the header.
+        let saw_header = server.join().expect("server thread");
+        assert!(!saw_header, "server should not have seen the header");
+    }
+
+    #[test]
+    fn test_websocket_connect_with_headers_passes_custom_header() {
+        let (port, server) = spawn_header_checking_ws_server();
+
+        let io = IoRuntime::new();
+        let tx = io.request_sender();
+
+        let (resp_tx, resp_rx) = oneshot::channel();
+        tx.send(IoRequest::WebSocketConnectWithHeaders {
+            url: format!("ws://127.0.0.1:{}/", port),
+            headers: vec![("X-Test-Auth".to_string(), "secret".to_string())],
+            response: resp_tx,
+        }).unwrap();
+
+        let result = io.runtime.as_ref().unwrap().block_on(async {
+            resp_rx.await.unwrap()
+        });
+
+        assert!(result.is_ok(), "expected connectWithHeaders to succeed: {:?}", result);
+        match result.unwrap() {
+            IoResponseValue::Int(handle) => assert!(handle > 0, "expected positive handle"),
+            other => panic!("expected Int handle, got {:?}", other),
+        }
+
+        let saw_header = server.join().expect("server thread");
+        assert!(saw_header, "server should have observed X-Test-Auth header");
+    }
+
+    #[test]
+    fn test_websocket_connect_with_headers_invalid_header_name_errors() {
+        // An invalid header name (contains a newline) must be reported as an
+        // IO error and must not panic the runtime.
+        let io = IoRuntime::new();
+        let tx = io.request_sender();
+
+        let (resp_tx, resp_rx) = oneshot::channel();
+        tx.send(IoRequest::WebSocketConnectWithHeaders {
+            url: "ws://127.0.0.1:1/".to_string(),
+            headers: vec![("Bad\nName".to_string(), "value".to_string())],
+            response: resp_tx,
+        }).unwrap();
+
+        let result = io.runtime.as_ref().unwrap().block_on(async {
+            resp_rx.await.unwrap()
+        });
+
+        match result {
+            Err(IoError::IoError(msg)) => {
+                assert!(msg.contains("invalid header name"), "expected invalid header name error, got: {}", msg);
+            }
+            other => panic!("expected invalid-header-name error, got {:?}", other),
         }
     }
 }

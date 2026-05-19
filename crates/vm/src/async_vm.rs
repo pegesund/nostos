@@ -8161,6 +8161,72 @@ impl AsyncProcess {
                 }
             }
 
+            WebSocketConnectWithHeaders(dst, url_reg, headers_reg) => {
+                let url = match reg!(url_reg) {
+                    GcValue::String(ptr) => {
+                        self.heap.get_string(ptr).map(|s| s.data.clone())
+                            .ok_or_else(|| RuntimeError::IOError("Invalid URL string".to_string()))?
+                    }
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "String".to_string(),
+                        found: "non-string".to_string(),
+                    }),
+                };
+                let headers = match reg!(headers_reg) {
+                    GcValue::List(list) => {
+                        let mut result = Vec::new();
+                        for item in list.iter() {
+                            if let GcValue::Tuple(ptr) = item {
+                                if let Some(tuple) = self.heap.get_tuple(*ptr) {
+                                    if tuple.items.len() >= 2 {
+                                        let name = match &tuple.items[0] {
+                                            GcValue::String(ptr) => self.heap.get_string(*ptr)
+                                                .map(|s| s.data.clone())
+                                                .unwrap_or_default(),
+                                            _ => String::new(),
+                                        };
+                                        let value = match &tuple.items[1] {
+                                            GcValue::String(ptr) => self.heap.get_string(*ptr)
+                                                .map(|s| s.data.clone())
+                                                .unwrap_or_default(),
+                                            _ => String::new(),
+                                        };
+                                        result.push((name, value));
+                                    }
+                                }
+                            }
+                        }
+                        result
+                    }
+                    GcValue::Unit => vec![],
+                    _ => return Err(RuntimeError::TypeError {
+                        expected: "List[(String, String)]".to_string(),
+                        found: "non-list".to_string(),
+                    }),
+                };
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if let Some(sender) = &self.shared.io_sender {
+                    let request = IoRequest::WebSocketConnectWithHeaders { url, headers, response: tx };
+                    if sender.send(request).is_err() {
+                        return Err(RuntimeError::IOError("IO runtime shutdown".to_string()));
+                    }
+                    let result = rx.await.map_err(|_| RuntimeError::IOError("IO response channel closed".to_string()))?;
+                    match result {
+                        Ok(IoResponseValue::Int(ws_handle)) => {
+                            set_reg!(dst, GcValue::Int64(ws_handle));
+                        }
+                        Ok(_) => {
+                            return Err(RuntimeError::IOError("Unexpected response type".to_string()));
+                        }
+                        Err(e) => {
+                            self.throw_exception("websocket_error", format!("{}", e))?;
+                        }
+                    }
+                } else {
+                    return Err(RuntimeError::IOError("IO runtime not available".to_string()));
+                }
+            }
+
             WebSocketSend(dst, request_id_reg, message_reg) => {
                 let request_id = match reg!(request_id_reg) {
                     GcValue::Int64(n) => n as u64,

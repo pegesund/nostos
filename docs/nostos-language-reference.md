@@ -6501,6 +6501,30 @@ println("Got: " ++ response)
 WebSocket.close(ws)
 ```
 
+### Custom Headers on the Upgrade Request
+
+Use `WebSocket.connectWithHeaders` when the server requires HTTP headers on the
+WebSocket handshake (for example an `X-API-Key` or `Authorization` token):
+
+```nostos
+ws = WebSocket.connectWithHeaders(
+    "wss://api.example.com/feed",
+    [
+        ("X-API-Key", "secret"),
+        ("Authorization", "Bearer abc123"),
+    ]
+)
+WebSocket.send(ws, "subscribe")
+msg = WebSocket.recv(ws)
+WebSocket.close(ws)
+```
+
+The standard handshake headers (`Host`, `Upgrade`, `Connection`,
+`Sec-WebSocket-Key`, `Sec-WebSocket-Version`) are filled in automatically; the
+list you pass is appended on top. The function throws a `websocket_error`
+exception if the server rejects the upgrade or if a header name/value is
+invalid.
+
 ## Message Types
 
 ```nostos

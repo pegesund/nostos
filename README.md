@@ -451,6 +451,12 @@ handle(req) = {
 ws = WebSocket.connect("wss://echo.websocket.org")
 WebSocket.send(ws, "Hello!")
 response = WebSocket.recv(ws)
+
+# Client with custom HTTP headers on the upgrade (e.g. X-API-Key, Authorization)
+ws = WebSocket.connectWithHeaders("wss://api.example.com/feed", [
+    ("X-API-Key", "secret"),
+    ("Authorization", "Bearer abc123"),
+])
 ```
 
 ### Cryptography
