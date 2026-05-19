@@ -26319,13 +26319,6 @@ scope_depth: self.block_depth,
         self.function_visibility.insert(name.to_string(), visibility);
     }
 
-    /// Iterate over all registered function visibility entries.
-    /// Used to copy visibility into a throw-away analysis compiler so that
-    /// cross-module `use` imports can be resolved during read-only checking.
-    pub fn get_all_function_visibility(&self) -> impl Iterator<Item = (&String, &Visibility)> {
-        self.function_visibility.iter()
-    }
-
     /// Register all external functions at once, preserving their indices.
     /// This is important for eval because compiled bytecode contains CallDirect
     /// instructions with hardcoded function indices that must be preserved.
@@ -34354,7 +34347,14 @@ impl Compiler {
                     let mut resolved_qualified_name = qualified_name.clone();
                     if !is_stdlib_module {
                         let fn_prefix = format!("{}/", qualified_name);
+                        // Check both function_visibility and the function table. Functions
+                        // registered into a compiler externally (register_external_functions_with_list,
+                        // used by the LSP's read-only check) populate `functions` but not
+                        // `function_visibility`; consulting only the latter would wrongly flag a
+                        // valid cross-module import as undefined.
                         let exists_as_function = self.function_visibility.keys().any(|k| {
+                            k == &qualified_name || k.starts_with(&fn_prefix)
+                        }) || self.functions.keys().any(|k| {
                             k == &qualified_name || k.starts_with(&fn_prefix)
                         });
                         let exists_as_type = self.type_visibility.contains_key(&qualified_name);

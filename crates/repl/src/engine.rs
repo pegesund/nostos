@@ -7967,14 +7967,6 @@ impl ReplEngine {
         let func_list = self.compiler.get_function_list_names();
         check_compiler.register_external_functions_with_list(all_funcs, func_list);
 
-        // Copy function visibility from the main compiler. register_external_functions_with_list
-        // populates the function tables but not function_visibility, and compile_use_stmt's
-        // import-existence check consults only function_visibility — so without this, every
-        // cross-module `use mod.{func}` import would be wrongly flagged as undefined.
-        for (name, visibility) in self.compiler.get_all_function_visibility() {
-            check_compiler.register_function_visibility(name, *visibility);
-        }
-
         // Register external types from the main compiler
         for (name, type_val) in self.compiler.get_all_types() {
             check_compiler.register_external_type(&name, &type_val);
