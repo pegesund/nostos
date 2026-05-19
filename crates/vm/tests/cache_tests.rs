@@ -7,7 +7,7 @@
 
 use std::path::Path;
 use std::collections::HashMap;
-use nostos_vm::cache::{load_module_cache, save_module_cache, CachedModule, BytecodeCache, FunctionSignature};
+use nostos_vm::cache::{load_module_cache, save_module_cache, CachedModule, BytecodeCache, FunctionSignature, CACHE_FORMAT_VERSION};
 
 /// Helper to compute source hash (same algorithm as compiler)
 fn compute_source_hash(content: &str) -> String {
@@ -319,7 +319,7 @@ fn test_dependency_graph_tracking() {
 
     // Verify the manifest structure exists
     let manifest = cache.manifest();
-    assert_eq!(manifest.format_version, 1);
+    assert_eq!(manifest.format_version, CACHE_FORMAT_VERSION);
     assert_eq!(manifest.compiler_version, "test-0.1.0");
     assert!(manifest.dependency_graph.is_empty(), "Should start with empty graph");
 

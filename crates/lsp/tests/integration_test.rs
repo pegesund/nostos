@@ -5970,3 +5970,73 @@ fn test_rename_capability_advertised() {
     client.exit();
     cleanup_test_project(&project_path);
 }
+
+/// Regression test for the cascading "not defined in module" false positive.
+///
+/// A valid `use lib.{...}` import must not be flagged as undefined after a
+/// transient parse error in the importing file is introduced and reverted.
+/// Before the fix, the throw-away analysis compiler lacked function visibility
+/// for the imported module, so the import was wrongly reported as undefined.
+#[test]
+fn test_lsp_no_false_cascading_import_error() {
+    let project_path = create_test_project("cascading_import");
+
+    // A module with two genuinely-defined, public functions.
+    fs::write(
+        project_path.join("lib.nos"),
+        "pub answer() = 42\npub double(x) = x + x\n",
+    ).unwrap();
+
+    let valid_content = "use lib.{answer, double}\n\nmain() = double(answer())\n";
+    // The same file with `use` mistyped as `usse` — a parse error on line 1.
+    let broken_content = "usse lib.{answer, double}\n\nmain() = double(answer())\n";
+
+    fs::write(project_path.join("main.nos"), valid_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, valid_content);
+
+    // Initial state: the import is valid, so it must not be flagged.
+    std::thread::sleep(Duration::from_millis(400));
+    let initial_diags = client.read_diagnostics(&main_uri, Duration::from_secs(2));
+    println!("=== Initial diagnostics ===");
+    for d in &initial_diags {
+        println!("  Line {}: {}", d.line + 1, d.message);
+    }
+    assert!(
+        !initial_diags.iter().any(|d| d.message.contains("is not defined in module")),
+        "Valid import wrongly flagged on initial open: {:?}",
+        initial_diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+
+    // Introduce a transient parse error: `use` -> `usse`. This produces one
+    // diagnostics batch (the parse error), which we read and discard.
+    client.did_change(&main_uri, broken_content, 2);
+    std::thread::sleep(Duration::from_millis(500));
+    let _ = client.read_diagnostics(&main_uri, Duration::from_secs(3));
+
+    // Revert back to the valid import. The LSP publishes exactly one
+    // diagnostics batch per didChange — this batch is the reverted state.
+    client.did_change(&main_uri, valid_content, 3);
+    std::thread::sleep(Duration::from_millis(600));
+    let post_revert = client.read_diagnostics(&main_uri, Duration::from_secs(3));
+    println!("=== Diagnostics after usse -> use round-trip ===");
+    for d in &post_revert {
+        println!("  Line {}: {}", d.line + 1, d.message);
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+
+    assert!(
+        !post_revert.iter().any(|d| d.message.contains("is not defined in module")),
+        "After reverting a transient parse error, the valid `use lib.{{...}}` import \
+         was wrongly flagged as undefined: {:?}",
+        post_revert.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}

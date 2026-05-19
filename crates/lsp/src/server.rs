@@ -194,7 +194,7 @@ impl NostosLanguageServer {
 
         // Use check_module_compiles which does NOT modify the engine state
         // This is a read-only analysis for real-time feedback
-        let (result, failed_modules) = {
+        let (result, failed_modules, unanalyzed_modules) = {
             let engine_guard = self.engine.lock().unwrap();
             let Some(engine) = engine_guard.as_ref() else {
                 debug!("check_file: engine not ready yet after waiting, skipping check");
@@ -203,7 +203,8 @@ impl NostosLanguageServer {
 
             let r = engine.check_module_compiles(&module_name, content);
             let fm = engine.get_failed_modules();
-            (r, fm)
+            let um = engine.get_unanalyzed_modules();
+            (r, fm, um)
         };
 
         trace!("Check result for {}: {:?}", module_name, result);
@@ -228,7 +229,7 @@ impl NostosLanguageServer {
         };
 
         // Filter out cascading import errors from failed modules
-        let error_diagnostics = Self::filter_cascading_import_errors(error_diagnostics, &failed_modules);
+        let error_diagnostics = Self::filter_cascading_import_errors(error_diagnostics, &failed_modules, &unanalyzed_modules);
 
         // Store error diagnostics for this file
         self.file_errors.insert(uri.clone(), error_diagnostics.clone());
@@ -321,11 +322,14 @@ impl NostosLanguageServer {
         };
 
         // Filter out cascading import errors from failed modules
-        let failed_modules = {
+        let (failed_modules, unanalyzed_modules) = {
             let engine_guard = self.engine.lock().unwrap();
-            engine_guard.as_ref().map(|e| e.get_failed_modules()).unwrap_or_default()
+            match engine_guard.as_ref() {
+                Some(e) => (e.get_failed_modules(), e.get_unanalyzed_modules()),
+                None => Default::default(),
+            }
         };
-        let error_diagnostics = Self::filter_cascading_import_errors(error_diagnostics, &failed_modules);
+        let error_diagnostics = Self::filter_cascading_import_errors(error_diagnostics, &failed_modules, &unanalyzed_modules);
 
         // Store error diagnostics for this file (so we can merge with stale warnings later)
         self.file_errors.insert(uri.clone(), error_diagnostics.clone());
@@ -392,11 +396,14 @@ impl NostosLanguageServer {
             };
 
             // Filter cascading import errors from failed modules
-            let failed_modules = {
+            let (failed_modules, unanalyzed_modules) = {
                 let engine_guard = self.engine.lock().unwrap();
-                engine_guard.as_ref().map(|e| e.get_failed_modules()).unwrap_or_default()
+                match engine_guard.as_ref() {
+                    Some(e) => (e.get_failed_modules(), e.get_unanalyzed_modules()),
+                    None => Default::default(),
+                }
             };
-            let error_diagnostics = Self::filter_cascading_import_errors(error_diagnostics, &failed_modules);
+            let error_diagnostics = Self::filter_cascading_import_errors(error_diagnostics, &failed_modules, &unanalyzed_modules);
 
             self.file_errors.insert(uri.clone(), error_diagnostics.clone());
             self.client.publish_diagnostics(uri, error_diagnostics, None).await;
@@ -494,12 +501,23 @@ impl NostosLanguageServer {
         (0, error_msg.to_string())
     }
 
-    /// Filter out cascading import errors caused by a dependency module failing to compile.
-    /// When module B has errors, importing from B produces "`X` is not defined in module `B`".
-    /// This is misleading — the real problem is in B, not in the import statement.
-    /// We replace such diagnostics with a clearer message pointing at the failed module.
-    fn filter_cascading_import_errors(diagnostics: Vec<Diagnostic>, failed_modules: &std::collections::HashSet<String>) -> Vec<Diagnostic> {
-        if failed_modules.is_empty() {
+    /// Filter out misleading cascading import diagnostics.
+    ///
+    /// When module B cannot be resolved, importing from B produces
+    /// "`X` is not defined in module `B`". This is misleading — the real
+    /// problem is not the import statement. Two cases are downgraded:
+    ///
+    /// - `failed_modules`: B exists but failed to compile. The user should be
+    ///   pointed at B's real error.
+    /// - `unanalyzed_modules`: B is known but was never fully analyzed (for
+    ///   example, restored from an incomplete bytecode cache). The import is
+    ///   probably valid; a rebuild usually resolves it.
+    fn filter_cascading_import_errors(
+        diagnostics: Vec<Diagnostic>,
+        failed_modules: &std::collections::HashSet<String>,
+        unanalyzed_modules: &std::collections::HashSet<String>,
+    ) -> Vec<Diagnostic> {
+        if failed_modules.is_empty() && unanalyzed_modules.is_empty() {
             return diagnostics;
         }
 
@@ -515,6 +533,14 @@ impl NostosLanguageServer {
                         if failed_modules.contains(module_name) {
                             // Replace with a clearer message
                             d.message = format!("module `{}` failed to compile — see errors in {}.nos", module_name, module_name);
+                            d.severity = Some(DiagnosticSeverity::WARNING);
+                            return Some(d);
+                        }
+                        if unanalyzed_modules.contains(module_name) {
+                            d.message = format!(
+                                "module `{}` has not been fully analyzed yet — this import is probably valid; rebuilding usually clears this",
+                                module_name
+                            );
                             d.severity = Some(DiagnosticSeverity::WARNING);
                             return Some(d);
                         }
@@ -735,6 +761,7 @@ impl LanguageServer for NostosLanguageServer {
                     // Collect errors and failed modules before storing engine
                     let error_defs = engine.get_error_definitions();
                     let failed_modules = engine.get_failed_modules();
+                    let unanalyzed_modules = engine.get_unanalyzed_modules();
                     let root = self.root_path.lock().unwrap().clone();
 
                     *self.engine.lock().unwrap() = Some(engine);
@@ -774,7 +801,7 @@ impl LanguageServer for NostosLanguageServer {
                                         };
 
                                         // Filter cascading import errors
-                                        let filtered = Self::filter_cascading_import_errors(vec![diagnostic], &failed_modules);
+                                        let filtered = Self::filter_cascading_import_errors(vec![diagnostic], &failed_modules, &unanalyzed_modules);
 
                                         // Store in file_errors for persistence
                                         self.file_errors.insert(uri.clone(), filtered.clone());

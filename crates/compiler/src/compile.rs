@@ -26319,6 +26319,13 @@ scope_depth: self.block_depth,
         self.function_visibility.insert(name.to_string(), visibility);
     }
 
+    /// Iterate over all registered function visibility entries.
+    /// Used to copy visibility into a throw-away analysis compiler so that
+    /// cross-module `use` imports can be resolved during read-only checking.
+    pub fn get_all_function_visibility(&self) -> impl Iterator<Item = (&String, &Visibility)> {
+        self.function_visibility.iter()
+    }
+
     /// Register all external functions at once, preserving their indices.
     /// This is important for eval because compiled bytecode contains CallDirect
     /// instructions with hardcoded function indices that must be preserved.
@@ -27259,6 +27266,25 @@ scope_depth: self.block_depth,
     /// Get all known module prefixes.
     pub fn get_known_modules(&self) -> impl Iterator<Item = &str> {
         self.known_modules.iter().map(|s| s.as_str())
+    }
+
+    /// Get known module names that have no resolvable public symbols registered.
+    ///
+    /// Such a module was referenced but never fully analyzed — for example,
+    /// restored from an incomplete bytecode cache. Imports from it cannot be
+    /// resolved, so a "symbol is not defined in module" diagnostic against the
+    /// import would be misleading rather than helpful.
+    pub fn get_known_modules_without_public_symbols(&self) -> std::collections::HashSet<String> {
+        let mut result = std::collections::HashSet::new();
+        for module in &self.known_modules {
+            let prefix = format!("{}.", module);
+            let has_function = self.function_visibility.keys().any(|k| k.starts_with(&prefix));
+            let has_type = self.type_visibility.keys().any(|k| k.starts_with(&prefix));
+            if !has_function && !has_type {
+                result.insert(module.clone());
+            }
+        }
+        result
     }
 
     /// Debug function to check what arities exist for a function name
