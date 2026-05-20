@@ -928,12 +928,14 @@ pub fn check_builtin_shadowing(name: &str) -> Option<(&'static str, &'static str
 /// myFunction(x) = x + 1
 /// ```
 pub fn extract_doc_comment(source: &str, span_start: usize) -> Option<String> {
-    if span_start == 0 || span_start > source.len() {
+    if span_start == 0 {
         return None;
     }
 
-    // Get the text before the span
-    let before = &source[..span_start];
+    // Get the text before the span. Use `str::get` so a span_start that
+    // lands inside a multi-byte UTF-8 character returns None instead of
+    // panicking. Length and char-boundary are both verified by `get`.
+    let before = source.get(..span_start)?;
 
     // Find all lines before the definition
     let lines: Vec<&str> = before.lines().collect();
@@ -11107,13 +11109,14 @@ impl Compiler {
         // Use accumulated debug symbols (not affected by block scope restoration)
         let debug_symbols = std::mem::take(&mut self.current_fn_debug_symbols);
 
-        // Extract source code for this function from the source
+        // Extract source code for this function from the source. Use
+        // `str::get` rather than direct slicing so a span that lands inside
+        // a multi-byte UTF-8 character (e.g. an em-dash in a doc comment)
+        // yields None instead of panicking. The bounds-only guard the
+        // earlier code used was not enough -- byte indices in range can
+        // still cut a codepoint in half.
         let source_code = self.current_source.as_ref().and_then(|src| {
-            if def.span.start < src.len() && def.span.end <= src.len() {
-                Some(Arc::new(src[def.span.start..def.span.end].to_string()))
-            } else {
-                None
-            }
+            src.get(def.span.start..def.span.end).map(|s| Arc::new(s.to_string()))
         });
 
         // Extract doc comment from source (comment lines immediately before the function)
@@ -34511,6 +34514,23 @@ mod tests {
         let span_start = source.find("main").unwrap();
         let doc = extract_doc_comment(source, span_start);
         assert_eq!(doc, None);
+    }
+
+    /// Regression test: a span_start that lands inside a multi-byte UTF-8
+    /// character (here, between the bytes of an em-dash `─`) must not panic.
+    /// Before the str::get fix, `&source[..span_start]` would panic with
+    /// "byte index N is not a char boundary".
+    #[test]
+    fn test_extract_doc_comment_mid_codepoint_does_not_panic() {
+        let source = "# A box drawing char ─ in a comment\nmain() = 42";
+        let em_dash = source.find('─').unwrap();
+        // Aim for the middle byte of the 3-byte `─` codepoint.
+        let mid_codepoint = em_dash + 1;
+        assert!(!source.is_char_boundary(mid_codepoint));
+        // Must return None rather than panic. The behaviour at a non-boundary
+        // index is "no doc comment available", which is what the rest of the
+        // codebase expects from this helper.
+        assert_eq!(extract_doc_comment(source, mid_codepoint), None);
     }
 
     #[test]
