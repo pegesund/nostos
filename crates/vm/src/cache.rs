@@ -176,6 +176,17 @@ use crate::value::TypeValue;
 // Cache Manifest
 // ============================================================================
 
+/// Current on-disk cache format version.
+///
+/// Bump this whenever the serialized shape or semantics of a cached module
+/// change in a way that makes older caches unsafe to read. `is_cache_valid`
+/// rejects any manifest whose `format_version` differs, so stale caches are
+/// transparently rebuilt instead of being loaded in a degraded state.
+///
+/// Version 2: `CachedModule.exports` is now populated with the module's public
+/// functions (it was always empty in version 1).
+pub const CACHE_FORMAT_VERSION: u32 = 2;
+
 /// Global cache manifest tracking all cached modules
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CacheManifest {
@@ -196,7 +207,7 @@ pub struct ModuleCacheInfo {
 impl CacheManifest {
     pub fn new(compiler_version: &str) -> Self {
         Self {
-            format_version: 1,
+            format_version: CACHE_FORMAT_VERSION,
             compiler_version: compiler_version.to_string(),
             modules: HashMap::new(),
             dependency_graph: HashMap::new(),
@@ -578,6 +589,11 @@ pub fn is_cache_valid(
     source_path: &Path,
     compiler_version: &str,
 ) -> bool {
+    // Reject caches written in an older on-disk format
+    if manifest.format_version != CACHE_FORMAT_VERSION {
+        return false;
+    }
+
     // Check compiler version
     if manifest.compiler_version != compiler_version {
         return false;

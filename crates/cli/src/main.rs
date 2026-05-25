@@ -281,12 +281,20 @@ fn save_extension_to_cache(
         })
         .collect();
 
+    // Module exports: qualified names of this module's public functions, so a
+    // later cache hit can repopulate function_visibility via register_cached_module.
+    let exports: Vec<String> = compiler
+        .get_module_public_functions(ext_name)
+        .into_iter()
+        .map(|(_local_name, qualified_name)| qualified_name)
+        .collect();
+
     let cached_module = CachedModule {
         module_path: vec![ext_name.to_string()],
         source_hash: source_hash.to_string(),
         functions: cached_functions,
         function_signatures: std::collections::HashMap::new(),
-        exports: Vec::new(),
+        exports,
         prelude_imports: Vec::new(),
         types: module_types,
         mvars: module_mvars,
@@ -500,12 +508,20 @@ fn save_package_to_cache(
             })
             .collect();
 
+        // Module exports: qualified names of this module's public functions, so a
+        // later cache hit can repopulate function_visibility via register_cached_module.
+        let exports: Vec<String> = compiler
+            .get_module_public_functions(module_name)
+            .into_iter()
+            .map(|(_local_name, qualified_name)| qualified_name)
+            .collect();
+
         let cached_module = CachedModule {
             module_path: module_name.split('.').map(|s| s.to_string()).collect(),
             source_hash: source_hash.clone(),
             functions: cached_functions,
             function_signatures: std::collections::HashMap::new(),
-            exports: Vec::new(),
+            exports,
             prelude_imports: Vec::new(),
             types: module_types,
             mvars: module_mvars,
@@ -769,6 +785,14 @@ fn save_project_to_cache(
             module_name.clone()
         };
 
+        // Module exports: qualified names of this module's public functions, so a
+        // later cache hit can repopulate function_visibility via register_cached_module.
+        let exports: Vec<String> = compiler
+            .get_module_public_functions(module_name)
+            .into_iter()
+            .map(|(_local_name, qualified_name)| qualified_name)
+            .collect();
+
         let cached_module = CachedModule {
             module_path: if module_name.is_empty() {
                 vec![]
@@ -778,7 +802,7 @@ fn save_project_to_cache(
             source_hash: source_hash.clone(),
             functions: cached_functions,
             function_signatures: std::collections::HashMap::new(),
-            exports: Vec::new(),
+            exports,
             prelude_imports: Vec::new(),
             types: module_types,
             mvars: module_mvars,

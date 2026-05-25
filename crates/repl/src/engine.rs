@@ -5437,8 +5437,16 @@ impl ReplEngine {
                             })
                             .collect();
 
-                        // Get module exports (for now, empty - TODO: extract from compiler)
-                        let exports = Vec::new();
+                        // Get module exports: the qualified names of this module's
+                        // public functions. These are needed so that a later cache
+                        // hit can repopulate function_visibility via
+                        // register_cached_module — otherwise imports from a
+                        // cache-restored module resolve to nothing.
+                        let exports: Vec<String> = self.compiler
+                            .get_module_public_functions(&module_name)
+                            .into_iter()
+                            .map(|(_local_name, qualified_name)| qualified_name)
+                            .collect();
 
                         // Get dependencies from call graph
                         let dependencies: Vec<String> = self.call_graph.direct_dependencies(&module_name)
@@ -8183,6 +8191,16 @@ impl ReplEngine {
             }
         }
         failed
+    }
+
+    /// Get known modules that have no resolvable public symbols.
+    ///
+    /// Such a module was referenced but never fully analyzed (for example,
+    /// restored from an incomplete bytecode cache). Imports from it cannot be
+    /// resolved, so the LSP downgrades any "symbol is not defined in module"
+    /// diagnostic against such an import rather than showing a misleading error.
+    pub fn get_unanalyzed_modules(&self) -> std::collections::HashSet<String> {
+        self.compiler.get_known_modules_without_public_symbols()
     }
 
     /// Get all stale definitions
