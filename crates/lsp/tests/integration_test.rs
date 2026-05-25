@@ -82,6 +82,7 @@ impl LspClient {
 
     /// Wait for the LSP engine to be fully initialized after sending `initialized`.
     /// Buffers any other messages (like diagnostics) received while waiting.
+    /// Automatically responds to server-initiated requests (e.g. window/workDoneProgress/create).
     fn initialized_and_wait(&mut self) {
         self.send_notification("initialized", json!({}));
         let timeout = Duration::from_secs(30);
@@ -92,13 +93,31 @@ impl LspClient {
                 if method == "nostos/fileStatus" {
                     return;
                 }
-                // Buffer other messages (e.g. diagnostics) for later consumption
+                // Auto-respond to server-initiated requests (they have an id + method)
+                if msg.get("id").is_some() && msg.get("method").is_some() {
+                    self.respond_to_server_request(&msg);
+                    continue;
+                }
+                // Buffer other messages (e.g. diagnostics, progress) for later consumption
                 self.buffered_messages.push(msg);
             } else {
                 std::thread::sleep(Duration::from_millis(50));
             }
         }
         panic!("LSP server did not become ready within 30s");
+    }
+
+    /// Respond to a server-initiated request with a null result (success).
+    /// Used for requests like window/workDoneProgress/create that need acknowledgement.
+    fn respond_to_server_request(&mut self, request: &Value) {
+        if let Some(id) = request.get("id") {
+            let response = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": null
+            });
+            self.send_message(&response);
+        }
     }
 
     fn send_request(&mut self, method: &str, params: Value) -> Value {
@@ -113,9 +132,15 @@ impl LspClient {
         self.send_message(&request);
 
         // Keep reading until we get a response with matching id
-        // (skip over notifications which have no id)
+        // (skip over notifications and handle server-initiated requests)
         loop {
             let msg = self.next_message().expect("Failed to read response");
+            // Auto-respond to server-initiated requests (have both id and method)
+            if msg.get("id").is_some() && msg.get("method").is_some() {
+                self.respond_to_server_request(&msg);
+                continue;
+            }
+            // Check if this is the response to our request (has id but no method)
             if let Some(id) = msg.get("id") {
                 if id.as_i64() == Some(expected_id) {
                     return msg;
@@ -186,6 +211,12 @@ impl LspClient {
                 let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("none");
                 println!("DEBUG: Read message #{}: method={}", read_count, method);
 
+                // Auto-respond to server-initiated requests
+                if msg.get("id").is_some() && msg.get("method").is_some() {
+                    self.respond_to_server_request(&msg);
+                    continue;
+                }
+
                 // Check if this is a publishDiagnostics notification
                 if msg.get("method") == Some(&json!("textDocument/publishDiagnostics")) {
                     if let Some(params) = msg.get("params") {
@@ -217,7 +248,8 @@ impl LspClient {
     }
 
     /// Wait for the server to be ready (indicated by nostos/fileStatus notification)
-    /// This ensures engine initialization is complete before sending requests
+    /// This ensures engine initialization is complete before sending requests.
+    /// Automatically responds to server-initiated requests.
     fn wait_for_ready(&mut self, timeout: Duration) -> bool {
         let start = Instant::now();
         while start.elapsed() < timeout {
@@ -225,6 +257,11 @@ impl LspClient {
                 let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("none");
                 if method == "nostos/fileStatus" {
                     return true;
+                }
+                // Auto-respond to server-initiated requests
+                if msg.get("id").is_some() && msg.get("method").is_some() {
+                    self.respond_to_server_request(&msg);
+                    continue;
                 }
                 // Buffer other messages for later consumption
                 self.buffered_messages.push(msg);
@@ -6039,4 +6076,302 @@ fn test_lsp_no_false_cascading_import_error() {
          was wrongly flagged as undefined: {:?}",
         post_revert.iter().map(|d| &d.message).collect::<Vec<_>>()
     );
+}
+
+/// Test: inlay hints suppress unresolved type variables (issue #40)
+/// When a parameter is truly polymorphic (e.g., identity function),
+/// the hint should NOT show meaningless ": a" or ": b".
+/// When a parameter type is resolved (e.g., x + 1 implies Int), it SHOULD show it.
+#[test]
+fn test_inlay_hints_suppress_type_variables() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("inlay_hints_type_vars");
+
+    // f(x) = x + 1     -> x is inferred as Int from usage
+    // g(y) = y          -> y is truly polymorphic, should suppress hint
+    // h(a, b) = a       -> both polymorphic, should suppress
+    let content = "f(x) = x + 1\ng(y) = y\nh(a, b) = a\nmain() = f(10)\n";
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Request inlay hints for the whole file
+    let hints = client.inlay_hints(&main_uri, 0, 10);
+    println!("Inlay hints: {:?}", hints);
+
+    // Check that NO hint contains a single-letter type variable like ": a" or ": b"
+    for (_line, _col, label) in &hints {
+        // The label format is ": Type"
+        let ty = label.trim_start_matches(": ");
+        assert!(
+            !(ty.len() == 1 && ty.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false)),
+            "Inlay hint should not show unresolved type variable, got: '{}'", label
+        );
+        assert!(
+            !ty.contains('?'),
+            "Inlay hint should not show unresolved ?-variable, got: '{}'", label
+        );
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test: renaming a pub symbol updates references in other modules
+#[test]
+fn test_rename_cross_module() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("rename_cross_module");
+
+    let lib_content = "pub add(x, y) = x + y\npub subtract(a, b) = a - b\n";
+    let main_content = "use lib.{add}\nmain() = add(1, 2)\n";
+    fs::write(project_path.join("lib.nos"), lib_content).unwrap();
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let lib_uri = format!("file://{}/lib.nos", project_path.display());
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&lib_uri, lib_content);
+    client.did_open(&main_uri, main_content);
+    std::thread::sleep(Duration::from_millis(1000));
+
+    // Rename "add" in lib.nos to "plus" at line 0, character 4
+    let edits = client.rename(&lib_uri, 0, 4, "plus");
+    println!("Cross-module rename edits: {:?}", edits);
+
+    // Should have edits in lib.nos
+    let lib_edits = edits.get(&lib_uri).expect("Expected edits in lib.nos");
+    assert!(!lib_edits.is_empty(), "Expected at least one edit in lib.nos");
+    // The definition itself should be renamed
+    assert!(lib_edits.iter().any(|(line, _, _, text)| *line == 0 && text == "plus"),
+        "Expected edit at line 0 in lib.nos to rename definition");
+
+    // Should also have edits in main.nos
+    let main_edits = edits.get(&main_uri).expect("Expected edits in main.nos for cross-module rename");
+    assert!(!main_edits.is_empty(), "Expected at least one edit in main.nos");
+    // Should rename "add" in the use statement and the call site
+    println!("  main.nos edits: {:?}", main_edits);
+    assert!(main_edits.len() >= 2, "Expected at least 2 edits in main.nos (use + call), got {}", main_edits.len());
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test: rename skips occurrences inside comments and string literals
+#[test]
+fn test_rename_scope_aware() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("rename_scope_aware");
+
+    // "foo" appears in: definition, usage, comment, and string literal
+    let content = "main() = {\n    foo = 42\n    x = foo + 1\n    # foo is the answer\n    y = \"foo bar\"\n    x + y.length()\n}\n";
+    fs::write(project_path.join("main.nos"), content).unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, content);
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Rename "foo" to "bar" at line 1, character 4 (the definition)
+    let edits = client.rename(&main_uri, 1, 4, "bar");
+    println!("Scope-aware rename edits: {:?}", edits);
+
+    let file_edits = edits.get(&main_uri).expect("Expected edits for main file");
+
+    // Should rename: line 1 (definition "foo = 42") and line 2 (usage "foo + 1")
+    // Should NOT rename: line 3 (comment "# foo is the answer") or line 4 (string "foo bar")
+    let code_edits: Vec<_> = file_edits.iter().filter(|(line, _, _, _)| *line <= 2).collect();
+    let comment_or_string_edits: Vec<_> = file_edits.iter().filter(|(line, _, _, _)| *line >= 3).collect();
+
+    assert!(code_edits.len() >= 2, "Expected at least 2 code edits (definition + usage), got {}: {:?}", code_edits.len(), code_edits);
+    assert!(comment_or_string_edits.is_empty(),
+        "Expected no edits in comments/strings, but got {:?}", comment_or_string_edits);
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test: rename handles qualified references (module.symbol) across files
+#[test]
+fn test_rename_qualified_reference() {
+    let lsp_binary = require_lsp_binary!();
+    let project_path = create_test_project("rename_qualified");
+
+    let lib_content = "pub compute(x) = x * 2\n";
+    let main_content = "main() = lib.compute(21)\n";
+    fs::write(project_path.join("lib.nos"), lib_content).unwrap();
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&lsp_binary);
+    client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let lib_uri = format!("file://{}/lib.nos", project_path.display());
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&lib_uri, lib_content);
+    client.did_open(&main_uri, main_content);
+    std::thread::sleep(Duration::from_millis(1000));
+
+    // Rename "compute" in lib.nos to "calculate"
+    let edits = client.rename(&lib_uri, 0, 4, "calculate");
+    println!("Qualified rename edits: {:?}", edits);
+
+    // Should have edits in lib.nos
+    let lib_edits = edits.get(&lib_uri).expect("Expected edits in lib.nos");
+    assert!(!lib_edits.is_empty(), "Expected edits in lib.nos");
+
+    // Should also rename the qualified reference in main.nos (lib.compute -> lib.calculate)
+    let main_edits = edits.get(&main_uri).expect("Expected edits in main.nos for qualified rename");
+    println!("  main.nos edits: {:?}", main_edits);
+    assert!(!main_edits.is_empty(), "Expected edit in main.nos for lib.compute");
+    // The edit should rename just the "compute" part, not "lib."
+    assert!(main_edits.iter().any(|(line, start, end, text)| {
+        *line == 0 && text == "calculate" && *start == 13 && *end == 20
+    }), "Expected edit at main.nos line 0, col 13..20 to rename 'compute' in 'lib.compute', got: {:?}", main_edits);
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test that work done progress notifications are emitted during project initialization.
+/// The LSP should send: window/workDoneProgress/create request, then $/progress
+/// with Begin, Report, and End values.
+#[test]
+fn test_work_done_progress_during_init() {
+    let project_path = create_test_project("work_done_progress");
+
+    // Create a simple project file
+    fs::write(project_path.join("main.nos"), "main() = 42\n").unwrap();
+
+    // Start LSP
+    let mut client = LspClient::new(&require_lsp_binary!());
+
+    // Initialize (this returns the initialize response)
+    let init_response = client.initialize(project_path.to_str().unwrap());
+    println!("Initialize response: {:?}", init_response);
+
+    // Send initialized notification (this triggers the heavy loading)
+    client.initialized();
+
+    // Collect all messages until we see nostos/fileStatus (which signals init is done)
+    let timeout = Duration::from_secs(30);
+    let start = Instant::now();
+    let mut progress_messages: Vec<Value> = Vec::new();
+    let mut got_create_request = false;
+    let mut got_file_status = false;
+
+    while start.elapsed() < timeout && !got_file_status {
+        if let Some(msg) = client.read_message() {
+            let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("none");
+            println!("DEBUG: Received message: method={}", method);
+
+            match method {
+                "window/workDoneProgress/create" => {
+                    got_create_request = true;
+                    // This is a request from the server - we need to respond
+                    if let Some(id) = msg.get("id") {
+                        let response = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": null
+                        });
+                        let content = serde_json::to_string(&response).unwrap();
+                        let header = format!("Content-Length: {}\r\n\r\n", content.len());
+                        let stdin = client.process.stdin.as_mut().unwrap();
+                        stdin.write_all(header.as_bytes()).unwrap();
+                        stdin.write_all(content.as_bytes()).unwrap();
+                        stdin.flush().unwrap();
+                        println!("DEBUG: Responded to workDoneProgress/create request");
+                    }
+                }
+                "$/progress" => {
+                    println!("DEBUG: Progress notification: {:?}", msg.get("params"));
+                    progress_messages.push(msg);
+                }
+                "nostos/fileStatus" => {
+                    got_file_status = true;
+                }
+                _ => {
+                    println!("DEBUG: Other message: {}", method);
+                }
+            }
+        } else {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    println!("=== Progress Summary ===");
+    println!("  Got workDoneProgress/create request: {}", got_create_request);
+    println!("  Got fileStatus (init done): {}", got_file_status);
+    println!("  Progress notifications count: {}", progress_messages.len());
+    for (i, msg) in progress_messages.iter().enumerate() {
+        println!("  Progress[{}]: {:?}", i, msg.get("params"));
+    }
+    println!("========================");
+
+    // Verify we got the create request
+    assert!(got_create_request, "Server should send window/workDoneProgress/create request");
+
+    // Verify we got progress notifications (begin, report, end = at least 3)
+    assert!(progress_messages.len() >= 3,
+        "Expected at least 3 progress notifications (begin, report, end), got {}",
+        progress_messages.len());
+
+    // Check that we have Begin, Report, and End
+    let mut has_begin = false;
+    let mut has_report = false;
+    let mut has_end = false;
+
+    for msg in &progress_messages {
+        if let Some(params) = msg.get("params") {
+            if let Some(value) = params.get("value") {
+                let kind = value.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+                match kind {
+                    "begin" => {
+                        has_begin = true;
+                        let title = value.get("title").and_then(|t| t.as_str()).unwrap_or("");
+                        assert!(!title.is_empty(), "Begin progress should have a title");
+                        println!("  Begin title: {}", title);
+                    }
+                    "report" => {
+                        has_report = true;
+                    }
+                    "end" => {
+                        has_end = true;
+                        let message = value.get("message").and_then(|m| m.as_str()).unwrap_or("");
+                        println!("  End message: {}", message);
+                    }
+                    _ => {}
+                }
+            }
+
+            // Verify token is consistent
+            let token = params.get("token").and_then(|t| t.as_str()).unwrap_or("");
+            assert_eq!(token, "nostos-loading", "Progress token should be 'nostos-loading'");
+        }
+    }
+
+    assert!(has_begin, "Expected a Begin progress notification");
+    assert!(has_report, "Expected a Report progress notification");
+    assert!(has_end, "Expected an End progress notification");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
 }

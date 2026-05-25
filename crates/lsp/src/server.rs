@@ -10,6 +10,7 @@ use tower_lsp::{Client, LanguageServer};
 use nostos_repl::{ReplEngine, ReplConfig};
 use nostos_repl::inference;
 use tower_lsp::lsp_types::notification::Notification;
+use tower_lsp::lsp_types::{notification, request};
 
 /// Custom notification for file status updates (for VS Code file decorations)
 pub struct FileStatusNotification;
@@ -88,6 +89,54 @@ impl NostosLanguageServer {
                 self.engine_ready.notify_waiters();
             }
         }
+    }
+
+    /// Create a work done progress token with the client
+    async fn create_progress(&self, token: &str) {
+        let params = WorkDoneProgressCreateParams {
+            token: NumberOrString::String(token.to_string()),
+        };
+        if let Err(e) = self.client.send_request::<request::WorkDoneProgressCreate>(params).await {
+            warn!("Failed to create progress token: {}", e);
+        }
+    }
+
+    /// Send a work done progress begin notification
+    async fn progress_begin(&self, token: &str, title: &str, message: Option<&str>) {
+        let params = ProgressParams {
+            token: NumberOrString::String(token.to_string()),
+            value: ProgressParamsValue::WorkDone(WorkDoneProgress::Begin(WorkDoneProgressBegin {
+                title: title.to_string(),
+                cancellable: Some(false),
+                message: message.map(|s| s.to_string()),
+                percentage: Some(0),
+            })),
+        };
+        self.client.send_notification::<notification::Progress>(params).await;
+    }
+
+    /// Send a work done progress report notification
+    async fn progress_report(&self, token: &str, message: Option<&str>, percentage: Option<u32>) {
+        let params = ProgressParams {
+            token: NumberOrString::String(token.to_string()),
+            value: ProgressParamsValue::WorkDone(WorkDoneProgress::Report(WorkDoneProgressReport {
+                cancellable: Some(false),
+                message: message.map(|s| s.to_string()),
+                percentage,
+            })),
+        };
+        self.client.send_notification::<notification::Progress>(params).await;
+    }
+
+    /// Send a work done progress end notification
+    async fn progress_end(&self, token: &str, message: Option<&str>) {
+        let params = ProgressParams {
+            token: NumberOrString::String(token.to_string()),
+            value: ProgressParamsValue::WorkDone(WorkDoneProgress::End(WorkDoneProgressEnd {
+                message: message.map(|s| s.to_string()),
+            })),
+        };
+        self.client.send_notification::<notification::Progress>(params).await;
     }
 
     /// Send file status notification to VS Code for file decorations
@@ -732,6 +781,11 @@ impl LanguageServer for NostosLanguageServer {
             info!("Starting engine initialization for {:?}...", path);
             let start = std::time::Instant::now();
 
+            // Send work done progress notifications so the editor shows loading status
+            let progress_token = "nostos-loading";
+            self.create_progress(progress_token).await;
+            self.progress_begin(progress_token, "Loading project", Some("Compiling stdlib...")).await;
+
             // Use spawn_blocking to run in a separate thread pool, returning the engine
             let init_result = tokio::task::spawn_blocking(move || {
                 let config = ReplConfig {
@@ -745,13 +799,25 @@ impl LanguageServer for NostosLanguageServer {
                     warn!("Warning: Failed to load stdlib: {}", e);
                 }
 
-                // Load the project directory
-                if let Err(e) = engine.load_directory(path.to_str().unwrap_or(".")) {
-                    warn!("Warning: Failed to load directory: {}", e);
-                }
-
                 engine
             }).await;
+
+            // Report progress: stdlib done, now analyzing files
+            self.progress_report(progress_token, Some("Analyzing files..."), Some(50)).await;
+
+            let init_result = match init_result {
+                Ok(mut engine) => {
+                    let path_clone = path.clone();
+                    let dir_result = tokio::task::spawn_blocking(move || {
+                        if let Err(e) = engine.load_directory(path_clone.to_str().unwrap_or(".")) {
+                            warn!("Warning: Failed to load directory: {}", e);
+                        }
+                        engine
+                    }).await;
+                    dir_result
+                }
+                Err(e) => Err(e),
+            };
 
             match init_result {
                 Ok(engine) => {
@@ -816,6 +882,9 @@ impl LanguageServer for NostosLanguageServer {
                     warn!("Engine initialization failed: {}", e);
                 }
             }
+
+            // Signal progress complete
+            self.progress_end(progress_token, Some("Ready")).await;
 
             self.initializing.store(false, Ordering::SeqCst);
 
@@ -1648,14 +1717,20 @@ impl LanguageServer for NostosLanguageServer {
 
             let parameters: Vec<ParameterInformation> = if let Some(params) = params_info {
                 params.iter().map(|(name, ty, has_default, default_val)| {
+                    // Suppress unresolved type variables in parameter types
+                    let display_ty = if Self::is_unresolved_type_variable(ty) {
+                        "auto".to_string()
+                    } else {
+                        ty.clone()
+                    };
                     let label = if *has_default {
                         if let Some(def) = default_val {
-                            format!("{}: {} = {}", name, ty, def)
+                            format!("{}: {} = {}", name, display_ty, def)
                         } else {
-                            format!("{}: {} = ?", name, ty)
+                            format!("{}: {} = ?", name, display_ty)
                         }
                     } else {
-                        format!("{}: {}", name, ty)
+                        format!("{}: {}", name, display_ty)
                     };
                     ParameterInformation {
                         label: ParameterLabel::Simple(label),
@@ -1666,8 +1741,10 @@ impl LanguageServer for NostosLanguageServer {
                 vec![]
             };
 
+            // Clean up unresolved type variables in the signature label
+            let clean_sig = Self::sanitize_signature_type_vars(&sig);
             let signature = SignatureInformation {
-                label: format!("{}: {}", fn_name, sig),
+                label: format!("{}: {}", fn_name, clean_sig),
                 documentation: doc.map(|d| Documentation::String(d)),
                 parameters: Some(parameters),
                 active_parameter: Some(active_param as u32),
@@ -1920,39 +1997,62 @@ impl LanguageServer for NostosLanguageServer {
 
         debug!("Rename '{}' -> '{}' in {}", word, new_name, uri);
 
-        // Find all occurrences in this file and build text edits
-        let mut edits = Vec::new();
-        for (ln, line_text) in content.lines().enumerate() {
-            let mut search_start = 0;
-            while let Some(pos) = line_text[search_start..].find(&word) {
-                let actual_pos = search_start + pos;
+        // Determine the module name of the file where the symbol is defined.
+        // Used to find qualified references (module.symbol) in other files.
+        let source_module_name = uri.to_file_path().ok()
+            .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()));
 
-                // Check word boundaries (simple identifier, no dots)
-                let before_ok = actual_pos == 0
-                    || !line_text.chars().nth(actual_pos - 1).map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false);
-                let after_ok = actual_pos + word.len() >= line_text.len()
-                    || !line_text.chars().nth(actual_pos + word.len()).map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false);
+        // Check if the symbol is a top-level pub definition in the current file.
+        // If so, we need to rename across all project files.
+        let is_top_level_pub = Self::is_pub_symbol(&content, &word);
 
-                if before_ok && after_ok {
-                    edits.push(TextEdit {
-                        range: Range {
-                            start: Position { line: ln as u32, character: actual_pos as u32 },
-                            end: Position { line: ln as u32, character: (actual_pos + word.len()) as u32 },
-                        },
-                        new_text: new_name.clone(),
-                    });
+        let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> = std::collections::HashMap::new();
+
+        // Find edits in the current file (scope-aware)
+        let current_edits = Self::find_scope_aware_rename_edits(&content, &word, new_name, None);
+        if !current_edits.is_empty() {
+            changes.insert(uri.clone(), current_edits);
+        }
+
+        // For pub symbols, also search across all other files
+        if is_top_level_pub {
+            let module_name = source_module_name.as_deref();
+
+            // Search in all open documents
+            for entry in self.documents.iter() {
+                let doc_uri = entry.key();
+                if doc_uri == uri {
+                    continue; // Already handled above
                 }
+                let doc_content = entry.value();
+                let edits = Self::find_scope_aware_rename_edits(doc_content, &word, new_name, module_name);
+                if !edits.is_empty() {
+                    changes.insert(doc_uri.clone(), edits);
+                }
+            }
 
-                search_start = actual_pos + word.len();
+            // Also search in project files from engine that are not open
+            let engine_guard = self.engine.lock().unwrap();
+            if let Some(engine) = engine_guard.as_ref() {
+                for file_path in engine.get_module_source_paths() {
+                    if let Ok(file_uri) = Url::from_file_path(&file_path) {
+                        if self.documents.contains_key(&file_uri) || &file_uri == uri {
+                            continue; // Already searched
+                        }
+                        if let Ok(file_content) = std::fs::read_to_string(&file_path) {
+                            let edits = Self::find_scope_aware_rename_edits(&file_content, &word, new_name, module_name);
+                            if !edits.is_empty() {
+                                changes.insert(file_uri, edits);
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        if edits.is_empty() {
+        if changes.is_empty() {
             return Ok(None);
         }
-
-        let mut changes = std::collections::HashMap::new();
-        changes.insert(uri.clone(), edits);
 
         Ok(Some(WorkspaceEdit {
             changes: Some(changes),
@@ -2673,6 +2773,131 @@ impl NostosLanguageServer {
                 search_start = actual_pos + word.len();
             }
         }
+    }
+
+    /// Check if a position in a line is inside a comment (after #) or string literal.
+    /// Nostos comments start with # and strings use double quotes.
+    fn is_in_comment_or_string(line: &str, byte_pos: usize) -> bool {
+        let mut in_string = false;
+        let mut escaped = false;
+        for (i, ch) in line.char_indices() {
+            if i >= byte_pos {
+                break;
+            }
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == '"' {
+                    in_string = false;
+                }
+            } else {
+                if ch == '#' {
+                    // Everything after # is a comment
+                    return true;
+                }
+                if ch == '"' {
+                    in_string = true;
+                }
+            }
+        }
+        in_string
+    }
+
+    /// Check if a symbol is a pub (public) top-level definition in the given file content.
+    fn is_pub_symbol(content: &str, symbol: &str) -> bool {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            // pub function: "pub foo(...)"
+            if trimmed.starts_with("pub ") {
+                let rest = trimmed[4..].trim();
+                // Check if rest starts with the symbol name followed by ( or space or =
+                if rest.starts_with(symbol) {
+                    let after = &rest[symbol.len()..];
+                    if after.starts_with('(') || after.starts_with(' ') || after.starts_with('=') || after.is_empty() {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Find all scope-aware rename edits in content for a given word.
+    /// Skips occurrences in comments and string literals.
+    /// If `source_module` is Some, also matches qualified references (module.symbol)
+    /// and use imports like `use module.{symbol}`.
+    fn find_scope_aware_rename_edits(
+        content: &str,
+        word: &str,
+        new_name: &str,
+        source_module: Option<&str>,
+    ) -> Vec<TextEdit> {
+        let mut edits = Vec::new();
+
+        for (ln, line_text) in content.lines().enumerate() {
+            // Search for bare identifier matches
+            let mut search_start = 0;
+            while let Some(pos) = line_text[search_start..].find(word) {
+                let actual_pos = search_start + pos;
+
+                // Skip if inside a comment or string literal
+                if Self::is_in_comment_or_string(line_text, actual_pos) {
+                    search_start = actual_pos + word.len();
+                    continue;
+                }
+
+                // Check word boundaries
+                let before_ok = actual_pos == 0
+                    || !line_text.as_bytes().get(actual_pos - 1).map(|&c| c.is_ascii_alphanumeric() || c == b'_').unwrap_or(false);
+                let after_ok = actual_pos + word.len() >= line_text.len()
+                    || !line_text.as_bytes().get(actual_pos + word.len()).map(|&c| c.is_ascii_alphanumeric() || c == b'_').unwrap_or(false);
+
+                if before_ok && after_ok {
+                    // For cross-file renames: check if preceded by a dot (qualified access).
+                    // If preceded by dot, only rename if the module matches source_module.
+                    let preceded_by_dot = actual_pos > 0 && line_text.as_bytes()[actual_pos - 1] == b'.';
+                    if preceded_by_dot {
+                        // This is a qualified reference like "module.symbol"
+                        // Only rename if we know the source module and it matches
+                        if let Some(mod_name) = source_module {
+                            let dot_pos = actual_pos - 1;
+                            // Check if the part before the dot matches the module name
+                            if dot_pos >= mod_name.len() {
+                                let mod_start = dot_pos - mod_name.len();
+                                let before_mod = &line_text[mod_start..dot_pos];
+                                let mod_boundary_ok = mod_start == 0
+                                    || !line_text.as_bytes().get(mod_start - 1).map(|&c| c.is_ascii_alphanumeric() || c == b'_').unwrap_or(false);
+                                if before_mod == mod_name && mod_boundary_ok {
+                                    edits.push(TextEdit {
+                                        range: Range {
+                                            start: Position { line: ln as u32, character: actual_pos as u32 },
+                                            end: Position { line: ln as u32, character: (actual_pos + word.len()) as u32 },
+                                        },
+                                        new_text: new_name.to_string(),
+                                    });
+                                }
+                            }
+                        }
+                        search_start = actual_pos + word.len();
+                        continue;
+                    }
+
+                    edits.push(TextEdit {
+                        range: Range {
+                            start: Position { line: ln as u32, character: actual_pos as u32 },
+                            end: Position { line: ln as u32, character: (actual_pos + word.len()) as u32 },
+                        },
+                        new_text: new_name.to_string(),
+                    });
+                }
+
+                search_start = actual_pos + word.len();
+            }
+        }
+
+        edits
     }
 
     /// Get completions after a dot (module functions or UFCS methods)
@@ -3959,13 +4184,69 @@ impl NostosLanguageServer {
     }
 
     /// Determine if we should show an inlay hint for this type.
-    /// Skip obvious types like simple literals.
+    /// Skip unresolved type variables and obvious types.
     fn should_show_type_hint(ty: &str) -> bool {
-        // Show hints for complex types
-        // Skip if it's just a basic type that's usually obvious from context
-        // For now, show all types - users can configure this in VS Code settings
-        // In the future, could skip Int/Float/String/Bool for simple literals
-        !ty.is_empty()
+        if ty.is_empty() {
+            return false;
+        }
+        // Filter out unbound type variables: single lowercase letters like "a", "b", etc.
+        if Self::is_unresolved_type_variable(ty) {
+            return false;
+        }
+        true
+    }
+
+    /// Check if a type string represents an unresolved/unbound type variable.
+    /// This includes:
+    /// - Single lowercase letters: "a", "b", "c", etc.
+    /// - Type variables with ? prefix: "?X", "?a"
+    /// - Types containing unresolved variables: "List[a]", "Option[?X]"
+    fn is_unresolved_type_variable(ty: &str) -> bool {
+        let ty = ty.trim();
+        // Single lowercase letter (unbound type parameter)
+        if ty.len() == 1 && ty.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false) {
+            return true;
+        }
+        // Starts with ? (unresolved inference variable)
+        if ty.starts_with('?') {
+            return true;
+        }
+        // Contains ? anywhere (e.g., "List[?X]")
+        if ty.contains('?') {
+            return true;
+        }
+        // Generic type where all parameters are unbound type variables
+        // e.g., "List[a]", "Map[a, b]", "Option[a]"
+        // Check if inner bracket contents are all single-letter type vars
+        if let Some(bracket_start) = ty.find('[') {
+            if let Some(bracket_end) = ty.rfind(']') {
+                let inner = &ty[bracket_start + 1..bracket_end];
+                let all_unresolved = inner.split(',').all(|part| {
+                    let part = part.trim();
+                    Self::is_unresolved_type_variable(part)
+                });
+                if all_unresolved {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Replace unresolved type variables in a signature string with "auto".
+    /// E.g., "a -> Int -> a" becomes "auto -> Int -> auto"
+    fn sanitize_signature_type_vars(sig: &str) -> String {
+        // Split by " -> " and replace unresolved parts
+        let parts: Vec<&str> = sig.split(" -> ").collect();
+        let cleaned: Vec<String> = parts.iter().map(|part| {
+            let trimmed = part.trim();
+            if Self::is_unresolved_type_variable(trimmed) {
+                "auto".to_string()
+            } else {
+                trimmed.to_string()
+            }
+        }).collect();
+        cleaned.join(" -> ")
     }
 
     /// Extract the word/identifier at the cursor position
