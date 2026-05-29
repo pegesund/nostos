@@ -6739,3 +6739,732 @@ fn test_call_hierarchy_prepare() {
     client.exit();
     cleanup_test_project(&project_path);
 }
+
+// ============================================================================
+// Call Hierarchy Tests
+// ============================================================================
+
+/// Test incoming calls: main() calls add() twice, so add's incoming calls should include main
+#[test]
+fn test_call_hierarchy_incoming_calls() {
+    let project_path = create_test_project("call_hierarchy_incoming");
+
+    let main_content = "add(x, y) = x + y\n\nmain() = add(1, 2) + add(3, 4)\n";
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _init = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, main_content);
+
+    std::thread::sleep(Duration::from_millis(200));
+
+    // Prepare call hierarchy on "add" (line 0, col 0)
+    let prepare_response = client.send_request("textDocument/prepareCallHierarchy", json!({
+        "textDocument": { "uri": main_uri },
+        "position": { "line": 0, "character": 0 }
+    }));
+
+    println!("PrepareCallHierarchy response: {:?}", prepare_response);
+
+    let result = prepare_response.get("result").expect("Expected result");
+    assert!(!result.is_null(), "Expected non-null prepareCallHierarchy result");
+    let items = result.as_array().expect("Expected array of CallHierarchyItems");
+    assert!(!items.is_empty(), "Expected at least one CallHierarchyItem");
+
+    let prepared_item = &items[0];
+    assert_eq!(
+        prepared_item.get("name").and_then(|n| n.as_str()).unwrap(),
+        "add",
+        "Expected prepared item to be 'add'"
+    );
+
+    // Request incoming calls for "add"
+    let incoming_response = client.send_request("callHierarchy/incomingCalls", json!({
+        "item": prepared_item
+    }));
+
+    println!("IncomingCalls response: {:?}", incoming_response);
+
+    let incoming_result = incoming_response.get("result").expect("Expected result");
+    assert!(!incoming_result.is_null(), "Expected non-null incoming calls");
+    let incoming_calls = incoming_result.as_array().expect("Expected array of incoming calls");
+
+    println!("Found {} incoming calls:", incoming_calls.len());
+    for call in incoming_calls {
+        let from_name = call.get("from")
+            .and_then(|f| f.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("?");
+        println!("  from: {}", from_name);
+    }
+
+    // main() calls add(), so main should appear as a caller
+    let has_main_caller = incoming_calls.iter().any(|call| {
+        call.get("from")
+            .and_then(|f| f.get("name"))
+            .and_then(|n| n.as_str())
+            == Some("main")
+    });
+    assert!(has_main_caller, "Expected 'main' to appear as incoming caller of 'add'");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test outgoing calls: main() calls double() and add(), verify both appear
+#[test]
+fn test_call_hierarchy_outgoing_calls() {
+    let project_path = create_test_project("call_hierarchy_outgoing");
+
+    let main_content = "double(x) = x * 2\n\nadd(a, b) = a + b\n\nmain() = double(add(1, 2))\n";
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _init = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, main_content);
+
+    std::thread::sleep(Duration::from_millis(200));
+
+    // Prepare call hierarchy on "main" (line 4, col 0)
+    let prepare_response = client.send_request("textDocument/prepareCallHierarchy", json!({
+        "textDocument": { "uri": main_uri },
+        "position": { "line": 4, "character": 0 }
+    }));
+
+    println!("PrepareCallHierarchy response: {:?}", prepare_response);
+
+    let result = prepare_response.get("result").expect("Expected result");
+    assert!(!result.is_null(), "Expected non-null prepareCallHierarchy result");
+    let items = result.as_array().expect("Expected array");
+    assert!(!items.is_empty(), "Expected at least one CallHierarchyItem");
+
+    let prepared_item = &items[0];
+    assert_eq!(
+        prepared_item.get("name").and_then(|n| n.as_str()).unwrap(),
+        "main",
+        "Expected prepared item to be 'main'"
+    );
+
+    // Request outgoing calls from "main"
+    let outgoing_response = client.send_request("callHierarchy/outgoingCalls", json!({
+        "item": prepared_item
+    }));
+
+    println!("OutgoingCalls response: {:?}", outgoing_response);
+
+    let outgoing_result = outgoing_response.get("result").expect("Expected result");
+    assert!(!outgoing_result.is_null(), "Expected non-null outgoing calls");
+    let outgoing_calls = outgoing_result.as_array().expect("Expected array of outgoing calls");
+
+    println!("Found {} outgoing calls:", outgoing_calls.len());
+    for call in outgoing_calls {
+        let to_name = call.get("to")
+            .and_then(|t| t.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("?");
+        println!("  to: {}", to_name);
+    }
+
+    // main() calls both double() and add()
+    let called_names: Vec<&str> = outgoing_calls.iter()
+        .filter_map(|call| {
+            call.get("to")
+                .and_then(|t| t.get("name"))
+                .and_then(|n| n.as_str())
+        })
+        .collect();
+
+    assert!(called_names.contains(&"double"), "Expected 'double' in outgoing calls, got {:?}", called_names);
+    assert!(called_names.contains(&"add"), "Expected 'add' in outgoing calls, got {:?}", called_names);
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+// ============================================================================
+// Code Lens Tests
+// ============================================================================
+
+/// Test code lens: a function that is never called should show "0 references"
+#[test]
+fn test_code_lens_zero_references() {
+    let project_path = create_test_project("code_lens_zero_refs");
+
+    let main_content = "neverCalled(x) = x * 2\n\nmain() = 42\n";
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _init = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, main_content);
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    let response = client.send_request("textDocument/codeLens", json!({
+        "textDocument": { "uri": main_uri }
+    }));
+
+    println!("Code lens response: {:?}", response);
+
+    let result = response.get("result").expect("Expected result");
+    assert!(!result.is_null(), "Expected non-null code lenses");
+    let lenses = result.as_array().expect("Expected array of code lenses");
+
+    println!("Found {} code lenses:", lenses.len());
+    for lens in lenses {
+        let title = lens.get("command")
+            .and_then(|c| c.get("title"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("?");
+        let line = lens.get("range")
+            .and_then(|r| r.get("start"))
+            .and_then(|s| s.get("line"))
+            .and_then(|l| l.as_u64())
+            .unwrap_or(999);
+        println!("  line {}: {}", line, title);
+    }
+
+    // neverCalled is on line 0 and has zero call sites
+    let never_called_lens = lenses.iter().find(|l| {
+        l.get("range")
+            .and_then(|r| r.get("start"))
+            .and_then(|s| s.get("line"))
+            .and_then(|v| v.as_u64())
+            == Some(0)
+    });
+    assert!(never_called_lens.is_some(), "Expected code lens for neverCalled on line 0");
+
+    let title = never_called_lens.unwrap()
+        .get("command")
+        .and_then(|c| c.get("title"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("");
+    assert!(title.contains("0 references"), "Expected '0 references' for neverCalled, got '{}'", title);
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test code lens cross-module: function in module A called from module B
+#[test]
+fn test_code_lens_cross_module() {
+    let project_path = create_test_project("code_lens_cross_mod");
+
+    let helper_content = "pub helperAdd(a, b) = a + b\n";
+    fs::write(project_path.join("helper.nos"), helper_content).unwrap();
+
+    let main_content = "main() = helper.helperAdd(1, 2)\n";
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _init = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let helper_uri = format!("file://{}/helper.nos", project_path.display());
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&helper_uri, helper_content);
+    client.did_open(&main_uri, main_content);
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Request code lenses for helper.nos
+    let response = client.send_request("textDocument/codeLens", json!({
+        "textDocument": { "uri": helper_uri }
+    }));
+
+    println!("Code lens response for helper.nos: {:?}", response);
+
+    let result = response.get("result").expect("Expected result");
+    assert!(!result.is_null(), "Expected non-null code lenses");
+    let lenses = result.as_array().expect("Expected array of code lenses");
+
+    println!("Found {} code lenses for helper.nos:", lenses.len());
+    for lens in lenses {
+        let title = lens.get("command")
+            .and_then(|c| c.get("title"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("?");
+        let line = lens.get("range")
+            .and_then(|r| r.get("start"))
+            .and_then(|s| s.get("line"))
+            .and_then(|l| l.as_u64())
+            .unwrap_or(999);
+        println!("  line {}: {}", line, title);
+    }
+
+    // helperAdd is defined on line 0 and called from main.nos
+    let helper_lens = lenses.iter().find(|l| {
+        l.get("range")
+            .and_then(|r| r.get("start"))
+            .and_then(|s| s.get("line"))
+            .and_then(|v| v.as_u64())
+            == Some(0)
+    });
+    assert!(helper_lens.is_some(), "Expected code lens for helperAdd on line 0");
+
+    let title = helper_lens.unwrap()
+        .get("command")
+        .and_then(|c| c.get("title"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("");
+    // The cross-module call should count as a reference
+    // It uses "helper.helperAdd" so the text search for "helperAdd(" should find it
+    assert!(
+        title.contains("1 reference") || title.contains("2 reference"),
+        "Expected at least '1 reference' for cross-module helperAdd, got '{}'", title
+    );
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+// ============================================================================
+// Code Action Tests
+// ============================================================================
+
+/// Test code action: suggest adding import for unknown function from another module
+#[test]
+fn test_code_action_add_import() {
+    let project_path = create_test_project("code_action_import");
+
+    // Create a helper module with a public function
+    let helper_content = "pub helperCalc(x) = x * 2\n";
+    fs::write(project_path.join("helper.nos"), helper_content).unwrap();
+
+    // main.nos uses helperCalc without importing or qualifying it
+    let main_content = "main() = helperCalc(21)\n";
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _init = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let helper_uri = format!("file://{}/helper.nos", project_path.display());
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&helper_uri, helper_content);
+    client.did_open(&main_uri, main_content);
+
+    // Wait for diagnostics about unknown function
+    let diagnostics = client.read_diagnostics(&main_uri, Duration::from_secs(5));
+
+    println!("Diagnostics for code action test:");
+    for d in &diagnostics {
+        println!("  Line {}: {}", d.line, d.message);
+    }
+
+    // Build LSP diagnostic objects from the diagnostics we received
+    let lsp_diagnostics: Vec<Value> = diagnostics.iter().map(|d| {
+        json!({
+            "range": {
+                "start": { "line": d.line, "character": 0 },
+                "end": { "line": d.line, "character": 0 }
+            },
+            "message": d.message
+        })
+    }).collect();
+
+    // Request code actions with the diagnostics
+    let response = client.send_request("textDocument/codeAction", json!({
+        "textDocument": { "uri": main_uri },
+        "range": {
+            "start": { "line": 0, "character": 0 },
+            "end": { "line": 0, "character": 0 }
+        },
+        "context": {
+            "diagnostics": lsp_diagnostics
+        }
+    }));
+
+    println!("Code action response: {:?}", response);
+
+    let result = response.get("result").expect("Expected result");
+    assert!(!result.is_null(), "Expected non-null code actions");
+    let actions = result.as_array().expect("Expected array of code actions");
+
+    println!("Found {} code actions:", actions.len());
+    for action in actions {
+        let title = action.get("title").and_then(|t| t.as_str()).unwrap_or("?");
+        println!("  {}", title);
+    }
+
+    // Should suggest adding import for helperCalc from helper module
+    let has_import_action = actions.iter().any(|a| {
+        let title = a.get("title").and_then(|t| t.as_str()).unwrap_or("");
+        title.contains("import") && title.contains("helperCalc")
+    });
+    assert!(has_import_action, "Expected code action suggesting import for helperCalc");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test code action: no suggestions for a type error (not a missing import)
+#[test]
+fn test_code_action_no_suggestions() {
+    let project_path = create_test_project("code_action_none");
+
+    // Type error: adding string to int
+    let main_content = "main() = 1 + \"hello\"\n";
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _init = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, main_content);
+
+    // Wait for diagnostics
+    let diagnostics = client.read_diagnostics(&main_uri, Duration::from_secs(5));
+
+    println!("Diagnostics for no-suggestion test:");
+    for d in &diagnostics {
+        println!("  Line {}: {}", d.line, d.message);
+    }
+
+    let lsp_diagnostics: Vec<Value> = diagnostics.iter().map(|d| {
+        json!({
+            "range": {
+                "start": { "line": d.line, "character": 0 },
+                "end": { "line": d.line, "character": 0 }
+            },
+            "message": d.message
+        })
+    }).collect();
+
+    let response = client.send_request("textDocument/codeAction", json!({
+        "textDocument": { "uri": main_uri },
+        "range": {
+            "start": { "line": 0, "character": 0 },
+            "end": { "line": 0, "character": 0 }
+        },
+        "context": {
+            "diagnostics": lsp_diagnostics
+        }
+    }));
+
+    println!("Code action response: {:?}", response);
+
+    let result = response.get("result").expect("Expected result");
+    // Should be empty array (no suggestions) or null
+    if !result.is_null() {
+        let actions = result.as_array().expect("Expected array");
+        assert!(actions.is_empty(), "Expected no code actions for type error, got {} actions", actions.len());
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+// ============================================================================
+// Formatting Tests
+// ============================================================================
+
+/// Test formatting: well-formatted code returns no edits
+#[test]
+fn test_formatting_preserves_correct_code() {
+    let project_path = create_test_project("formatting_correct");
+
+    let main_content = "main() = {\n    x = 42\n    x\n}\n";
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _init = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, main_content);
+
+    std::thread::sleep(Duration::from_millis(200));
+
+    let response = client.send_request("textDocument/formatting", json!({
+        "textDocument": { "uri": main_uri },
+        "options": { "tabSize": 4, "insertSpaces": true }
+    }));
+
+    println!("Formatting response: {:?}", response);
+
+    let result = response.get("result").expect("Expected result");
+    assert!(!result.is_null(), "Expected non-null formatting result");
+    let edits = result.as_array().expect("Expected array of text edits");
+
+    // Well-formatted code should produce no edits
+    assert!(edits.is_empty(), "Expected 0 edits for well-formatted code, got {}", edits.len());
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test formatting: trailing whitespace AND missing final newline both get fixed
+#[test]
+fn test_formatting_multiple_issues() {
+    let project_path = create_test_project("formatting_multi");
+
+    // Trailing whitespace on lines + no final newline
+    let main_content = "main() = {   \n    x = 42   \n    x\n}";
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _init = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, main_content);
+
+    std::thread::sleep(Duration::from_millis(200));
+
+    let response = client.send_request("textDocument/formatting", json!({
+        "textDocument": { "uri": main_uri },
+        "options": { "tabSize": 4, "insertSpaces": true }
+    }));
+
+    println!("Formatting response: {:?}", response);
+
+    let result = response.get("result").expect("Expected result");
+    assert!(!result.is_null(), "Expected non-null formatting result");
+    let edits = result.as_array().expect("Expected array of text edits");
+    assert!(!edits.is_empty(), "Expected at least one edit for code with formatting issues");
+
+    let new_text = edits[0].get("newText").and_then(|t| t.as_str()).expect("Expected newText");
+    println!("Formatted text:\n{}", new_text);
+
+    // Verify no trailing whitespace on any line
+    for line in new_text.lines() {
+        assert_eq!(line, line.trim_end(), "Line should have no trailing whitespace: '{}'", line);
+    }
+
+    // Verify ends with exactly one newline
+    assert!(new_text.ends_with('\n'), "Formatted text should end with newline");
+    assert!(!new_text.ends_with("\n\n"), "Formatted text should not end with double newline");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+// ============================================================================
+// Folding Range Tests
+// ============================================================================
+
+/// Test folding ranges with nested structures: match inside if/else
+#[test]
+fn test_folding_range_nested() {
+    let project_path = create_test_project("folding_nested");
+
+    let main_content = r#"process(x) = {
+    if x > 0
+        match x {
+            1 -> "one"
+            2 -> "two"
+            _ -> "other"
+        }
+    else
+        "negative"
+}
+
+main() = process(1)
+"#;
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _init = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, main_content);
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    let response = client.send_request("textDocument/foldingRange", json!({
+        "textDocument": { "uri": main_uri }
+    }));
+
+    println!("Folding range response: {:?}", response);
+
+    let result = response.get("result").expect("Expected result");
+    assert!(!result.is_null(), "Expected non-null folding ranges");
+    let ranges = result.as_array().expect("Expected array of folding ranges");
+
+    println!("Found {} folding ranges:", ranges.len());
+    for r in ranges {
+        println!("  lines {}-{} kind={:?}",
+            r.get("startLine").and_then(|v| v.as_u64()).unwrap_or(0),
+            r.get("endLine").and_then(|v| v.as_u64()).unwrap_or(0),
+            r.get("kind").and_then(|v| v.as_str()).unwrap_or("none")
+        );
+    }
+
+    // Should have multiple fold ranges: at least the function body
+    assert!(ranges.len() >= 1, "Expected at least 1 folding range for nested code, got {}", ranges.len());
+
+    // The function body (process) should be foldable starting at line 0
+    let has_fn_fold = ranges.iter().any(|r| {
+        let start = r.get("startLine").and_then(|v| v.as_u64()).unwrap_or(999);
+        start == 0
+    });
+    assert!(has_fn_fold, "Expected a folding range starting at line 0 for process()");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test folding ranges for consecutive comment lines
+#[test]
+fn test_folding_range_comments() {
+    let project_path = create_test_project("folding_comments");
+
+    let main_content = "# This is a block\n# of consecutive\n# comment lines\n# that should fold\n# into one range\n\nmain() = 42\n";
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _init = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, main_content);
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    let response = client.send_request("textDocument/foldingRange", json!({
+        "textDocument": { "uri": main_uri }
+    }));
+
+    println!("Folding range response: {:?}", response);
+
+    let result = response.get("result").expect("Expected result");
+    assert!(!result.is_null(), "Expected non-null folding ranges");
+    let ranges = result.as_array().expect("Expected array of folding ranges");
+
+    println!("Found {} folding ranges:", ranges.len());
+    for r in ranges {
+        println!("  lines {}-{} kind={:?}",
+            r.get("startLine").and_then(|v| v.as_u64()).unwrap_or(0),
+            r.get("endLine").and_then(|v| v.as_u64()).unwrap_or(0),
+            r.get("kind").and_then(|v| v.as_str()).unwrap_or("none")
+        );
+    }
+
+    // Should have a comment folding range spanning lines 0-4
+    let has_comment_fold = ranges.iter().any(|r| {
+        r.get("kind").and_then(|v| v.as_str()) == Some("comment")
+    });
+    assert!(has_comment_fold, "Expected a comment folding range for 5 consecutive comment lines");
+
+    // Verify the comment range covers at least 3 lines
+    let comment_range = ranges.iter().find(|r| {
+        r.get("kind").and_then(|v| v.as_str()) == Some("comment")
+    }).unwrap();
+    let start = comment_range.get("startLine").and_then(|v| v.as_u64()).unwrap_or(0);
+    let end = comment_range.get("endLine").and_then(|v| v.as_u64()).unwrap_or(0);
+    assert!(end - start >= 2, "Comment fold range should span at least 3 lines, got {}-{}", start, end);
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+// ============================================================================
+// Workspace Symbol Tests
+// ============================================================================
+
+/// Test workspace symbols: partial name filter returns only matching functions
+#[test]
+fn test_workspace_symbols_filter() {
+    let project_path = create_test_project("ws_symbols_filter");
+
+    let main_content = "pub addNums(a, b) = a + b\n\npub multiply(x, y) = x * y\n\nmain() = addNums(1, 2)\n";
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _init = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, main_content);
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Search for "add" - should find addNums but NOT multiply
+    let response = client.send_request("workspace/symbol", json!({
+        "query": "add"
+    }));
+
+    println!("Workspace symbol response for 'add': {:?}", response);
+
+    let result = response.get("result").expect("Expected result");
+    assert!(!result.is_null(), "Expected non-null symbols");
+    let symbols = result.as_array().expect("Expected array of symbols");
+
+    println!("Found {} symbols matching 'add':", symbols.len());
+    for s in symbols {
+        println!("  name={}", s.get("name").and_then(|v| v.as_str()).unwrap_or("?"));
+    }
+
+    let has_add_nums = symbols.iter().any(|s| {
+        s.get("name").and_then(|v| v.as_str()) == Some("addNums")
+    });
+    assert!(has_add_nums, "Expected 'addNums' in filtered workspace symbols");
+
+    let has_multiply = symbols.iter().any(|s| {
+        s.get("name").and_then(|v| v.as_str()) == Some("multiply")
+    });
+    assert!(!has_multiply, "Expected 'multiply' to NOT be in symbols filtered by 'add'");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test workspace symbols: search for nonexistent name returns empty results
+#[test]
+fn test_workspace_symbols_no_match() {
+    let project_path = create_test_project("ws_symbols_none");
+
+    let main_content = "pub addNums(a, b) = a + b\n\nmain() = addNums(1, 2)\n";
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _init = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, main_content);
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Search for something that does not exist
+    let response = client.send_request("workspace/symbol", json!({
+        "query": "xyznonexistent"
+    }));
+
+    println!("Workspace symbol response for 'xyznonexistent': {:?}", response);
+
+    let result = response.get("result").expect("Expected result");
+    if result.is_null() {
+        // null is fine - means no matches
+        println!("Result is null (no matches) - OK");
+    } else {
+        let symbols = result.as_array().expect("Expected array");
+        assert!(symbols.is_empty(), "Expected empty results for 'xyznonexistent', got {} symbols", symbols.len());
+    }
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}

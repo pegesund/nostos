@@ -5074,11 +5074,21 @@ impl NostosLanguageServer {
     /// Extract an unknown variable/function name from an error message.
     /// Matches patterns like "Unknown function 'foo'" or "Undefined variable: foo"
     fn extract_unknown_name(msg: &str) -> Option<String> {
-        // Pattern: "Unknown function 'NAME'" or "Unknown variable 'NAME'"
+        // Pattern: "Unknown function 'NAME'" or "Unknown variable 'NAME'" (single quotes)
         if let Some(start) = msg.find("Unknown function '").or_else(|| msg.find("Unknown variable '")) {
             let after_quote = &msg[msg[start..].find('\'')? + start + 1..];
             if let Some(end) = after_quote.find('\'') {
                 let name = &after_quote[..end];
+                if !name.is_empty() {
+                    return Some(name.to_string());
+                }
+            }
+        }
+        // Pattern: "unknown variable `NAME`" or "unknown function `NAME`" (backtick-quoted, lowercase)
+        if let Some(start) = msg.find("unknown variable `").or_else(|| msg.find("unknown function `")) {
+            let after_tick = &msg[msg[start..].find('`')? + start + 1..];
+            if let Some(end) = after_tick.find('`') {
+                let name = &after_tick[..end];
                 if !name.is_empty() {
                     return Some(name.to_string());
                 }
