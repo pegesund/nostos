@@ -749,6 +749,20 @@ impl LanguageServer for NostosLanguageServer {
                     prepare_provider: Some(true),
                     work_done_progress_options: Default::default(),
                 })),
+                // Code actions (quick fixes and suggestions)
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                // Document formatting
+                document_formatting_provider: Some(OneOf::Left(true)),
+                // Call hierarchy (incoming/outgoing calls)
+                call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
+                // Folding ranges (code folding for blocks, functions, types, traits)
+                folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                // Workspace symbol search
+                workspace_symbol_provider: Some(OneOf::Left(true)),
+                // Code lens (reference counts above functions)
+                code_lens_provider: Some(CodeLensOptions {
+                    resolve_provider: Some(false),
+                }),
                 // Don't advertise commands here - the extension registers them
                 // and forwards via workspace/executeCommand. Advertising them
                 // causes vscode-languageclient to also try registering them,
@@ -2080,6 +2094,368 @@ impl LanguageServer for NostosLanguageServer {
             data: tokens,
         })))
     }
+
+    async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
+        let uri = &params.text_document.uri;
+
+        let content = match self.documents.get(uri) {
+            Some(c) => c.clone(),
+            None => return Ok(None),
+        };
+
+        let ranges = Self::compute_folding_ranges(&content);
+
+        if ranges.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(ranges))
+        }
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        let query = params.query.to_lowercase();
+
+        let mut symbols = Vec::new();
+
+        // Search all open documents
+        for entry in self.documents.iter() {
+            let doc_uri = entry.key().clone();
+            let doc_content = entry.value().clone();
+
+            let doc_symbols = Self::extract_document_symbols(&doc_content);
+            for mut sym in doc_symbols {
+                if query.is_empty() || sym.name.to_lowercase().contains(&query) {
+                    sym.location.uri = doc_uri.clone();
+                    symbols.push(sym);
+                }
+            }
+        }
+
+        // Also search project files from engine that are not open
+        let engine_guard = self.engine.lock().unwrap();
+        if let Some(engine) = engine_guard.as_ref() {
+            for file_path in engine.get_module_source_paths() {
+                if let Ok(file_uri) = Url::from_file_path(&file_path) {
+                    if self.documents.contains_key(&file_uri) {
+                        continue;
+                    }
+                    if let Ok(file_content) = std::fs::read_to_string(&file_path) {
+                        let doc_symbols = Self::extract_document_symbols(&file_content);
+                        for mut sym in doc_symbols {
+                            if query.is_empty() || sym.name.to_lowercase().contains(&query) {
+                                sym.location.uri = file_uri.clone();
+                                symbols.push(sym);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if symbols.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(symbols))
+        }
+    }
+
+    async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
+        let uri = &params.text_document.uri;
+
+        let content = match self.documents.get(uri) {
+            Some(c) => c.clone(),
+            None => return Ok(None),
+        };
+
+        let symbols = Self::extract_document_symbols(&content);
+        if symbols.is_empty() {
+            return Ok(None);
+        }
+
+        let mut lenses = Vec::new();
+
+        for sym in &symbols {
+            let name = &sym.name;
+
+            // Count references across all documents
+            let mut ref_count: usize = 0;
+
+            for entry in self.documents.iter() {
+                let doc_content = entry.value();
+                ref_count += Self::count_references_in_content(name, doc_content);
+            }
+
+            // Also count in project files not currently open
+            let engine_guard = self.engine.lock().unwrap();
+            if let Some(engine) = engine_guard.as_ref() {
+                for file_path in engine.get_module_source_paths() {
+                    if let Ok(file_uri) = Url::from_file_path(&file_path) {
+                        if self.documents.contains_key(&file_uri) {
+                            continue;
+                        }
+                        if let Ok(file_content) = std::fs::read_to_string(&file_path) {
+                            ref_count += Self::count_references_in_content(name, &file_content);
+                        }
+                    }
+                }
+            }
+            drop(engine_guard);
+
+            // Subtract 1 for the definition itself (if it was counted)
+            let display_count = if ref_count > 0 { ref_count - 1 } else { 0 };
+
+            let title = if display_count == 1 {
+                "1 reference".to_string()
+            } else {
+                format!("{} references", display_count)
+            };
+
+            lenses.push(CodeLens {
+                range: sym.location.range,
+                command: Some(Command {
+                    title,
+                    command: "nostos.showReferences".to_string(),
+                    arguments: None,
+                }),
+                data: None,
+            });
+        }
+
+        if lenses.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(lenses))
+        }
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let uri = &params.text_document.uri;
+        let mut actions: Vec<CodeActionOrCommand> = Vec::new();
+
+        // Check if there are diagnostics in the request - suggest fixes for them
+        for diag in &params.context.diagnostics {
+            let msg = &diag.message;
+
+            // "Add missing import" suggestion for unknown variable errors
+            if let Some(var_name) = Self::extract_unknown_name(msg) {
+                // Look up if this name exists in any loaded module
+                if let Ok(engine_guard) = self.engine.lock() {
+                    if let Some(engine) = engine_guard.as_ref() {
+                        if let Some(module_name) = engine.get_function_module(&var_name) {
+                            let import_line = format!("use {}.{{{}}}\n", module_name, var_name);
+                            let edit = TextEdit {
+                                range: Range {
+                                    start: Position { line: 0, character: 0 },
+                                    end: Position { line: 0, character: 0 },
+                                },
+                                new_text: import_line.clone(),
+                            };
+                            let mut changes = std::collections::HashMap::new();
+                            changes.insert(uri.clone(), vec![edit]);
+                            let action = CodeAction {
+                                title: format!("Add missing import: use {}.{{{}}}", module_name, var_name),
+                                kind: Some(CodeActionKind::QUICKFIX),
+                                diagnostics: Some(vec![diag.clone()]),
+                                edit: Some(WorkspaceEdit {
+                                    changes: Some(changes),
+                                    document_changes: None,
+                                    change_annotations: None,
+                                }),
+                                ..Default::default()
+                            };
+                            actions.push(CodeActionOrCommand::CodeAction(action));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(Some(actions))
+    }
+
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let uri = &params.text_document.uri;
+
+        let content = match self.documents.get(uri) {
+            Some(c) => c.clone(),
+            None => return Ok(None),
+        };
+
+        let formatted = Self::format_nostos_code(&content);
+
+        // If no changes, return empty list
+        if formatted == content {
+            return Ok(Some(vec![]));
+        }
+
+        // Count lines in original document
+        let line_count = content.lines().count() as u32;
+        let last_line_len = content.lines().last().map(|l| l.len() as u32).unwrap_or(0);
+
+        // Return a single edit replacing the entire document
+        Ok(Some(vec![TextEdit {
+            range: Range {
+                start: Position { line: 0, character: 0 },
+                end: Position { line: line_count, character: last_line_len },
+            },
+            new_text: formatted,
+        }]))
+    }
+
+    async fn prepare_call_hierarchy(
+        &self,
+        params: CallHierarchyPrepareParams,
+    ) -> Result<Option<Vec<CallHierarchyItem>>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let pos = params.text_document_position_params.position;
+
+        let content = match self.documents.get(uri) {
+            Some(c) => c.clone(),
+            None => return Ok(None),
+        };
+
+        let lines: Vec<&str> = content.lines().collect();
+        let line_idx = pos.line as usize;
+        if line_idx >= lines.len() {
+            return Ok(None);
+        }
+        let line = lines[line_idx];
+
+        if let Some(func_name) = Self::find_function_name_at(line, pos.character as usize) {
+            let name_start = line.find(&func_name).unwrap_or(pos.character as usize);
+            let item = CallHierarchyItem {
+                name: func_name.clone(),
+                kind: SymbolKind::FUNCTION,
+                tags: None,
+                detail: None,
+                uri: uri.clone(),
+                range: Range {
+                    start: Position { line: pos.line, character: 0 },
+                    end: Position { line: pos.line, character: line.len() as u32 },
+                },
+                selection_range: Range {
+                    start: Position { line: pos.line, character: name_start as u32 },
+                    end: Position { line: pos.line, character: name_start as u32 + func_name.len() as u32 },
+                },
+                data: Some(serde_json::json!({ "name": func_name })),
+            };
+            return Ok(Some(vec![item]));
+        }
+
+        Ok(None)
+    }
+
+    async fn incoming_calls(
+        &self,
+        params: CallHierarchyIncomingCallsParams,
+    ) -> Result<Option<Vec<CallHierarchyIncomingCall>>> {
+        let target_name = params.item.name.clone();
+        let mut calls = Vec::new();
+
+        // Scan all open documents for calls to this function
+        for entry in self.documents.iter() {
+            let doc_uri = entry.key().clone();
+            let content = entry.value().clone();
+
+            for (line_idx, line) in content.lines().enumerate() {
+                let call_pattern = format!("{}(", target_name);
+
+                if line.contains(&call_pattern) {
+                    // Skip if this looks like a function definition
+                    let trimmed = line.trim();
+                    let is_def = trimmed.starts_with(&target_name)
+                        && trimmed.contains('=')
+                        && trimmed.find('(').map_or(true, |p| trimmed.find('=').map_or(false, |e| e > p));
+
+                    if is_def && doc_uri == params.item.uri {
+                        continue;
+                    }
+
+                    let caller_name = Self::find_enclosing_function(&content, line_idx)
+                        .unwrap_or_else(|| "<top-level>".to_string());
+
+                    let from_item = CallHierarchyItem {
+                        name: caller_name,
+                        kind: SymbolKind::FUNCTION,
+                        tags: None,
+                        detail: None,
+                        uri: doc_uri.clone(),
+                        range: Range {
+                            start: Position { line: line_idx as u32, character: 0 },
+                            end: Position { line: line_idx as u32, character: line.len() as u32 },
+                        },
+                        selection_range: Range {
+                            start: Position { line: line_idx as u32, character: 0 },
+                            end: Position { line: line_idx as u32, character: line.len() as u32 },
+                        },
+                        data: None,
+                    };
+
+                    let col = line.find(&call_pattern).unwrap_or(0) as u32;
+                    calls.push(CallHierarchyIncomingCall {
+                        from: from_item,
+                        from_ranges: vec![Range {
+                            start: Position { line: line_idx as u32, character: col },
+                            end: Position { line: line_idx as u32, character: col + target_name.len() as u32 },
+                        }],
+                    });
+                }
+            }
+        }
+
+        Ok(Some(calls))
+    }
+
+    async fn outgoing_calls(
+        &self,
+        params: CallHierarchyOutgoingCallsParams,
+    ) -> Result<Option<Vec<CallHierarchyOutgoingCall>>> {
+        let source_name = params.item.name.clone();
+        let uri = &params.item.uri;
+        let mut calls = Vec::new();
+
+        let content = match self.documents.get(uri) {
+            Some(c) => c.clone(),
+            None => return Ok(Some(vec![])),
+        };
+
+        let lines: Vec<&str> = content.lines().collect();
+        let mut in_function = false;
+        let mut brace_depth: i32 = 0;
+
+        for (line_idx, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+
+            if !in_function {
+                if trimmed.starts_with(&source_name) && trimmed.contains('=') {
+                    in_function = true;
+                    brace_depth = line.chars().filter(|&c| c == '{').count() as i32
+                        - line.chars().filter(|&c| c == '}').count() as i32;
+                    if let Some(eq_pos) = trimmed.find('=') {
+                        let rhs = &trimmed[eq_pos + 1..];
+                        Self::extract_calls_from_line(rhs, line_idx, uri, &mut calls);
+                    }
+                    continue;
+                }
+            }
+
+            if in_function {
+                brace_depth += line.chars().filter(|&c| c == '{').count() as i32;
+                brace_depth -= line.chars().filter(|&c| c == '}').count() as i32;
+
+                Self::extract_calls_from_line(line, line_idx, uri, &mut calls);
+
+                if brace_depth <= 0 {
+                    in_function = false;
+                }
+            }
+        }
+
+        Ok(Some(calls))
+    }
 }
 
 impl NostosLanguageServer {
@@ -2773,6 +3149,231 @@ impl NostosLanguageServer {
                 search_start = actual_pos + word.len();
             }
         }
+    }
+
+    /// Count how many times a word appears as a whole-word match in the content.
+    fn count_references_in_content(word: &str, content: &str) -> usize {
+        let mut count = 0;
+        for line in content.lines() {
+            let mut search_start = 0;
+            while let Some(pos) = line[search_start..].find(word) {
+                let actual_pos = search_start + pos;
+                let before_ok = actual_pos == 0
+                    || !line.chars().nth(actual_pos - 1).map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false);
+                let after_ok = actual_pos + word.len() >= line.len()
+                    || !line.chars().nth(actual_pos + word.len()).map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false);
+                if before_ok && after_ok {
+                    count += 1;
+                }
+                search_start = actual_pos + word.len();
+            }
+        }
+        count
+    }
+
+    /// Compute folding ranges for a document.
+    /// Detects: function bodies with braces, type definitions, trait/impl blocks,
+    /// comment blocks, and multi-line match expressions.
+    fn compute_folding_ranges(content: &str) -> Vec<FoldingRange> {
+        let lines: Vec<&str> = content.lines().collect();
+        let mut ranges = Vec::new();
+
+        let mut i = 0;
+        while i < lines.len() {
+            let trimmed = lines[i].trim();
+
+            // Comment blocks: consecutive # comment lines
+            if trimmed.starts_with('#') {
+                let start = i;
+                while i < lines.len() && lines[i].trim().starts_with('#') {
+                    i += 1;
+                }
+                let end = i - 1;
+                if end > start {
+                    ranges.push(FoldingRange {
+                        start_line: start as u32,
+                        start_character: None,
+                        end_line: end as u32,
+                        end_character: None,
+                        kind: Some(FoldingRangeKind::Comment),
+                        collapsed_text: None,
+                    });
+                }
+                continue;
+            }
+
+            // Function bodies: line containing `= {` - fold from this line to matching `}`
+            if (trimmed.contains("= {") || trimmed.ends_with("= {"))
+                && (trimmed.contains('(') || lines.get(i.wrapping_sub(1)).map_or(false, |l| l.trim().contains('(')))
+            {
+                // Find matching closing brace
+                if let Some(end) = Self::find_matching_brace(&lines, i) {
+                    if end > i {
+                        ranges.push(FoldingRange {
+                            start_line: i as u32,
+                            start_character: None,
+                            end_line: end as u32,
+                            end_character: None,
+                            kind: Some(FoldingRangeKind::Region),
+                            collapsed_text: None,
+                        });
+                    }
+                }
+                i += 1;
+                continue;
+            }
+
+            // Type definitions: from `type Name =` to end of definition
+            if trimmed.starts_with("type ") && trimmed.contains('=') {
+                let start = i;
+                i += 1;
+                // Continue until blank line, next top-level definition, or EOF
+                while i < lines.len() {
+                    let next_trimmed = lines[i].trim();
+                    if next_trimmed.is_empty() {
+                        break;
+                    }
+                    // Next top-level definition starts
+                    if !lines[i].starts_with(' ') && !lines[i].starts_with('\t') {
+                        if next_trimmed.starts_with("type ")
+                            || next_trimmed.starts_with("pub ")
+                            || next_trimmed.starts_with("trait ")
+                            || (next_trimmed.contains('(') && next_trimmed.contains('='))
+                        {
+                            break;
+                        }
+                    }
+                    i += 1;
+                }
+                let end = i - 1;
+                if end > start {
+                    ranges.push(FoldingRange {
+                        start_line: start as u32,
+                        start_character: None,
+                        end_line: end as u32,
+                        end_character: None,
+                        kind: Some(FoldingRangeKind::Region),
+                        collapsed_text: None,
+                    });
+                }
+                continue;
+            }
+
+            // Trait blocks: from `trait Name` to `end`
+            if trimmed.starts_with("trait ") && !trimmed.contains('=') {
+                let start = i;
+                i += 1;
+                while i < lines.len() {
+                    if lines[i].trim() == "end" {
+                        break;
+                    }
+                    i += 1;
+                }
+                if i < lines.len() {
+                    ranges.push(FoldingRange {
+                        start_line: start as u32,
+                        start_character: None,
+                        end_line: i as u32,
+                        end_character: None,
+                        kind: Some(FoldingRangeKind::Region),
+                        collapsed_text: None,
+                    });
+                }
+                i += 1;
+                continue;
+            }
+
+            // Trait impl blocks: `TypeName: TraitName` to `end` (at top level)
+            if !trimmed.is_empty()
+                && !lines[i].starts_with(' ')
+                && !lines[i].starts_with('\t')
+                && trimmed.contains(':')
+                && !trimmed.contains('(')
+                && !trimmed.contains('=')
+                && trimmed.chars().next().map_or(false, |c| c.is_uppercase())
+            {
+                let start = i;
+                i += 1;
+                while i < lines.len() {
+                    if lines[i].trim() == "end" {
+                        break;
+                    }
+                    i += 1;
+                }
+                if i < lines.len() {
+                    ranges.push(FoldingRange {
+                        start_line: start as u32,
+                        start_character: None,
+                        end_line: i as u32,
+                        end_character: None,
+                        kind: Some(FoldingRangeKind::Region),
+                        collapsed_text: None,
+                    });
+                }
+                i += 1;
+                continue;
+            }
+
+            // Multi-line match expressions
+            if trimmed.starts_with("match ") || trimmed == "match" {
+                let start = i;
+                // Find the end of match block - look for closing brace or dedent
+                let indent = lines[i].len() - trimmed.len();
+                i += 1;
+                while i < lines.len() {
+                    let line = lines[i];
+                    let lt = line.trim();
+                    if lt.is_empty() {
+                        i += 1;
+                        continue;
+                    }
+                    let cur_indent = line.len() - lt.len();
+                    if cur_indent <= indent && !lt.starts_with('|') && !lt.starts_with('}') {
+                        break;
+                    }
+                    if lt == "}" || lt.ends_with('}') {
+                        // Include this closing brace line
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+                let end = i - 1;
+                if end > start {
+                    ranges.push(FoldingRange {
+                        start_line: start as u32,
+                        start_character: None,
+                        end_line: end as u32,
+                        end_character: None,
+                        kind: Some(FoldingRangeKind::Region),
+                        collapsed_text: None,
+                    });
+                }
+                continue;
+            }
+
+            i += 1;
+        }
+
+        ranges
+    }
+
+    /// Find the line number of the matching closing brace for a line containing `{`.
+    fn find_matching_brace(lines: &[&str], start_line: usize) -> Option<usize> {
+        let mut depth = 0i32;
+        for i in start_line..lines.len() {
+            for ch in lines[i].chars() {
+                if ch == '{' {
+                    depth += 1;
+                } else if ch == '}' {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Check if a position in a line is inside a comment (after #) or string literal.
@@ -4468,6 +5069,195 @@ impl NostosLanguageServer {
         }
 
         (fn_name, comma_count)
+    }
+
+    /// Extract an unknown variable/function name from an error message.
+    /// Matches patterns like "Unknown function 'foo'" or "Undefined variable: foo"
+    fn extract_unknown_name(msg: &str) -> Option<String> {
+        // Pattern: "Unknown function 'NAME'" or "Unknown variable 'NAME'"
+        if let Some(start) = msg.find("Unknown function '").or_else(|| msg.find("Unknown variable '")) {
+            let after_quote = &msg[msg[start..].find('\'')? + start + 1..];
+            if let Some(end) = after_quote.find('\'') {
+                let name = &after_quote[..end];
+                if !name.is_empty() {
+                    return Some(name.to_string());
+                }
+            }
+        }
+        // Pattern: "Undefined variable X" or "undefined function X"
+        for prefix in &["Undefined variable ", "undefined function ", "Undefined function ", "Unknown function "] {
+            if let Some(rest) = msg.strip_prefix(prefix) {
+                let name = rest.trim().trim_matches('\'').trim_matches('`');
+                if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                    return Some(name.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// Format Nostos source code with basic rules:
+    /// - Trim trailing whitespace from each line
+    /// - Ensure file ends with a single newline
+    /// - Normalize spacing around = and -> operators
+    fn format_nostos_code(content: &str) -> String {
+        let mut result = String::with_capacity(content.len());
+
+        for line in content.lines() {
+            let trimmed_end = line.trim_end();
+            result.push_str(trimmed_end);
+            result.push('\n');
+        }
+
+        // Ensure exactly one trailing newline
+        while result.ends_with("\n\n") {
+            result.pop();
+        }
+        if !result.ends_with('\n') {
+            result.push('\n');
+        }
+
+        result
+    }
+
+    /// Find a function name at or near a cursor position in a line.
+    /// Looks for identifiers followed by '(' or function definitions like "name(params) ="
+    fn find_function_name_at(line: &str, col: usize) -> Option<String> {
+        let chars: Vec<char> = line.chars().collect();
+        if chars.is_empty() {
+            return None;
+        }
+
+        // Find the word at cursor position
+        let col = col.min(chars.len().saturating_sub(1));
+
+        // Expand left to find start of identifier
+        let mut start = col;
+        while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_' || chars[start - 1] == '.') {
+            start -= 1;
+        }
+
+        // Expand right to find end of identifier
+        let mut end = col;
+        while end < chars.len() && (chars[end].is_alphanumeric() || chars[end] == '_' || chars[end] == '.') {
+            end += 1;
+        }
+
+        if start == end {
+            return None;
+        }
+
+        let word: String = chars[start..end].iter().collect();
+        if word.is_empty() {
+            return None;
+        }
+
+        // Check if this looks like a function (followed by '(' or is a definition)
+        let trimmed = line.trim();
+        let is_function_def = trimmed.contains('(') && trimmed.contains('=');
+        let followed_by_paren = end < chars.len() && chars[end] == '(';
+
+        if is_function_def || followed_by_paren || word.contains('.') {
+            // Strip module prefix for the name
+            Some(word)
+        } else {
+            // Check if cursor is on a name that appears as "name(" elsewhere in the line
+            let call_pat = format!("{}(", word);
+            if line.contains(&call_pat) {
+                Some(word)
+            } else {
+                // Still return it - could be a function name without parens
+                Some(word)
+            }
+        }
+    }
+
+    /// Find the enclosing function definition for a given line index.
+    /// Searches upward for a line that looks like a function definition.
+    fn find_enclosing_function(content: &str, line_idx: usize) -> Option<String> {
+        let lines: Vec<&str> = content.lines().collect();
+
+        for i in (0..=line_idx).rev() {
+            let trimmed = lines[i].trim();
+            // Look for pattern: name(params) = or name() =
+            if let Some(paren_pos) = trimmed.find('(') {
+                if trimmed[paren_pos..].contains('=') || (i + 1 < lines.len() && lines.get(i + 1).map_or(false, |l| l.trim().starts_with('='))) {
+                    let name = trimmed[..paren_pos].trim();
+                    // Strip visibility keywords
+                    let name = name.strip_prefix("pub ").unwrap_or(name);
+                    if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                        return Some(name.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract function calls from a line of code and add them to the calls list.
+    fn extract_calls_from_line(line: &str, line_idx: usize, uri: &Url, calls: &mut Vec<CallHierarchyOutgoingCall>) {
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 0;
+
+        while i < chars.len() {
+            // Skip comments
+            if chars[i] == '#' {
+                break;
+            }
+            // Skip strings
+            if chars[i] == '"' {
+                i += 1;
+                while i < chars.len() && chars[i] != '"' {
+                    if chars[i] == '\\' { i += 1; }
+                    i += 1;
+                }
+                i += 1;
+                continue;
+            }
+
+            // Look for identifier followed by '('
+            if chars[i].is_alphabetic() || chars[i] == '_' {
+                let start = i;
+                while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == '.') {
+                    i += 1;
+                }
+                let name: String = chars[start..i].iter().collect();
+
+                // Check if followed by '('
+                if i < chars.len() && chars[i] == '(' {
+                    // Skip keywords that look like function calls
+                    let keywords = ["if", "else", "match", "while", "for", "type", "trait", "impl", "use", "pub"];
+                    if !keywords.contains(&name.as_str()) {
+                        let col = start as u32;
+                        calls.push(CallHierarchyOutgoingCall {
+                            to: CallHierarchyItem {
+                                name: name.clone(),
+                                kind: SymbolKind::FUNCTION,
+                                tags: None,
+                                detail: None,
+                                uri: uri.clone(),
+                                range: Range {
+                                    start: Position { line: line_idx as u32, character: col },
+                                    end: Position { line: line_idx as u32, character: col + name.len() as u32 },
+                                },
+                                selection_range: Range {
+                                    start: Position { line: line_idx as u32, character: col },
+                                    end: Position { line: line_idx as u32, character: col + name.len() as u32 },
+                                },
+                                data: None,
+                            },
+                            from_ranges: vec![Range {
+                                start: Position { line: line_idx as u32, character: col },
+                                end: Position { line: line_idx as u32, character: col + name.len() as u32 },
+                            }],
+                        });
+                    }
+                }
+                continue;
+            }
+
+            i += 1;
+        }
     }
 }
 

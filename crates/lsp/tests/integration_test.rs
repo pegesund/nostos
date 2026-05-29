@@ -6375,3 +6375,367 @@ fn test_work_done_progress_during_init() {
     client.exit();
     cleanup_test_project(&project_path);
 }
+
+/// Test folding ranges: function body and trait block produce fold ranges
+#[test]
+fn test_folding_ranges() {
+    let project_path = create_test_project("folding_ranges");
+
+    let main_content = r#"# This is a comment block
+# spanning multiple lines
+# for testing comment folding
+
+trait Printable
+    toString(self) -> String
+end
+
+type Color =
+    Red
+    | Green
+    | Blue
+
+add(a, b) = {
+    result = a + b
+    result
+}
+
+main() = {
+    x = add(1, 2)
+    x
+}
+"#;
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _init = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, main_content);
+
+    // Small delay to let the server process the file
+    std::thread::sleep(Duration::from_millis(500));
+
+    let response = client.send_request("textDocument/foldingRange", json!({
+        "textDocument": { "uri": main_uri }
+    }));
+
+    println!("Folding range response: {:?}", response);
+
+    let result = response.get("result").expect("Expected result");
+    assert!(!result.is_null(), "Expected non-null folding ranges");
+    let ranges = result.as_array().expect("Expected array of folding ranges");
+
+    println!("Found {} folding ranges:", ranges.len());
+    for r in ranges {
+        println!("  lines {}-{} kind={:?}",
+            r.get("startLine").and_then(|v| v.as_u64()).unwrap_or(0),
+            r.get("endLine").and_then(|v| v.as_u64()).unwrap_or(0),
+            r.get("kind").and_then(|v| v.as_str()).unwrap_or("none")
+        );
+    }
+
+    // Should have at least: comment block, trait block, type def, and two function bodies
+    assert!(ranges.len() >= 3, "Expected at least 3 folding ranges, got {}", ranges.len());
+
+    // Verify comment block fold exists (lines 0-2)
+    let has_comment_fold = ranges.iter().any(|r| {
+        r.get("kind").and_then(|v| v.as_str()) == Some("comment")
+    });
+    assert!(has_comment_fold, "Expected a comment folding range");
+
+    // Verify trait block fold exists (starts at line 4 "trait Printable")
+    let has_trait_fold = ranges.iter().any(|r| {
+        let start = r.get("startLine").and_then(|v| v.as_u64()).unwrap_or(999);
+        start == 4
+    });
+    assert!(has_trait_fold, "Expected a trait block folding range starting at line 4");
+
+    // Verify function body fold exists for add (line 13: "add(a, b) = {")
+    let has_fn_fold = ranges.iter().any(|r| {
+        let start = r.get("startLine").and_then(|v| v.as_u64()).unwrap_or(999);
+        let kind = r.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        start == 13 && kind == "region"
+    });
+    assert!(has_fn_fold, "Expected a function body folding range for add()");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test workspace symbols: searching for a function name returns it
+#[test]
+fn test_workspace_symbols() {
+    let project_path = create_test_project("workspace_symbols");
+
+    let main_content = "pub calculateTotal(x, y) = x + y\n\nmain() = calculateTotal(3, 4)\n";
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let helper_content = "pub helperFunction(a) = a * 2\n";
+    fs::write(project_path.join("helper.nos"), helper_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _init = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    let helper_uri = format!("file://{}/helper.nos", project_path.display());
+    client.did_open(&main_uri, main_content);
+    client.did_open(&helper_uri, helper_content);
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Search for "calculate" - should find calculateTotal
+    let response = client.send_request("workspace/symbol", json!({
+        "query": "calculate"
+    }));
+
+    println!("Workspace symbol response: {:?}", response);
+
+    let result = response.get("result").expect("Expected result");
+    assert!(!result.is_null(), "Expected non-null symbols");
+    let symbols = result.as_array().expect("Expected array of symbols");
+
+    println!("Found {} symbols matching 'calculate':", symbols.len());
+    for s in symbols {
+        println!("  name={} kind={}",
+            s.get("name").and_then(|v| v.as_str()).unwrap_or("?"),
+            s.get("kind").and_then(|v| v.as_u64()).unwrap_or(0)
+        );
+    }
+
+    assert!(!symbols.is_empty(), "Expected at least one symbol matching 'calculate'");
+
+    let has_calculate_total = symbols.iter().any(|s| {
+        s.get("name").and_then(|v| v.as_str()) == Some("calculateTotal")
+    });
+    assert!(has_calculate_total, "Expected to find 'calculateTotal' in workspace symbols");
+
+    // Search for "helper" - should find helperFunction
+    let response2 = client.send_request("workspace/symbol", json!({
+        "query": "helper"
+    }));
+    let result2 = response2.get("result").expect("Expected result");
+    let symbols2 = result2.as_array().expect("Expected array");
+    let has_helper = symbols2.iter().any(|s| {
+        s.get("name").and_then(|v| v.as_str()) == Some("helperFunction")
+    });
+    assert!(has_helper, "Expected to find 'helperFunction' in workspace symbols");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test code lens: function shows reference count
+#[test]
+fn test_code_lens_references() {
+    let project_path = create_test_project("code_lens_refs");
+
+    let main_content = r#"pub addNums(a, b) = a + b
+
+main() = {
+    x = addNums(1, 2)
+    y = addNums(3, 4)
+    x + y
+}
+"#;
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _init = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, main_content);
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    let response = client.send_request("textDocument/codeLens", json!({
+        "textDocument": { "uri": main_uri }
+    }));
+
+    println!("Code lens response: {:?}", response);
+
+    let result = response.get("result").expect("Expected result");
+    assert!(!result.is_null(), "Expected non-null code lenses");
+    let lenses = result.as_array().expect("Expected array of code lenses");
+
+    println!("Found {} code lenses:", lenses.len());
+    for lens in lenses {
+        let title = lens.get("command")
+            .and_then(|c| c.get("title"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("?");
+        let line = lens.get("range")
+            .and_then(|r| r.get("start"))
+            .and_then(|s| s.get("line"))
+            .and_then(|l| l.as_u64())
+            .unwrap_or(999);
+        println!("  line {}: {}", line, title);
+    }
+
+    // Should have lenses for addNums and main
+    assert!(lenses.len() >= 2, "Expected at least 2 code lenses, got {}", lenses.len());
+
+    // addNums is called twice in main(), so it should show "2 references"
+    let add_nums_lens = lenses.iter().find(|l| {
+        let line = l.get("range")
+            .and_then(|r| r.get("start"))
+            .and_then(|s| s.get("line"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(999);
+        line == 0 // addNums is on line 0
+    });
+    assert!(add_nums_lens.is_some(), "Expected code lens for addNums on line 0");
+
+    let title = add_nums_lens.unwrap()
+        .get("command")
+        .and_then(|c| c.get("title"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("");
+    assert!(title.contains("2 references"), "Expected '2 references' for addNums, got '{}'", title);
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test that the code action capability is advertised in initialize response
+#[test]
+fn test_code_action_capability() {
+    let project_path = create_test_project("code_action_cap");
+
+    let main_content = "main() = 42\n";
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let init_response = client.initialize(project_path.to_str().unwrap());
+
+    // Check that codeActionProvider is advertised
+    let capabilities = init_response.get("result")
+        .and_then(|r| r.get("capabilities"))
+        .expect("Expected capabilities in initialize response");
+
+    let code_action = capabilities.get("codeActionProvider");
+    assert!(code_action.is_some(), "Expected codeActionProvider capability");
+    assert_eq!(code_action.unwrap(), &json!(true), "Expected codeActionProvider to be true");
+
+    // Also verify documentFormattingProvider
+    let formatting = capabilities.get("documentFormattingProvider");
+    assert!(formatting.is_some(), "Expected documentFormattingProvider capability");
+    assert_eq!(formatting.unwrap(), &json!(true), "Expected documentFormattingProvider to be true");
+
+    // Also verify callHierarchyProvider
+    let call_hierarchy = capabilities.get("callHierarchyProvider");
+    assert!(call_hierarchy.is_some(), "Expected callHierarchyProvider capability");
+    assert_eq!(call_hierarchy.unwrap(), &json!(true), "Expected callHierarchyProvider to be true");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test formatting: trailing whitespace is trimmed and final newline ensured
+#[test]
+fn test_formatting_trailing_whitespace() {
+    let project_path = create_test_project("formatting_ws");
+
+    // Content with trailing whitespace and missing final newline
+    let main_content = "main() = {   \n    x = 42   \n    x\n}";
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _init = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, main_content);
+
+    // Small delay to let didOpen be processed
+    std::thread::sleep(Duration::from_millis(200));
+
+    // Request formatting
+    let response = client.send_request("textDocument/formatting", json!({
+        "textDocument": { "uri": main_uri },
+        "options": {
+            "tabSize": 4,
+            "insertSpaces": true
+        }
+    }));
+
+    println!("Formatting response: {:?}", response);
+
+    let result = response.get("result").expect("Expected result");
+    assert!(!result.is_null(), "Expected non-null formatting result");
+
+    let edits = result.as_array().expect("Expected array of text edits");
+    assert!(!edits.is_empty(), "Expected at least one text edit for trailing whitespace");
+
+    // The formatted text should have no trailing whitespace and end with newline
+    let new_text = edits[0].get("newText").and_then(|t| t.as_str()).expect("Expected newText");
+    println!("Formatted text:\n{}", new_text);
+
+    // Verify no trailing whitespace on any line
+    for line in new_text.lines() {
+        assert_eq!(line, line.trim_end(), "Line should have no trailing whitespace: '{}'", line);
+    }
+
+    // Verify ends with exactly one newline
+    assert!(new_text.ends_with('\n'), "Formatted text should end with newline");
+    assert!(!new_text.ends_with("\n\n"), "Formatted text should not end with double newline");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
+
+/// Test call hierarchy prepare: function at cursor returns CallHierarchyItem
+#[test]
+fn test_call_hierarchy_prepare() {
+    let project_path = create_test_project("call_hierarchy");
+
+    let main_content = "add(a, b) = a + b\n\nmain() = add(1, 2)\n";
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _init = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, main_content);
+
+    // Small delay to let didOpen be processed
+    std::thread::sleep(Duration::from_millis(200));
+
+    // Request prepare call hierarchy on the "add" function definition (line 0, col 0)
+    let response = client.send_request("textDocument/prepareCallHierarchy", json!({
+        "textDocument": { "uri": main_uri },
+        "position": { "line": 0, "character": 0 }
+    }));
+
+    println!("PrepareCallHierarchy response: {:?}", response);
+
+    let result = response.get("result").expect("Expected result");
+    assert!(!result.is_null(), "Expected non-null prepareCallHierarchy result");
+
+    let items = result.as_array().expect("Expected array of CallHierarchyItems");
+    assert!(!items.is_empty(), "Expected at least one CallHierarchyItem");
+
+    let item = &items[0];
+    let name = item.get("name").and_then(|n| n.as_str()).expect("Expected name");
+    println!("CallHierarchyItem name: {}", name);
+    assert_eq!(name, "add", "Expected function name 'add'");
+
+    let kind = item.get("kind").and_then(|k| k.as_u64()).expect("Expected kind");
+    assert_eq!(kind, 12, "Expected SymbolKind::Function (12)");
+
+    // Verify it has a URI
+    let item_uri = item.get("uri").and_then(|u| u.as_str()).expect("Expected uri");
+    assert!(item_uri.contains("main.nos"), "Expected URI to contain main.nos");
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}
