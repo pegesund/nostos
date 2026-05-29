@@ -822,13 +822,12 @@ impl LanguageServer for NostosLanguageServer {
             let init_result = match init_result {
                 Ok(mut engine) => {
                     let path_clone = path.clone();
-                    let dir_result = tokio::task::spawn_blocking(move || {
+                    tokio::task::spawn_blocking(move || {
                         if let Err(e) = engine.load_directory(path_clone.to_str().unwrap_or(".")) {
                             warn!("Warning: Failed to load directory: {}", e);
                         }
                         engine
-                    }).await;
-                    dir_result
+                    }).await
                 }
                 Err(e) => Err(e),
             };
@@ -3361,8 +3360,8 @@ impl NostosLanguageServer {
     /// Find the line number of the matching closing brace for a line containing `{`.
     fn find_matching_brace(lines: &[&str], start_line: usize) -> Option<usize> {
         let mut depth = 0i32;
-        for i in start_line..lines.len() {
-            for ch in lines[i].chars() {
+        for (i, line) in lines.iter().enumerate().skip(start_line) {
+            for ch in line.chars() {
                 if ch == '{' {
                     depth += 1;
                 } else if ch == '}' {
