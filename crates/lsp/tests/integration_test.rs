@@ -7468,3 +7468,38 @@ fn test_workspace_symbols_no_match() {
     client.exit();
     cleanup_test_project(&project_path);
 }
+
+/// Regression: hovering an unannotated parameter that inference leaves as a
+/// polymorphic (Concat-bounded) type variable must show a friendly "auto"
+/// rather than a raw inference variable like `?2451`.
+#[test]
+fn test_lsp_hover_polymorphic_param_shows_auto() {
+    let project_path = create_test_project("hover_poly_param");
+
+    // `source` is unannotated; `++` only adds a `Concat` bound, so inference
+    // leaves it as an unresolved type variable rather than a concrete type.
+    let main_content = "fmt(source, message) = source ++ \" - \" ++ message\n";
+    fs::write(project_path.join("main.nos"), main_content).unwrap();
+
+    let mut client = LspClient::new(&require_lsp_binary!());
+    let _ = client.initialize(project_path.to_str().unwrap());
+    client.initialized_and_wait();
+
+    let main_uri = format!("file://{}/main.nos", project_path.display());
+    client.did_open(&main_uri, main_content);
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Hover over the `source` use in the body (col 23 begins "source").
+    let hover = client.hover(&main_uri, 0, 25);
+    println!("hover for `source`: {:?}", hover);
+    let text = hover.expect("expected hover info for `source`");
+    assert!(
+        !text.contains('?'),
+        "hover must not expose a raw inference variable like ?N, got: {}",
+        text
+    );
+
+    let _ = client.shutdown();
+    client.exit();
+    cleanup_test_project(&project_path);
+}

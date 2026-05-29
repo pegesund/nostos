@@ -1415,7 +1415,7 @@ impl LanguageServer for NostosLanguageServer {
                     use std::io::Write;
                     let _ = writeln!(f, "LHS binding fast path: {} = {}", word, ty);
                 }
-                let info = format!("```nostos\n{}: {}\n```\n*(inferred)*", word, ty);
+                let info = format!("```nostos\n{}: {}\n```\n*(inferred)*", word, Self::sanitize_signature_type_vars(ty));
                 drop(engine_guard);
                 return Ok(Some(Hover {
                     contents: HoverContents::Markup(MarkupContent {
@@ -1486,23 +1486,23 @@ impl LanguageServer for NostosLanguageServer {
             if let Some(engine) = engine_ref {
                 self.get_hover_info(engine, &word, &local_vars, line)
                     .or_else(|| hm_type.as_ref().map(|ty| {
-                        format!("```nostos\n{}: {}\n```\n*(inferred)*", word, ty)
+                        format!("```nostos\n{}: {}\n```\n*(inferred)*", word, Self::sanitize_signature_type_vars(ty))
                     }))
             } else {
                 hm_type.as_ref().map(|ty| {
-                    format!("```nostos\n{}: {}\n```\n*(inferred)*", word, ty)
+                    format!("```nostos\n{}: {}\n```\n*(inferred)*", word, Self::sanitize_signature_type_vars(ty))
                 })
             }
         } else if let Some(ty) = &hm_type {
             if !ty.contains('?') {
                 // Got a clean HM-inferred type - use it
-                Some(format!("```nostos\n{}: {}\n```\n*(inferred)*", word, ty))
+                Some(format!("```nostos\n{}: {}\n```\n*(inferred)*", word, Self::sanitize_signature_type_vars(ty)))
             } else if let Some(engine) = engine_ref {
                 // Type has unresolved vars - try fallback
                 self.get_hover_info(engine, &word, &local_vars, line)
-                    .or_else(|| Some(format!("```nostos\n{}: {}\n```\n*(inferred)*", word, ty)))
+                    .or_else(|| Some(format!("```nostos\n{}: {}\n```\n*(inferred)*", word, Self::sanitize_signature_type_vars(ty))))
             } else {
-                Some(format!("```nostos\n{}: {}\n```\n*(inferred)*", word, ty))
+                Some(format!("```nostos\n{}: {}\n```\n*(inferred)*", word, Self::sanitize_signature_type_vars(ty)))
             }
         } else if let Some(engine) = engine_ref {
             self.get_hover_info(engine, &word, &local_vars, line)
@@ -4998,7 +4998,7 @@ impl NostosLanguageServer {
 
         // Try to infer expression type
         if let Some(ty) = engine.infer_expression_type(word, local_vars) {
-            return Some(format!("```nostos\n{}: {}\n```\n*(inferred)*", word, ty));
+            return Some(format!("```nostos\n{}: {}\n```\n*(inferred)*", word, Self::sanitize_signature_type_vars(&ty)));
         }
 
         None
