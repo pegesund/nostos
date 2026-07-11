@@ -18,7 +18,7 @@
     dead_code
 )]
 
-use tower_lsp::{LspService, Server};
+use tower_lsp_server::{LspService, Server};
 
 mod server;
 

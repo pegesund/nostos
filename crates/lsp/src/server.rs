@@ -3,14 +3,14 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use dashmap::DashMap;
 use log::{info, warn, debug, trace};
-use tower_lsp::jsonrpc::Result;
-use tower_lsp::lsp_types::*;
-use tower_lsp::{Client, LanguageServer};
+use tower_lsp_server::jsonrpc::Result;
+use tower_lsp_server::ls_types::*;
+use tower_lsp_server::{Client, LanguageServer};
 
 use nostos_repl::{ReplEngine, ReplConfig};
 use nostos_repl::inference;
-use tower_lsp::lsp_types::notification::Notification;
-use tower_lsp::lsp_types::{notification, request};
+use tower_lsp_server::ls_types::notification::Notification;
+use tower_lsp_server::ls_types::{notification, request};
 
 /// Custom notification for file status updates (for VS Code file decorations)
 pub struct FileStatusNotification;
@@ -31,9 +31,9 @@ pub struct NostosLanguageServer {
     client: Client,
     engine: Mutex<Option<ReplEngine>>,
     /// Map from URI to document content (for unsaved changes)
-    documents: DashMap<Url, String>,
+    documents: DashMap<Uri, String>,
     /// Map from URI to error diagnostics from recompile_file (to preserve when adding stale warnings)
-    file_errors: DashMap<Url, Vec<Diagnostic>>,
+    file_errors: DashMap<Uri, Vec<Diagnostic>>,
     /// Root path of the workspace
     root_path: Mutex<Option<PathBuf>>,
     /// Flag to prevent double initialization
@@ -213,10 +213,10 @@ impl NostosLanguageServer {
 
     /// Check a file for errors without modifying the live compiler state.
     /// Used for real-time analysis while the user is typing.
-    async fn check_file(&self, uri: &Url, content: &str) {
+    async fn check_file(&self, uri: &Uri, content: &str) {
         let file_path = match uri.to_file_path() {
-            Ok(p) => p,
-            Err(_) => return,
+            Some(p) => p.into_owned(),
+            None => return,
         };
 
         let file_path_str = file_path.to_string_lossy().to_string();
@@ -289,10 +289,10 @@ impl NostosLanguageServer {
     /// Recompile a file and publish updated diagnostics.
     /// This modifies the live compiler state - use for commits.
     /// Returns Ok(()) if compilation succeeded, Err(message) if there were errors.
-    async fn recompile_file(&self, uri: &Url, content: &str) -> std::result::Result<(), String> {
+    async fn recompile_file(&self, uri: &Uri, content: &str) -> std::result::Result<(), String> {
         let file_path = match uri.to_file_path() {
-            Ok(p) => p,
-            Err(_) => return Err("Invalid file path".to_string()),
+            Some(p) => p.into_owned(),
+            None => return Err("Invalid file path".to_string()),
         };
 
         let file_path_str = file_path.to_string_lossy().to_string();
@@ -398,18 +398,18 @@ impl NostosLanguageServer {
     }
 
     /// Recompile all open files except the one that was just compiled
-    async fn recompile_other_open_files(&self, exclude_uri: &Url) {
-        let open_docs: Vec<(Url, String)> = self.documents.iter()
+    async fn recompile_other_open_files(&self, exclude_uri: &Uri) {
+        let open_docs: Vec<(Uri, String)> = self.documents.iter()
             .filter(|entry| entry.key() != exclude_uri)
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
 
         for (uri, content) in open_docs {
-            debug!("Recompiling dependent file: {}", uri);
+            debug!("Recompiling dependent file: {}", uri.as_str());
 
             let file_path = match uri.to_file_path() {
-                Ok(p) => p,
-                Err(_) => continue,
+                Some(p) => p.into_owned(),
+                None => continue,
             };
 
             let module_name = file_path
@@ -651,7 +651,6 @@ impl NostosLanguageServer {
 const LSP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const LSP_BUILD_ID: &str = "2026-01-13-show-inferred-type";
 
-#[tower_lsp::async_trait]
 impl LanguageServer for NostosLanguageServer {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         info!("Nostos LSP v{} (build: {})", LSP_VERSION, LSP_BUILD_ID);
@@ -660,13 +659,13 @@ impl LanguageServer for NostosLanguageServer {
         // Store workspace root for lazy initialization - do NOT block here
         // Heavy init will happen on first file open or in initialized() notification
         if let Some(root_uri) = params.root_uri {
-            if let Ok(path) = root_uri.to_file_path() {
+            if let Some(path) = root_uri.to_file_path().map(|p| p.into_owned()) {
                 trace!("Workspace root: {:?}", path);
                 *self.root_path.lock().unwrap() = Some(path);
             }
         } else if let Some(folders) = params.workspace_folders {
             if let Some(folder) = folders.first() {
-                if let Ok(path) = folder.uri.to_file_path() {
+                if let Some(path) = folder.uri.to_file_path().map(|p| p.into_owned()) {
                     trace!("Workspace folder: {:?}", path);
                     *self.root_path.lock().unwrap() = Some(path);
                 }
@@ -774,6 +773,7 @@ impl LanguageServer for NostosLanguageServer {
                 name: "nostos-lsp".to_string(),
                 version: Some("0.1.0".to_string()),
             }),
+            offset_encoding: None,
         })
     }
 
@@ -859,7 +859,7 @@ impl LanguageServer for NostosLanguageServer {
                             if let Some(ref root_path) = root {
                                 let file_path = root_path.join(format!("{}.nos", module_name));
                                 if file_path.exists() {
-                                    let uri = Url::from_file_path(&file_path).ok();
+                                    let uri = Uri::from_file_path(&file_path);
                                     if let Some(uri) = uri {
                                         // Read file content for better error location
                                         let content = std::fs::read_to_string(&file_path).ok();
@@ -966,7 +966,7 @@ impl LanguageServer for NostosLanguageServer {
                     return Ok(Some(serde_json::json!({ "error": "No file specified" })));
                 }
 
-                let uri = match Url::parse(uri_str) {
+                let uri: Uri = match uri_str.parse() {
                     Ok(u) => u,
                     Err(e) => {
                         let msg = format!("Invalid URI: {}", e);
@@ -980,7 +980,7 @@ impl LanguageServer for NostosLanguageServer {
                     match self.recompile_file(&uri, &content.clone()).await {
                         Ok(()) => {
                             // Clear dirty flag on successful commit
-                            if let Ok(file_path) = uri.to_file_path() {
+                            if let Some(file_path) = uri.to_file_path().map(|p| p.into_owned()) {
                                 self.dirty_files.remove(&file_path.to_string_lossy().to_string());
                             }
                             // Send updated file status notification
@@ -1006,7 +1006,7 @@ impl LanguageServer for NostosLanguageServer {
             }
             "nostos.commitAll" => {
                 // Commit all open files to the live system
-                let open_docs: Vec<(Url, String)> = self.documents.iter()
+                let open_docs: Vec<(Uri, String)> = self.documents.iter()
                     .map(|entry| (entry.key().clone(), entry.value().clone()))
                     .collect();
 
@@ -1019,7 +1019,7 @@ impl LanguageServer for NostosLanguageServer {
                         Ok(()) => {
                             success_count += 1;
                             // Clear dirty flag on successful commit
-                            if let Ok(file_path) = uri.to_file_path() {
+                            if let Some(file_path) = uri.to_file_path().map(|p| p.into_owned()) {
                                 self.dirty_files.remove(&file_path.to_string_lossy().to_string());
                             }
                         }
@@ -1170,7 +1170,7 @@ impl LanguageServer for NostosLanguageServer {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        info!("Opened: {}", params.text_document.uri);
+        info!("Opened: {}", params.text_document.uri.as_str());
 
         let uri = params.text_document.uri;
         let content = params.text_document.text;
@@ -1186,7 +1186,7 @@ impl LanguageServer for NostosLanguageServer {
             let init_in_progress = self.initializing.load(Ordering::SeqCst);
 
             if needs_init && !init_in_progress {
-                if let Ok(file_path) = uri.to_file_path() {
+                if let Some(file_path) = uri.to_file_path().map(|p| p.into_owned()) {
                     if let Some(parent) = file_path.parent() {
                         // Try to set the initializing flag
                         if !self.initializing.swap(true, Ordering::SeqCst) {
@@ -1222,7 +1222,7 @@ impl LanguageServer for NostosLanguageServer {
             self.documents.insert(uri.clone(), content.clone());
 
             // Mark file as dirty (modified but not compiled)
-            if let Ok(file_path) = uri.to_file_path() {
+            if let Some(file_path) = uri.to_file_path().map(|p| p.into_owned()) {
                 self.dirty_files.insert(file_path.to_string_lossy().to_string(), true);
             }
 
@@ -1245,7 +1245,7 @@ impl LanguageServer for NostosLanguageServer {
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
-        debug!("Saved: {} (use Ctrl+Alt+C to commit to live)", params.text_document.uri);
+        debug!("Saved: {} (use Ctrl+Alt+C to commit to live)", params.text_document.uri.as_str());
 
         // Save does NOT commit to live system
         // User must explicitly use nostos.commit command (Ctrl+Alt+C)
@@ -1253,7 +1253,7 @@ impl LanguageServer for NostosLanguageServer {
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        info!("Closed: {}", params.text_document.uri);
+        info!("Closed: {}", params.text_document.uri.as_str());
 
         // Remove from our document cache
         self.documents.remove(&params.text_document.uri);
@@ -1660,7 +1660,7 @@ impl LanguageServer for NostosLanguageServer {
             // Try to find the line in the source file
             if let Some(file_content) = std::fs::read_to_string(&source_file).ok() {
                 if let Some(line_num) = Self::find_definition_line(&file_content, &word) {
-                    if let Ok(target_uri) = Url::from_file_path(&source_file) {
+                    if let Some(target_uri) = Uri::from_file_path(&source_file) {
                         return Ok(Some(GotoDefinitionResponse::Scalar(Location {
                             uri: target_uri,
                             range: Range {
@@ -1675,7 +1675,7 @@ impl LanguageServer for NostosLanguageServer {
 
         // Check if it's a type
         if let Some(type_def_info) = engine.get_type_definition_location(&word) {
-            if let Ok(target_uri) = Url::from_file_path(&type_def_info.0) {
+            if let Some(target_uri) = Uri::from_file_path(&type_def_info.0) {
                 return Ok(Some(GotoDefinitionResponse::Scalar(Location {
                     uri: target_uri,
                     range: Range {
@@ -1807,7 +1807,7 @@ impl LanguageServer for NostosLanguageServer {
         if symbols.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(DocumentSymbolResponse::Flat(symbols)))
+            Ok(Some(DocumentSymbolResponse::Nested(symbols)))
         }
     }
 
@@ -1857,7 +1857,7 @@ impl LanguageServer for NostosLanguageServer {
             // Get all loaded module source paths
             for file_path in engine.get_module_source_paths() {
                 // Skip if already searched (open document)
-                if let Ok(file_uri) = Url::from_file_path(&file_path) {
+                if let Some(file_uri) = Uri::from_file_path(&file_path) {
                     if self.documents.contains_key(&file_uri) {
                         continue;
                     }
@@ -2008,18 +2008,18 @@ impl LanguageServer for NostosLanguageServer {
             return Ok(None);
         }
 
-        debug!("Rename '{}' -> '{}' in {}", word, new_name, uri);
+        debug!("Rename '{}' -> '{}' in {}", word, new_name, uri.as_str());
 
         // Determine the module name of the file where the symbol is defined.
         // Used to find qualified references (module.symbol) in other files.
-        let source_module_name = uri.to_file_path().ok()
+        let source_module_name = uri.to_file_path()
             .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()));
 
         // Check if the symbol is a top-level pub definition in the current file.
         // If so, we need to rename across all project files.
         let is_top_level_pub = Self::is_pub_symbol(&content, &word);
 
-        let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> = std::collections::HashMap::new();
+        let mut changes: std::collections::HashMap<Uri, Vec<TextEdit>> = std::collections::HashMap::new();
 
         // Find edits in the current file (scope-aware)
         let current_edits = Self::find_scope_aware_rename_edits(&content, &word, new_name, None);
@@ -2048,7 +2048,7 @@ impl LanguageServer for NostosLanguageServer {
             let engine_guard = self.engine.lock().unwrap();
             if let Some(engine) = engine_guard.as_ref() {
                 for file_path in engine.get_module_source_paths() {
-                    if let Ok(file_uri) = Url::from_file_path(&file_path) {
+                    if let Some(file_uri) = Uri::from_file_path(&file_path) {
                         if self.documents.contains_key(&file_uri) || &file_uri == uri {
                             continue; // Already searched
                         }
@@ -2114,10 +2114,10 @@ impl LanguageServer for NostosLanguageServer {
     async fn symbol(
         &self,
         params: WorkspaceSymbolParams,
-    ) -> Result<Option<Vec<SymbolInformation>>> {
+    ) -> Result<Option<WorkspaceSymbolResponse>> {
         let query = params.query.to_lowercase();
 
-        let mut symbols = Vec::new();
+        let mut symbols: Vec<WorkspaceSymbol> = Vec::new();
 
         // Search all open documents
         for entry in self.documents.iter() {
@@ -2125,10 +2125,19 @@ impl LanguageServer for NostosLanguageServer {
             let doc_content = entry.value().clone();
 
             let doc_symbols = Self::extract_document_symbols(&doc_content);
-            for mut sym in doc_symbols {
+            for sym in doc_symbols {
                 if query.is_empty() || sym.name.to_lowercase().contains(&query) {
-                    sym.location.uri = doc_uri.clone();
-                    symbols.push(sym);
+                    symbols.push(WorkspaceSymbol {
+                        name: sym.name,
+                        kind: sym.kind,
+                        tags: sym.tags,
+                        container_name: None,
+                        location: OneOf::Left(Location {
+                            uri: doc_uri.clone(),
+                            range: sym.range,
+                        }),
+                        data: None,
+                    });
                 }
             }
         }
@@ -2137,16 +2146,25 @@ impl LanguageServer for NostosLanguageServer {
         let engine_guard = self.engine.lock().unwrap();
         if let Some(engine) = engine_guard.as_ref() {
             for file_path in engine.get_module_source_paths() {
-                if let Ok(file_uri) = Url::from_file_path(&file_path) {
+                if let Some(file_uri) = Uri::from_file_path(&file_path) {
                     if self.documents.contains_key(&file_uri) {
                         continue;
                     }
                     if let Ok(file_content) = std::fs::read_to_string(&file_path) {
                         let doc_symbols = Self::extract_document_symbols(&file_content);
-                        for mut sym in doc_symbols {
+                        for sym in doc_symbols {
                             if query.is_empty() || sym.name.to_lowercase().contains(&query) {
-                                sym.location.uri = file_uri.clone();
-                                symbols.push(sym);
+                                symbols.push(WorkspaceSymbol {
+                                    name: sym.name,
+                                    kind: sym.kind,
+                                    tags: sym.tags,
+                                    container_name: None,
+                                    location: OneOf::Left(Location {
+                                        uri: file_uri.clone(),
+                                        range: sym.range,
+                                    }),
+                                    data: None,
+                                });
                             }
                         }
                     }
@@ -2157,7 +2175,7 @@ impl LanguageServer for NostosLanguageServer {
         if symbols.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(symbols))
+            Ok(Some(WorkspaceSymbolResponse::Nested(symbols)))
         }
     }
 
@@ -2191,7 +2209,7 @@ impl LanguageServer for NostosLanguageServer {
             let engine_guard = self.engine.lock().unwrap();
             if let Some(engine) = engine_guard.as_ref() {
                 for file_path in engine.get_module_source_paths() {
-                    if let Ok(file_uri) = Url::from_file_path(&file_path) {
+                    if let Some(file_uri) = Uri::from_file_path(&file_path) {
                         if self.documents.contains_key(&file_uri) {
                             continue;
                         }
@@ -2213,7 +2231,7 @@ impl LanguageServer for NostosLanguageServer {
             };
 
             lenses.push(CodeLens {
-                range: sym.location.range,
+                range: sym.range,
                 command: Some(Command {
                     title,
                     command: "nostos.showReferences".to_string(),
@@ -3012,7 +3030,8 @@ enum TypeClassification {
 
 impl NostosLanguageServer {
     /// Extract document symbols (functions, types, traits) from source content
-    fn extract_document_symbols(content: &str) -> Vec<SymbolInformation> {
+    /// Returns LSP 3.17 DocumentSymbol objects (no deprecated SymbolInformation).
+    fn extract_document_symbols(content: &str) -> Vec<DocumentSymbol> {
         let mut symbols = Vec::new();
 
         for (line_num, line) in content.lines().enumerate() {
@@ -3023,6 +3042,11 @@ impl NostosLanguageServer {
                 continue;
             }
 
+            let range = Range {
+                start: Position { line: line_num as u32, character: 0 },
+                end: Position { line: line_num as u32, character: line.len() as u32 },
+            };
+
             // Type definitions: "type Foo = ..." or "type Foo[T] = ..."
             if trimmed.starts_with("type ") {
                 let rest = &trimmed[5..];
@@ -3030,20 +3054,21 @@ impl NostosLanguageServer {
                     .next()
                     .unwrap_or("");
                 if !name.is_empty() {
+                    // selection_range covers just the type name
+                    let name_start = line.find(name).unwrap_or(0) as u32;
                     #[allow(deprecated)]
-                    symbols.push(SymbolInformation {
+                    symbols.push(DocumentSymbol {
                         name: name.to_string(),
+                        detail: None,
                         kind: SymbolKind::STRUCT,
                         tags: None,
                         deprecated: None,
-                        location: Location {
-                            uri: Url::parse("file:///").unwrap(), // Will be replaced
-                            range: Range {
-                                start: Position { line: line_num as u32, character: 0 },
-                                end: Position { line: line_num as u32, character: line.len() as u32 },
-                            },
+                        range,
+                        selection_range: Range {
+                            start: Position { line: line_num as u32, character: name_start },
+                            end: Position { line: line_num as u32, character: name_start + name.len() as u32 },
                         },
-                        container_name: None,
+                        children: None,
                     });
                 }
             }
@@ -3054,20 +3079,20 @@ impl NostosLanguageServer {
                     .next()
                     .unwrap_or("");
                 if !name.is_empty() {
+                    let name_start = line.find(name).unwrap_or(0) as u32;
                     #[allow(deprecated)]
-                    symbols.push(SymbolInformation {
+                    symbols.push(DocumentSymbol {
                         name: name.to_string(),
+                        detail: None,
                         kind: SymbolKind::INTERFACE,
                         tags: None,
                         deprecated: None,
-                        location: Location {
-                            uri: Url::parse("file:///").unwrap(), // Will be replaced
-                            range: Range {
-                                start: Position { line: line_num as u32, character: 0 },
-                                end: Position { line: line_num as u32, character: line.len() as u32 },
-                            },
+                        range,
+                        selection_range: Range {
+                            start: Position { line: line_num as u32, character: name_start },
+                            end: Position { line: line_num as u32, character: name_start + name.len() as u32 },
                         },
-                        container_name: None,
+                        children: None,
                     });
                 }
             }
@@ -3098,20 +3123,20 @@ impl NostosLanguageServer {
                         && fn_name.chars().next().map(|c| c.is_alphabetic() || c == '_').unwrap_or(false)
                         && !["if", "else", "match", "let", "type", "trait", "end", "import"].contains(&fn_name)
                     {
+                        let name_start = line.find(fn_name).unwrap_or(0) as u32;
                         #[allow(deprecated)]
-                        symbols.push(SymbolInformation {
+                        symbols.push(DocumentSymbol {
                             name: fn_name.to_string(),
+                            detail: None,
                             kind: SymbolKind::FUNCTION,
                             tags: None,
                             deprecated: None,
-                            location: Location {
-                                uri: Url::parse("file:///").unwrap(), // Will be replaced
-                                range: Range {
-                                    start: Position { line: line_num as u32, character: 0 },
-                                    end: Position { line: line_num as u32, character: line.len() as u32 },
-                                },
+                            range,
+                            selection_range: Range {
+                                start: Position { line: line_num as u32, character: name_start },
+                                end: Position { line: line_num as u32, character: name_start + fn_name.len() as u32 },
                             },
-                            container_name: None,
+                            children: None,
                         });
                     }
                 }
@@ -3122,7 +3147,7 @@ impl NostosLanguageServer {
     }
 
     /// Find all references to a word in content and add to locations
-    fn find_references_in_content(word: &str, uri: &Url, content: &str, locations: &mut Vec<Location>) {
+    fn find_references_in_content(word: &str, uri: &Uri, content: &str, locations: &mut Vec<Location>) {
         for (line_num, line) in content.lines().enumerate() {
             // Find all occurrences of word in line
             let mut search_start = 0;
@@ -5204,7 +5229,7 @@ impl NostosLanguageServer {
     }
 
     /// Extract function calls from a line of code and add them to the calls list.
-    fn extract_calls_from_line(line: &str, line_idx: usize, uri: &Url, calls: &mut Vec<CallHierarchyOutgoingCall>) {
+    fn extract_calls_from_line(line: &str, line_idx: usize, uri: &Uri, calls: &mut Vec<CallHierarchyOutgoingCall>) {
         let chars: Vec<char> = line.chars().collect();
         let mut i = 0;
 
